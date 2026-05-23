@@ -188,6 +188,18 @@ approve the task from bounded evidence. Use `--model default` to omit an
 explicit Codex model or `--keep` to retain the temporary DB, logs, and
 workspace for inspection.
 
+Use `--goal` to exercise the goal-root path as well:
+
+```bash
+PYTHONPATH=/path/to/hermes-agent \
+  /path/to/venv/bin/python scripts/smoke_kanban_codex_e2e.py --goal
+```
+
+That mode creates a top-level Kanban goal, decomposes it into a deterministic
+implementation child assigned to `codex-impl`, advances the goal controller
+through the child review/test/acceptance gates, and asserts both the child task
+and root goal finish as `done`.
+
 ## Skill-Generated Lane Intent
 
 Skills can choose an existing trusted lane by assigning a task:

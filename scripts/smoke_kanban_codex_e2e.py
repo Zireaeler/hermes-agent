@@ -159,6 +159,62 @@ Verification, Remaining risks, and Recommended reviewer action.
         )
 
 
+def _create_goal_root_and_child(workspace: Path, *, worker_timeout: int) -> tuple[str, str]:
+    """Create a top-level Kanban goal and deterministic Codex child task."""
+    from hermes_cli import kanban_db as kb
+    from hermes_cli.goals import create_kanban_task_from_goal
+
+    root_id = create_kanban_task_from_goal(
+        "real Codex Kanban e2e smoke goal",
+        session_id="codex-e2e-smoke-session",
+        assignee="orchestrator",
+        workspace_kind="dir",
+        workspace_path=str(workspace),
+        max_runtime_seconds=int(worker_timeout) + 60,
+        created_by="codex-e2e-smoke",
+        idempotency_key="codex-e2e-smoke-goal",
+    )
+    body = """\
+Implement the smoke goal by creating `smoke_result.txt` in this repository
+containing exactly this single line, including the trailing newline:
+
+hermes codex e2e ok
+
+Using Python, this exact content is:
+
+"hermes codex e2e ok\\n"
+
+Do not change any other tracked file. Run a verification command with python3
+that proves the file content is exactly `hermes codex e2e ok\\n`. Include the
+required structured receipt with a Progress checklist, Changed files,
+Verification, Remaining risks, and Recommended reviewer action.
+"""
+    with kb.connect() as conn:
+        child_ids = kb.decompose_triage_task(
+            conn,
+            root_id,
+            root_assignee="orchestrator",
+            children=[
+                {
+                    "title": "real Codex Kanban e2e smoke goal implementation",
+                    "body": body,
+                    "assignee": "codex-impl",
+                    "acceptance_check_requests": {
+                        "name": "smoke-file-content",
+                        "type": "file_content",
+                        "path": "smoke_result.txt",
+                        "equals": "hermes codex e2e ok\n",
+                        "reason": "smoke verifies the implementation artifact",
+                    },
+                }
+            ],
+            author="codex-e2e-smoke",
+        )
+    if not child_ids:
+        _die("failed to decompose smoke goal into a worker child", details={"root_task_id": root_id})
+    return root_id, child_ids[0]
+
+
 def _dispatch_one(task_id: str, *, max_spawn: int = 1) -> dict[str, Any]:
     from hermes_cli import kanban_db as kb
 
@@ -212,6 +268,23 @@ def _advance(task_id: str, *, dispatch_max: int = 3) -> dict[str, Any]:
             reviewer="codex-e2e-smoke-controller",
             summary="real Codex implementation, review/test follow-ups, and acceptance checks passed",
             max_iterations=6,
+        )
+
+
+def _advance_goal(root_task_id: str, *, dispatch_max: int = 3) -> dict[str, Any]:
+    from hermes_cli import kanban_db as kb
+
+    with kb.connect() as conn:
+        return kb.advance_goal_acceptance_workflow_until_idle(
+            conn,
+            root_task_id,
+            review_assignee="codex-review",
+            test_assignee="codex-test",
+            dispatch=True,
+            dispatch_max=dispatch_max,
+            reviewer="codex-e2e-smoke-controller",
+            summary="real Codex goal, review/test follow-ups, and acceptance checks passed",
+            max_iterations=8,
         )
 
 
@@ -286,6 +359,30 @@ def _wait_for_acceptance(task_id: str, *, deadline: float) -> dict[str, Any]:
     )
 
 
+def _wait_for_goal_acceptance(root_task_id: str, child_task_id: str, *, deadline: float) -> dict[str, Any]:
+    last_payload: dict[str, Any] | None = None
+    last_child_acceptance: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        last_payload = _advance_goal(root_task_id)
+        last_child_acceptance = _acceptance(child_task_id)
+        root_task = ((last_payload.get("final") or {}).get("task") or {})
+        if root_task.get("status") == "done":
+            gate = (last_child_acceptance or {}).get("review_followup_gate") or {}
+            acceptance_gate = (last_child_acceptance or {}).get("acceptance_check_gate") or {}
+            if gate.get("ready") is not True:
+                _die("goal review/test follow-up gate was not ready at completion", details={"acceptance": last_child_acceptance or {}})
+            if acceptance_gate.get("ready") is not True:
+                _die("goal deterministic acceptance gate was not ready at completion", details={"acceptance": last_child_acceptance or {}})
+            return last_payload
+        if last_payload.get("stop_reason") == "blocked":
+            _die("goal acceptance workflow blocked", details={"payload": last_payload, "child_acceptance": last_child_acceptance or {}})
+        time.sleep(3)
+    _die(
+        "timed out waiting for goal review/test follow-ups and acceptance approval",
+        details={"last_payload": last_payload or {}, "last_child_acceptance": last_child_acceptance or {}},
+    )
+
+
 def _assert_final(task_id: str, workspace: Path) -> dict[str, Any]:
     final_snapshot = _snapshot(task_id)
     final_acceptance = _acceptance(task_id)
@@ -318,11 +415,38 @@ def _assert_final(task_id: str, workspace: Path) -> dict[str, Any]:
     }
 
 
+def _assert_goal_final(root_task_id: str, child_task_id: str, workspace: Path) -> dict[str, Any]:
+    root_snapshot = _snapshot(root_task_id)
+    child_final = _assert_final(child_task_id, workspace)
+    if root_snapshot["task"]["status"] != "done":
+        _die("goal root task is not done", details={"snapshot": root_snapshot})
+    child_ids = {
+        ((child.get("task") or {}).get("id"))
+        for child in (root_snapshot.get("children") or [])
+        if isinstance(child, dict)
+    }
+    if child_task_id not in child_ids:
+        _die("goal root snapshot does not include implementation child", details={"snapshot": root_snapshot, "child_task_id": child_task_id})
+    root_events = _task_events(root_task_id)
+    root_kinds = {event["kind"] for event in root_events}
+    for kind in {"decomposed", "goal_acceptance_advanced", "completed"}:
+        if kind not in root_kinds:
+            _die("missing expected goal root event", details={"missing": kind, "events": root_events[-20:]})
+    return {
+        "root_snapshot": root_snapshot,
+        "child_snapshot": child_final["snapshot"],
+        "child_acceptance": child_final["acceptance"],
+        "child_events": child_final["events"],
+        "root_events": root_events,
+    }
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default=DEFAULT_MODEL, help="Codex model for all lanes; use 'default' to omit --model")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help="overall smoke timeout in seconds")
     parser.add_argument("--worker-timeout", type=int, default=DEFAULT_WORKER_TIMEOUT, help="per Codex wrapper timeout in seconds")
+    parser.add_argument("--goal", action="store_true", help="exercise the /goal-style root task -> Codex child controller path")
     parser.add_argument("--keep", action="store_true", help="keep the temporary HERMES_HOME/workspace after success")
     return parser.parse_args(argv)
 
@@ -352,32 +476,58 @@ def main(argv: list[str] | None = None) -> int:
         kb.init_db()
         register_configured_worker_lanes()
 
-        task_id = _create_task(workspace, worker_timeout=int(args.worker_timeout))
+        root_task_id: str | None = None
+        if args.goal:
+            root_task_id, task_id = _create_goal_root_and_child(
+                workspace,
+                worker_timeout=int(args.worker_timeout),
+            )
+        else:
+            task_id = _create_task(workspace, worker_timeout=int(args.worker_timeout))
+
         initial = _dispatch_one(task_id, max_spawn=1)
         if not initial["dispatch"].get("spawned"):
             _die("dispatcher did not spawn implementation worker", details={"initial": initial})
 
         deadline = time.monotonic() + float(args.timeout)
         implementation = _wait_for_implementation(task_id, deadline=deadline)
-        acceptance_payload = _wait_for_acceptance(task_id, deadline=deadline)
-        final = _assert_final(task_id, workspace)
+        if root_task_id:
+            acceptance_payload = _wait_for_goal_acceptance(
+                root_task_id,
+                task_id,
+                deadline=deadline,
+            )
+            final = _assert_goal_final(root_task_id, task_id, workspace)
+            final_snapshot = final["child_snapshot"]
+            final_acceptance = final["child_acceptance"]
+            recent_events = final["child_events"][-12:]
+            goal_final_status = final["root_snapshot"]["task"]["status"]
+        else:
+            acceptance_payload = _wait_for_acceptance(task_id, deadline=deadline)
+            final = _assert_final(task_id, workspace)
+            final_snapshot = final["snapshot"]
+            final_acceptance = final["acceptance"]
+            recent_events = final["events"][-12:]
+            goal_final_status = None
 
         out = {
             "ok": True,
             "task_id": task_id,
+            "root_task_id": root_task_id,
             "home": str(home),
             "workspace": str(workspace),
             "model": model or "codex default",
             "implementation_run": (implementation.get("run") or {}).get("id"),
-            "final_status": final["snapshot"]["task"]["status"],
+            "final_status": final_snapshot["task"]["status"],
+            "goal_final_status": goal_final_status,
             "review_decision": (
-                ((final["snapshot"].get("evidence") or {}).get("review") or {})
+                ((final_snapshot.get("evidence") or {}).get("review") or {})
                 .get("decision")
             ),
             "advance_stop_reason": acceptance_payload.get("stop_reason"),
-            "review_followup_gate": (final["acceptance"] or {}).get("review_followup_gate"),
-            "acceptance_check_gate": (final["acceptance"] or {}).get("acceptance_check_gate"),
-            "recent_events": final["events"][-12:],
+            "review_followup_gate": (final_acceptance or {}).get("review_followup_gate"),
+            "acceptance_check_gate": (final_acceptance or {}).get("acceptance_check_gate"),
+            "recent_events": recent_events,
         }
         print(json.dumps(out, indent=2, sort_keys=True))
         return 0

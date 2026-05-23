@@ -94,3 +94,61 @@ def test_real_codex_e2e_smoke_creates_review_gated_task(tmp_path, monkeypatch):
     assert gate["required"] == 1
     assert gate["items"][0]["name"] == "smoke-file-content"
     assert gate["items"][0]["state"] == "missing"
+
+
+def test_real_codex_e2e_smoke_goal_mode_creates_root_and_child(
+    tmp_path,
+    monkeypatch,
+):
+    smoke = _load_smoke_module()
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    smoke._setup_environment(home)
+
+    from hermes_cli import kanban_db as kb
+
+    kb.init_db()
+    root_id, child_id = smoke._create_goal_root_and_child(
+        workspace,
+        worker_timeout=99,
+    )
+
+    with kb.connect() as conn:
+        root = kb.get_task(conn, root_id)
+        child = kb.get_task(conn, child_id)
+        root_events = kb.list_events(conn, root_id)
+        child_events = kb.list_events(conn, child_id)
+        gate = kb.acceptance_check_gate_status(conn, child_id, source_run_id=None)
+        root_snapshot = kb.task_progress_snapshot(
+            conn,
+            root_id,
+            include_children=True,
+        )
+
+    assert root is not None
+    assert child is not None
+    assert root.status == "todo"
+    assert root.assignee == "orchestrator"
+    assert child.status == "ready"
+    assert child.assignee == "codex-impl"
+    assert child.workspace_kind == "dir"
+    assert child.workspace_path == str(workspace)
+    assert child.max_runtime_seconds == 159
+    assert any(event.kind == "decomposed" for event in root_events)
+    assert any(event.kind == "acceptance_check_requested" for event in child_events)
+    assert gate is not None
+    assert gate["required"] == 1
+    assert gate["items"][0]["name"] == "smoke-file-content"
+    assert root_snapshot is not None
+    assert root_snapshot.children[0]["task"]["id"] == child_id
+
+
+def test_real_codex_e2e_smoke_goal_arg_parses():
+    smoke = _load_smoke_module()
+
+    args = smoke.parse_args(["--goal", "--model", "default"])
+
+    assert args.goal is True
+    assert args.model == "default"
