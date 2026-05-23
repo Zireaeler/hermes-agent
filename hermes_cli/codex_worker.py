@@ -28,6 +28,7 @@ CODEX_OUTPUT_TAIL_BYTES = 8192
 CODEX_FIELD_MAX_BYTES = 4096
 CODEX_EVENT_FIELD_MAX_BYTES = 2048
 CODEX_PROGRESS_MAX_ITEMS = 50
+CODEX_REVIEW_OUTPUT_TAIL_LINES = 80
 DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30.0
 
 _CHECKBOX_RE = re.compile(r"^\s*[-*]\s*\[([ xX])\]\s+(.+?)\s*$")
@@ -53,6 +54,19 @@ _RECEIPT_SECTION_KEYS = {
     "verification",
     "remaining_risks",
     "recommended_reviewer_action",
+}
+_REVIEW_OUTPUT_START_HEADERS = {
+    "changed_files",
+    "decision",
+    "findings",
+    "remaining_risks",
+    "result",
+    "results",
+    "review_findings",
+    "summary",
+    "test_findings",
+    "test_results",
+    "verification",
 }
 
 
@@ -790,6 +804,81 @@ def _extract_structured_verdict(output: str) -> Optional[str]:
     return verdicts[-1] if verdicts else None
 
 
+def _structured_verdict_from_line(line: str) -> Optional[str]:
+    match = _VERDICT_LINE_RE.match(line)
+    if not match:
+        return None
+    value = match.group(1).strip().lower().replace("-", "_")
+    return value if value in _ALLOWED_STRUCTURED_VERDICTS else None
+
+
+def _review_output_header_key(raw_line: str) -> Optional[str]:
+    stripped = raw_line.strip()
+    if not stripped.endswith(":"):
+        return None
+    label = stripped[:-1].strip().lower().replace(" ", "_").replace("-", "_")
+    return label if label in _REVIEW_OUTPUT_START_HEADERS else None
+
+
+def _review_output_tail(output: str, receipt: dict[str, Any]) -> str:
+    """Return bounded reviewable worker output without the echoed prompt prefix."""
+    lines = (output or "").splitlines()
+    if not lines:
+        return ""
+
+    start_index: Optional[int] = None
+    verdict_index: Optional[int] = None
+    message_boundary = -1
+    for index, line in enumerate(lines):
+        if line.strip().lower() == "codex":
+            message_boundary = index
+    for index in range(len(lines) - 1, -1, -1):
+        if index <= message_boundary:
+            break
+        label = _receipt_section_key(lines[index])
+        if label == "progress":
+            start_index = index
+            break
+        if _review_output_header_key(lines[index]):
+            start_index = index
+        if verdict_index is None and _structured_verdict_from_line(lines[index]):
+            verdict_index = index
+
+    tail_lines = (
+        lines[start_index:]
+        if start_index is not None
+        else lines[verdict_index:]
+        if verdict_index is not None
+        else lines[-CODEX_REVIEW_OUTPUT_TAIL_LINES:]
+    )
+    tail = "\n".join(tail_lines).strip()
+    if tail:
+        return _cap(tail, CODEX_OUTPUT_TAIL_BYTES)
+
+    sections = receipt.get("sections") if isinstance(receipt, dict) else None
+    if isinstance(sections, dict):
+        receipt_lines: list[str] = []
+        for label, key in (
+            ("Progress", "progress"),
+            ("Changed files", "changed_files"),
+            ("Verification", "verification"),
+            ("Remaining risks", "remaining_risks"),
+            ("Recommended reviewer action", "recommended_reviewer_action"),
+        ):
+            value = sections.get(key)
+            if isinstance(value, str) and value.strip():
+                receipt_lines.append(f"{label}:")
+                receipt_lines.extend(value.strip().splitlines())
+                receipt_lines.append("")
+        verdict = receipt.get("verdict")
+        if isinstance(verdict, str) and verdict.strip():
+            receipt_lines.append(f"Verdict: {verdict.strip()}")
+        tail = "\n".join(receipt_lines).strip()
+        if tail:
+            return _cap(tail, CODEX_OUTPUT_TAIL_BYTES)
+    return _cap("\n".join(lines[-CODEX_REVIEW_OUTPUT_TAIL_LINES:]).strip(), CODEX_OUTPUT_TAIL_BYTES)
+
+
 def _extract_worker_receipt(output: str) -> dict[str, Any]:
     sections = _extract_receipt_sections(output)
     receipt: dict[str, Any] = {
@@ -826,6 +915,7 @@ def _metadata(
     succeeded = (exit_code == 0 and not timed_out and not binary_missing)
     receipt = _extract_worker_receipt(output_tail)
     verification = _extract_verification_summary(output_tail)
+    review_output_tail = _review_output_tail(output_tail, receipt)
     if receipt.get("verdict"):
         verification["verdict"] = receipt["verdict"]
     return {
@@ -848,7 +938,7 @@ def _metadata(
             "exit_code": exit_code,
             "timed_out": timed_out,
             "binary_missing": binary_missing,
-            "output_tail": output_tail,
+            "output_tail": review_output_tail,
             "receipt": receipt,
             "verdict": receipt.get("verdict"),
             "json_events": json_events,

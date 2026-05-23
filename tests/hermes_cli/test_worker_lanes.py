@@ -17,6 +17,7 @@ from hermes_cli.codex_worker import (
     _safe_env_for_codex,
     _safe_env_for_worker,
     _extract_worker_receipt,
+    _metadata,
 )
 from hermes_cli.plugins import PluginContext, PluginManager, PluginManifest
 from hermes_cli.worker_lanes import (
@@ -512,6 +513,92 @@ def test_codex_receipt_extracts_final_allowed_verdict():
     )
 
     assert receipt["verdict"] == "request_changes"
+
+
+def test_codex_metadata_output_tail_excludes_echoed_prompt_prefix():
+    meta = _metadata(
+        lane="codex-deep",
+        task_id="t1",
+        run_id=7,
+        worker_pid=123,
+        claim_lock="host:123",
+        workspace="/tmp/no-such-workspace",
+        model="gpt-5.5",
+        exit_code=0,
+        timed_out=False,
+        output_tail=(
+            "OpenAI Codex v0.132.0\n"
+            "--------\n"
+            "user\n"
+            "# Kanban task t1: implementation\n\n"
+            "## External worker instructions\n"
+            "When finished, print a concise structured receipt:\n\n"
+            "Progress:\n"
+            "- [x] ...\n"
+            "- [ ] ...\n\n"
+            "Changed files:\n"
+            "- ...\n\n"
+            "Verification:\n"
+            "- command: ...\n"
+            "  result: ...\n\n"
+            "codex\n"
+            "I am working now.\n"
+            "exec\n"
+            "/bin/bash -lc 'pytest smoke'\n"
+            "Progress:\n"
+            "- [x] Implemented worker lane evidence trimming.\n\n"
+            "Changed files:\n"
+            "- hermes_cli/codex_worker.py\n\n"
+            "Verification:\n"
+            "- command: pytest smoke\n"
+            "  result: passed\n\n"
+            "Remaining risks:\n"
+            "- none\n\n"
+            "Recommended reviewer action:\n"
+            "- approve\n"
+        ),
+    )
+
+    tail = meta["worker_lane"]["output_tail"]
+    assert tail.startswith("Progress:\n- [x] Implemented worker lane evidence trimming.")
+    assert "hermes_cli/codex_worker.py" in tail
+    assert "pytest smoke" in tail
+    assert "External worker instructions" not in tail
+    assert "# Kanban task t1" not in tail
+
+
+def test_codex_metadata_output_tail_keeps_followup_verdict_without_prompt_prefix():
+    meta = _metadata(
+        lane="codex-review",
+        task_id="t2",
+        run_id=8,
+        worker_pid=124,
+        claim_lock="host:124",
+        workspace="/tmp/no-such-workspace",
+        model="gpt-5.5",
+        exit_code=0,
+        timed_out=False,
+        output_tail=(
+            "# Kanban task t2: Independent review task\n\n"
+            "## Required review output\n"
+            "End with exactly one structured verdict line:\n"
+            "Verdict: approve | request_changes | blocked\n\n"
+            "codex\n"
+            "I inspected the bounded evidence and workspace.\n"
+            "Findings:\n"
+            "- No blocking issues found.\n\n"
+            "Verification:\n"
+            "- command: pytest smoke\n"
+            "  result: passed\n\n"
+            "Verdict: approve\n"
+        ),
+    )
+
+    tail = meta["worker_lane"]["output_tail"]
+    assert tail.startswith("Findings:\n- No blocking issues found.")
+    assert "Verdict: approve" in tail
+    assert "Verdict: approve | request_changes | blocked" not in tail
+    assert "Required review output" not in tail
 
 
 def test_codex_prompt_marks_requested_changes_as_mandatory():
