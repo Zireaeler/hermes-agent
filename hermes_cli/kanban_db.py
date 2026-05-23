@@ -118,6 +118,9 @@ ACCEPTANCE_CHECK_DEFAULT_TIMEOUT_SECONDS = 300
 ACCEPTANCE_CHECK_MAX_TIMEOUT_SECONDS = 3600
 REVIEW_SHARDS_DEFAULT_CHANGED_FILES_THRESHOLD = 8
 REVIEW_SHARDS_DEFAULT_DIFF_SUMMARY_LINES_THRESHOLD = 80
+WORKER_CODEX_EVENT_SNAPSHOT_LIMIT = 12
+WORKER_CODEX_EVENT_FIELD_MAX_CHARS = 800
+WORKER_CODEX_EVENT_TEXT_TAIL_MAX_CHARS = 1200
 REVIEW_SHARDS_DEFAULT_MAX_FILES_PER_SHARD = 8
 REVIEW_SHARDS_DEFAULT_MAX_SHARDS = 8
 _ACCEPTANCE_CHECK_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
@@ -840,6 +843,7 @@ class TaskProgressSnapshot:
     task: Task
     run: Optional[Run]
     worker_progress: Optional[dict]
+    worker_codex_events: Optional[list[dict[str, Any]]]
     heartbeat_event: Optional[Event]
     last_event: Optional[Event]
     review_required: bool
@@ -886,6 +890,7 @@ class TaskProgressSnapshot:
                 if self.run else None
             ),
             "worker_progress": self.worker_progress,
+            "worker_codex_events": self.worker_codex_events,
             "last_heartbeat_event": (
                 {
                     "id": self.heartbeat_event.id,
@@ -2154,6 +2159,109 @@ def list_events(conn: sqlite3.Connection, task_id: str) -> list[Event]:
     return out
 
 
+def _compact_worker_codex_event_payload(payload: Optional[dict]) -> Optional[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return None
+
+    def _text(value: Any, limit: int = WORKER_CODEX_EVENT_FIELD_MAX_CHARS) -> str:
+        text = str(value)
+        if len(text) <= limit:
+            return text
+        return text[:limit] + f"\n[truncated {len(text) - limit} chars]"
+
+    out: dict[str, Any] = {}
+    for key in ("worker_lane", "worker_kind", "event_type", "thread_id"):
+        if payload.get(key) is not None:
+            out[key] = _text(payload.get(key), 160)
+    if payload.get("run_id") is not None:
+        out["run_id"] = payload.get("run_id")
+
+    usage = payload.get("usage")
+    if isinstance(usage, dict):
+        out["usage"] = {
+            key: usage.get(key)
+            for key in (
+                "input_tokens",
+                "cached_input_tokens",
+                "output_tokens",
+                "reasoning_output_tokens",
+            )
+            if key in usage
+        }
+
+    item = payload.get("item")
+    if isinstance(item, dict):
+        compact_item: dict[str, Any] = {}
+        for key in ("id", "type", "status", "exit_code"):
+            if item.get(key) is not None:
+                compact_item[key] = item.get(key)
+        for key in ("command", "text_tail", "output_tail"):
+            if item.get(key) is not None:
+                limit = (
+                    WORKER_CODEX_EVENT_TEXT_TAIL_MAX_CHARS
+                    if key in {"text_tail", "output_tail"}
+                    else WORKER_CODEX_EVENT_FIELD_MAX_CHARS
+                )
+                compact_item[key] = _text(item.get(key), limit)
+        changes = item.get("changes")
+        if isinstance(changes, list):
+            compact_changes: list[dict[str, str]] = []
+            for change in changes[:10]:
+                if not isinstance(change, dict):
+                    continue
+                compact_change: dict[str, str] = {}
+                if change.get("path") is not None:
+                    compact_change["path"] = _text(change.get("path"), 300)
+                if change.get("kind") is not None:
+                    compact_change["kind"] = _text(change.get("kind"), 80)
+                if compact_change:
+                    compact_changes.append(compact_change)
+            if compact_changes:
+                compact_item["changes"] = compact_changes
+        if compact_item:
+            out["item"] = compact_item
+
+    return out or None
+
+
+def _recent_worker_codex_events(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    limit: int = WORKER_CODEX_EVENT_SNAPSHOT_LIMIT,
+) -> Optional[list[dict[str, Any]]]:
+    rows = conn.execute(
+        """
+        SELECT id, run_id, payload, created_at
+          FROM task_events
+         WHERE task_id = ? AND kind = 'worker_codex_event'
+         ORDER BY created_at DESC, id DESC
+         LIMIT ?
+        """,
+        (task_id, max(1, int(limit))),
+    ).fetchall()
+    if not rows:
+        return None
+    events: list[dict[str, Any]] = []
+    for row in reversed(rows):
+        try:
+            payload = json.loads(row["payload"]) if row["payload"] else None
+        except Exception:
+            payload = None
+        compact_payload = _compact_worker_codex_event_payload(payload)
+        if compact_payload is None:
+            continue
+        events.append({
+            "id": int(row["id"]),
+            "created_at": int(row["created_at"]),
+            "run_id": (
+                int(row["run_id"]) if row["run_id"] is not None else None
+            ),
+            "payload": compact_payload,
+        })
+    return events or None
+
+
 def _latest_event(
     conn: sqlite3.Connection,
     task_id: str,
@@ -2265,6 +2373,7 @@ def task_progress_snapshot(
         worker_progress=(
             progress_event.payload if progress_event and progress_event.payload else None
         ),
+        worker_codex_events=_recent_worker_codex_events(conn, task_id),
         heartbeat_event=heartbeat_event,
         last_event=last_event,
         review_required=review_required,
@@ -2768,6 +2877,7 @@ def task_children_progress_summary(
             ),
             "worker_lane": worker_lane,
             "worker_progress": progress,
+            "worker_codex_events": snap.worker_codex_events,
             "last_heartbeat_event": (
                 {
                     "id": snap.heartbeat_event.id,

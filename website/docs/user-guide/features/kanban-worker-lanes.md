@@ -175,6 +175,10 @@ It records bounded `worker_codex_event` rows for Codex thread, item, command,
 and usage events. Agent-message text and command summaries from those JSONL
 events still feed the same progress, receipt, and metadata parsers. Leave
 `json_events` unset for the legacy stdout/stderr parser path.
+Progress snapshots returned by `hermes kanban progress`, `kanban_progress`,
+and the dashboard progress API include the latest bounded
+`worker_codex_events` list, so a controller can inspect recent Codex JSONL
+activity without reading or interrupting the full Codex session.
 
 Each worker instance records the worker lane, kind, task id, run id, worker pid, claim lock, workspace, and model in events and metadata. Codex output is written to the normal worker log (`hermes kanban log <task_id>`).
 
@@ -597,6 +601,9 @@ children are included, for each child. This lets `kanban_progress`,
 drawer explain states such as `acceptance_check_gate_failed` or
 `auto_request_changes_exhausted` from bounded Kanban evidence without opening or
 interrupting the Codex session.
+For Codex JSONL lanes, the same snapshots include recent bounded
+`worker_codex_events` summaries for the task and each child, including known
+thread, item, command, file-change, and usage fields.
 
 `hermes kanban reviews` lists implementation handoffs whose latest run metadata
 says `review.required: true`, optionally filtered with `--assignee`, `--tenant`,

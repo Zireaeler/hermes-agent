@@ -102,6 +102,75 @@ def test_task_progress_snapshot_reads_worker_state_without_claiming(
     assert after.status == "running"
 
 
+def test_task_progress_snapshot_includes_bounded_codex_events(
+    kanban_home, tmp_path,
+):
+    with kb.connect() as conn:
+        tid = kb.create_task(
+            conn,
+            title="json events",
+            assignee="codex-deep",
+            workspace_kind="dir",
+            workspace_path=str(tmp_path),
+        )
+        task = kb.claim_task(conn, tid, claimer="worker:test")
+        assert task is not None
+        run_id = task.current_run_id
+        assert run_id is not None
+        kb.record_task_event(
+            conn,
+            tid,
+            "worker_codex_event",
+            {
+                "worker_lane": "codex-deep",
+                "worker_kind": "codex_cli",
+                "run_id": run_id,
+                "event_type": "thread.started",
+                "thread_id": "thread-1",
+            },
+            run_id=run_id,
+        )
+        kb.record_task_event(
+            conn,
+            tid,
+            "worker_codex_event",
+            {
+                "worker_lane": "codex-deep",
+                "worker_kind": "codex_cli",
+                "run_id": run_id,
+                "event_type": "item.completed",
+                "item": {
+                    "id": "item-1",
+                    "type": "command_execution",
+                    "command": "pytest " + ("x" * 1000),
+                    "output_tail": "passed\n" + ("A" * 4000),
+                    "exit_code": 0,
+                    "status": "completed",
+                    "ignored": "not surfaced",
+                },
+            },
+            run_id=run_id,
+        )
+        snapshot = kb.task_progress_snapshot(conn, tid)
+
+    assert snapshot is not None
+    payload = snapshot.to_dict()
+    events = payload["worker_codex_events"]
+    assert len(events) == 2
+    assert events[0]["payload"]["event_type"] == "thread.started"
+    assert events[0]["payload"]["thread_id"] == "thread-1"
+    command = events[1]["payload"]["item"]
+    assert command["type"] == "command_execution"
+    assert command["status"] == "completed"
+    assert command["exit_code"] == 0
+    assert command["command"].startswith("pytest ")
+    assert len(command["command"]) < 900
+    assert "truncated" in command["command"]
+    assert len(command["output_tail"]) < 1300
+    assert "truncated" in command["output_tail"]
+    assert "ignored" not in command
+
+
 def test_task_progress_snapshot_surfaces_review_evidence(kanban_home, tmp_path):
     metadata = {
         "worker_lane": {

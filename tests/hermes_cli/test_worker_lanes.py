@@ -881,6 +881,7 @@ def test_codex_json_events_write_task_events_and_feed_progress_metadata(
         task = kb.get_task(conn, tid)
         run = kb.latest_run(conn, tid)
         events = kb.list_events(conn, tid)
+        snapshot = kb.task_progress_snapshot(conn, tid)
         log = kb.read_worker_log(tid)
 
     assert task.status == "blocked"
@@ -937,6 +938,14 @@ def test_codex_json_events_write_task_events_and_feed_progress_metadata(
         "output_tokens": 4,
         "reasoning_output_tokens": 5,
     }
+    assert snapshot is not None
+    snapshot_payload = snapshot.to_dict()
+    snapshot_events = snapshot_payload["worker_codex_events"]
+    assert len(snapshot_events) == 5
+    assert snapshot_events[0]["payload"]["event_type"] == "thread.started"
+    assert snapshot_events[2]["payload"]["item"]["changes"][0]["path"].endswith("smoke.txt")
+    assert snapshot_events[3]["payload"]["item"]["command"] == "pytest json-events"
+    assert "ignored_future_field" not in snapshot_events[4]["payload"]["usage"]
 
 
 def test_codex_metadata_ignores_prompt_template_verification(
