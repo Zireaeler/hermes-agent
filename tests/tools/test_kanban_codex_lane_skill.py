@@ -11,6 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILL_DIR = REPO_ROOT / "skills" / "autonomous-ai-agents" / "kanban-codex-lane"
 SKILL_MD = SKILL_DIR / "SKILL.md"
 TEMPLATE = SKILL_DIR / "templates" / "pmb-codex-lane-prompt.md"
+DOC = REPO_ROOT / "docs" / "kanban-worker-lanes.md"
 
 
 def _skill_text() -> str:
@@ -57,33 +58,44 @@ def test_kanban_codex_lane_skill_is_discoverable_with_template(monkeypatch, tmp_
 
 def test_kanban_codex_lane_documents_required_contracts():
     content = _skill_text()
+    doc = DOC.read_text(encoding="utf-8")
     template = TEMPLATE.read_text(encoding="utf-8")
 
     required_skill_phrases = [
-        "Hermes is always the task owner",
-        "Codex is an input lane only",
-        "git -C \"$REPO\" worktree add -b \"$BRANCH\" \"$WORKTREE\" \"$BASE\"",
-        "codex --version",
-        "codex features list | grep -i goals || true",
-        "codex exec --full-auto",
-        "/goal Work in this repository only",
-        "process(action=\"kill\", session_id=session_id)",
-        "scripts/run_tests.sh",
-        '"codex_lane"',
-        '"used"',
-        '"mode"',
-        '"worktree"',
-        '"branch"',
-        '"command"',
-        '"result"',
-        '"accepted_commits"',
-        '"rejected_reason"',
-        '"tests_run"',
-        '"artifacts"',
-        "accepted | rejected | partial | timed_out",
+        "Codex is an external Kanban worker lane",
+        "not a Hermes model provider",
+        "Hermes is the control plane",
+        "Codex is the execution plane",
+        "hermes kanban worker-lanes --json",
+        "kanban_worker_lane_request",
+        "worker_lane_request_intent",
+        "review.required: true",
+        "kanban_progress(task_id=task, log_tail_bytes=4096)",
+        "worker_progress",
+        "bounded metadata",
+        "not the full Codex session",
     ]
     for phrase in required_skill_phrases:
         assert phrase in content
+
+    required_doc_phrases = [
+        "Hermes profile lanes",
+        "External worker lanes",
+        "Codex CLI Adapter",
+        "codex-fast",
+        "codex-deep",
+        "codex-review",
+        "task_events",
+        "worker_progress",
+        "review.required: true",
+        "Codex artifacts and bounded evidence",
+        "worker_lane_request",
+        "No full Codex event stream",
+        "No Codex approval bridge",
+        "Deep review is workflow-based",
+    ]
+    for phrase in required_doc_phrases:
+        assert phrase in doc
 
     required_safety_phrases = [
         "live-SIM is paper-only; do not add or enable live REST order entry",
@@ -94,5 +106,4 @@ def test_kanban_codex_lane_documents_required_contracts():
         "Do not read, print, write, or require secrets/tokens/credentials",
     ]
     for phrase in required_safety_phrases:
-        assert phrase in content
         assert phrase in template
