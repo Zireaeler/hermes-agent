@@ -3165,19 +3165,35 @@ def _task_has_event_kind(
 
 
 _FOLLOWUP_VERDICT_LINE_RE = re.compile(
-    r"(?i)^\s*verdict\s*:\s*(?:[-*]\s*)?([a-z][a-z_-]*)\b"
+    r"(?i)^\s*verdict\s*:\s*(?:[-*]\s*)?([a-z][a-z_-]*)\s*$"
 )
 _FOLLOWUP_VERDICT_HEADER_RE = re.compile(r"(?i)^\s*verdict\s*:\s*$")
-_FOLLOWUP_VERDICT_BULLET_RE = re.compile(r"^\s*[-*]?\s*([a-z][a-z_-]*)\b")
+_FOLLOWUP_VERDICT_BULLET_RE = re.compile(r"^\s*[-*]?\s*([a-z][a-z_-]*)\s*$")
+_FOLLOWUP_ALLOWED_VERDICTS = {
+    "approve",
+    "approved",
+    "request_changes",
+    "blocked",
+    "pass",
+    "passed",
+    "fail",
+    "failed",
+}
 
 
 def _extract_followup_verdict_from_text(text: str) -> Optional[str]:
+    def normalize(raw: str) -> Optional[str]:
+        value = raw.strip().lower().replace("-", "_")
+        return value if value in _FOLLOWUP_ALLOWED_VERDICTS else None
+
     lines = text.splitlines()
     verdicts: list[str] = []
     for index, line in enumerate(lines):
         match = _FOLLOWUP_VERDICT_LINE_RE.match(line)
         if match:
-            verdicts.append(match.group(1).strip().lower().replace("-", "_"))
+            verdict = normalize(match.group(1))
+            if verdict:
+                verdicts.append(verdict)
             continue
         if _FOLLOWUP_VERDICT_HEADER_RE.match(line):
             for next_line in lines[index + 1 : index + 4]:
@@ -3185,9 +3201,9 @@ def _extract_followup_verdict_from_text(text: str) -> Optional[str]:
                     continue
                 bullet = _FOLLOWUP_VERDICT_BULLET_RE.match(next_line)
                 if bullet:
-                    verdicts.append(
-                        bullet.group(1).strip().lower().replace("-", "_")
-                    )
+                    verdict = normalize(bullet.group(1))
+                    if verdict:
+                        verdicts.append(verdict)
                 break
     return verdicts[-1] if verdicts else None
 
@@ -6040,6 +6056,26 @@ def _metadata_text_lines(value: Any, *, limit: int = 20) -> list[str]:
     return []
 
 
+def _metadata_tail_lines(value: Any, *, limit: int = 20) -> list[str]:
+    if isinstance(value, str) and value.strip():
+        return [line[:400] for line in value.strip().splitlines()[-limit:]]
+    return _metadata_text_lines(value, limit=limit)
+
+
+def _receipt_section_lines(
+    receipt: Any,
+    key: str,
+    *,
+    limit: int = 12,
+) -> list[str]:
+    if not isinstance(receipt, dict):
+        return []
+    sections = receipt.get("sections")
+    if not isinstance(sections, dict):
+        return []
+    return _metadata_text_lines(sections.get(key), limit=limit)
+
+
 def _review_followup_failure_comment(gate: dict[str, Any]) -> str:
     """Build bounded feedback for a failed independent review/test gate."""
     lines = [
@@ -6303,6 +6339,16 @@ def _review_followup_body(
         if isinstance(worker_lane, dict)
         else None
     )
+    worker_receipt = (
+        evidence.get("worker_receipt")
+        if isinstance(evidence.get("worker_receipt"), dict)
+        else (
+            worker_lane.get("receipt")
+            if isinstance(worker_lane, dict)
+            and isinstance(worker_lane.get("receipt"), dict)
+            else None
+        )
+    )
     run = snapshot.run
     purpose_label = "review shard" if purpose == "review_shard" else purpose
     lines = [
@@ -6361,9 +6407,24 @@ def _review_followup_body(
     if verification_summary:
         lines.extend(["", "### Verification summary"])
         lines.extend(_metadata_text_lines(verification_summary, limit=40))
+    if worker_receipt:
+        lines.extend(["", "## Worker receipt"])
+        for label, key in (
+            ("Progress", "progress"),
+            ("Changed files", "changed_files"),
+            ("Remaining risks", "remaining_risks"),
+            ("Recommended reviewer action", "recommended_reviewer_action"),
+        ):
+            section_lines = _receipt_section_lines(worker_receipt, key, limit=10)
+            if section_lines:
+                lines.append(f"{label}:")
+                lines.extend(f"- {line}" for line in section_lines)
+        verdict = worker_receipt.get("verdict")
+        if verdict:
+            lines.append(f"Worker verdict: {str(verdict)[:80]}")
     if worker_tail:
         lines.extend(["", "## Worker output tail"])
-        lines.extend(_metadata_text_lines(worker_tail, limit=80))
+        lines.extend(_metadata_tail_lines(worker_tail, limit=24))
     if purpose in {"review", "review_shard"}:
         lines.extend([
             "",

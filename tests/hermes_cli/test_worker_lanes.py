@@ -16,6 +16,7 @@ from hermes_cli.codex_worker import (
     run_codex_worker,
     _safe_env_for_codex,
     _safe_env_for_worker,
+    _extract_worker_receipt,
 )
 from hermes_cli.plugins import PluginContext, PluginManager, PluginManifest
 from hermes_cli.worker_lanes import (
@@ -489,6 +490,28 @@ def test_codex_argv_json_events():
         "--json",
         "-",
     ]
+
+
+def test_codex_receipt_ignores_verdict_instruction_template():
+    receipt = _extract_worker_receipt(
+        "## Required review output\n"
+        "End with exactly one structured verdict line:\n"
+        "Verdict: approve | request_changes | blocked\n"
+        "Use approve only when the implementation should pass this review gate.\n"
+    )
+
+    assert "verdict" not in receipt
+
+
+def test_codex_receipt_extracts_final_allowed_verdict():
+    receipt = _extract_worker_receipt(
+        "Verdict: approve | request_changes | blocked\n"
+        "Progress:\n"
+        "- [x] inspected evidence\n\n"
+        "Verdict: request_changes\n"
+    )
+
+    assert receipt["verdict"] == "request_changes"
 
 
 def test_codex_prompt_marks_requested_changes_as_mandatory():

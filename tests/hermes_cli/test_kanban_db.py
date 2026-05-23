@@ -1426,6 +1426,140 @@ def test_review_followup_gate_prefers_structured_receipt_verdict(
     assert gate["ready"] is True
 
 
+def test_review_followup_verdict_ignores_instruction_template(
+    kanban_home, tmp_path,
+):
+    metadata = {
+        "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+        "verification": {"commands": ["pytest -q"], "summary": "passed"},
+        "review": {"required": True, "reason": "Codex completed; Hermes review required"},
+    }
+    with kb.connect() as conn:
+        tid = kb.create_task(
+            conn,
+            title="implementation with template verdict text",
+            assignee="codex-deep",
+            workspace_kind="dir",
+            workspace_path=str(tmp_path),
+        )
+        task = kb.claim_task(conn, tid, claimer="worker:codex-deep")
+        assert task is not None
+        assert kb.block_task(
+            conn,
+            tid,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=task.current_run_id,
+            metadata=metadata,
+        )
+        plan = kb.plan_review_followups(conn, tid)
+        review = kb.claim_task(conn, plan.review_task_id, claimer="worker:codex-review")
+        assert review is not None
+        assert kb.block_task(
+            conn,
+            plan.review_task_id,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=review.current_run_id,
+            metadata={
+                "worker_lane": {
+                    "name": "codex-review",
+                    "kind": "codex_cli",
+                    "exit_code": 0,
+                    "timed_out": False,
+                    "binary_missing": False,
+                    "output_tail": (
+                        "End with exactly one structured verdict line:\n"
+                        "Verdict: approve | request_changes | blocked\n"
+                    ),
+                },
+                "verification": {"summary": "passed"},
+                "review": {
+                    "required": True,
+                    "reason": "Codex completed; Hermes review required",
+                },
+            },
+        )
+        _finish_followup_with_worker_evidence(
+            conn,
+            plan.test_task_id,
+            lane="codex-test",
+            verdict="pass",
+        )
+        gate = kb.review_followup_gate_status(
+            conn,
+            tid,
+            source_run_id=task.current_run_id,
+        )
+
+    review_item = next(item for item in gate["items"] if item["purpose"] == "review")
+    assert "verdict" not in review_item
+    assert review_item["state"] == "satisfied"
+    assert gate["ready"] is True
+
+
+def test_review_followup_body_uses_receipt_and_tail_not_prompt_prefix(
+    kanban_home, tmp_path,
+):
+    metadata = {
+        "worker_lane": {
+            "name": "codex-deep",
+            "kind": "codex_cli",
+            "exit_code": 0,
+            "output_tail": (
+                "PROMPT PREFIX SHOULD NOT BE INCLUDED\n"
+                + "\n".join(f"old line {i}" for i in range(40))
+                + "\nProgress:\n- [x] final work\n"
+                "Changed files:\n- final.txt\n"
+            ),
+            "receipt": {
+                "schema": "codex_cli_receipt_v1",
+                "sections": {
+                    "progress": "- [x] final work",
+                    "changed_files": "- final.txt",
+                    "remaining_risks": "- none",
+                    "recommended_reviewer_action": "- approve",
+                },
+            },
+        },
+        "worker_receipt": {
+            "schema": "codex_cli_receipt_v1",
+            "sections": {
+                "progress": "- [x] final work",
+                "changed_files": "- final.txt",
+                "remaining_risks": "- none",
+                "recommended_reviewer_action": "- approve",
+            },
+        },
+        "git": {"changed_files": ["final.txt"], "diff_summary": "final.txt | 1 +"},
+        "verification": {"commands": ["python3 -m pytest"], "summary": "passed"},
+        "review": {"required": True, "reason": "Codex completed; Hermes review required"},
+    }
+    with kb.connect() as conn:
+        tid = kb.create_task(
+            conn,
+            title="implementation with long output tail",
+            assignee="codex-deep",
+            workspace_kind="dir",
+            workspace_path=str(tmp_path),
+        )
+        task = kb.claim_task(conn, tid, claimer="worker:codex-deep")
+        assert task is not None
+        assert kb.block_task(
+            conn,
+            tid,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=task.current_run_id,
+            metadata=metadata,
+        )
+        plan = kb.plan_review_followups(conn, tid)
+        review_task = kb.get_task(conn, plan.review_task_id)
+
+    assert review_task is not None
+    assert "## Worker receipt" in review_task.body
+    assert "- - [x] final work" in review_task.body
+    assert "old line 39" in review_task.body
+    assert "PROMPT PREFIX SHOULD NOT BE INCLUDED" not in review_task.body
+
+
 def test_acceptance_check_gate_requires_configured_check_success(
     kanban_home, tmp_path,
 ):

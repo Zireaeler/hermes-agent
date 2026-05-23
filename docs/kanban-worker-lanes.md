@@ -165,6 +165,29 @@ review tasks over subsets of changed files; every shard verdict must pass before
 the source task can be approved. They are a control-plane review workflow, not a
 claim that Hermes has semantically audited an arbitrary large diff by itself.
 
+## Real Codex E2E Smoke
+
+Unit tests use fake Codex processes. Before calling a worker-lane/control-plane
+change ready on a machine with Codex auth, run the real smoke helper:
+
+```bash
+PYTHONPATH=/path/to/hermes-agent \
+  /path/to/venv/bin/python scripts/smoke_kanban_codex_e2e.py
+```
+
+The helper creates a temporary `HERMES_HOME`, a temporary git workspace, and
+three Codex lanes: `codex-impl`, `codex-review`, and `codex-test`. It preserves
+the operator's normal `~/.codex`/`CODEX_HOME` auth state, does not touch the
+deployment config, and waits only on tasks created by this smoke run.
+
+A successful run proves the dispatcher can start a real implementation Codex
+worker, progress can be queried while that worker is running, Codex completion
+enters review-required state, real Codex review/test follow-up lanes can be
+spawned, Hermes can run deterministic acceptance checks, and the controller can
+approve the task from bounded evidence. Use `--model default` to omit an
+explicit Codex model or `--keep` to retain the temporary DB, logs, and
+workspace for inspection.
+
 ## Skill-Generated Lane Intent
 
 Skills can choose an existing trusted lane by assigning a task:

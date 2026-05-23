@@ -34,9 +34,19 @@ _CHECKBOX_RE = re.compile(r"^\s*[-*]\s*\[([ xX])\]\s+(.+?)\s*$")
 _ORDINAL_RE = re.compile(r"^\s*([oxOX])\s*\((\d+)\)\s+(.+?)\s*$")
 _CODEX_ITEM_ID_INDEX_RE = re.compile(r"(\d+)$")
 _RECEIPT_SECTION_RE = re.compile(r"^\s*([A-Za-z][A-Za-z ]{0,60})\s*:\s*$")
-_VERDICT_LINE_RE = re.compile(r"(?i)^\s*verdict\s*:\s*(?:[-*]\s*)?([a-z][a-z_-]*)\b")
+_VERDICT_LINE_RE = re.compile(r"(?i)^\s*verdict\s*:\s*(?:[-*]\s*)?([a-z][a-z_-]*)\s*$")
 _VERDICT_HEADER_RE = re.compile(r"(?i)^\s*verdict\s*:\s*$")
-_VERDICT_BULLET_RE = re.compile(r"^\s*[-*]?\s*([a-z][a-z_-]*)\b")
+_VERDICT_BULLET_RE = re.compile(r"^\s*[-*]?\s*([a-z][a-z_-]*)\s*$")
+_ALLOWED_STRUCTURED_VERDICTS = {
+    "approve",
+    "approved",
+    "request_changes",
+    "blocked",
+    "pass",
+    "passed",
+    "fail",
+    "failed",
+}
 _RECEIPT_SECTION_KEYS = {
     "progress",
     "changed_files",
@@ -754,12 +764,18 @@ def _extract_receipt_sections(output: str) -> dict[str, str]:
 
 
 def _extract_structured_verdict(output: str) -> Optional[str]:
+    def normalize(raw: str) -> Optional[str]:
+        value = raw.strip().lower().replace("-", "_")
+        return value if value in _ALLOWED_STRUCTURED_VERDICTS else None
+
     lines = (output or "").splitlines()
     verdicts: list[str] = []
     for index, line in enumerate(lines):
         match = _VERDICT_LINE_RE.match(line)
         if match:
-            verdicts.append(match.group(1).strip().lower().replace("-", "_"))
+            verdict = normalize(match.group(1))
+            if verdict:
+                verdicts.append(verdict)
             continue
         if _VERDICT_HEADER_RE.match(line):
             for next_line in lines[index + 1 : index + 4]:
@@ -767,9 +783,9 @@ def _extract_structured_verdict(output: str) -> Optional[str]:
                     continue
                 bullet = _VERDICT_BULLET_RE.match(next_line)
                 if bullet:
-                    verdicts.append(
-                        bullet.group(1).strip().lower().replace("-", "_")
-                    )
+                    verdict = normalize(bullet.group(1))
+                    if verdict:
+                        verdicts.append(verdict)
                 break
     return verdicts[-1] if verdicts else None
 
