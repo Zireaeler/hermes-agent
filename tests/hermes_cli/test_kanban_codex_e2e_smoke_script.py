@@ -131,8 +131,13 @@ def test_real_codex_e2e_smoke_goal_mode_creates_root_and_child(
     assert child is not None
     assert root.status == "todo"
     assert root.assignee == "orchestrator"
+    assert root.session_id == "codex-e2e-smoke-session"
+    assert root.idempotency_key == "codex-e2e-smoke-goal"
+    assert root.created_by == "codex-e2e-smoke"
+    assert root.title.startswith("Goal: real Codex Kanban e2e smoke goal")
     assert child.status == "ready"
     assert child.assignee == "codex-impl"
+    assert child.session_id == "codex-e2e-smoke-session"
     assert child.workspace_kind == "dir"
     assert child.workspace_path == str(workspace)
     assert child.max_runtime_seconds == 159

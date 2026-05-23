@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -160,20 +161,29 @@ Verification, Remaining risks, and Recommended reviewer action.
 
 
 def _create_goal_root_and_child(workspace: Path, *, worker_timeout: int) -> tuple[str, str]:
-    """Create a top-level Kanban goal and deterministic Codex child task."""
+    """Create a /goal-style Kanban root and deterministic Codex child task."""
     from hermes_cli import kanban_db as kb
-    from hermes_cli.goals import create_kanban_task_from_goal
+    from hermes_cli.goals import run_kanban_goal_bridge
 
-    root_id = create_kanban_task_from_goal(
-        "real Codex Kanban e2e smoke goal",
+    response = run_kanban_goal_bridge(
+        "real Codex Kanban e2e smoke goal "
+        f"--assignee orchestrator --workspace dir:{shlex.quote(str(workspace))} "
+        f"--max-runtime {int(worker_timeout) + 60}s "
+        "--created-by codex-e2e-smoke "
+        "--idempotency-key codex-e2e-smoke-goal "
+        "--json",
         session_id="codex-e2e-smoke-session",
-        assignee="orchestrator",
-        workspace_kind="dir",
-        workspace_path=str(workspace),
-        max_runtime_seconds=int(worker_timeout) + 60,
-        created_by="codex-e2e-smoke",
-        idempotency_key="codex-e2e-smoke-goal",
     )
+    try:
+        payload = json.loads(response)
+    except json.JSONDecodeError:
+        _die("/goal create smoke bridge did not return JSON", details={"response": response})
+    root_id = str(payload.get("task_id") or "").strip()
+    if not root_id:
+        _die("/goal create smoke bridge did not create a root task", details={"response": payload})
+    task = payload.get("task")
+    if not isinstance(task, dict) or task.get("status") != "triage":
+        _die("/goal create smoke bridge root was not triage", details={"response": payload})
     body = """\
 Implement the smoke goal by creating `smoke_result.txt` in this repository
 containing exactly this single line, including the trailing newline:
