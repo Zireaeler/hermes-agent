@@ -1,14 +1,32 @@
 ---
-name: kanban-codex-lane
-description: Use when a Hermes orchestrator should route coding work to registered Codex CLI worker lanes while Hermes keeps control of task lifecycle, progress queries, review/test gates, and deterministic acceptance.
-version: 2.0.0
-author: Hermes Agent
-license: MIT
-metadata:
-  hermes:
-    tags: [kanban, codex, worker-lanes, autonomous-agents]
-    related_skills: [kanban-worker, kanban-orchestrator, codex]
+title: "Kanban Codex Lane"
+sidebar_label: "Kanban Codex Lane"
+description: "Use when a Hermes orchestrator should route coding work to registered Codex CLI worker lanes while Hermes keeps control of task lifecycle, progress queries, ..."
 ---
+
+{/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
+
+# Kanban Codex Lane
+
+Use when a Hermes orchestrator should route coding work to registered Codex CLI worker lanes while Hermes keeps control of task lifecycle, progress queries, review/test gates, and deterministic acceptance.
+
+## Skill metadata
+
+| | |
+|---|---|
+| Source | Bundled (installed by default) |
+| Path | `skills/autonomous-ai-agents/kanban-codex-lane` |
+| Version | `2.0.0` |
+| Author | Hermes Agent |
+| License | MIT |
+| Tags | `kanban`, `codex`, `worker-lanes`, `autonomous-agents` |
+| Related skills | [`kanban-worker`](/docs/user-guide/skills/bundled/devops/devops-kanban-worker), [`kanban-orchestrator`](/docs/user-guide/skills/bundled/devops/devops-kanban-orchestrator), [`codex`](/docs/user-guide/skills/bundled/autonomous-ai-agents/autonomous-ai-agents-codex) |
+
+## Reference: full SKILL.md
+
+:::info
+The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+:::
 
 # Kanban Codex Worker Lanes
 
@@ -55,19 +73,8 @@ task = kanban_create(
     title="Implement bounded retry for worker lane failures",
     assignee="codex-deep",
     body="Work in the configured workspace only. Implement bounded retry for failed external worker lane runs. Preserve existing dispatcher lifecycle semantics. Run focused tests and report changed files, verification, and risks.",
-    acceptance_check_request={
-        "name": "focused-unit-test",
-        "type": "command_template",
-        "template": "pytest-target",
-        "args": {"target": "tests/test_worker_lanes.py"},
-    },
 )["task_id"]
 ```
-
-Use `acceptance_check_request` or `acceptance_check_requests` during
-`kanban_create` whenever the acceptance condition is concrete. These requests
-are validated by Hermes and run later by the controller; Codex workers should
-not invent commands or mutate the board themselves.
 
 For review/test, prefer the controller workflow rather than hand-authoring cards:
 
@@ -129,7 +136,7 @@ kanban_acceptance(task_id=task)
 kanban_reviews(lane="codex-deep")
 ```
 
-The Codex adapter parses simple checklist output into `worker_progress` task events, records lane/run-scoped worker heartbeats, and writes logs under the normal Kanban worker log path. The main agent and dashboard should read these records instead of asking the running Codex process for status.
+The Codex adapter parses simple checklist output into `worker_progress` task events, records heartbeats, and writes logs under the normal Kanban worker log path. The main agent and dashboard should read these records instead of asking the running Codex process for status.
 
 Review strategy:
 

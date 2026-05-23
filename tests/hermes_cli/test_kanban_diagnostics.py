@@ -33,6 +33,17 @@ def kanban_home(tmp_path, monkeypatch):
     return home
 
 
+@pytest.fixture(autouse=True)
+def clean_worker_lane_registry():
+    from hermes_cli.worker_lanes import clear_worker_lanes
+
+    clear_worker_lanes()
+    try:
+        yield
+    finally:
+        clear_worker_lanes()
+
+
 def _task(**overrides):
     base = {
         "id": "t_demo00",
@@ -60,6 +71,40 @@ def _run(outcome="completed", run_id=1, error=None):
         "outcome": outcome,
         "error": error,
     }
+
+
+def _review_required_run(run_id=1):
+    return {
+        "id": run_id,
+        "outcome": "blocked",
+        "metadata": {
+            "worker_lane": {
+                "name": "codex-deep",
+                "kind": "codex_cli",
+                "exit_code": 0,
+            },
+            "review": {
+                "required": True,
+                "reason": "Codex completed; Hermes review required",
+            },
+        },
+    }
+
+
+def _finish_followup_with_verdict(conn, task_id: str, *, lane: str, verdict: str) -> None:
+    task = kb.claim_task(conn, task_id, claimer=f"worker:{lane}")
+    assert task is not None
+    assert kb.block_task(
+        conn,
+        task_id,
+        reason="review-required",
+        expected_run_id=task.current_run_id,
+        metadata={
+            "worker_lane": {"name": lane, "kind": "codex_cli", "exit_code": 0},
+            "verification": {"summary": f"Verdict: {verdict}"},
+            "review": {"required": True},
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -732,6 +777,356 @@ def test_config_from_runtime_config_carries_aux_and_model():
     assert cfg["kanban"]["auto_decompose"] is False
     assert cfg["auxiliary"]["kanban_decomposer"]["provider"] == "openrouter"
     assert cfg["model"]["default"] == "qwen/qwen3"
+
+
+def test_review_followup_lane_missing_flags_nonspawnable_followup(
+    kanban_home,
+    monkeypatch,
+):
+    from hermes_cli.worker_lanes import WorkerLane, clear_worker_lanes, register_worker_lane
+
+    clear_worker_lanes()
+    register_worker_lane(WorkerLane(
+        name="codex-review",
+        kind="codex_cli",
+        description="Review lane",
+        spawn_fn=lambda task, workspace, **kwargs: 123,
+        source="test",
+    ))
+    monkeypatch.setattr("hermes_cli.profiles.profile_exists", lambda name: False)
+
+    metadata = {
+        "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+        "review": {"required": True, "reason": "Codex completed; Hermes review required"},
+    }
+    with kb.connect() as conn:
+        tid = kb.create_task(conn, title="implementation", assignee="codex-deep")
+        claimed = kb.claim_task(conn, tid, claimer="worker:codex-deep")
+        assert claimed is not None
+        assert kb.block_task(
+            conn,
+            tid,
+            reason="review-required",
+            expected_run_id=claimed.current_run_id,
+            metadata=metadata,
+        )
+        plan = kb.plan_review_followups(
+            conn,
+            tid,
+            review_assignee="codex-review",
+            test_assignee="codex-test",
+        )
+        task = kb.get_task(conn, tid)
+        events = kb.list_events(conn, tid)
+        runs = kb.list_runs(conn, tid)
+
+    diags = kd.compute_task_diagnostics(task, events, runs, now=1234)
+    missing = [d for d in diags if d.kind == "review_followup_lane_missing"]
+
+    assert len(missing) == 1
+    assert missing[0].data["missing"] == [
+        {"purpose": "test", "assignee": "codex-test", "task_id": plan.test_task_id},
+    ]
+    assert missing[0].actions[0].payload["command"] == "hermes kanban worker-lanes"
+
+
+def test_review_followup_lane_missing_clears_when_lanes_registered(
+    kanban_home,
+    monkeypatch,
+):
+    from hermes_cli.worker_lanes import WorkerLane, clear_worker_lanes, register_worker_lane
+
+    clear_worker_lanes()
+    for name in ("codex-review", "codex-test"):
+        register_worker_lane(WorkerLane(
+            name=name,
+            kind="codex_cli",
+            description=f"{name} lane",
+            spawn_fn=lambda task, workspace, **kwargs: 123,
+            source="test",
+        ))
+    monkeypatch.setattr("hermes_cli.profiles.profile_exists", lambda name: False)
+
+    metadata = {
+        "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+        "review": {"required": True, "reason": "Codex completed; Hermes review required"},
+    }
+    with kb.connect() as conn:
+        tid = kb.create_task(conn, title="implementation", assignee="codex-deep")
+        claimed = kb.claim_task(conn, tid, claimer="worker:codex-deep")
+        assert claimed is not None
+        assert kb.block_task(
+            conn,
+            tid,
+            reason="review-required",
+            expected_run_id=claimed.current_run_id,
+            metadata=metadata,
+        )
+        kb.plan_review_followups(
+            conn,
+            tid,
+            review_assignee="codex-review",
+            test_assignee="codex-test",
+        )
+        task = kb.get_task(conn, tid)
+        events = kb.list_events(conn, tid)
+        runs = kb.list_runs(conn, tid)
+
+    diags = kd.compute_task_diagnostics(task, events, runs, now=1234)
+
+    assert [d for d in diags if d.kind == "review_followup_lane_missing"] == []
+
+
+def test_acceptance_check_gate_failed_flags_current_review_run():
+    task = _task(status="blocked", id="t_accept")
+    events = [
+        _event(
+            "acceptance_check_completed",
+            ts=300,
+            name="unit-tests",
+            source_run_id=7,
+            passed=False,
+            exit_code=2,
+            stdout_tail="nope\n",
+            stderr_tail="assertion failed\n",
+        )
+    ]
+
+    diags = kd.compute_task_diagnostics(
+        task,
+        events,
+        [_review_required_run(run_id=7)],
+        now=400,
+    )
+    failed = [d for d in diags if d.kind == "acceptance_check_gate_failed"]
+
+    assert len(failed) == 1
+    d = failed[0]
+    assert d.severity == "error"
+    assert d.run_id == 7
+    assert d.data["failed_checks"][0]["name"] == "unit-tests"
+    assert d.data["failed_checks"][0]["exit_code"] == 2
+    assert "hermes kanban acceptance t_accept --json" in d.actions[0].payload["command"]
+
+
+def test_acceptance_check_gate_failed_ignores_old_or_cleared_failures():
+    task = _task(status="blocked", id="t_accept")
+    old_failure = _event(
+        "acceptance_check_completed",
+        ts=100,
+        name="unit-tests",
+        source_run_id=6,
+        passed=False,
+        exit_code=2,
+    )
+    current_failure = _event(
+        "acceptance_check_completed",
+        ts=200,
+        name="lint",
+        source_run_id=7,
+        passed=False,
+        exit_code=1,
+    )
+    current_success = _event(
+        "acceptance_check_completed",
+        ts=250,
+        name="lint",
+        source_run_id=7,
+        passed=True,
+        exit_code=0,
+    )
+
+    assert kd.compute_task_diagnostics(
+        task,
+        [old_failure],
+        [_review_required_run(run_id=7)],
+        now=300,
+    ) == []
+    assert kd.compute_task_diagnostics(
+        task,
+        [current_failure, current_success],
+        [_review_required_run(run_id=7)],
+        now=300,
+    ) == []
+    assert kd.compute_task_diagnostics(
+        task,
+        [
+            current_failure,
+            _event("worker_review_changes_requested", ts=260, source_run_id=7),
+        ],
+        [_review_required_run(run_id=7)],
+        now=300,
+    ) == []
+
+
+def test_acceptance_check_gate_failed_round_trips_real_db(
+    kanban_home,
+    tmp_path,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (kanban_home / "config.yaml").write_text(
+        "kanban:\n"
+        "  acceptance_checks:\n"
+        "    failing-check:\n"
+        "      argv: [python3, -c, \"import sys; print('nope'); sys.exit(7)\"]\n"
+        "      timeout_seconds: 10\n",
+        encoding="utf-8",
+    )
+    metadata = {
+        "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+        "review": {"required": True, "reason": "Codex completed; Hermes review required"},
+    }
+    with kb.connect() as conn:
+        tid = kb.create_task(
+            conn,
+            title="implementation with failed hermes verification",
+            assignee="codex-deep",
+            workspace_kind="dir",
+            workspace_path=str(workspace),
+        )
+        task = kb.claim_task(conn, tid, claimer="worker:codex-deep")
+        assert task is not None
+        assert kb.block_task(
+            conn,
+            tid,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=task.current_run_id,
+            metadata=metadata,
+        )
+        kb.run_acceptance_checks(conn, tid, source_run_id=task.current_run_id)
+        row = kb.get_task(conn, tid)
+        events = kb.list_events(conn, tid)
+        runs = kb.list_runs(conn, tid)
+
+    diags = kd.compute_task_diagnostics(row, events, runs, now=1234)
+    failed = [d for d in diags if d.kind == "acceptance_check_gate_failed"]
+
+    assert len(failed) == 1
+    assert failed[0].data["failed_checks"][0]["name"] == "failing-check"
+    assert failed[0].data["failed_checks"][0]["exit_code"] == 7
+    assert failed[0].data["failed_checks"][0]["stdout_tail"].strip() == "nope"
+
+
+def test_auto_request_changes_exhausted_flags_blocked_review_run():
+    task = _task(status="blocked", id="t_retry")
+    events = [
+        _event(
+            "worker_review_auto_retry_exhausted",
+            ts=500,
+            limit=1,
+            limit_source="task",
+            used=1,
+            reason="automatic request-changes retry limit reached",
+        )
+    ]
+
+    diags = kd.compute_task_diagnostics(
+        task,
+        events,
+        [_review_required_run(run_id=9)],
+        now=600,
+    )
+    exhausted = [d for d in diags if d.kind == "auto_request_changes_exhausted"]
+
+    assert len(exhausted) == 1
+    d = exhausted[0]
+    assert d.severity == "error"
+    assert d.run_id == 9
+    assert d.data["auto_request_changes"]["limit"] == 1
+    assert "hermes kanban acceptance t_retry --json" in d.actions[0].payload["command"]
+
+
+def test_auto_request_changes_exhausted_clears_after_unblock():
+    task = _task(status="blocked", id="t_retry")
+    events = [
+        _event("worker_review_auto_retry_exhausted", ts=500, limit=1, used=1),
+        _event("unblocked", ts=501),
+    ]
+
+    assert kd.compute_task_diagnostics(
+        task,
+        events,
+        [_review_required_run(run_id=9)],
+        now=600,
+    ) == []
+
+
+def test_auto_request_changes_exhausted_round_trips_real_db(
+    kanban_home,
+    tmp_path,
+):
+    metadata = {
+        "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+        "verification": {"commands": ["pytest -q"], "summary": "passed"},
+        "review": {"required": True, "reason": "Codex completed; Hermes review required"},
+    }
+    with kb.connect() as conn:
+        tid = kb.create_task(
+            conn,
+            title="advance stops after one automatic request changes",
+            assignee="codex-deep",
+            workspace_kind="dir",
+            workspace_path=str(tmp_path),
+            max_retries=1,
+        )
+        first = kb.claim_task(conn, tid, claimer="worker:codex-deep")
+        assert first is not None
+        assert kb.block_task(
+            conn,
+            tid,
+            reason="review-required: first run",
+            expected_run_id=first.current_run_id,
+            metadata=metadata,
+        )
+        plan = kb.plan_review_followups(conn, tid)
+        _finish_followup_with_verdict(
+            conn,
+            plan.review_task_id,
+            lane="codex-review",
+            verdict="request_changes",
+        )
+        _finish_followup_with_verdict(
+            conn,
+            plan.test_task_id,
+            lane="codex-test",
+            verdict="pass",
+        )
+        kb.advance_acceptance_workflow(conn, tid, reviewer="controller", dispatch=False)
+
+        retry = kb.claim_task(conn, tid, claimer="worker:codex-deep")
+        assert retry is not None
+        assert kb.block_task(
+            conn,
+            tid,
+            reason="review-required: second run",
+            expected_run_id=retry.current_run_id,
+            metadata=metadata,
+        )
+        retry_plan = kb.plan_review_followups(conn, tid)
+        _finish_followup_with_verdict(
+            conn,
+            retry_plan.review_task_id,
+            lane="codex-review",
+            verdict="request_changes",
+        )
+        _finish_followup_with_verdict(
+            conn,
+            retry_plan.test_task_id,
+            lane="codex-test",
+            verdict="pass",
+        )
+        kb.advance_acceptance_workflow(conn, tid, reviewer="controller", dispatch=False)
+        task = kb.get_task(conn, tid)
+        events = kb.list_events(conn, tid)
+        runs = kb.list_runs(conn, tid)
+
+    diags = kd.compute_task_diagnostics(task, events, runs, now=1234)
+    exhausted = [d for d in diags if d.kind == "auto_request_changes_exhausted"]
+
+    assert len(exhausted) == 1
+    assert exhausted[0].data["auto_request_changes"]["limit"] == 1
+    assert exhausted[0].data["auto_request_changes"]["used"] == 1
 
 
 def test_config_from_runtime_config_handles_empty_input():

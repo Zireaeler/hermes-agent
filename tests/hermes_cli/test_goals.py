@@ -386,6 +386,9 @@ def test_create_kanban_task_from_goal_bridge_is_opt_in_and_idempotent(hermes_hom
     assert task.tenant == "dev"
     assert task.priority == 7
     assert "refactor worker lanes" in task.body
+    assert "Kanban goal bridge" in task.body
+    assert "ready for a Hermes orchestrator or Kanban decomposer" in task.body
+    assert "future orchestrator" not in task.body
 
 
 def test_create_kanban_task_from_goal_accepts_workspace_for_decomposition(
@@ -434,6 +437,203 @@ def test_run_kanban_goal_bridge_creates_task_with_session(hermes_home):
         task = kb.get_task(conn, payload["task_id"])
     assert task is not None
     assert "ship worker lanes" in task.body
+
+
+def test_run_kanban_goal_bridge_usage_mentions_advance():
+    from hermes_cli.goals import run_kanban_goal_bridge
+
+    out = run_kanban_goal_bridge("")
+
+    assert "--decompose" in out
+    assert "--advance" in out
+    assert "--loop" in out
+
+
+def test_advance_kanban_goal_for_session_dispatches_current_root(
+    hermes_home,
+    tmp_path,
+    monkeypatch,
+):
+    from hermes_cli import profiles
+    from hermes_cli import kanban_db as kb
+    from hermes_cli.goals import (
+        advance_kanban_goal_for_session,
+        create_kanban_task_from_goal,
+    )
+
+    monkeypatch.setattr(profiles, "profile_exists", lambda name: True)
+    root = create_kanban_task_from_goal(
+        "advance current root",
+        session_id="goal-advance-session",
+        assignee="orchestrator",
+        workspace_kind="dir",
+        workspace_path=str(tmp_path),
+    )
+    with kb.connect() as conn:
+        child_ids = kb.decompose_triage_task(
+            conn,
+            root,
+            root_assignee="orchestrator",
+            children=[{"title": "implement", "assignee": "codex-deep"}],
+            author="planner",
+        )
+        assert child_ids is not None
+
+    out = advance_kanban_goal_for_session(
+        "--dry-run --json",
+        session_id="goal-advance-session",
+    )
+    payload = json.loads(out)
+    spawned_ids = {
+        item["task_id"]
+        for step in payload["steps"]
+        if step["kind"] == "dispatch_goal_children"
+        for item in step["dispatch"]["spawned"]
+    }
+
+    assert payload["task_id"] == root
+    assert spawned_ids == {child_ids[0]}
+
+
+def test_advance_kanban_goal_for_session_reports_missing_root(hermes_home):
+    from hermes_cli.goals import advance_kanban_goal_for_session
+
+    out = advance_kanban_goal_for_session("--json", session_id="missing-goal-root")
+
+    assert "No /goal create Kanban root found" in out
+
+
+def test_kanban_goal_status_line_surfaces_root_next_action(hermes_home, tmp_path):
+    from hermes_cli import kanban_db as kb
+    from hermes_cli.goals import create_kanban_task_from_goal, kanban_goal_status_line
+
+    root = create_kanban_task_from_goal(
+        "ship status next action",
+        session_id="goal-status-next",
+        assignee="orchestrator",
+        workspace_kind="dir",
+        workspace_path=str(tmp_path),
+    )
+    with kb.connect() as conn:
+        child_ids = kb.decompose_triage_task(
+            conn,
+            root,
+            root_assignee="orchestrator",
+            children=[{"title": "implementation ready for review", "assignee": "codex-deep"}],
+            author="planner",
+        )
+        assert child_ids is not None
+        child = child_ids[0]
+        claimed = kb.claim_task(conn, child, claimer="worker:codex-deep")
+        assert claimed is not None
+        assert kb.block_task(
+            conn,
+            child,
+            reason="review-required",
+            expected_run_id=claimed.current_run_id,
+            metadata={
+                "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+                "verification": {"summary": "passed"},
+                "review": {"required": True, "reason": "needs review"},
+            },
+        )
+
+    line = kanban_goal_status_line("goal-status-next")
+
+    assert line is not None
+    assert f"Kanban goal {root}" in line
+    assert "root-next: advance_children: plan_review_followups=1" in line
+    assert "children=0/1 done running=0 review-required=1" in line
+
+
+def test_kanban_goal_status_line_surfaces_single_goal_worker(hermes_home, tmp_path):
+    from hermes_cli import kanban_db as kb
+    from hermes_cli.goals import create_kanban_task_from_goal, kanban_goal_status_line
+
+    root = create_kanban_task_from_goal(
+        "ship single worker status",
+        session_id="goal-status-single-worker",
+        assignee="codex-fast",
+        workspace_kind="dir",
+        workspace_path=str(tmp_path),
+    )
+    with kb.connect() as conn:
+        assert kb.specify_triage_task(
+            conn,
+            root,
+            title="Ship single worker status",
+            body="Single worker task",
+            assignee="codex-fast",
+            author="planner",
+        )
+        claimed = kb.claim_task(conn, root, claimer="worker:codex-fast")
+        assert claimed is not None
+        kb.record_task_event(
+            conn,
+            root,
+            "worker_progress",
+            {
+                "lane": "codex-fast",
+                "items": [{"index": 1, "status": "running", "text": "editing"}],
+            },
+            run_id=claimed.current_run_id,
+        )
+
+    line = kanban_goal_status_line("goal-status-single-worker")
+
+    assert line is not None
+    assert f"Kanban goal {root}" in line
+    assert "root-next: wait_for_goal_worker" in line
+    assert "root-worker: next=wait_for_goal_worker; progress=running: editing" in line
+    assert "children=0; next: decompose" not in line
+
+
+def test_kanban_goal_status_line_surfaces_child_diagnostics(hermes_home, tmp_path):
+    from hermes_cli import kanban_db as kb
+    from hermes_cli.goals import create_kanban_task_from_goal, kanban_goal_status_line
+
+    root = create_kanban_task_from_goal(
+        "ship diagnostic status",
+        session_id="goal-status-diagnostics",
+        assignee="orchestrator",
+        workspace_kind="dir",
+        workspace_path=str(tmp_path),
+    )
+    with kb.connect() as conn:
+        child_ids = kb.decompose_triage_task(
+            conn,
+            root,
+            root_assignee="orchestrator",
+            children=[{"title": "implementation blocked on retries", "assignee": "codex-deep"}],
+            author="planner",
+        )
+        assert child_ids is not None
+        child = child_ids[0]
+        claimed = kb.claim_task(conn, child, claimer="worker:codex-deep")
+        assert claimed is not None
+        assert kb.block_task(
+            conn,
+            child,
+            reason="review-required",
+            expected_run_id=claimed.current_run_id,
+            metadata={
+                "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+                "review": {"required": True, "reason": "needs review"},
+            },
+        )
+        kb.record_task_event(
+            conn,
+            child,
+            "worker_review_auto_retry_exhausted",
+            {"limit": 1, "limit_source": "task", "used": 1},
+            run_id=claimed.current_run_id,
+        )
+
+    line = kanban_goal_status_line("goal-status-diagnostics")
+
+    assert line is not None
+    assert "diagnostics: auto_request_changes_exhausted" in line
+    assert "diagnostics=auto_request_changes_exhausted" in line
 
 
 # ──────────────────────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import stat
 import subprocess
@@ -124,6 +125,7 @@ def test_config_registers_multiple_codex_lanes():
                     "sandbox": "workspace-write",
                     "approval": "never",
                     "max_concurrency": 1,
+                    "json_events": True,
                 },
             }
         }
@@ -132,6 +134,7 @@ def test_config_registers_multiple_codex_lanes():
     assert set(lanes) == {"codex-deep", "codex-fast"}
     assert lanes["codex-fast"].max_concurrency == 2
     assert lanes["codex-deep"].config["model"] == "gpt-5.5"
+    assert lanes["codex-deep"].config["json_events"] is True
 
 
 def test_lane_request_validator_rejects_shell_command():
@@ -152,6 +155,7 @@ def test_enable_worker_lane_request_registers_sanitized_lane():
         "approval": "never",
         "max_concurrency": 1,
         "success_policy": "block_for_review",
+        "json_events": "true",
         "reason": "large refactor",
     })
 
@@ -159,6 +163,7 @@ def test_enable_worker_lane_request_registers_sanitized_lane():
     assert lane.kind == "codex_cli"
     assert lane.source == "lane_request"
     assert get_worker_lane("codex-long-context") is lane
+    assert lane.config["json_events"] is True
     assert resolve_worker_assignee("codex-long-context", refresh_config=False).kind == "worker_lane"
 
 
@@ -177,6 +182,7 @@ def test_enable_worker_lane_request_can_persist_sanitized_config(tmp_path, monke
             "approval": "never",
             "max_concurrency": 2,
             "success_policy": "block_for_review",
+            "json_events": True,
             "reason": "operator approved",
         },
         persist=True,
@@ -190,8 +196,18 @@ def test_enable_worker_lane_request_can_persist_sanitized_config(tmp_path, monke
     assert stored["type"] == "codex_cli"
     assert stored["model"] == "gpt-5.4-mini"
     assert stored["max_concurrency"] == 2
+    assert stored["json_events"] is True
     assert "reason" not in stored
     assert "command" not in stored
+
+
+def test_lane_request_validator_rejects_invalid_json_events():
+    with pytest.raises(ValueError, match="json_events"):
+        validate_worker_lane_request({
+            "name": "codex-events",
+            "type": "codex_cli",
+            "json_events": "maybe",
+        })
 
 
 def test_dispatcher_uses_external_lane_assignee(kanban_home, monkeypatch):
@@ -450,6 +466,31 @@ def test_codex_argv_model_parameter():
     ]
 
 
+def test_codex_argv_json_events():
+    argv = build_codex_argv(
+        binary="/usr/bin/codex",
+        workspace="/tmp/ws",
+        sandbox="read-only",
+        approval="never",
+        model="gpt-5.4-mini",
+        json_events=True,
+    )
+    assert argv == [
+        "/usr/bin/codex",
+        "--cd",
+        "/tmp/ws",
+        "--sandbox",
+        "read-only",
+        "--ask-for-approval",
+        "never",
+        "--model",
+        "gpt-5.4-mini",
+        "exec",
+        "--json",
+        "-",
+    ]
+
+
 def test_codex_prompt_marks_requested_changes_as_mandatory():
     from hermes_cli.codex_worker import build_codex_prompt
 
@@ -463,6 +504,7 @@ def test_codex_prompt_marks_requested_changes_as_mandatory():
 
     assert "Requested changes to address before finishing" in prompt
     assert "mandatory retry feedback" in prompt
+    assert "ordinary task instructions or examples" in prompt
     assert "Fix the failed exact-file acceptance check." in prompt
 
 
@@ -681,6 +723,7 @@ def test_codex_exit_zero_blocks_for_review_and_records_progress_metadata(
         task = kb.get_task(conn, tid)
         run = kb.latest_run(conn, tid)
         events = kb.list_events(conn, tid)
+        snapshot = kb.task_progress_snapshot(conn, tid)
         log = kb.read_worker_log(tid)
     assert task.status == "blocked"
     assert run.outcome == "blocked"
@@ -692,11 +735,208 @@ def test_codex_exit_zero_blocks_for_review_and_records_progress_metadata(
     assert "hermes_cli/kanban_db.py" in run.metadata["worker_lane"]["output_tail"]
     assert run.metadata["verification"]["commands"] == ["pytest fake"]
     assert any(e.kind == "heartbeat" for e in events)
+    worker_heartbeats = [e for e in events if e.kind == "worker_heartbeat"]
+    assert worker_heartbeats
+    assert worker_heartbeats[-1].payload["worker_lane"] == "codex-deep"
+    assert worker_heartbeats[-1].payload["worker_kind"] == "codex_cli"
+    assert worker_heartbeats[-1].payload["run_id"] == run_id
+    assert snapshot.heartbeat_event is not None
+    assert snapshot.heartbeat_event.kind == "worker_heartbeat"
+    assert snapshot.to_dict()["last_heartbeat_event"]["payload"]["worker_lane"] == "codex-deep"
     progress = [e for e in events if e.kind == "worker_progress"]
     assert progress
+    assert progress[-1].payload["worker_lane"] == "codex-deep"
     assert progress[-1].payload["lane"] == "codex-deep"
+    assert progress[-1].payload["run_id"] == run_id
     assert any(item["text"] == "修改 dispatcher" for item in progress[-1].payload["items"])
     assert "[codex-worker]" in log
+
+
+def test_codex_exit_zero_records_structured_receipt_verdict(
+    kanban_home, tmp_path, monkeypatch,
+):
+    old_path = os.environ.get("PATH", "")
+    fake_bin = _make_fake_codex(
+        tmp_path,
+        "Progress:\n- [x] inspected evidence\n\n"
+        "Verification:\n- command: pytest fake\n  result: passed\n\n"
+        "Remaining risks:\n- none\n\n"
+        "Recommended reviewer action:\n- approve\n\n"
+        "Verdict: pass\n",
+    )
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + old_path)
+    with kb.connect() as conn:
+        tid, task = _claim_for_codex(conn)
+        run_id = task.current_run_id
+    run_codex_worker(
+        task_id=tid,
+        lane="codex-test",
+        workspace=os.getcwd(),
+        sandbox="workspace-write",
+        approval="never",
+        run_id=run_id,
+        claim_lock=task.claim_lock,
+        heartbeat_interval=0.01,
+    )
+
+    with kb.connect() as conn:
+        run = kb.latest_run(conn, tid)
+
+    assert run.metadata["worker_receipt"]["schema"] == "codex_cli_receipt_v1"
+    assert run.metadata["worker_receipt"]["verdict"] == "pass"
+    assert run.metadata["worker_receipt"]["remaining_risks"] == "- none"
+    assert run.metadata["verification"]["verdict"] == "pass"
+    assert run.metadata["worker_lane"]["verdict"] == "pass"
+    assert run.metadata["worker_lane"]["receipt"]["sections"]["verification"]
+
+
+def test_codex_json_events_write_task_events_and_feed_progress_metadata(
+    kanban_home, tmp_path, monkeypatch,
+):
+    old_path = os.environ.get("PATH", "")
+    agent_message = (
+        "Progress:\n"
+        "- [x] analyzed task\n"
+        "- [ ] update docs\n\n"
+        "Changed files:\n"
+        "- hermes_cli/codex_worker.py\n\n"
+        "Verification:\n"
+        "- command: pytest json-events\n"
+        "  result: passed\n\n"
+        "Remaining risks:\n"
+        "- event stream shape may evolve\n\n"
+        "Recommended reviewer action:\n"
+        "- approve\n"
+    )
+    body = "\n".join(
+        json.dumps(event)
+        for event in [
+            {"type": "thread.started", "thread_id": "thread-json-test"},
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "item-msg",
+                    "type": "agent_message",
+                    "text": agent_message,
+                },
+            },
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "item-file",
+                    "type": "file_change",
+                    "changes": [
+                        {
+                            "path": str(tmp_path / "workspace" / "smoke.txt"),
+                            "kind": "add",
+                        }
+                    ],
+                    "status": "completed",
+                },
+            },
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "item-cmd",
+                    "type": "command_execution",
+                    "command": "pytest json-events",
+                    "aggregated_output": "passed\n" + ("A" * 5000),
+                    "exit_code": 0,
+                    "status": "completed",
+                },
+            },
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 12,
+                    "cached_input_tokens": 3,
+                    "output_tokens": 4,
+                    "reasoning_output_tokens": 5,
+                    "ignored_future_field": 999,
+                },
+            },
+        ]
+    ) + "\n"
+    fake_bin = _make_fake_codex(tmp_path, body)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + old_path)
+    with kb.connect() as conn:
+        tid, task = _claim_for_codex(conn)
+        run_id = task.current_run_id
+
+    rc = run_codex_worker(
+        task_id=tid,
+        lane="codex-deep",
+        workspace=os.getcwd(),
+        sandbox="workspace-write",
+        approval="never",
+        model="gpt-5.5",
+        run_id=run_id,
+        claim_lock=task.claim_lock,
+        heartbeat_interval=0.01,
+        json_events=True,
+    )
+
+    assert rc == 0
+    with kb.connect() as conn:
+        task = kb.get_task(conn, tid)
+        run = kb.latest_run(conn, tid)
+        events = kb.list_events(conn, tid)
+        log = kb.read_worker_log(tid)
+
+    assert task.status == "blocked"
+    assert run.outcome == "blocked"
+    assert run.metadata["worker_instance"]["json_events"] is True
+    assert run.metadata["worker_lane"]["json_events"] is True
+    assert run.metadata["worker_receipt"]["changed_files_text"] == "- hermes_cli/codex_worker.py"
+    assert run.metadata["worker_receipt"]["remaining_risks"] == "- event stream shape may evolve"
+    assert run.metadata["verification"]["commands"] == ["pytest json-events"]
+    assert "hermes_cli/codex_worker.py" in run.metadata["worker_lane"]["output_tail"]
+    assert '"type": "thread.started"' in log
+
+    progress = [event for event in events if event.kind == "worker_progress"]
+    assert progress
+    assert progress[-1].payload["worker_lane"] == "codex-deep"
+    assert progress[-1].payload["run_id"] == run_id
+    progress_items = progress[-1].payload["items"]
+    assert progress_items[:2] == [
+        {"index": 1, "status": "done", "text": "analyzed task"},
+        {"index": 2, "status": "pending", "text": "update docs"},
+    ]
+    assert any(
+        item["status"] == "done" and item["text"] == "apply file changes: smoke.txt"
+        for item in progress_items
+    )
+    assert any(
+        item["status"] == "done" and item["text"] == "run command: pytest json-events"
+        for item in progress_items
+    )
+
+    codex_events = [event for event in events if event.kind == "worker_codex_event"]
+    assert len(codex_events) == 5
+    first_payload = codex_events[0].payload
+    assert first_payload["worker_lane"] == "codex-deep"
+    assert first_payload["worker_kind"] == "codex_cli"
+    assert first_payload["run_id"] == run_id
+    assert first_payload["event_type"] == "thread.started"
+    assert first_payload["thread_id"] == "thread-json-test"
+    file_payload = codex_events[2].payload["item"]
+    assert file_payload["type"] == "file_change"
+    assert file_payload["changes"][0]["path"].endswith("smoke.txt")
+    assert file_payload["changes"][0]["kind"] == "add"
+    command_payload = codex_events[3].payload["item"]
+    assert command_payload["type"] == "command_execution"
+    assert command_payload["command"] == "pytest json-events"
+    assert command_payload["status"] == "completed"
+    assert command_payload["exit_code"] == 0
+    assert len(command_payload["output_tail"]) < 2300
+    assert "truncated" in command_payload["output_tail"]
+    usage_payload = codex_events[4].payload["usage"]
+    assert usage_payload == {
+        "input_tokens": 12,
+        "cached_input_tokens": 3,
+        "output_tokens": 4,
+        "reasoning_output_tokens": 5,
+    }
 
 
 def test_codex_metadata_ignores_prompt_template_verification(
@@ -737,6 +977,100 @@ def test_codex_metadata_ignores_prompt_template_verification(
     assert progress[-1].payload["items"] == [
         {"index": 1, "status": "done", "text": "Create smoke_result.txt"}
     ]
+
+
+def test_codex_receipt_parser_uses_last_real_receipt_block(
+    kanban_home, tmp_path, monkeypatch,
+):
+    old_path = os.environ.get("PATH", "")
+    fake_bin = _make_fake_codex(
+        tmp_path,
+        "## External worker instructions\n"
+        "When finished, print a concise structured receipt:\n\n"
+        "Progress:\n- [x] ...\n- [ ] ...\n\n"
+        "Changed files:\n- ...\n\n"
+        "Verification:\n- command: ...\n  result: ...\n\n"
+        "Remaining risks:\n- ...\n\n"
+        "Recommended reviewer action:\n- ...\n\n"
+        "If this is an independent review or test follow-up task, include a Verdict line.\n"
+        "codex\nI am doing the actual work now.\n"
+        "exec\n/bin/bash -lc 'git status --short'\n"
+        "Progress:\n- [x] Create final file\n\n"
+        "Changed files:\n- smoke_result.txt\n\n"
+        "Verification:\n- command: pytest smoke\n  result: passed\n\n"
+        "Remaining risks:\n- none\n\n"
+        "Recommended reviewer action:\n- approve\n",
+    )
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + old_path)
+    with kb.connect() as conn:
+        tid, task = _claim_for_codex(conn)
+        run_id = task.current_run_id
+    run_codex_worker(
+        task_id=tid,
+        lane="codex-smoke",
+        workspace=os.getcwd(),
+        sandbox="workspace-write",
+        approval="never",
+        run_id=run_id,
+        claim_lock=task.claim_lock,
+        heartbeat_interval=0.01,
+    )
+
+    with kb.connect() as conn:
+        run = kb.latest_run(conn, tid)
+
+    receipt = run.metadata["worker_receipt"]
+    assert receipt["sections"]["progress"] == "- [x] Create final file"
+    assert receipt["changed_files_text"] == "- smoke_result.txt"
+    assert receipt["remaining_risks"] == "- none"
+    assert receipt["recommended_reviewer_action"] == "- approve"
+    assert "External worker instructions" not in receipt["recommended_reviewer_action"]
+
+
+def test_codex_worker_heartbeat_ignores_superseded_run(
+    kanban_home,
+):
+    from hermes_cli.codex_worker import _heartbeat
+
+    with kb.connect() as conn:
+        tid, task = _claim_for_codex(conn)
+        old_run_id = task.current_run_id
+        assert old_run_id is not None
+        assert kb.block_task(
+            conn,
+            tid,
+            reason="review-required: first run",
+            expected_run_id=old_run_id,
+            metadata={
+                "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+                "review": {"required": True, "reason": "first run"},
+            },
+        )
+        assert kb.unblock_task(conn, tid)
+        second = kb.claim_task(conn, tid, claimer="worker:codex-deep")
+        assert second is not None
+        new_run_id = second.current_run_id
+        assert new_run_id is not None and new_run_id != old_run_id
+
+    _heartbeat(
+        tid,
+        run_id=old_run_id,
+        claim_lock=task.claim_lock,
+        lane="codex-deep",
+    )
+
+    with kb.connect() as conn:
+        events = kb.list_events(conn, tid)
+        current = kb.get_task(conn, tid)
+
+    stale_worker_heartbeats = [
+        event
+        for event in events
+        if event.kind == "worker_heartbeat" and event.run_id == old_run_id
+    ]
+    assert stale_worker_heartbeats == []
+    assert current.current_run_id == new_run_id
+    assert current.status == "running"
 
 
 def test_codex_exit_nonzero_blocks_failed(kanban_home, tmp_path, monkeypatch):

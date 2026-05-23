@@ -26,11 +26,24 @@ from hermes_cli.worker_lanes import WorkerLane
 
 CODEX_OUTPUT_TAIL_BYTES = 8192
 CODEX_FIELD_MAX_BYTES = 4096
+CODEX_EVENT_FIELD_MAX_BYTES = 2048
 CODEX_PROGRESS_MAX_ITEMS = 50
 DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30.0
 
 _CHECKBOX_RE = re.compile(r"^\s*[-*]\s*\[([ xX])\]\s+(.+?)\s*$")
 _ORDINAL_RE = re.compile(r"^\s*([oxOX])\s*\((\d+)\)\s+(.+?)\s*$")
+_CODEX_ITEM_ID_INDEX_RE = re.compile(r"(\d+)$")
+_RECEIPT_SECTION_RE = re.compile(r"^\s*([A-Za-z][A-Za-z ]{0,60})\s*:\s*$")
+_VERDICT_LINE_RE = re.compile(r"(?i)^\s*verdict\s*:\s*(?:[-*]\s*)?([a-z][a-z_-]*)\b")
+_VERDICT_HEADER_RE = re.compile(r"(?i)^\s*verdict\s*:\s*$")
+_VERDICT_BULLET_RE = re.compile(r"^\s*[-*]?\s*([a-z][a-z_-]*)\b")
+_RECEIPT_SECTION_KEYS = {
+    "progress",
+    "changed_files",
+    "verification",
+    "remaining_risks",
+    "recommended_reviewer_action",
+}
 
 
 @dataclass(frozen=True)
@@ -43,6 +56,7 @@ class CodexLaneConfig:
     success_policy: str = "block_for_review"
     timeout_seconds: Optional[int] = None
     heartbeat_interval_seconds: float = DEFAULT_HEARTBEAT_INTERVAL_SECONDS
+    json_events: bool = False
 
 
 class _TailBuffer:
@@ -78,6 +92,7 @@ def make_codex_worker_lane(config: dict[str, Any], *, source: str = "config") ->
             if config.get("timeout_seconds") is not None
             else None
         ),
+        json_events=_as_bool(config.get("json_events"), default=False),
     )
 
     def _spawn(task, workspace: str, *, board: Optional[str] = None) -> Optional[int]:
@@ -97,8 +112,23 @@ def make_codex_worker_lane(config: dict[str, Any], *, source: str = "config") ->
             "sandbox": cfg.sandbox,
             "approval": cfg.approval,
             "timeout_seconds": cfg.timeout_seconds,
+            "json_events": cfg.json_events,
         },
     )
+
+
+def _as_bool(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
 
 
 def _safe_env_for_worker(task, workspace: str, cfg: CodexLaneConfig, *, board: Optional[str]) -> dict[str, str]:
@@ -238,6 +268,8 @@ def spawn_codex_worker(
         "--heartbeat-interval",
         str(cfg.heartbeat_interval_seconds),
     ]
+    if cfg.json_events:
+        cmd.append("--json-events")
     if task.current_run_id is not None:
         cmd.extend(["--run-id", str(task.current_run_id)])
     if task.claim_lock:
@@ -279,6 +311,7 @@ def build_codex_argv(
     sandbox: str,
     approval: str,
     model: Optional[str] = None,
+    json_events: bool = False,
 ) -> list[str]:
     argv = [
         binary,
@@ -291,7 +324,10 @@ def build_codex_argv(
     ]
     if model:
         argv.extend(["--model", model])
-    argv.extend(["exec", "-"])
+    argv.append("exec")
+    if json_events:
+        argv.append("--json")
+    argv.append("-")
     return argv
 
 
@@ -369,6 +405,142 @@ def _record_event(task_id: str, kind: str, payload: dict[str, Any], *, run_id: O
         pass
 
 
+def _json_event_item_payload(item: dict[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for key in ("id", "type", "status", "exit_code"):
+        if key in item:
+            payload[key] = item.get(key)
+    if item.get("command"):
+        payload["command"] = _cap(str(item.get("command")), CODEX_EVENT_FIELD_MAX_BYTES)
+    if item.get("text"):
+        payload["text_tail"] = _cap(str(item.get("text")), CODEX_EVENT_FIELD_MAX_BYTES)
+    if item.get("aggregated_output"):
+        payload["output_tail"] = _cap(
+            str(item.get("aggregated_output")),
+            CODEX_EVENT_FIELD_MAX_BYTES,
+        )
+    changes = item.get("changes")
+    if isinstance(changes, list):
+        compact_changes: list[dict[str, str]] = []
+        for change in changes[:20]:
+            if not isinstance(change, dict):
+                continue
+            compact: dict[str, str] = {}
+            if change.get("path"):
+                compact["path"] = _cap(str(change.get("path")), CODEX_EVENT_FIELD_MAX_BYTES)
+            if change.get("kind"):
+                compact["kind"] = _cap(str(change.get("kind")), 80)
+            if compact:
+                compact_changes.append(compact)
+        if compact_changes:
+            payload["changes"] = compact_changes
+    return payload
+
+
+def _codex_json_event_payload(
+    event: dict[str, Any],
+    *,
+    lane: str,
+    run_id: Optional[int],
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "worker_lane": lane,
+        "worker_kind": "codex_cli",
+        "run_id": run_id,
+        "event_type": str(event.get("type") or "unknown"),
+    }
+    if event.get("thread_id"):
+        payload["thread_id"] = str(event["thread_id"])
+    if isinstance(event.get("usage"), dict):
+        payload["usage"] = {
+            key: event["usage"].get(key)
+            for key in (
+                "input_tokens",
+                "cached_input_tokens",
+                "output_tokens",
+                "reasoning_output_tokens",
+            )
+            if key in event["usage"]
+        }
+    item = event.get("item")
+    if isinstance(item, dict):
+        payload["item"] = _json_event_item_payload(item)
+    return payload
+
+
+def _codex_json_event_text(event: dict[str, Any]) -> str:
+    item = event.get("item")
+    if not isinstance(item, dict):
+        return ""
+    item_type = str(item.get("type") or "")
+    if item_type == "agent_message" and item.get("text"):
+        return str(item["text"]).rstrip() + "\n"
+    if item_type == "command_execution":
+        parts: list[str] = []
+        command = item.get("command")
+        if command:
+            parts.append(f"$ {command}")
+        status = item.get("status")
+        exit_code = item.get("exit_code")
+        if status or exit_code is not None:
+            parts.append(f"status={status or '-'} exit_code={exit_code}")
+        if item.get("aggregated_output"):
+            parts.append(str(item["aggregated_output"]).rstrip())
+        return "\n".join(part for part in parts if part).rstrip() + ("\n" if parts else "")
+    return ""
+
+
+def _codex_json_event_progress_text(event: dict[str, Any]) -> str:
+    item = event.get("item")
+    if not isinstance(item, dict):
+        return ""
+    item_type = str(item.get("type") or "")
+    if item_type not in {"file_change", "command_execution"}:
+        return ""
+
+    item_id = str(item.get("id") or "")
+    match = _CODEX_ITEM_ID_INDEX_RE.search(item_id)
+    index = int(match.group(1)) + 1 if match else 1
+    status = str(item.get("status") or "")
+    event_type = str(event.get("type") or "")
+    done = event_type == "item.completed" or status in {"completed", "failed", "cancelled"}
+    mark = "o" if done else "x"
+
+    if item_type == "file_change":
+        paths: list[str] = []
+        changes = item.get("changes")
+        if isinstance(changes, list):
+            for change in changes[:5]:
+                if isinstance(change, dict) and change.get("path"):
+                    paths.append(Path(str(change["path"])).name or str(change["path"]))
+        suffix = ", ".join(paths) if paths else "workspace files"
+        text = f"apply file changes: {suffix}"
+    else:
+        command = str(item.get("command") or "command").replace("\n", " ")
+        text = "run command: " + _cap(command, 180)
+    return f"{mark} ({index}) {text}\n"
+
+
+def _handle_codex_json_line(
+    line: str,
+    *,
+    task_id: str,
+    lane: str,
+    run_id: Optional[int],
+) -> tuple[bool, str]:
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return False, line
+    if not isinstance(event, dict):
+        return False, line
+    payload = _codex_json_event_payload(event, lane=lane, run_id=run_id)
+    _record_event(task_id, "worker_codex_event", payload, run_id=run_id)
+    text = _codex_json_event_text(event)
+    text += _codex_json_event_progress_text(event)
+    return True, text
+
+
 def _heartbeat(task_id: str, *, run_id: Optional[int], claim_lock: Optional[str], lane: str) -> None:
     from hermes_cli import kanban_db as kb
 
@@ -376,11 +548,26 @@ def _heartbeat(task_id: str, *, run_id: Optional[int], claim_lock: Optional[str]
         with kb.connect() as conn:
             if claim_lock:
                 kb.heartbeat_claim(conn, task_id, claimer=claim_lock)
-            kb.heartbeat_worker(
+            accepted = kb.heartbeat_worker(
                 conn,
                 task_id,
                 note=f"worker_lane={lane}",
                 expected_run_id=run_id,
+            )
+            if not accepted:
+                return
+            kb.record_task_event(
+                conn,
+                task_id,
+                "worker_heartbeat",
+                {
+                    "worker_lane": lane,
+                    "lane": lane,
+                    "worker_kind": "codex_cli",
+                    "run_id": run_id,
+                    "claim_lock": claim_lock,
+                },
+                run_id=run_id,
             )
     except Exception:
         pass
@@ -500,6 +687,111 @@ def _extract_verification_summary(output: str) -> dict[str, Any]:
     return candidates[-1]
 
 
+def _receipt_section_key(raw_line: str) -> Optional[str]:
+    match = _RECEIPT_SECTION_RE.match(raw_line)
+    if not match:
+        return None
+    label = match.group(1).strip().lower().replace(" ", "_")
+    return label if label in _RECEIPT_SECTION_KEYS else None
+
+
+def _materialize_receipt_sections(
+    sections: dict[str, list[str]],
+) -> dict[str, str]:
+    return {
+        key: _cap("\n".join(lines).strip())
+        for key, lines in sections.items()
+        if "\n".join(lines).strip()
+    }
+
+
+def _extract_receipt_sections(output: str) -> dict[str, str]:
+    """Extract the last real Codex receipt block from stdout/stderr tail.
+
+    Codex CLI output commonly includes the prompt itself before the final
+    assistant answer.  The prompt contains the receipt template, so a simple
+    "first header wins" parser can accidentally ingest much of the session log
+    as ``recommended_reviewer_action``.  Treat each ``Progress:`` header as the
+    start of a candidate receipt and keep the last candidate with non-placeholder
+    content.
+    """
+
+    candidates: list[dict[str, str]] = []
+    sections: Optional[dict[str, list[str]]] = None
+    current_key: Optional[str] = None
+    for raw_line in (output or "").splitlines():
+        label = _receipt_section_key(raw_line)
+        if label:
+            if label == "progress":
+                if sections:
+                    materialized = _materialize_receipt_sections(sections)
+                    if materialized:
+                        candidates.append(materialized)
+                sections = {"progress": []}
+            elif sections is None:
+                sections = {}
+            current_key = label
+            sections.setdefault(label, [])
+            continue
+        if sections is not None and current_key is not None:
+            sections[current_key].append(raw_line)
+    if sections:
+        materialized = _materialize_receipt_sections(sections)
+        if materialized:
+            candidates.append(materialized)
+
+    useful: list[dict[str, str]] = []
+    for candidate in candidates:
+        progress_items = parse_progress_items(candidate.get("progress", ""))
+        has_non_placeholder_content = any(
+            value.strip() and not _is_placeholder_progress_text(value.strip())
+            for key, value in candidate.items()
+            if key != "progress"
+        )
+        if progress_items or has_non_placeholder_content:
+            useful.append(candidate)
+    return useful[-1] if useful else {}
+
+
+def _extract_structured_verdict(output: str) -> Optional[str]:
+    lines = (output or "").splitlines()
+    verdicts: list[str] = []
+    for index, line in enumerate(lines):
+        match = _VERDICT_LINE_RE.match(line)
+        if match:
+            verdicts.append(match.group(1).strip().lower().replace("-", "_"))
+            continue
+        if _VERDICT_HEADER_RE.match(line):
+            for next_line in lines[index + 1 : index + 4]:
+                if not next_line.strip():
+                    continue
+                bullet = _VERDICT_BULLET_RE.match(next_line)
+                if bullet:
+                    verdicts.append(
+                        bullet.group(1).strip().lower().replace("-", "_")
+                    )
+                break
+    return verdicts[-1] if verdicts else None
+
+
+def _extract_worker_receipt(output: str) -> dict[str, Any]:
+    sections = _extract_receipt_sections(output)
+    receipt: dict[str, Any] = {
+        "schema": "codex_cli_receipt_v1",
+        "sections": sections,
+    }
+    verdict = _extract_structured_verdict(output)
+    if verdict:
+        receipt["verdict"] = verdict
+    if "changed_files" in sections:
+        receipt["changed_files_text"] = sections["changed_files"]
+    if "remaining_risks" in sections:
+        receipt["remaining_risks"] = sections["remaining_risks"]
+    if "recommended_reviewer_action" in sections:
+        receipt["recommended_reviewer_action"] = sections["recommended_reviewer_action"]
+    return receipt
+
+
 def _metadata(
     *,
     lane: str,
@@ -513,8 +805,13 @@ def _metadata(
     timed_out: bool,
     output_tail: str,
     binary_missing: bool = False,
+    json_events: bool = False,
 ) -> dict[str, Any]:
     succeeded = (exit_code == 0 and not timed_out and not binary_missing)
+    receipt = _extract_worker_receipt(output_tail)
+    verification = _extract_verification_summary(output_tail)
+    if receipt.get("verdict"):
+        verification["verdict"] = receipt["verdict"]
     return {
         "worker_instance": {
             "worker_lane": lane,
@@ -525,6 +822,7 @@ def _metadata(
             "claim_lock": claim_lock,
             "workspace": workspace,
             "model": model,
+            "json_events": json_events,
         },
         "worker_lane": {
             "name": lane,
@@ -535,9 +833,13 @@ def _metadata(
             "timed_out": timed_out,
             "binary_missing": binary_missing,
             "output_tail": output_tail,
+            "receipt": receipt,
+            "verdict": receipt.get("verdict"),
+            "json_events": json_events,
         },
         "git": collect_git_evidence(workspace),
-        "verification": _extract_verification_summary(output_tail),
+        "verification": verification,
+        "worker_receipt": receipt,
         "review": {
             "required": succeeded,
             "reason": (
@@ -578,9 +880,11 @@ Implement the assigned task in the workspace. Do not mark the Kanban task
 done yourself; this wrapper will return your structured receipt to Hermes
 and block the task for review.
 
-If the task context contains "Requested changes to address before finishing",
-treat that section as mandatory retry feedback. Fix those items first and
-include the verification you ran for the requested changes in your receipt.
+If the task context contains an actual markdown section headed exactly
+"## Requested changes to address before finishing", treat only that section as
+mandatory retry feedback. Do not infer retry mode from the phrase appearing in
+ordinary task instructions or examples. Fix those items first and include the
+verification you ran for the requested changes in your receipt.
 
 When finished, print a concise structured receipt:
 
@@ -600,6 +904,12 @@ Remaining risks:
 
 Recommended reviewer action:
 - ...
+
+If this is an independent review or test follow-up task, the task body will
+contain a "Required review output" or "Required test output" section. Follow
+that section exactly and include one final `Verdict: ...` line. Review verdicts
+must be one of `approve`, `request_changes`, or `blocked`; test verdicts must
+be one of `pass`, `fail`, or `blocked`.
 """
 
 
@@ -617,6 +927,7 @@ def run_codex_worker(
     success_policy: str = "block_for_review",
     timeout_seconds: Optional[float] = None,
     heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
+    json_events: bool = False,
 ) -> int:
     from hermes_cli import kanban_db as kb
 
@@ -637,6 +948,7 @@ def run_codex_worker(
             "claim_lock": claim_lock,
             "workspace": workspace,
             "model": model,
+            "json_events": json_events,
         }
         _write_log(log_f, "[codex-worker] " + json.dumps(header, ensure_ascii=False) + "\n")
         _record_event(task_id, "worker_started", header, run_id=run_id)
@@ -658,6 +970,7 @@ def run_codex_worker(
                 timed_out=False,
                 output_tail=msg,
                 binary_missing=True,
+                json_events=json_events,
             )
             _record_event(task_id, "worker_failed", meta["worker_lane"], run_id=run_id)
             _finish_blocked(
@@ -677,6 +990,7 @@ def run_codex_worker(
             sandbox=sandbox,
             approval=approval,
             model=model,
+            json_events=json_events,
         )
         _write_log(log_f, "[codex-worker] exec " + json.dumps(argv, ensure_ascii=False) + "\n")
 
@@ -706,6 +1020,7 @@ def run_codex_worker(
                 exit_code=None,
                 timed_out=False,
                 output_tail=msg,
+                json_events=json_events,
             )
             _record_event(task_id, "worker_failed", meta["worker_lane"], run_id=run_id)
             _finish_blocked(
@@ -758,12 +1073,26 @@ def run_codex_worker(
                 reader_done = True
             elif item:
                 _write_log(log_f, item)
-                tail.append(item)
+                parsed_json_event = False
+                progress_source = item
+                if json_events:
+                    parsed_json_event, progress_source = _handle_codex_json_line(
+                        item,
+                        task_id=task_id,
+                        lane=lane,
+                        run_id=run_id,
+                    )
+                if progress_source:
+                    tail.append(progress_source)
+                elif not parsed_json_event:
+                    tail.append(item)
                 items = parse_progress_items(tail.text())
                 if items:
                     progress_payload = {
+                        "worker_lane": lane,
                         "lane": lane,
                         "worker_kind": "codex_cli",
+                        "run_id": run_id,
                         "items": items,
                     }
                     progress_json = json.dumps(progress_payload, ensure_ascii=False, sort_keys=True)
@@ -820,6 +1149,7 @@ def run_codex_worker(
             exit_code=exit_code,
             timed_out=timed_out,
             output_tail=output_tail,
+            json_events=json_events,
         )
         if timed_out:
             _record_event(task_id, "worker_timed_out", meta["worker_lane"], run_id=run_id)
@@ -867,6 +1197,7 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     run.add_argument("--board")
     run.add_argument("--timeout-seconds", type=float)
     run.add_argument("--heartbeat-interval", type=float, default=DEFAULT_HEARTBEAT_INTERVAL_SECONDS)
+    run.add_argument("--json-events", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -886,6 +1217,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             success_policy=args.success_policy,
             timeout_seconds=args.timeout_seconds,
             heartbeat_interval=args.heartbeat_interval,
+            json_events=bool(args.json_events),
         )
     return 2
 

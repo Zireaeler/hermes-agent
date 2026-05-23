@@ -108,11 +108,27 @@ _IS_WINDOWS = sys.platform == "win32"
 # long single-call MCP workflows.
 DEFAULT_CLAIM_TTL_SECONDS = 15 * 60
 ACCEPTANCE_CHECK_OUTPUT_TAIL_BYTES = 16 * 1024
+ACCEPTANCE_CHECK_REQUEST_TEXT_MAX_BYTES = 64 * 1024
+ACCEPTANCE_CHECK_REQUEST_FILE_MAX_BYTES = 1024 * 1024
+ACCEPTANCE_CHECK_REQUEST_MAX_ARGS = 20
+ACCEPTANCE_CHECK_REQUEST_MAX_ITEMS = 16
 REQUEST_CHANGES_FEEDBACK_BYTES = 12 * 1024
 AUTO_REQUEST_CHANGES_DEFAULT_LIMIT = 2
 ACCEPTANCE_CHECK_DEFAULT_TIMEOUT_SECONDS = 300
 ACCEPTANCE_CHECK_MAX_TIMEOUT_SECONDS = 3600
+REVIEW_SHARDS_DEFAULT_CHANGED_FILES_THRESHOLD = 8
+REVIEW_SHARDS_DEFAULT_DIFF_SUMMARY_LINES_THRESHOLD = 80
+REVIEW_SHARDS_DEFAULT_MAX_FILES_PER_SHARD = 8
+REVIEW_SHARDS_DEFAULT_MAX_SHARDS = 8
 _ACCEPTANCE_CHECK_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_ACCEPTANCE_CHECK_ALLOWED_REQUEST_TYPES = {"file_content", "command_template"}
+_ACCEPTANCE_CHECK_FORBIDDEN_REQUEST_KEYS = {
+    "argv",
+    "command",
+    "cmd",
+    "shell",
+    "executable",
+}
 _PROXY_ENV_NAMES = (
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -910,10 +926,12 @@ class ReviewFollowupPlan:
     source_run_id: int
     review_task_id: Optional[str]
     test_task_id: Optional[str]
+    review_shard_task_ids: list[str]
     created: list[str]
     existing: list[str]
     review_assignee: Optional[str]
     test_assignee: Optional[str]
+    deep_review: Optional[dict[str, Any]] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -921,10 +939,12 @@ class ReviewFollowupPlan:
             "source_run_id": self.source_run_id,
             "review_task_id": self.review_task_id,
             "test_task_id": self.test_task_id,
-            "created": self.created,
-            "existing": self.existing,
+            "review_shard_task_ids": list(self.review_shard_task_ids),
+            "created": list(self.created),
+            "existing": list(self.existing),
             "review_assignee": self.review_assignee,
             "test_assignee": self.test_assignee,
+            "deep_review": self.deep_review,
         }
 
 
@@ -1605,6 +1625,7 @@ def create_task(
     initial_status: str = "running",
     session_id: Optional[str] = None,
     board: Optional[str] = None,
+    acceptance_check_requests: Any = None,
 ) -> str:
     """Create a new task and optionally link it under parent tasks.
 
@@ -1629,6 +1650,12 @@ def create_task(
     ``kanban-worker``. Use this to pin a task to a specialist skill
     (e.g. ``skills=["translation"]`` so the worker loads the
     translation skill regardless of the profile's default config).
+
+    ``acceptance_check_requests`` is an optional single request or list of
+    validated task-scoped acceptance checks. Requests are declarative
+    (``file_content`` or configured ``command_template``), are recorded as
+    pre-run ``acceptance_check_requested`` events, and then apply to the
+    worker run that later produces review-required evidence.
     """
     assignee = _canonical_assignee(assignee)
     if not title or not title.strip():
@@ -1693,6 +1720,10 @@ def create_task(
             )
         skills_list = cleaned
 
+    acceptance_requests = validate_acceptance_check_requests(
+        acceptance_check_requests
+    )
+
     # Idempotency check — return the existing task instead of creating a
     # duplicate. Done BEFORE entering write_txn to keep the fast path fast
     # and to avoid holding a write lock during the lookup. Race is
@@ -1706,6 +1737,13 @@ def create_task(
             (idempotency_key,),
         ).fetchone()
         if row:
+            if acceptance_requests:
+                add_acceptance_check_requests(
+                    conn,
+                    row["id"],
+                    acceptance_requests,
+                    requested_by=created_by or "creator",
+                )
             return row["id"]
 
     now = int(time.time())
@@ -1801,8 +1839,19 @@ def create_task(
                         "tenant": tenant,
                         "branch_name": branch_name,
                         "skills": list(skills_list) if skills_list else None,
+                        "acceptance_check_requests": [
+                            req["name"] for req in acceptance_requests
+                        ] or None,
                     },
                 )
+                for req in acceptance_requests:
+                    _append_acceptance_check_request_event(
+                        conn,
+                        task_id,
+                        req,
+                        run_id=None,
+                        requested_by=created_by or "creator",
+                    )
             return task_id
         except sqlite3.IntegrityError:
             if attempt == 1:
@@ -2136,6 +2185,41 @@ def _latest_event(
     )
 
 
+def _latest_event_any(
+    conn: sqlite3.Connection,
+    task_id: str,
+    kinds: Iterable[str],
+) -> Optional[Event]:
+    kind_list = [str(kind) for kind in kinds if str(kind)]
+    if not kind_list:
+        return None
+    placeholders = ",".join("?" for _ in kind_list)
+    row = conn.execute(
+        "SELECT * FROM task_events "
+        f"WHERE task_id = ? AND kind IN ({placeholders}) "
+        "ORDER BY created_at DESC, id DESC LIMIT 1",
+        (task_id, *kind_list),
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        payload = json.loads(row["payload"]) if row["payload"] else None
+    except Exception:
+        payload = None
+    return Event(
+        id=row["id"],
+        task_id=row["task_id"],
+        kind=row["kind"],
+        payload=payload,
+        created_at=row["created_at"],
+        run_id=(
+            int(row["run_id"])
+            if "run_id" in row.keys() and row["run_id"] is not None
+            else None
+        ),
+    )
+
+
 def task_progress_snapshot(
     conn: sqlite3.Connection,
     task_id: str,
@@ -2155,7 +2239,11 @@ def task_progress_snapshot(
         return None
     run = latest_run(conn, task_id)
     progress_event = _latest_event(conn, task_id, kind="worker_progress")
-    heartbeat_event = _latest_event(conn, task_id, kind="heartbeat")
+    heartbeat_event = _latest_event_any(
+        conn,
+        task_id,
+        ("heartbeat", "worker_heartbeat"),
+    )
     last_event = _latest_event(conn, task_id)
     evidence = run.metadata if run and isinstance(run.metadata, dict) else None
     review_required = bool(
@@ -2228,6 +2316,151 @@ def _compact_progress_event_payload(payload: Optional[dict]) -> Optional[dict]:
     }
 
 
+def _compact_gate_status(gate: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Return a bounded gate summary suitable for root progress snapshots."""
+    if not isinstance(gate, dict):
+        return None
+    out: dict[str, Any] = {}
+    for key in (
+        "required",
+        "ready",
+        "satisfied",
+        "pending",
+        "running",
+        "failed",
+        "missing",
+    ):
+        if key in gate:
+            out[key] = gate.get(key)
+    reasons = gate.get("blocking_reasons")
+    if isinstance(reasons, list):
+        out["blocking_reasons"] = [str(item)[:200] for item in reasons[:6]]
+    checks = gate.get("checks")
+    if isinstance(checks, list):
+        out["checks"] = [
+            {
+                key: item.get(key)
+                for key in ("name", "state", "status", "exit_code", "duration_seconds")
+                if isinstance(item, dict) and key in item
+            }
+            for item in checks[:8]
+            if isinstance(item, dict)
+        ]
+    items = gate.get("items")
+    if isinstance(items, list):
+        compact_items: list[dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            compact: dict[str, Any] = {}
+            for key in (
+                "purpose",
+                "relationship",
+                "task_id",
+                "state",
+                "status",
+                "assignee",
+                "verdict",
+                "failure_reason",
+            ):
+                if key in item:
+                    value = item.get(key)
+                    compact[key] = str(value)[:400] if value is not None else None
+            run = item.get("run")
+            if isinstance(run, dict):
+                compact["run"] = {
+                    key: run.get(key)
+                    for key in ("id", "status", "outcome", "ended_at")
+                    if key in run
+                }
+            worker_lane = item.get("worker_lane")
+            if isinstance(worker_lane, dict):
+                compact["worker_lane"] = {
+                    key: worker_lane.get(key)
+                    for key in (
+                        "name",
+                        "kind",
+                        "exit_code",
+                        "timed_out",
+                        "binary_missing",
+                    )
+                    if key in worker_lane
+                }
+            compact_items.append(compact)
+            if len(compact_items) >= 8:
+                break
+        out["items"] = compact_items
+    return out
+
+
+def _latest_auto_retry_exhausted(
+    conn: sqlite3.Connection,
+    task_id: str,
+) -> Optional[dict[str, Any]]:
+    event = _latest_event(conn, task_id, kind="worker_review_auto_retry_exhausted")
+    if event and isinstance(event.payload, dict):
+        payload = dict(event.payload)
+        payload["event_id"] = event.id
+        payload["created_at"] = event.created_at
+        return payload
+    return None
+
+
+def _compact_acceptance_progress(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    board: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    """Return bounded acceptance state for child/root progress summaries."""
+    snapshot = task_acceptance_snapshot(conn, task_id, board=board)
+    if not isinstance(snapshot, dict):
+        return None
+    implementation = snapshot.get("implementation")
+    implementation_task = (
+        implementation.get("task")
+        if isinstance(implementation, dict)
+        and isinstance(implementation.get("task"), dict)
+        else {}
+    )
+    recommended_action = snapshot.get("recommended_action")
+    if not recommended_action or recommended_action == "none":
+        status = implementation_task.get("status")
+        if status == "ready":
+            recommended_action = "dispatch_worker"
+        elif status == "todo":
+            recommended_action = "wait_for_dependencies"
+        elif status == "scheduled":
+            recommended_action = "wait_for_schedule"
+        elif status == "triage":
+            recommended_action = "decompose_or_specify"
+    out: dict[str, Any] = {
+        "source_run_id": snapshot.get("source_run_id"),
+        "recommended_action": recommended_action,
+        "followups_planned": snapshot.get("followups_planned"),
+        "approval_allowed": snapshot.get("approval_allowed"),
+        "request_changes_allowed": snapshot.get("request_changes_allowed"),
+    }
+    gate = _compact_gate_status(snapshot.get("review_followup_gate"))
+    if gate is not None:
+        out["review_followup_gate"] = gate
+    acceptance_gate = _compact_gate_status(snapshot.get("acceptance_check_gate"))
+    if acceptance_gate is not None:
+        out["acceptance_check_gate"] = acceptance_gate
+    exhausted = _latest_auto_retry_exhausted(conn, task_id)
+    if exhausted is not None:
+        out["auto_request_changes"] = {
+            "exhausted": True,
+            "limit": exhausted.get("limit"),
+            "limit_source": exhausted.get("limit_source"),
+            "used": exhausted.get("used"),
+            "reason": exhausted.get("reason"),
+            "event_id": exhausted.get("event_id"),
+            "created_at": exhausted.get("created_at"),
+        }
+    return out
+
+
 def _progress_summary_task_refs(
     conn: sqlite3.Connection,
     task_id: str,
@@ -2272,6 +2505,23 @@ def _progress_summary_task_refs(
             task_id,
             source_run_id=current_run.id,
         )
+    elif current_run and current_run.outcome == "completed":
+        review_meta = (
+            current_run.metadata.get("review")
+            if isinstance(current_run.metadata, dict)
+            else None
+        )
+        source_run_id = (
+            review_meta.get("source_run_id")
+            if isinstance(review_meta, dict)
+            and review_meta.get("decision") == "approved"
+            else None
+        )
+        followup_refs = _review_followup_refs(
+            conn,
+            task_id,
+            source_run_id=source_run_id,
+        ) if source_run_id is not None else []
     else:
         followup_refs = []
     for ref in followup_refs:
@@ -2281,6 +2531,111 @@ def _progress_summary_task_refs(
         add(parent_ids(conn, task_id), "dependency")
 
     return refs
+
+
+def _progress_summary_followup_source_run_id(
+    conn: sqlite3.Connection,
+    task_id: str,
+) -> Optional[int]:
+    current_run = latest_run(conn, task_id)
+    if current_run is None or not isinstance(current_run.metadata, dict):
+        return None
+    review_meta = current_run.metadata.get("review")
+    if not isinstance(review_meta, dict):
+        return None
+    if review_meta.get("required"):
+        return current_run.id
+    if current_run.outcome != "completed" or review_meta.get("decision") != "approved":
+        return None
+    try:
+        source_run_id = review_meta.get("source_run_id")
+        return int(source_run_id) if source_run_id is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _progress_summary_followup_gate_items(
+    conn: sqlite3.Connection,
+    task_id: str,
+) -> dict[str, dict[str, Any]]:
+    source_run_id = _progress_summary_followup_source_run_id(conn, task_id)
+    if source_run_id is None:
+        return {}
+    gate = review_followup_gate_status(
+        conn,
+        task_id,
+        source_run_id=source_run_id,
+    )
+    if not isinstance(gate, dict):
+        return {}
+    items: dict[str, dict[str, Any]] = {}
+    for raw_item in gate.get("items") or []:
+        if not isinstance(raw_item, dict):
+            continue
+        followup_task_id = str(raw_item.get("task_id") or "").strip()
+        if followup_task_id:
+            items[followup_task_id] = raw_item
+    return items
+
+
+def _followup_gate_recommended_action(item: dict[str, Any]) -> str:
+    state = str(item.get("state") or "").strip()
+    if state == "satisfied":
+        return "done"
+    if state == "failed":
+        return "request_changes_or_replan_followups"
+    return "wait_for_followups"
+
+
+def _followup_gate_summary_status(item: dict[str, Any], fallback: str) -> str:
+    state = str(item.get("state") or "").strip()
+    if state == "satisfied":
+        return "done"
+    if state == "running":
+        return "running"
+    if state in {"pending", "missing"}:
+        status = str(item.get("status") or "").strip()
+        if status and status != "missing":
+            return status
+    return fallback
+
+
+def _compact_followup_gate_item(item: dict[str, Any]) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    for key in (
+        "purpose",
+        "relationship",
+        "task_id",
+        "state",
+        "status",
+        "assignee",
+        "verdict",
+        "failure_reason",
+    ):
+        if key in item:
+            value = item.get(key)
+            compact[key] = str(value)[:400] if value is not None else None
+    run = item.get("run")
+    if isinstance(run, dict):
+        compact["run"] = {
+            key: run.get(key)
+            for key in ("id", "status", "outcome", "ended_at")
+            if key in run
+        }
+    worker_lane = item.get("worker_lane")
+    if isinstance(worker_lane, dict):
+        compact["worker_lane"] = {
+            key: worker_lane.get(key)
+            for key in (
+                "name",
+                "kind",
+                "exit_code",
+                "timed_out",
+                "binary_missing",
+            )
+            if key in worker_lane
+        }
+    return compact
 
 
 def task_children_progress_summary(
@@ -2297,11 +2652,14 @@ def task_children_progress_summary(
     fallback) are also summarized for goal/root progress queries.
     """
     refs = _progress_summary_task_refs(conn, task_id)
+    followup_gate_items = _progress_summary_followup_gate_items(conn, task_id)
     children: list[dict[str, Any]] = []
     status_counts: dict[str, int] = {}
     relationship_counts: dict[str, int] = {}
     lanes: dict[str, int] = {}
+    recommended_actions: dict[str, int] = {}
     review_required = 0
+    auto_retry_exhausted = 0
     progress_items_total = 0
     running = 0
     done = 0
@@ -2316,13 +2674,29 @@ def task_children_progress_summary(
         if snap is None:
             continue
         t = snap.task
-        status_counts[t.status] = status_counts.get(t.status, 0) + 1
+        followup_gate_item = (
+            followup_gate_items.get(child_id)
+            if relationship in _REVIEW_FOLLOWUP_RELATIONSHIPS
+            else None
+        )
+        summary_status = (
+            _followup_gate_summary_status(followup_gate_item, t.status)
+            if isinstance(followup_gate_item, dict)
+            else t.status
+        )
+        summary_review_required = bool(snap.review_required)
+        if (
+            isinstance(followup_gate_item, dict)
+            and followup_gate_item.get("state") == "satisfied"
+        ):
+            summary_review_required = False
+        status_counts[summary_status] = status_counts.get(summary_status, 0) + 1
         relationship_counts[relationship] = relationship_counts.get(relationship, 0) + 1
-        if t.status == "running":
+        if summary_status == "running":
             running += 1
-        if t.status == "done":
+        if summary_status == "done":
             done += 1
-        if snap.review_required:
+        if summary_review_required:
             review_required += 1
         worker_lane = None
         if snap.evidence and isinstance(snap.evidence.get("worker_lane"), dict):
@@ -2341,6 +2715,31 @@ def task_children_progress_summary(
         items = progress.get("items") if progress else []
         progress_items_total += len(items)
         run = snap.run
+        acceptance = _compact_acceptance_progress(conn, child_id, board=board)
+        if isinstance(followup_gate_item, dict):
+            acceptance = dict(acceptance or {})
+            acceptance["recommended_action"] = _followup_gate_recommended_action(
+                followup_gate_item
+            )
+            acceptance["followup_gate_item"] = _compact_followup_gate_item(
+                followup_gate_item
+            )
+        recommended_action = (
+            acceptance.get("recommended_action")
+            if isinstance(acceptance, dict)
+            else None
+        )
+        if recommended_action:
+            action_key = str(recommended_action)
+            recommended_actions[action_key] = (
+                recommended_actions.get(action_key, 0) + 1
+            )
+        if (
+            isinstance(acceptance, dict)
+            and isinstance(acceptance.get("auto_request_changes"), dict)
+            and acceptance["auto_request_changes"].get("exhausted")
+        ):
+            auto_retry_exhausted += 1
         children.append({
             "task": {
                 "id": t.id,
@@ -2388,6 +2787,9 @@ def task_children_progress_summary(
                 if snap.last_event else None
             ),
             "review_required": snap.review_required,
+            "summary_status": summary_status,
+            "summary_review_required": summary_review_required,
+            "acceptance": acceptance,
             "verification": (
                 snap.evidence.get("verification")
                 if snap.evidence and isinstance(snap.evidence, dict)
@@ -2403,6 +2805,8 @@ def task_children_progress_summary(
         "status_counts": status_counts,
         "relationship_counts": relationship_counts,
         "lanes": lanes,
+        "recommended_actions": recommended_actions,
+        "auto_retry_exhausted": auto_retry_exhausted,
         "progress_items": progress_items_total,
     }
     return children, summary
@@ -2416,6 +2820,7 @@ def review_required_snapshots(
     worker_lane: Optional[str] = None,
     limit: int = 100,
     log_tail_bytes: Optional[int] = None,
+    include_followups: bool = False,
     board: Optional[str] = None,
 ) -> list[TaskProgressSnapshot]:
     """Return read-only snapshots for tasks waiting on Hermes review.
@@ -2471,6 +2876,12 @@ def review_required_snapshots(
             log_tail_bytes=log_tail_bytes,
             board=board,
         )
+        if (
+            snapshot is not None
+            and not include_followups
+            and _is_review_followup_task(snapshot.task)
+        ):
+            continue
         if snapshot is not None and snapshot.review_required:
             snapshots.append(snapshot)
             if len(snapshots) >= max_rows:
@@ -2545,6 +2956,40 @@ def _review_followup_refs(
                 "task_id": followup_task_id,
                 "source_run_id": event_source_run_id,
             })
+        raw_shards = payload.get("review_shards")
+        if not isinstance(raw_shards, list):
+            raw_shards = []
+        for index, raw_shard in enumerate(raw_shards, start=1):
+            if not isinstance(raw_shard, dict):
+                continue
+            followup_task_id = raw_shard.get("task_id")
+            if not isinstance(followup_task_id, str) or not followup_task_id.strip():
+                continue
+            followup_task_id = followup_task_id.strip()
+            shard_index = raw_shard.get("index")
+            try:
+                shard_index_int = int(shard_index)
+            except (TypeError, ValueError):
+                shard_index_int = index
+            purpose = f"review_shard:{shard_index_int}"
+            dedupe = (purpose, followup_task_id)
+            if dedupe in seen:
+                continue
+            seen.add(dedupe)
+            ref: dict[str, Any] = {
+                "purpose": purpose,
+                "relationship": "review_shard_followup",
+                "task_id": followup_task_id,
+                "source_run_id": event_source_run_id,
+                "shard_index": shard_index_int,
+            }
+            if isinstance(raw_shard.get("files"), list):
+                ref["files"] = [
+                    str(path)
+                    for path in raw_shard["files"]
+                    if str(path).strip()
+                ]
+            refs.append(ref)
     return refs
 
 
@@ -2568,6 +3013,45 @@ def _followup_run_has_success_evidence(run: Optional[Run]) -> bool:
     if run.outcome == "completed":
         return True
     return False
+
+
+def _followup_failure_reason(run: Optional[Run]) -> Optional[str]:
+    """Return a compact reason when a follow-up run cannot satisfy a gate."""
+    if run is None:
+        return None
+    lane_meta = (
+        run.metadata.get("worker_lane")
+        if isinstance(run.metadata, dict)
+        else None
+    )
+    if isinstance(lane_meta, dict):
+        if lane_meta.get("binary_missing"):
+            return "worker binary missing"
+        if lane_meta.get("timed_out"):
+            return "worker timed out"
+        exit_code = lane_meta.get("exit_code")
+        if exit_code not in {None, 0}:
+            return f"worker exited with code {exit_code}"
+    if run.outcome in {"crashed", "timed_out", "spawn_failed", "gave_up"}:
+        summary = str(run.summary or "").strip()
+        return (
+            f"worker run {run.outcome}: {summary[:300]}"
+            if summary
+            else f"worker run {run.outcome}"
+        )
+    return None
+
+
+def _task_has_event_kind(
+    conn: sqlite3.Connection,
+    task_id: str,
+    kind: str,
+) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM task_events WHERE task_id = ? AND kind = ? LIMIT 1",
+        (task_id, kind),
+    ).fetchone()
+    return row is not None
 
 
 _FOLLOWUP_VERDICT_LINE_RE = re.compile(
@@ -2601,14 +3085,33 @@ def _extract_followup_verdict_from_text(text: str) -> Optional[str]:
 def _extract_followup_verdict(run: Optional[Run]) -> Optional[str]:
     if run is None or not isinstance(run.metadata, dict):
         return None
+    for raw in (
+        run.metadata.get("worker_receipt"),
+        run.metadata.get("receipt"),
+    ):
+        if isinstance(raw, dict):
+            verdict = raw.get("verdict")
+            if isinstance(verdict, str) and verdict.strip():
+                return verdict.strip().lower().replace("-", "_")
     candidates: list[str] = []
     lane_meta = run.metadata.get("worker_lane")
     if isinstance(lane_meta, dict):
+        verdict = lane_meta.get("verdict")
+        if isinstance(verdict, str) and verdict.strip():
+            return verdict.strip().lower().replace("-", "_")
+        receipt = lane_meta.get("receipt")
+        if isinstance(receipt, dict):
+            verdict = receipt.get("verdict")
+            if isinstance(verdict, str) and verdict.strip():
+                return verdict.strip().lower().replace("-", "_")
         tail = lane_meta.get("output_tail")
         if isinstance(tail, str):
             candidates.append(tail)
     verification = run.metadata.get("verification")
     if isinstance(verification, dict):
+        verdict = verification.get("verdict")
+        if isinstance(verdict, str) and verdict.strip():
+            return verdict.strip().lower().replace("-", "_")
         summary = verification.get("summary")
         if isinstance(summary, str):
             candidates.append(summary)
@@ -2628,7 +3131,7 @@ def _followup_verdict_accepts_purpose(
         # Preserve that compatibility while newer Codex receipts get stricter
         # semantic gating when they emit a structured verdict.
         return True
-    if purpose == "review":
+    if purpose == "review" or purpose.startswith("review_shard:"):
         return verdict in {"approve", "approved"}
     if purpose == "test":
         return verdict in {"pass", "passed"}
@@ -2696,6 +3199,415 @@ def _bounded_text(value: Any, *, max_bytes: int) -> str:
     return data[-max_bytes:].decode("utf-8", errors="replace")
 
 
+def _validate_acceptance_check_name(name: Any) -> str:
+    out = str(name or "").strip().lower()
+    if not _ACCEPTANCE_CHECK_ID_RE.match(out):
+        raise ValueError("acceptance check name must match [a-z0-9][a-z0-9_-]{0,63}")
+    return out
+
+
+def _validate_relative_workspace_path(path: Any) -> str:
+    raw = str(path or "").strip()
+    if not raw:
+        raise ValueError("path is required")
+    p = Path(raw)
+    if p.is_absolute():
+        raise ValueError("path must be relative to the task workspace")
+    parts = p.parts
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        raise ValueError("path must not contain empty, '.', or '..' segments")
+    if any(part.startswith("~") for part in parts):
+        raise ValueError("path must not use home-directory expansion")
+    return p.as_posix()
+
+
+def _load_acceptance_template_configs() -> dict[str, dict[str, Any]]:
+    try:
+        from hermes_cli.config import load_config
+
+        cfg = load_config()
+    except Exception as exc:
+        _log.debug("Could not load config for acceptance templates: %s", exc)
+        return {}
+    raw = ((cfg or {}).get("kanban") or {}).get("acceptance_templates") or {}
+    if not isinstance(raw, dict):
+        _log.warning(
+            "kanban.acceptance_templates must be a mapping; got %s",
+            type(raw).__name__,
+        )
+        return {}
+    templates: dict[str, dict[str, Any]] = {}
+    for raw_name, raw_cfg in raw.items():
+        try:
+            name = _validate_acceptance_check_name(raw_name)
+            if not isinstance(raw_cfg, dict):
+                raise ValueError("config must be a mapping")
+            argv_template = raw_cfg.get("argv_template")
+            if not isinstance(argv_template, list) or not argv_template:
+                raise ValueError("argv_template must be a non-empty list")
+            clean_template = [str(part) for part in argv_template]
+            if not clean_template[0].strip():
+                raise ValueError("argv_template[0] cannot be empty")
+            if re.search(r"{[a-z0-9][a-z0-9_-]{0,63}}", clean_template[0]):
+                raise ValueError("argv_template[0] may not contain placeholders")
+            allowed_args_raw = raw_cfg.get("allowed_args") or []
+            if not isinstance(allowed_args_raw, list):
+                raise ValueError("allowed_args must be a list")
+            allowed_args = [_validate_acceptance_check_name(arg) for arg in allowed_args_raw]
+            if len(allowed_args) > ACCEPTANCE_CHECK_REQUEST_MAX_ARGS:
+                raise ValueError(
+                    f"allowed_args cannot exceed {ACCEPTANCE_CHECK_REQUEST_MAX_ARGS}"
+                )
+            allowed_set = set(allowed_args)
+            arg_types_raw = raw_cfg.get("arg_types") or {}
+            if not isinstance(arg_types_raw, dict):
+                raise ValueError("arg_types must be a mapping")
+            arg_types: dict[str, str] = {}
+            for arg in allowed_args:
+                kind = str(arg_types_raw.get(arg) or "string").strip()
+                if kind not in {"string", "relative_path"}:
+                    raise ValueError(
+                        f"arg_types.{arg} must be one of: string, relative_path"
+                    )
+                arg_types[arg] = kind
+            default_args_raw = raw_cfg.get("defaults") or {}
+            if not isinstance(default_args_raw, dict):
+                raise ValueError("defaults must be a mapping")
+            defaults: dict[str, str] = {}
+            for key, value in default_args_raw.items():
+                arg = _validate_acceptance_check_name(key)
+                if arg not in allowed_set:
+                    raise ValueError(f"default arg {arg!r} is not in allowed_args")
+                defaults[arg] = _validate_acceptance_template_arg_value(
+                    arg,
+                    value,
+                    kind=arg_types[arg],
+                )
+            unresolved = [
+                field
+                for field in re.findall(r"{([a-z0-9][a-z0-9_-]{0,63})}", " ".join(clean_template))
+                if field not in allowed_set
+            ]
+            if unresolved:
+                raise ValueError(
+                    "argv_template references args not in allowed_args: "
+                    + ", ".join(sorted(set(unresolved)))
+                )
+            timeout_raw = raw_cfg.get(
+                "timeout_seconds",
+                ACCEPTANCE_CHECK_DEFAULT_TIMEOUT_SECONDS,
+            )
+            timeout = int(timeout_raw)
+            if timeout < 1 or timeout > ACCEPTANCE_CHECK_MAX_TIMEOUT_SECONDS:
+                raise ValueError(
+                    "timeout_seconds must be between 1 and "
+                    f"{ACCEPTANCE_CHECK_MAX_TIMEOUT_SECONDS}"
+                )
+            templates[name] = {
+                "name": name,
+                "description": str(raw_cfg.get("description") or ""),
+                "argv_template": clean_template,
+                "allowed_args": allowed_args,
+                "arg_types": arg_types,
+                "defaults": defaults,
+                "timeout_seconds": timeout,
+            }
+        except Exception as exc:
+            _log.warning("Skipping acceptance template %r: %s", raw_name, exc)
+    return templates
+
+
+def _validate_acceptance_template_arg_value(
+    name: str,
+    value: Any,
+    *,
+    kind: str,
+) -> str:
+    if kind == "relative_path":
+        out = _validate_relative_workspace_path(value)
+        if out.startswith("-"):
+            raise ValueError(f"arg {name!r} must not start with '-'")
+        return out
+    text = _bounded_text(
+        value,
+        max_bytes=ACCEPTANCE_CHECK_REQUEST_TEXT_MAX_BYTES,
+    )
+    if "\x00" in text:
+        raise ValueError(f"arg {name!r} may not contain NUL bytes")
+    return text
+
+
+def _validate_acceptance_template_args(
+    args: Any,
+    *,
+    allowed_args: list[str],
+    arg_types: Optional[dict[str, str]] = None,
+) -> dict[str, str]:
+    if args is None:
+        return {}
+    if not isinstance(args, dict):
+        raise ValueError("command_template args must be a mapping")
+    allowed = set(allowed_args)
+    if len(args) > ACCEPTANCE_CHECK_REQUEST_MAX_ARGS:
+        raise ValueError(
+            f"command_template args cannot exceed {ACCEPTANCE_CHECK_REQUEST_MAX_ARGS}"
+        )
+    out: dict[str, str] = {}
+    for raw_key, raw_value in args.items():
+        key = _validate_acceptance_check_name(raw_key)
+        if key not in allowed:
+            raise ValueError(f"arg {key!r} is not allowed by the acceptance template")
+        out[key] = _validate_acceptance_template_arg_value(
+            key,
+            raw_value,
+            kind=str((arg_types or {}).get(key) or "string"),
+        )
+    return out
+
+
+def _render_acceptance_template_argv(
+    template: dict[str, Any],
+    args: dict[str, Any],
+) -> list[str]:
+    values = dict(template.get("defaults") or {})
+    values.update({str(k): str(v) for k, v in (args or {}).items()})
+    missing = [
+        field
+        for field in re.findall(
+            r"{([a-z0-9][a-z0-9_-]{0,63})}",
+            " ".join(template.get("argv_template") or []),
+        )
+        if field not in values
+    ]
+    if missing:
+        raise ValueError(
+            "command_template missing required args: "
+            + ", ".join(sorted(set(missing)))
+        )
+    rendered: list[str] = []
+    for part in template.get("argv_template") or []:
+        text = str(part)
+        for key, value in values.items():
+            text = text.replace("{" + key + "}", str(value))
+        rendered.append(text)
+    return rendered
+
+
+def validate_acceptance_check_request(request: dict[str, Any]) -> dict[str, Any]:
+    """Validate a task-scoped acceptance check request.
+
+    The sanitized request is declarative. It never contains executable shell
+    strings or argv, so model/skill output can express acceptance intent
+    without becoming trusted code.
+    """
+    if not isinstance(request, dict):
+        raise ValueError("acceptance_check_request must be an object")
+    forbidden = sorted(
+        _ACCEPTANCE_CHECK_FORBIDDEN_REQUEST_KEYS.intersection(request.keys())
+    )
+    if forbidden:
+        raise ValueError(
+            "acceptance_check_request may not include executable command fields: "
+            + ", ".join(forbidden)
+        )
+    check_type = str(request.get("type") or "").strip()
+    if check_type not in _ACCEPTANCE_CHECK_ALLOWED_REQUEST_TYPES:
+        raise ValueError(
+            f"acceptance check type {check_type!r} is not allowed; allowed: "
+            f"{sorted(_ACCEPTANCE_CHECK_ALLOWED_REQUEST_TYPES)}"
+        )
+    name = _validate_acceptance_check_name(request.get("name"))
+    description = str(request.get("description") or request.get("reason") or "")
+    out: dict[str, Any] = {
+        "name": name,
+        "type": check_type,
+        "description": _bounded_text(description, max_bytes=1024),
+    }
+    if check_type == "file_content":
+        path = _validate_relative_workspace_path(request.get("path"))
+        has_equals = request.get("equals") is not None
+        has_contains = request.get("contains") is not None
+        if has_equals == has_contains:
+            raise ValueError("file_content check must provide exactly one of equals or contains")
+        out["path"] = path
+        if has_equals:
+            out["equals"] = _bounded_text(
+                request.get("equals"),
+                max_bytes=ACCEPTANCE_CHECK_REQUEST_TEXT_MAX_BYTES,
+            )
+        else:
+            out["contains"] = _bounded_text(
+                request.get("contains"),
+                max_bytes=ACCEPTANCE_CHECK_REQUEST_TEXT_MAX_BYTES,
+            )
+    elif check_type == "command_template":
+        template_name = _validate_acceptance_check_name(request.get("template"))
+        templates = _load_acceptance_template_configs()
+        template = templates.get(template_name)
+        if template is None:
+            raise ValueError(f"acceptance template {template_name!r} is not configured")
+        out["template"] = template_name
+        out["args"] = _validate_acceptance_template_args(
+            request.get("args") or {},
+            allowed_args=list(template.get("allowed_args") or []),
+            arg_types=dict(template.get("arg_types") or {}),
+        )
+    return out
+
+
+def validate_acceptance_check_requests(requests: Any) -> list[dict[str, Any]]:
+    """Validate a single acceptance request or a bounded list of requests."""
+    if requests is None:
+        return []
+    if isinstance(requests, dict):
+        raw_requests = [requests]
+    elif isinstance(requests, (list, tuple)):
+        raw_requests = list(requests)
+    else:
+        raise ValueError("acceptance_check_requests must be an object or list")
+    if len(raw_requests) > ACCEPTANCE_CHECK_REQUEST_MAX_ITEMS:
+        raise ValueError(
+            f"acceptance_check_requests cannot exceed "
+            f"{ACCEPTANCE_CHECK_REQUEST_MAX_ITEMS} items"
+        )
+    validated: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for idx, request in enumerate(raw_requests):
+        if not isinstance(request, dict):
+            raise ValueError(f"acceptance_check_requests[{idx}] must be an object")
+        valid = validate_acceptance_check_request(request)
+        name = str(valid.get("name") or "")
+        if name in seen:
+            raise ValueError(f"duplicate acceptance check request name {name!r}")
+        seen.add(name)
+        validated.append(valid)
+    return validated
+
+
+def _append_acceptance_check_request_event(
+    conn: sqlite3.Connection,
+    task_id: str,
+    request: dict[str, Any],
+    *,
+    run_id: Optional[int],
+    requested_by: str,
+) -> dict[str, Any]:
+    payload = {
+        "request": request,
+        "requested_by": (requested_by or "hermes-controller").strip()
+        or "hermes-controller",
+        "source_run_id": run_id,
+    }
+    _append_event(
+        conn,
+        task_id,
+        "acceptance_check_requested",
+        payload,
+        run_id=run_id,
+    )
+    return payload
+
+
+def _task_acceptance_check_requests(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    source_run_id: Optional[int],
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT id, run_id, payload, created_at FROM task_events "
+        "WHERE task_id = ? AND kind = ? "
+        "ORDER BY created_at ASC, id ASC",
+        (task_id, "acceptance_check_requested"),
+    ).fetchall()
+    by_name: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if (
+            source_run_id is not None
+            and row["run_id"] is not None
+            and int(row["run_id"]) != int(source_run_id)
+        ):
+            continue
+        try:
+            payload = json.loads(row["payload"]) if row["payload"] else None
+        except Exception:
+            payload = None
+        if not isinstance(payload, dict):
+            continue
+        request = payload.get("request")
+        if not isinstance(request, dict):
+            continue
+        request = dict(request)
+        name = str(request.get("name") or "").strip().lower()
+        if not name:
+            continue
+        request["event_id"] = row["id"]
+        request["created_at"] = row["created_at"]
+        request["source_run_id"] = (
+            int(row["run_id"]) if row["run_id"] is not None else None
+        )
+        if payload.get("requested_by"):
+            request["requested_by"] = payload.get("requested_by")
+        by_name[name] = request
+    return [by_name[name] for name in sorted(by_name)]
+
+
+def add_acceptance_check_request(
+    conn: sqlite3.Connection,
+    task_id: str,
+    request: dict[str, Any],
+    *,
+    source_run_id: Optional[int] = None,
+    requested_by: str = "hermes-controller",
+) -> dict[str, Any]:
+    """Persist a validated task-scoped acceptance check request."""
+    task = get_task(conn, task_id)
+    if task is None:
+        raise ValueError(f"unknown task {task_id}")
+    valid = validate_acceptance_check_request(request)
+    run_id = source_run_id
+    if run_id is None:
+        run = latest_run(conn, task_id)
+        if run is not None:
+            run_id = run.id
+    else:
+        row = conn.execute(
+            "SELECT 1 FROM task_runs WHERE task_id = ? AND id = ?",
+            (task_id, int(run_id)),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"source_run_id {run_id} does not belong to task {task_id}")
+    with write_txn(conn):
+        return _append_acceptance_check_request_event(
+            conn,
+            task_id,
+            valid,
+            run_id=run_id,
+            requested_by=requested_by,
+        )
+
+
+def add_acceptance_check_requests(
+    conn: sqlite3.Connection,
+    task_id: str,
+    requests: Any,
+    *,
+    source_run_id: Optional[int] = None,
+    requested_by: str = "hermes-controller",
+) -> list[dict[str, Any]]:
+    """Persist one or more validated task-scoped acceptance check requests."""
+    return [
+        add_acceptance_check_request(
+            conn,
+            task_id,
+            request,
+            source_run_id=source_run_id,
+            requested_by=requested_by,
+        )
+        for request in validate_acceptance_check_requests(requests)
+    ]
+
+
 def _load_acceptance_check_configs() -> dict[str, dict[str, Any]]:
     try:
         from hermes_cli.config import load_config
@@ -2714,11 +3626,7 @@ def _load_acceptance_check_configs() -> dict[str, dict[str, Any]]:
     checks: dict[str, dict[str, Any]] = {}
     for raw_name, raw_cfg in raw.items():
         try:
-            name = str(raw_name).strip().lower()
-            if not _ACCEPTANCE_CHECK_ID_RE.match(name):
-                raise ValueError(
-                    "name must match [a-z0-9][a-z0-9_-]{0,63}"
-                )
+            name = _validate_acceptance_check_name(raw_name)
             if not isinstance(raw_cfg, dict):
                 raise ValueError("config must be a mapping")
             argv = raw_cfg.get("argv")
@@ -2740,6 +3648,7 @@ def _load_acceptance_check_configs() -> dict[str, dict[str, Any]]:
             description = str(raw_cfg.get("description") or "")
             checks[name] = {
                 "name": name,
+                "type": "configured_command",
                 "description": description,
                 "argv": clean_argv,
                 "timeout_seconds": timeout,
@@ -2785,6 +3694,200 @@ def _acceptance_check_event_runs(
     return out
 
 
+def _acceptance_check_file_path(workspace: Path, rel_path: str) -> Path:
+    workspace_root = workspace.expanduser().resolve()
+    target = (workspace_root / rel_path).resolve()
+    try:
+        target.relative_to(workspace_root)
+    except ValueError:
+        raise ValueError("acceptance check path escapes the task workspace")
+    return target
+
+
+def _run_file_content_acceptance_check(
+    task_id: str,
+    request: dict[str, Any],
+    *,
+    workspace: Path,
+    run_id: Optional[int],
+) -> dict[str, Any]:
+    name = str(request["name"])
+    rel_path = str(request["path"])
+    target = _acceptance_check_file_path(workspace, rel_path)
+    started = time.time()
+    error = None
+    passed = False
+    actual_tail = ""
+    actual_bytes = 0
+    if not target.exists():
+        error = f"file missing: {rel_path}"
+    elif not target.is_file():
+        error = f"path is not a file: {rel_path}"
+    else:
+        try:
+            actual_bytes = target.stat().st_size
+            if actual_bytes > ACCEPTANCE_CHECK_REQUEST_FILE_MAX_BYTES:
+                error = (
+                    "file too large for file_content acceptance check: "
+                    f"{actual_bytes} bytes"
+                )
+            else:
+                actual = target.read_text(encoding="utf-8", errors="replace")
+                actual_tail = _bounded_text(
+                    actual,
+                    max_bytes=ACCEPTANCE_CHECK_OUTPUT_TAIL_BYTES,
+                )
+                if "equals" in request:
+                    expected = str(request.get("equals") or "")
+                    passed = actual == expected
+                    if not passed:
+                        error = "file content did not exactly match expected text"
+                else:
+                    expected = str(request.get("contains") or "")
+                    passed = expected in actual
+                    if not passed:
+                        error = "file content did not contain expected text"
+        except OSError as exc:
+            error = str(exc)
+    duration_ms = int((time.time() - started) * 1000)
+    payload: dict[str, Any] = {
+        "name": name,
+        "type": "file_content",
+        "description": request.get("description") or "",
+        "workspace": str(workspace),
+        "source_run_id": run_id,
+        "exit_code": 0 if passed else 1,
+        "timed_out": False,
+        "passed": passed,
+        "duration_ms": duration_ms,
+        "path": rel_path,
+        "stdout_tail": actual_tail,
+        "stderr_tail": "",
+        "output_truncated": actual_bytes > ACCEPTANCE_CHECK_OUTPUT_TAIL_BYTES,
+        "request": {
+            key: request.get(key)
+            for key in ("name", "type", "path", "equals", "contains", "description")
+            if key in request
+        },
+    }
+    if error:
+        payload["error"] = error
+    return payload
+
+
+def _run_subprocess_acceptance_argv(
+    *,
+    name: str,
+    check_type: str,
+    description: str,
+    argv: list[str],
+    workspace: Path,
+    run_id: Optional[int],
+    timeout: int,
+    extra_payload: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    env = dict(os.environ)
+    for key in _PROXY_ENV_NAMES:
+        env.pop(key, None)
+
+    started = time.time()
+    timed_out = False
+    try:
+        proc = subprocess.run(
+            argv,
+            cwd=str(workspace),
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            shell=False,
+        )
+        exit_code: Optional[int] = int(proc.returncode)
+        stdout_bytes = len((proc.stdout or "").encode("utf-8", errors="replace"))
+        stderr_bytes = len((proc.stderr or "").encode("utf-8", errors="replace"))
+        stdout_tail = _bounded_text(proc.stdout, max_bytes=ACCEPTANCE_CHECK_OUTPUT_TAIL_BYTES)
+        stderr_tail = _bounded_text(proc.stderr, max_bytes=ACCEPTANCE_CHECK_OUTPUT_TAIL_BYTES)
+        error = None
+    except subprocess.TimeoutExpired as exc:
+        timed_out = True
+        exit_code = None
+        raw_stdout = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else exc.stdout
+        raw_stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else exc.stderr
+        stdout_bytes = len((raw_stdout or "").encode("utf-8", errors="replace"))
+        stderr_bytes = len((raw_stderr or "").encode("utf-8", errors="replace"))
+        stdout_tail = _bounded_text(raw_stdout, max_bytes=ACCEPTANCE_CHECK_OUTPUT_TAIL_BYTES)
+        stderr_tail = _bounded_text(raw_stderr, max_bytes=ACCEPTANCE_CHECK_OUTPUT_TAIL_BYTES)
+        error = f"timed out after {timeout}s"
+    except FileNotFoundError as exc:
+        exit_code = None
+        stdout_tail = ""
+        stderr_tail = ""
+        stdout_bytes = 0
+        stderr_bytes = 0
+        error = f"binary missing: {exc.filename or argv[0]}"
+    duration_ms = int((time.time() - started) * 1000)
+    payload: dict[str, Any] = {
+        "name": name,
+        "type": check_type,
+        "description": description,
+        "argv": argv,
+        "workspace": str(workspace),
+        "source_run_id": run_id,
+        "exit_code": exit_code,
+        "timed_out": timed_out,
+        "passed": bool(exit_code == 0 and not timed_out and not error),
+        "duration_ms": duration_ms,
+        "stdout_tail": stdout_tail,
+        "stderr_tail": stderr_tail,
+        "output_truncated": (
+            stdout_bytes > ACCEPTANCE_CHECK_OUTPUT_TAIL_BYTES
+            or stderr_bytes > ACCEPTANCE_CHECK_OUTPUT_TAIL_BYTES
+        ),
+    }
+    if extra_payload:
+        payload.update(extra_payload)
+    if error:
+        payload["error"] = error
+    return payload
+
+
+def _run_command_template_acceptance_check(
+    request: dict[str, Any],
+    *,
+    workspace: Path,
+    run_id: Optional[int],
+) -> dict[str, Any]:
+    templates = _load_acceptance_template_configs()
+    template_name = str(request.get("template") or "")
+    template = templates.get(template_name)
+    if template is None:
+        raise ValueError(f"acceptance template {template_name!r} is not configured")
+    args = _validate_acceptance_template_args(
+        request.get("args") or {},
+        allowed_args=list(template.get("allowed_args") or []),
+        arg_types=dict(template.get("arg_types") or {}),
+    )
+    argv = _render_acceptance_template_argv(template, args)
+    return _run_subprocess_acceptance_argv(
+        name=str(request["name"]),
+        check_type="command_template",
+        description=str(request.get("description") or template.get("description") or ""),
+        argv=argv,
+        workspace=workspace,
+        run_id=run_id,
+        timeout=int(template.get("timeout_seconds") or ACCEPTANCE_CHECK_DEFAULT_TIMEOUT_SECONDS),
+        extra_payload={
+            "template": template_name,
+            "args": args,
+            "request": {
+                key: request.get(key)
+                for key in ("name", "type", "template", "args", "description")
+                if key in request
+            },
+        },
+    )
+
+
 def acceptance_check_gate_status(
     conn: sqlite3.Connection,
     task_id: str,
@@ -2794,9 +3897,22 @@ def acceptance_check_gate_status(
 ) -> Optional[dict[str, Any]]:
     """Return deterministic gate state for Hermes-run acceptance checks."""
     configured = _load_acceptance_check_configs()
+    task_requests = {
+        str(req.get("name") or "").strip().lower(): req
+        for req in _task_acceptance_check_requests(
+            conn,
+            task_id,
+            source_run_id=source_run_id,
+        )
+        if str(req.get("name") or "").strip()
+    }
     required = [
         str(name).strip().lower()
-        for name in (required_checks if required_checks is not None else configured.keys())
+        for name in (
+            required_checks
+            if required_checks is not None
+            else [*configured.keys(), *task_requests.keys()]
+        )
         if str(name).strip()
     ]
     deduped_required = list(dict.fromkeys(required))
@@ -2819,15 +3935,50 @@ def acceptance_check_gate_status(
     missing = 0
     for name in deduped_required:
         cfg = configured.get(name)
+        request = task_requests.get(name)
         run = runs_by_name.get(name)
         item: dict[str, Any] = {
             "name": name,
             "configured": cfg is not None,
+            "requested": request is not None,
         }
         if cfg is not None:
+            item["type"] = cfg.get("type") or "configured_command"
             item["description"] = cfg.get("description") or ""
             item["argv"] = cfg.get("argv")
             item["timeout_seconds"] = cfg.get("timeout_seconds")
+        elif request is not None:
+            item["type"] = request.get("type")
+            item["description"] = request.get("description") or ""
+            item["request"] = {
+                key: request.get(key)
+                for key in (
+                    "name",
+                    "type",
+                    "path",
+                    "equals",
+                    "contains",
+                    "template",
+                    "args",
+                    "description",
+                    "requested_by",
+                    "source_run_id",
+                )
+                if key in request
+            }
+            if request.get("type") == "command_template":
+                template = _load_acceptance_template_configs().get(
+                    str(request.get("template") or "")
+                )
+                if template is not None:
+                    try:
+                        item["argv"] = _render_acceptance_template_argv(
+                            template,
+                            request.get("args") or {},
+                        )
+                        item["timeout_seconds"] = template.get("timeout_seconds")
+                    except Exception as exc:
+                        item["template_error"] = str(exc)
         if run is not None:
             item["run"] = run
             item["state"] = "satisfied" if run.get("passed") else "failed"
@@ -2835,7 +3986,7 @@ def acceptance_check_gate_status(
                 satisfied += 1
             else:
                 failed += 1
-        elif cfg is None:
+        elif cfg is None and request is None:
             item["state"] = "missing"
             item["failure_reason"] = "acceptance check is not configured"
             missing += 1
@@ -2880,13 +4031,27 @@ def run_acceptance_check(
     task = get_task(conn, task_id)
     if task is None:
         raise ValueError(f"unknown task {task_id}")
-    name = str(check_name or "").strip().lower()
-    if not _ACCEPTANCE_CHECK_ID_RE.match(name):
-        raise ValueError("invalid acceptance check name")
+    name = _validate_acceptance_check_name(check_name)
     checks = _load_acceptance_check_configs()
     cfg = checks.get(name)
-    if cfg is None:
-        raise ValueError(f"acceptance check {name!r} is not configured")
+
+    run_id = source_run_id
+    if run_id is None:
+        run = latest_run(conn, task_id)
+        if run is not None:
+            run_id = run.id
+    task_requests = {
+        str(req.get("name") or "").strip().lower(): req
+        for req in _task_acceptance_check_requests(
+            conn,
+            task_id,
+            source_run_id=run_id,
+        )
+        if str(req.get("name") or "").strip()
+    }
+    request = task_requests.get(name)
+    if cfg is None and request is None:
+        raise ValueError(f"acceptance check {name!r} is not configured or requested")
     workspace = _acceptance_check_workspace(task)
     if workspace is None:
         raise ValueError(
@@ -2894,73 +4059,53 @@ def run_acceptance_check(
         )
     if not workspace.exists() or not workspace.is_dir():
         raise ValueError(f"acceptance check workspace does not exist: {workspace}")
+    if cfg is None and request is not None:
+        if request.get("type") == "file_content":
+            payload = _run_file_content_acceptance_check(
+                task_id,
+                request,
+                workspace=workspace,
+                run_id=run_id,
+            )
+        elif request.get("type") == "command_template":
+            payload = _run_command_template_acceptance_check(
+                request,
+                workspace=workspace,
+                run_id=run_id,
+            )
+        else:
+            raise ValueError(f"unsupported acceptance check request type {request.get('type')!r}")
+        with write_txn(conn):
+            _append_event(
+                conn,
+                task_id,
+                "acceptance_check_completed",
+                payload,
+                run_id=run_id,
+            )
+        return payload
 
-    run_id = source_run_id
-    if run_id is None:
-        run = latest_run(conn, task_id)
-        if run is not None:
-            run_id = run.id
     argv = [str(part) for part in cfg["argv"]]
     timeout = int(cfg["timeout_seconds"])
-    env = dict(os.environ)
-    for key in _PROXY_ENV_NAMES:
-        env.pop(key, None)
-
-    started = time.time()
-    timed_out = False
-    try:
-        proc = subprocess.run(
-            argv,
-            cwd=str(workspace),
-            env=env,
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-            shell=False,
-        )
-        exit_code: Optional[int] = int(proc.returncode)
-        stdout_bytes = len((proc.stdout or "").encode("utf-8", errors="replace"))
-        stderr_bytes = len((proc.stderr or "").encode("utf-8", errors="replace"))
-        stdout_tail = _bounded_text(proc.stdout, max_bytes=ACCEPTANCE_CHECK_OUTPUT_TAIL_BYTES)
-        stderr_tail = _bounded_text(proc.stderr, max_bytes=ACCEPTANCE_CHECK_OUTPUT_TAIL_BYTES)
-        error = None
-    except subprocess.TimeoutExpired as exc:
-        timed_out = True
-        exit_code = None
-        raw_stdout = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else exc.stdout
-        raw_stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else exc.stderr
-        stdout_bytes = len((raw_stdout or "").encode("utf-8", errors="replace"))
-        stderr_bytes = len((raw_stderr or "").encode("utf-8", errors="replace"))
-        stdout_tail = _bounded_text(raw_stdout, max_bytes=ACCEPTANCE_CHECK_OUTPUT_TAIL_BYTES)
-        stderr_tail = _bounded_text(raw_stderr, max_bytes=ACCEPTANCE_CHECK_OUTPUT_TAIL_BYTES)
-        error = f"timed out after {timeout}s"
-    except FileNotFoundError as exc:
-        exit_code = None
-        stdout_tail = ""
-        stderr_tail = ""
-        stdout_bytes = 0
-        stderr_bytes = 0
-        error = f"binary missing: {exc.filename or argv[0]}"
-    duration_ms = int((time.time() - started) * 1000)
-    payload = {
+    payload = _run_subprocess_acceptance_argv(
+        name=name,
+        check_type=cfg.get("type") or "configured_command",
+        description=cfg.get("description") or "",
+        argv=argv,
+        workspace=workspace,
+        run_id=run_id,
+        timeout=timeout,
+    )
+    # Preserve the configured-command payload shape produced before
+    # subprocess execution was shared with task-scoped command templates.
+    payload.update({
         "name": name,
+        "type": cfg.get("type") or "configured_command",
         "description": cfg.get("description") or "",
         "argv": argv,
         "workspace": str(workspace),
         "source_run_id": run_id,
-        "exit_code": exit_code,
-        "timed_out": timed_out,
-        "passed": bool(exit_code == 0 and not timed_out and not error),
-        "duration_ms": duration_ms,
-        "stdout_tail": stdout_tail,
-        "stderr_tail": stderr_tail,
-        "output_truncated": (
-            stdout_bytes > ACCEPTANCE_CHECK_OUTPUT_TAIL_BYTES
-            or stderr_bytes > ACCEPTANCE_CHECK_OUTPUT_TAIL_BYTES
-        ),
-    }
-    if error:
-        payload["error"] = error
+    })
     with write_txn(conn):
         _append_event(
             conn,
@@ -2980,9 +4125,22 @@ def run_acceptance_checks(
     source_run_id: Optional[int] = None,
 ) -> dict[str, Any]:
     configured = _load_acceptance_check_configs()
+    task_requests = {
+        str(req.get("name") or "").strip().lower(): req
+        for req in _task_acceptance_check_requests(
+            conn,
+            task_id,
+            source_run_id=source_run_id,
+        )
+        if str(req.get("name") or "").strip()
+    }
     names = [
         str(name).strip().lower()
-        for name in (check_names if check_names is not None else configured.keys())
+        for name in (
+            check_names
+            if check_names is not None
+            else [*configured.keys(), *task_requests.keys()]
+        )
         if str(name).strip()
     ]
     names = list(dict.fromkeys(names))
@@ -3036,6 +4194,10 @@ def review_followup_gate_status(
             "task_id": ref["task_id"],
             "source_run_id": ref.get("source_run_id"),
         }
+        if ref.get("shard_index") is not None:
+            item["shard_index"] = ref.get("shard_index")
+        if ref.get("files") is not None:
+            item["files"] = ref.get("files")
         if followup_task is None:
             item["state"] = "missing"
             item["status"] = "missing"
@@ -3085,6 +4247,19 @@ def review_followup_gate_status(
                     "does not satisfy the gate"
                 )
                 failed += 1
+            elif (
+                run is not None
+                and _task_has_event_kind(conn, ref["task_id"], "gave_up")
+                and (
+                    run.outcome in {"crashed", "timed_out", "spawn_failed", "gave_up"}
+                    or followup_task.status == "blocked"
+                )
+            ):
+                item["state"] = "failed"
+                item["failure_reason"] = (
+                    _followup_failure_reason(run) or "follow-up worker failed"
+                )
+                failed += 1
             elif followup_task.status == "running":
                 item["state"] = "running"
                 running += 1
@@ -3104,6 +4279,9 @@ def review_followup_gate_status(
                 )
             ):
                 item["state"] = "failed"
+                item["failure_reason"] = (
+                    _followup_failure_reason(run) or "follow-up worker failed"
+                )
                 failed += 1
             else:
                 item["state"] = "pending"
@@ -3132,6 +4310,68 @@ def review_followup_gate_status(
         "missing": missing,
         "items": items,
         "blocking_reasons": blocking,
+    }
+
+
+def _acceptance_followup_summary(
+    gate: Optional[dict[str, Any]],
+    followups: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Return a compact operator-facing summary of planned follow-ups."""
+    counts_by_purpose: dict[str, int] = {}
+    counts_by_state: dict[str, int] = {}
+    shard_count = 0
+    shard_file_count = 0
+    shard_files: list[str] = []
+    failed: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
+
+    for item in (gate or {}).get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        purpose = str(item.get("purpose") or "follow-up")
+        state = str(item.get("state") or "pending")
+        counts_by_purpose[purpose] = counts_by_purpose.get(purpose, 0) + 1
+        counts_by_state[state] = counts_by_state.get(state, 0) + 1
+        files = [
+            str(path)
+            for path in (item.get("files") or [])
+            if str(path).strip()
+        ]
+        if purpose.startswith("review_shard:"):
+            shard_count += 1
+            shard_file_count += len(files)
+            for path in files:
+                if path not in shard_files and len(shard_files) < 50:
+                    shard_files.append(path)
+        if state == "failed":
+            failed.append({
+                "purpose": purpose,
+                "task_id": item.get("task_id"),
+                "state": state,
+                "verdict": item.get("verdict"),
+                "failure_reason": item.get("failure_reason"),
+                "files": files[:12],
+            })
+        elif state in {"pending", "running", "missing"}:
+            pending.append({
+                "purpose": purpose,
+                "task_id": item.get("task_id"),
+                "state": state,
+                "files": files[:12],
+            })
+
+    return {
+        "total": len(followups),
+        "required": int((gate or {}).get("required") or 0),
+        "ready": bool((gate or {}).get("ready")) if gate else False,
+        "counts_by_purpose": counts_by_purpose,
+        "counts_by_state": counts_by_state,
+        "review_shards": shard_count,
+        "review_shard_files": shard_file_count,
+        "review_shard_file_sample": shard_files,
+        "failed": failed[:8],
+        "pending": pending[:8],
     }
 
 
@@ -3209,6 +4449,7 @@ def task_acceptance_snapshot(
             ),
             "snapshot": snap.to_dict() if snap else None,
         })
+    followup_summary = _acceptance_followup_summary(gate, followups)
 
     review_meta = (
         implementation.evidence.get("review")
@@ -3264,6 +4505,7 @@ def task_acceptance_snapshot(
         "source_run_id": source_run_id,
         "implementation": implementation.to_dict(),
         "followups": followups,
+        "followup_summary": followup_summary,
         "review_followup_gate": gate,
         "acceptance_check_gate": acceptance_check_gate,
         "followups_planned": followups_planned,
@@ -3417,9 +4659,7 @@ def advance_acceptance_workflow(
             board=board,
         )
         steps.append({"kind": "plan_review_followups", "plan": plan.to_dict()})
-        followup_ids = [
-            tid for tid in (plan.review_task_id, plan.test_task_id) if tid
-        ]
+        followup_ids = _review_followup_plan_task_ids(plan)
         if dispatch and followup_ids:
             dispatch_result = dispatch_once(
                 conn,
@@ -3448,6 +4688,31 @@ def advance_acceptance_workflow(
 
     gate = snapshot.get("review_followup_gate")
     if gate and not gate.get("ready"):
+        if dispatch:
+            running_followup_ids = [
+                item.get("task_id")
+                for item in gate.get("items") or []
+                if item.get("task_id") and item.get("state") == "running"
+            ]
+            running_followup_ids = [
+                str(tid) for tid in running_followup_ids if str(tid).strip()
+            ]
+            if running_followup_ids:
+                dispatch_result = dispatch_once(
+                    conn,
+                    dry_run=dry_run,
+                    max_spawn=0,
+                    only_task_ids=running_followup_ids,
+                    board=board,
+                )
+                dispatch_payload = dispatch_result.to_dict()
+                if _dispatch_lifecycle_changed(dispatch_payload):
+                    steps.append({
+                        "kind": "maintain_running_followups",
+                        "dispatch": dispatch_payload,
+                    })
+                    snapshot = _current()
+                    gate = snapshot.get("review_followup_gate") or {}
         if gate.get("failed"):
             if request_changes_on_failure:
                 snapshot = _request_changes_for_failed_gate(
@@ -3641,15 +4906,169 @@ def _dispatch_spawn_count(payload: dict[str, Any]) -> int:
     return len(spawned) if isinstance(spawned, list) else 0
 
 
+def _dispatch_lifecycle_changed(payload: dict[str, Any]) -> bool:
+    """Return true when a dispatch pass only changed worker lifecycle state."""
+    if not isinstance(payload, dict):
+        return False
+    return bool(
+        payload.get("reclaimed")
+        or payload.get("crashed")
+        or payload.get("timed_out")
+        or payload.get("stale")
+        or payload.get("auto_blocked")
+    )
+
+
+def _review_followup_plan_task_ids(plan: ReviewFollowupPlan) -> list[str]:
+    ids = [
+        task_id
+        for task_id in (
+            plan.review_task_id,
+            *plan.review_shard_task_ids,
+            plan.test_task_id,
+        )
+        if task_id
+    ]
+    return list(dict.fromkeys(str(task_id) for task_id in ids))
+
+
+_REVIEW_FOLLOWUP_RELATIONSHIPS = {
+    "review_followup",
+    "test_followup",
+    "review_shard_followup",
+}
+
+
 def _advance_child_spawn_count(payload: dict[str, Any]) -> int:
-    total = 0
-    for step in payload.get("steps") or []:
-        if not isinstance(step, dict):
+    def count_steps(steps: Any) -> int:
+        total = 0
+        for step in steps or []:
+            if not isinstance(step, dict):
+                continue
+            dispatch_payload = step.get("dispatch")
+            if isinstance(dispatch_payload, dict):
+                total += _dispatch_spawn_count(dispatch_payload)
+            total += count_steps(step.get("steps"))
+        return total
+
+    total = count_steps(payload.get("steps"))
+    for child_advance in payload.get("child_advances") or []:
+        if not isinstance(child_advance, dict):
             continue
-        dispatch_payload = step.get("dispatch")
-        if isinstance(dispatch_payload, dict):
-            total += _dispatch_spawn_count(dispatch_payload)
+        advance = child_advance.get("advance")
+        if isinstance(advance, dict):
+            total += _advance_child_spawn_count(advance)
     return total
+
+
+def _advance_loop_final_task(payload: dict[str, Any]) -> dict[str, Any]:
+    final = payload.get("final") if isinstance(payload, dict) else None
+    if not isinstance(final, dict):
+        return {}
+    task = final.get("task")
+    if isinstance(task, dict):
+        return task
+    implementation = final.get("implementation")
+    if isinstance(implementation, dict):
+        task = implementation.get("task")
+        if isinstance(task, dict):
+            return task
+    return {}
+
+
+def _advance_loop_final_acceptance(payload: dict[str, Any]) -> dict[str, Any]:
+    final = payload.get("final") if isinstance(payload, dict) else None
+    if not isinstance(final, dict):
+        return {}
+    acceptance = final.get("acceptance")
+    if isinstance(acceptance, dict):
+        return acceptance
+    return final
+
+
+def _advance_loop_stop_reason(
+    payload: dict[str, Any],
+    *,
+    dispatch: bool,
+    dry_run: bool,
+    dispatch_max: Optional[int],
+    dispatch_used: int,
+) -> Optional[str]:
+    """Return why a bounded controller loop should stop after one pass."""
+
+    if dry_run:
+        return "dry_run"
+
+    final_task = _advance_loop_final_task(payload)
+    if final_task.get("status") == "done":
+        return "done"
+
+    if dispatch_max is not None and dispatch_used >= int(dispatch_max):
+        return "dispatch_budget_exhausted"
+
+    step_kinds = [
+        str(step.get("kind"))
+        for step in (payload.get("steps") or [])
+        if isinstance(step, dict)
+    ]
+    if any(
+        kind in {
+            "wait_for_implementation",
+            "wait_for_child",
+            "wait_for_goal_ready",
+            "wait_for_goal_worker",
+        }
+        for kind in step_kinds
+    ):
+        return "waiting"
+    if any(kind == "blocked" for kind in step_kinds):
+        return "blocked"
+
+    acceptance = _advance_loop_final_acceptance(payload)
+    recommended = str(acceptance.get("recommended_action") or "")
+    if recommended in {"wait_for_implementation", "wait_for_followups"}:
+        return "waiting"
+    auto_retry = acceptance.get("auto_request_changes")
+    if isinstance(auto_retry, dict) and auto_retry.get("exhausted"):
+        return "retry_exhausted"
+
+    final = payload.get("final") if isinstance(payload.get("final"), dict) else {}
+    child_summary = final.get("child_summary") if isinstance(final, dict) else None
+    if isinstance(child_summary, dict):
+        if int(child_summary.get("auto_retry_exhausted") or 0) > 0:
+            return "retry_exhausted"
+        if int(child_summary.get("running") or 0) > 0:
+            return "waiting"
+        status_counts = child_summary.get("status_counts")
+        ready_children = (
+            int(status_counts.get("ready") or 0)
+            if isinstance(status_counts, dict)
+            else 0
+        )
+        if dispatch and ready_children > 0:
+            return None
+        recommended_actions = child_summary.get("recommended_actions")
+        if isinstance(recommended_actions, dict) and any(
+            str(key).startswith("wait_for_") for key in recommended_actions
+        ):
+            return "waiting"
+
+    if not payload.get("advanced"):
+        return "idle"
+
+    return None
+
+
+def _validate_advance_loop_iterations(max_iterations: int) -> int:
+    try:
+        parsed = int(max_iterations)
+    except (TypeError, ValueError):
+        raise ValueError("max_iterations must be an integer")
+    if parsed < 1:
+        raise ValueError("max_iterations must be >= 1")
+    if parsed > 64:
+        raise ValueError("max_iterations must be <= 64")
+    return parsed
 
 
 def _remaining_dispatch_budget(
@@ -3659,6 +5078,81 @@ def _remaining_dispatch_budget(
     if dispatch_max is None:
         return None
     return max(0, int(dispatch_max) - int(used))
+
+
+def advance_acceptance_workflow_until_idle(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    review_assignee: Optional[str] = "codex-review",
+    test_assignee: Optional[str] = "codex-test",
+    dispatch: bool = True,
+    dry_run: bool = False,
+    dispatch_max: Optional[int] = None,
+    verify: bool = True,
+    approve: bool = True,
+    request_changes_on_failure: bool = True,
+    reviewer: str = "hermes-controller",
+    summary: Optional[str] = None,
+    result: Optional[str] = None,
+    board: Optional[str] = None,
+    max_iterations: int = 8,
+) -> dict[str, Any]:
+    """Run bounded acceptance-controller passes until the workflow is idle.
+
+    This is not a daemon and it never waits for external workers. It repeats
+    only while the next pass can make deterministic control-plane progress,
+    then returns at async boundaries such as running implementation/review/test
+    workers, retry exhaustion, dispatch budget exhaustion, or completion.
+    """
+
+    max_iterations = _validate_advance_loop_iterations(max_iterations)
+    iterations: list[dict[str, Any]] = []
+    dispatch_used = 0
+    stop_reason = "max_iterations"
+
+    for _index in range(max_iterations):
+        remaining = _remaining_dispatch_budget(dispatch_max, dispatch_used)
+        payload = advance_acceptance_workflow(
+            conn,
+            task_id,
+            review_assignee=review_assignee,
+            test_assignee=test_assignee,
+            dispatch=dispatch and (remaining is None or remaining > 0),
+            dry_run=dry_run,
+            dispatch_max=remaining,
+            verify=verify,
+            approve=approve,
+            request_changes_on_failure=request_changes_on_failure,
+            reviewer=reviewer,
+            summary=summary,
+            result=result,
+            board=board,
+        )
+        iterations.append(payload)
+        dispatch_used += _advance_child_spawn_count(payload)
+        reason = _advance_loop_stop_reason(
+            payload,
+            dispatch=dispatch,
+            dry_run=dry_run,
+            dispatch_max=dispatch_max,
+            dispatch_used=dispatch_used,
+        )
+        if reason:
+            stop_reason = reason
+            break
+
+    final = iterations[-1].get("final") if iterations else None
+    return {
+        "task_id": task_id,
+        "iterations": iterations,
+        "iteration_count": len(iterations),
+        "max_iterations": max_iterations,
+        "stop_reason": stop_reason,
+        "dispatch_used": dispatch_used,
+        "final": final,
+        "advanced": any(bool(item.get("advanced")) for item in iterations),
+    }
 
 
 def advance_goal_acceptance_workflow(
@@ -3710,19 +5204,118 @@ def advance_goal_acceptance_workflow(
         }
 
     refs = _progress_summary_task_refs(conn, task_id)
-    child_ids_for_dispatch = [child_id for child_id, _relationship in refs]
+    implementation_refs = [
+        (child_id, relationship)
+        for child_id, relationship in refs
+        if relationship not in _REVIEW_FOLLOWUP_RELATIONSHIPS
+    ]
+    child_ids_for_dispatch = [child_id for child_id, _relationship in implementation_refs]
     if not child_ids_for_dispatch:
-        steps.append({
-            "kind": "inspect_goal",
-            "reason": "goal/root task has no related child worker tasks",
-        })
+        root_status = initial_snapshot.task.status
+        if dispatch and root_status == "ready":
+            remaining = _remaining_dispatch_budget(dispatch_max, dispatch_used)
+            if remaining is None or remaining > 0:
+                dispatch_result = dispatch_once(
+                    conn,
+                    dry_run=dry_run,
+                    max_spawn=remaining,
+                    only_task_ids=[task_id],
+                    board=board,
+                )
+                dispatch_payload = dispatch_result.to_dict()
+                dispatch_used += _dispatch_spawn_count(dispatch_payload)
+                if (
+                    dispatch_payload.get("spawned")
+                    or dispatch_payload.get("promoted")
+                    or dispatch_payload.get("skipped_unassigned")
+                    or dispatch_payload.get("skipped_nonspawnable")
+                    or dispatch_payload.get("skipped_concurrency")
+                    or dispatch_payload.get("respawn_guarded")
+                    or dispatch_payload.get("auto_blocked")
+                    or dispatch_payload.get("timed_out")
+                    or dispatch_payload.get("crashed")
+                    or dispatch_payload.get("stale")
+                ):
+                    steps.append({
+                        "kind": "dispatch_goal_task",
+                        "dispatch": dispatch_payload,
+                    })
+        elif root_status == "running":
+            steps.append({
+                "kind": "wait_for_goal_worker",
+                "task_id": task_id,
+                "reason": "goal/root worker is still running",
+            })
+        else:
+            root_snapshot = task_progress_snapshot(
+                conn,
+                task_id,
+                include_children=False,
+                board=board,
+            )
+            if root_snapshot is not None and root_snapshot.review_required:
+                root_payload = advance_acceptance_workflow(
+                    conn,
+                    task_id,
+                    review_assignee=review_assignee,
+                    test_assignee=test_assignee,
+                    dispatch=dispatch,
+                    dry_run=dry_run,
+                    dispatch_max=dispatch_max,
+                    verify=verify,
+                    approve=approve,
+                    request_changes_on_failure=request_changes_on_failure,
+                    reviewer=reviewer,
+                    summary=summary,
+                    result=result,
+                    board=board,
+                )
+                dispatch_used += _advance_child_spawn_count(root_payload)
+                steps.append({
+                    "kind": "advance_goal_task_acceptance",
+                    "task_id": task_id,
+                    "steps": root_payload.get("steps") or [],
+                    "recommended_action": (
+                        (root_payload.get("final") or {}).get("recommended_action")
+                    ),
+                })
+        final_snapshot = task_progress_snapshot(
+            conn,
+            task_id,
+            include_children=True,
+            board=board,
+        )
+        final_payload = final_snapshot.to_dict() if final_snapshot else None
+        if steps:
+            try:
+                with write_txn(conn):
+                    _append_event(
+                        conn,
+                        task_id,
+                        "goal_acceptance_advanced",
+                        {
+                            "reviewer": reviewer,
+                            "dispatch_used": dispatch_used,
+                            "step_kinds": [step.get("kind") for step in steps],
+                            "incomplete_children": [],
+                        },
+                    )
+            except Exception:
+                pass
+        if not steps:
+            steps.append({
+                "kind": "inspect_goal",
+                "reason": "goal/root task has no related child worker tasks",
+            })
+            final_payload = final_payload or initial_snapshot.to_dict()
         return {
             "task_id": task_id,
             "steps": steps,
             "child_advances": child_advances,
             "initial": initial_snapshot.to_dict(),
-            "final": initial_snapshot.to_dict(),
-            "advanced": False,
+            "final": final_payload,
+            "dispatch_used": dispatch_used,
+            "advanced": bool(steps and steps[0].get("kind") != "inspect_goal"),
         }
 
     if dispatch:
@@ -3754,7 +5347,7 @@ def advance_goal_acceptance_workflow(
                     "dispatch": dispatch_payload,
                 })
 
-    for child_id, relationship in refs:
+    for child_id, relationship in implementation_refs:
         snap = task_progress_snapshot(
             conn,
             child_id,
@@ -3887,6 +5480,330 @@ def advance_goal_acceptance_workflow(
         "incomplete_children": incomplete_children,
         "dispatch_used": dispatch_used,
         "advanced": bool(steps or child_advances),
+    }
+
+
+def advance_goal_acceptance_workflow_until_idle(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    review_assignee: Optional[str] = "codex-review",
+    test_assignee: Optional[str] = "codex-test",
+    dispatch: bool = True,
+    dry_run: bool = False,
+    dispatch_max: Optional[int] = None,
+    verify: bool = True,
+    approve: bool = True,
+    request_changes_on_failure: bool = True,
+    reviewer: str = "hermes-controller",
+    summary: Optional[str] = None,
+    result: Optional[str] = None,
+    board: Optional[str] = None,
+    max_iterations: int = 8,
+) -> dict[str, Any]:
+    """Run bounded root-goal controller passes until no safe step remains."""
+
+    max_iterations = _validate_advance_loop_iterations(max_iterations)
+    iterations: list[dict[str, Any]] = []
+    dispatch_used = 0
+    stop_reason = "max_iterations"
+
+    for _index in range(max_iterations):
+        remaining = _remaining_dispatch_budget(dispatch_max, dispatch_used)
+        payload = advance_goal_acceptance_workflow(
+            conn,
+            task_id,
+            review_assignee=review_assignee,
+            test_assignee=test_assignee,
+            dispatch=dispatch and (remaining is None or remaining > 0),
+            dry_run=dry_run,
+            dispatch_max=remaining,
+            verify=verify,
+            approve=approve,
+            request_changes_on_failure=request_changes_on_failure,
+            reviewer=reviewer,
+            summary=summary,
+            result=result,
+            board=board,
+        )
+        iterations.append(payload)
+        dispatch_used += int(payload.get("dispatch_used") or 0)
+        reason = _advance_loop_stop_reason(
+            payload,
+            dispatch=dispatch,
+            dry_run=dry_run,
+            dispatch_max=dispatch_max,
+            dispatch_used=dispatch_used,
+        )
+        if reason:
+            stop_reason = reason
+            break
+
+    final = iterations[-1].get("final") if iterations else None
+    return {
+        "task_id": task_id,
+        "iterations": iterations,
+        "iteration_count": len(iterations),
+        "max_iterations": max_iterations,
+        "stop_reason": stop_reason,
+        "dispatch_used": dispatch_used,
+        "final": final,
+        "advanced": any(bool(item.get("advanced")) for item in iterations),
+    }
+
+
+def _validate_controller_max_items(max_items: int) -> int:
+    try:
+        parsed = int(max_items)
+    except (TypeError, ValueError):
+        raise ValueError("max_items must be an integer")
+    if parsed < 1:
+        raise ValueError("max_items must be >= 1")
+    if parsed > 128:
+        raise ValueError("max_items must be <= 128")
+    return parsed
+
+
+def _controller_goal_candidate_ids(
+    conn: sqlite3.Connection,
+    *,
+    limit: int,
+) -> list[str]:
+    rows = conn.execute(
+        """
+        SELECT t.id
+          FROM tasks t
+         WHERE t.status NOT IN ('done', 'archived')
+           AND EXISTS (
+               SELECT 1
+                 FROM task_events e
+                WHERE e.task_id = t.id
+                  AND e.kind = 'decomposed'
+           )
+         ORDER BY t.priority DESC, t.created_at ASC
+         LIMIT ?
+        """,
+        (int(limit),),
+    ).fetchall()
+    return [str(row["id"]) for row in rows]
+
+
+def _is_review_followup_task(task: Task) -> bool:
+    key = (task.idempotency_key or "").strip()
+    return key.startswith("review-followup:")
+
+
+def _controller_acceptance_candidate_ids(
+    conn: sqlite3.Connection,
+    *,
+    limit: int,
+    exclude_task_ids: Optional[Iterable[str]] = None,
+    board: Optional[str] = None,
+) -> list[str]:
+    excluded = {str(tid) for tid in (exclude_task_ids or []) if str(tid)}
+    candidates: list[str] = []
+    # Fetch extra rows because this scanner intentionally filters out
+    # review/test follow-up tasks. Those tasks also finish with review-required
+    # evidence, but recursively reviewing the reviewer would never converge.
+    fetch_limit = max(int(limit) * 4, int(limit), 16)
+    for snapshot in review_required_snapshots(
+        conn,
+        limit=fetch_limit,
+        board=board,
+    ):
+        task = snapshot.task
+        if task.id in excluded:
+            continue
+        if task.status != "blocked":
+            continue
+        if _is_review_followup_task(task):
+            continue
+        candidates.append(task.id)
+        if len(candidates) >= int(limit):
+            break
+    return candidates
+
+
+def _controller_payload_dispatch_used(payload: dict[str, Any]) -> int:
+    try:
+        return int(payload.get("dispatch_used") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _controller_item_stop_reason(payload: dict[str, Any]) -> Optional[str]:
+    reason = payload.get("stop_reason")
+    return str(reason) if reason else None
+
+
+def advance_controller_once(
+    conn: sqlite3.Connection,
+    *,
+    review_assignee: Optional[str] = "codex-review",
+    test_assignee: Optional[str] = "codex-test",
+    dispatch: bool = True,
+    dry_run: bool = False,
+    dispatch_max: Optional[int] = None,
+    verify: bool = True,
+    approve: bool = True,
+    request_changes_on_failure: bool = True,
+    reviewer: str = "hermes-controller",
+    summary: Optional[str] = None,
+    result: Optional[str] = None,
+    board: Optional[str] = None,
+    max_iterations: int = 8,
+    max_items: int = 8,
+    include_goals: bool = True,
+    include_review_required: bool = True,
+) -> dict[str, Any]:
+    """Run one bounded autonomous Kanban controller tick.
+
+    The tick scans for decomposed goal roots and standalone implementation
+    tasks that are blocked on external-worker review evidence, then advances
+    each item to the next deterministic idle boundary. It never waits for or
+    interrupts running workers. Dispatch, when enabled, remains scoped to the
+    child/follow-up task IDs selected by the underlying advance workflow.
+    """
+
+    max_iterations = _validate_advance_loop_iterations(max_iterations)
+    max_items = _validate_controller_max_items(max_items)
+    dispatch_limit = None if dispatch_max is None else max(0, int(dispatch_max))
+    items: list[dict[str, Any]] = []
+    scanned: dict[str, int] = {"goals": 0, "review_required": 0}
+    skipped: list[dict[str, Any]] = []
+    processed: set[str] = set()
+    protected_children: set[str] = set()
+    dispatch_used = 0
+
+    def _remaining() -> Optional[int]:
+        return _remaining_dispatch_budget(dispatch_limit, dispatch_used)
+
+    def _dispatch_enabled() -> bool:
+        remaining = _remaining()
+        return dispatch and (remaining is None or remaining > 0)
+
+    def _record_item(kind: str, task_id: str, payload: dict[str, Any]) -> None:
+        items.append({
+            "kind": kind,
+            "task_id": task_id,
+            "stop_reason": _controller_item_stop_reason(payload),
+            "advanced": bool(payload.get("advanced")),
+            "payload": payload,
+        })
+
+    if include_goals and len(items) < max_items:
+        goal_ids = _controller_goal_candidate_ids(conn, limit=max_items)
+        scanned["goals"] = len(goal_ids)
+        for task_id in goal_ids:
+            if len(items) >= max_items:
+                break
+            processed.add(task_id)
+            try:
+                for child_id, _relationship in _progress_summary_task_refs(conn, task_id):
+                    protected_children.add(child_id)
+                payload = advance_goal_acceptance_workflow_until_idle(
+                    conn,
+                    task_id,
+                    review_assignee=review_assignee,
+                    test_assignee=test_assignee,
+                    dispatch=_dispatch_enabled(),
+                    dry_run=dry_run,
+                    dispatch_max=_remaining(),
+                    verify=verify,
+                    approve=approve,
+                    request_changes_on_failure=request_changes_on_failure,
+                    reviewer=reviewer,
+                    summary=summary,
+                    result=result,
+                    board=board,
+                    max_iterations=max_iterations,
+                )
+            except ValueError as exc:
+                skipped.append({
+                    "kind": "goal",
+                    "task_id": task_id,
+                    "reason": str(exc),
+                })
+                continue
+            dispatch_used += _controller_payload_dispatch_used(payload)
+            _record_item("goal", task_id, payload)
+            if dispatch_limit is not None and dispatch_used >= dispatch_limit:
+                break
+
+    if (
+        include_review_required
+        and len(items) < max_items
+        and (dispatch_limit is None or dispatch_used < dispatch_limit or not dispatch)
+    ):
+        acceptance_ids = _controller_acceptance_candidate_ids(
+            conn,
+            limit=max_items - len(items),
+            exclude_task_ids=processed | protected_children,
+            board=board,
+        )
+        scanned["review_required"] = len(acceptance_ids)
+        for task_id in acceptance_ids:
+            if len(items) >= max_items:
+                break
+            if task_id in processed:
+                continue
+            processed.add(task_id)
+            try:
+                payload = advance_acceptance_workflow_until_idle(
+                    conn,
+                    task_id,
+                    review_assignee=review_assignee,
+                    test_assignee=test_assignee,
+                    dispatch=_dispatch_enabled(),
+                    dry_run=dry_run,
+                    dispatch_max=_remaining(),
+                    verify=verify,
+                    approve=approve,
+                    request_changes_on_failure=request_changes_on_failure,
+                    reviewer=reviewer,
+                    summary=summary,
+                    result=result,
+                    board=board,
+                    max_iterations=max_iterations,
+                )
+            except ValueError as exc:
+                skipped.append({
+                    "kind": "acceptance",
+                    "task_id": task_id,
+                    "reason": str(exc),
+                })
+                continue
+            dispatch_used += _controller_payload_dispatch_used(payload)
+            _record_item("acceptance", task_id, payload)
+            if dispatch_limit is not None and dispatch_used >= dispatch_limit:
+                break
+
+    advanced = any(bool(item.get("advanced")) for item in items)
+    if dispatch_limit is not None and dispatch_used >= dispatch_limit:
+        stop_reason = "dispatch_budget_exhausted"
+    elif len(items) >= max_items and (
+        scanned.get("goals", 0) >= max_items
+        or scanned.get("review_required", 0) >= max_items
+    ):
+        stop_reason = "max_items"
+    elif not items:
+        stop_reason = "idle"
+    elif advanced:
+        stop_reason = "advanced"
+    else:
+        stop_reason = "idle"
+
+    return {
+        "items": items,
+        "scanned": scanned,
+        "skipped": skipped,
+        "item_count": len(items),
+        "max_items": max_items,
+        "max_iterations": max_iterations,
+        "dispatch_used": dispatch_used,
+        "dispatch_max": dispatch_limit,
+        "stop_reason": stop_reason,
+        "advanced": advanced,
     }
 
 
@@ -4062,10 +5979,140 @@ def _acceptance_check_failure_comment(gate: dict[str, Any]) -> str:
     )
 
 
+def _changed_files_from_snapshot(snapshot: TaskProgressSnapshot) -> list[str]:
+    evidence = snapshot.evidence or {}
+    git_meta = evidence.get("git") if isinstance(evidence, dict) else {}
+    changed_files = (
+        git_meta.get("changed_files")
+        if isinstance(git_meta, dict)
+        else None
+    )
+    if isinstance(changed_files, str):
+        raw_items: Iterable[Any] = changed_files.splitlines()
+    elif isinstance(changed_files, (list, tuple)):
+        raw_items = changed_files
+    else:
+        raw_items = []
+    files: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_items:
+        text = str(raw).strip()
+        if not text:
+            continue
+        # Git porcelain and --stat style values may include a status prefix or
+        # a pipe-separated stats suffix. Keep the path-like portion only.
+        if "\t" in text:
+            text = text.split("\t")[-1].strip()
+        if " | " in text:
+            text = text.split(" | ", 1)[0].strip()
+        text = text.strip("-* ")
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        files.append(text)
+    return files
+
+
+def _diff_summary_lines_from_snapshot(snapshot: TaskProgressSnapshot) -> list[str]:
+    evidence = snapshot.evidence or {}
+    git_meta = evidence.get("git") if isinstance(evidence, dict) else {}
+    diff_summary = (
+        git_meta.get("diff_summary")
+        if isinstance(git_meta, dict)
+        else None
+    )
+    return _metadata_text_lines(diff_summary, limit=500)
+
+
+def _load_deep_review_config() -> dict[str, Any]:
+    cfg: dict[str, Any] = {}
+    try:
+        from hermes_cli.config import load_config
+
+        cfg = ((load_config() or {}).get("kanban") or {}).get("deep_review") or {}
+    except Exception as exc:
+        _log.debug("Could not load kanban.deep_review config: %s", exc)
+    if not isinstance(cfg, dict):
+        cfg = {}
+
+    def _int_value(name: str, default: int, *, minimum: int, maximum: int) -> int:
+        try:
+            value = int(cfg.get(name, default))
+        except (TypeError, ValueError):
+            value = default
+        return max(minimum, min(maximum, value))
+
+    return {
+        "enabled": bool(cfg.get("enabled", True)),
+        "changed_files_threshold": _int_value(
+            "changed_files_threshold",
+            REVIEW_SHARDS_DEFAULT_CHANGED_FILES_THRESHOLD,
+            minimum=1,
+            maximum=500,
+        ),
+        "diff_summary_lines_threshold": _int_value(
+            "diff_summary_lines_threshold",
+            REVIEW_SHARDS_DEFAULT_DIFF_SUMMARY_LINES_THRESHOLD,
+            minimum=1,
+            maximum=5000,
+        ),
+        "max_files_per_shard": _int_value(
+            "max_files_per_shard",
+            REVIEW_SHARDS_DEFAULT_MAX_FILES_PER_SHARD,
+            minimum=1,
+            maximum=100,
+        ),
+        "max_shards": _int_value(
+            "max_shards",
+            REVIEW_SHARDS_DEFAULT_MAX_SHARDS,
+            minimum=1,
+            maximum=32,
+        ),
+    }
+
+
+def _review_shard_plan(snapshot: TaskProgressSnapshot) -> dict[str, Any]:
+    cfg = _load_deep_review_config()
+    changed_files = _changed_files_from_snapshot(snapshot)
+    diff_lines = _diff_summary_lines_from_snapshot(snapshot)
+    enabled = bool(cfg.get("enabled"))
+    triggered = bool(
+        enabled
+        and (
+            len(changed_files) >= int(cfg["changed_files_threshold"])
+            or len(diff_lines) >= int(cfg["diff_summary_lines_threshold"])
+        )
+    )
+    shards: list[dict[str, Any]] = []
+    if triggered and changed_files:
+        max_files = int(cfg["max_files_per_shard"])
+        max_shards = int(cfg["max_shards"])
+        for index in range(0, len(changed_files), max_files):
+            if len(shards) >= max_shards:
+                break
+            files = changed_files[index : index + max_files]
+            shards.append({
+                "index": len(shards) + 1,
+                "files": files,
+            })
+    return {
+        "enabled": enabled,
+        "triggered": bool(shards),
+        "changed_files_count": len(changed_files),
+        "diff_summary_lines": len(diff_lines),
+        "changed_files_threshold": int(cfg["changed_files_threshold"]),
+        "diff_summary_lines_threshold": int(cfg["diff_summary_lines_threshold"]),
+        "max_files_per_shard": int(cfg["max_files_per_shard"]),
+        "max_shards": int(cfg["max_shards"]),
+        "shards": shards,
+    }
+
+
 def _review_followup_body(
     snapshot: TaskProgressSnapshot,
     *,
     purpose: str,
+    shard: Optional[dict[str, Any]] = None,
 ) -> str:
     evidence = snapshot.evidence or {}
     worker_lane = evidence.get("worker_lane") if isinstance(evidence, dict) else {}
@@ -4088,8 +6135,9 @@ def _review_followup_body(
         else None
     )
     run = snapshot.run
+    purpose_label = "review shard" if purpose == "review_shard" else purpose
     lines = [
-        f"Independent {purpose} task for implementation Kanban task {snapshot.task.id}.",
+        f"Independent {purpose_label} task for implementation Kanban task {snapshot.task.id}.",
         "",
         "Do not implement new feature work unless explicitly requested by the review/test findings.",
         "Read the bounded evidence below, inspect the workspace/diff as needed, and write a structured verdict.",
@@ -4108,9 +6156,23 @@ def _review_followup_body(
         f"- exit_code: {worker_lane.get('exit_code', '-') if isinstance(worker_lane, dict) else '-'}",
         f"- timed_out: {worker_lane.get('timed_out', '-') if isinstance(worker_lane, dict) else '-'}",
         f"- review_reason: {review.get('reason', '-') if isinstance(review, dict) else '-'}",
-        "",
-        "## Changed files",
     ]
+    if purpose == "review_shard" and isinstance(shard, dict):
+        lines.extend([
+            "",
+            "## Review shard scope",
+            f"- shard_index: {shard.get('index') or '-'}",
+            "- Review only these changed files unless a directly related issue requires nearby context.",
+        ])
+        shard_files = [
+            str(path)
+            for path in (shard.get("files") or [])
+            if str(path).strip()
+        ]
+        lines.extend([f"- {path}" for path in shard_files] or ["- (none recorded)"])
+        lines.extend(["", "## All changed files"])
+    else:
+        lines.extend(["", "## Changed files"])
     changed_lines = _metadata_text_lines(changed_files)
     lines.extend([f"- {line}" for line in changed_lines] or ["- (none recorded)"])
     lines.extend(["", "## Diff summary"])
@@ -4133,12 +6195,16 @@ def _review_followup_body(
     if worker_tail:
         lines.extend(["", "## Worker output tail"])
         lines.extend(_metadata_text_lines(worker_tail, limit=80))
-    if purpose == "review":
+    if purpose in {"review", "review_shard"}:
         lines.extend([
             "",
             "## Required review output",
             "Return findings grouped by file/hunk where possible.",
-            "State one verdict: approve, request_changes, or blocked.",
+            "For a review shard, keep the verdict scoped to the shard files.",
+            "End with exactly one structured verdict line:",
+            "Verdict: approve | request_changes | blocked",
+            "Use approve only when the implementation should pass this review gate.",
+            "Do not rely on Recommended reviewer action as the verdict; Hermes reads the Verdict line.",
             "Do not mark the implementation task done; Hermes will consume your evidence.",
         ])
     else:
@@ -4146,21 +6212,44 @@ def _review_followup_body(
             "",
             "## Required test output",
             "Run or define deterministic verification commands when possible.",
-            "State one verdict: pass, fail, or blocked.",
+            "End with exactly one structured verdict line:",
+            "Verdict: pass | fail | blocked",
+            "Use pass only when the implementation should pass this test gate.",
+            "Do not rely on Recommended reviewer action as the verdict; Hermes reads the Verdict line.",
             "Do not mark the implementation task done; Hermes will consume your evidence.",
         ])
     return "\n".join(lines)
 
 
 def _review_followup_event_payload(plan: ReviewFollowupPlan) -> dict[str, Any]:
+    review_shards: list[dict[str, Any]] = []
+    if isinstance(plan.deep_review, dict):
+        for shard in plan.deep_review.get("shards") or []:
+            if not isinstance(shard, dict):
+                continue
+            task_id = shard.get("task_id")
+            if not isinstance(task_id, str) or not task_id.strip():
+                continue
+            review_shards.append({
+                "index": shard.get("index"),
+                "task_id": task_id.strip(),
+                "files": [
+                    str(path)
+                    for path in (shard.get("files") or [])
+                    if str(path).strip()
+                ],
+            })
     return {
         "source_run_id": plan.source_run_id,
         "review_task_id": plan.review_task_id,
         "test_task_id": plan.test_task_id,
+        "review_shard_task_ids": list(plan.review_shard_task_ids),
+        "review_shards": review_shards,
         "created": list(plan.created),
         "existing": list(plan.existing),
         "review_assignee": plan.review_assignee,
         "test_assignee": plan.test_assignee,
+        "deep_review": plan.deep_review,
     }
 
 
@@ -4198,6 +6287,8 @@ def plan_review_followups(
     existing: list[str] = []
     review_task_id: Optional[str] = None
     test_task_id: Optional[str] = None
+    review_shard_task_ids: list[str] = []
+    deep_review = _review_shard_plan(snapshot) if include_review else None
 
     if include_review:
         key = f"review-followup:{task_id}:{source_run_id}:review"
@@ -4228,6 +6319,45 @@ def plan_review_followups(
         else:
             created.append(review_task_id)
         link_tasks(conn, review_task_id, task_id)
+
+        for shard in (deep_review or {}).get("shards") or []:
+            if not isinstance(shard, dict):
+                continue
+            shard_index = int(shard.get("index") or (len(review_shard_task_ids) + 1))
+            key = f"review-followup:{task_id}:{source_run_id}:review-shard:{shard_index}"
+            preexisting = conn.execute(
+                "SELECT id FROM tasks WHERE idempotency_key = ? "
+                "AND status != 'archived' ORDER BY created_at DESC LIMIT 1",
+                (key,),
+            ).fetchone()
+            shard_task_id = create_task(
+                conn,
+                title=f"Review shard {shard_index} for {task_id}",
+                body=_review_followup_body(
+                    snapshot,
+                    purpose="review_shard",
+                    shard=shard,
+                ),
+                assignee=review_name,
+                created_by=created_by,
+                workspace_kind=snapshot.task.workspace_kind,
+                workspace_path=snapshot.task.workspace_path,
+                branch_name=snapshot.task.branch_name,
+                tenant=snapshot.task.tenant,
+                priority=snapshot.task.priority,
+                max_runtime_seconds=snapshot.task.max_runtime_seconds,
+                max_retries=snapshot.task.max_retries,
+                session_id=snapshot.task.session_id,
+                idempotency_key=key,
+                board=board,
+            )
+            shard["task_id"] = shard_task_id
+            review_shard_task_ids.append(shard_task_id)
+            if preexisting:
+                existing.append(shard_task_id)
+            else:
+                created.append(shard_task_id)
+            link_tasks(conn, shard_task_id, task_id)
 
     if include_test:
         key = f"review-followup:{task_id}:{source_run_id}:test"
@@ -4264,10 +6394,12 @@ def plan_review_followups(
         source_run_id=source_run_id,
         review_task_id=review_task_id,
         test_task_id=test_task_id,
+        review_shard_task_ids=review_shard_task_ids,
         created=created,
         existing=existing,
         review_assignee=review_name if include_review else None,
         test_assignee=test_name if include_test else None,
+        deep_review=deep_review,
     )
     with write_txn(conn):
         _append_event(
@@ -4703,6 +6835,14 @@ def _has_sticky_block(conn: sqlite3.Connection, task_id: str) -> bool:
     return bool(row) and row["kind"] == "blocked"
 
 
+def _is_review_followup_task_id(conn: sqlite3.Connection, task_id: str) -> bool:
+    row = conn.execute(
+        "SELECT idempotency_key FROM tasks WHERE id = ?", (task_id,),
+    ).fetchone()
+    key = row["idempotency_key"] if row else None
+    return isinstance(key, str) and key.startswith("review-followup:")
+
+
 def recompute_ready(conn: sqlite3.Connection) -> int:
     """Promote ``todo`` tasks to ``ready`` when all parents are ``done`` or ``archived``.
 
@@ -4731,6 +6871,16 @@ def recompute_ready(conn: sqlite3.Connection) -> int:
                 # silently auto-recover.  ``unblock_task`` is the only
                 # legitimate exit (it emits ``"unblocked"`` which flips
                 # this predicate back).
+                continue
+            if (
+                cur_status == "blocked"
+                and _is_review_followup_task_id(conn, task_id)
+                and _task_has_event_kind(conn, task_id, "gave_up")
+            ):
+                # Review/test follow-ups are scoped to one implementation
+                # run. Once their worker exhausts retries, the source task
+                # should receive bounded request-changes feedback instead of
+                # silently re-queuing the stale follow-up.
                 continue
             parents = conn.execute(
                 "SELECT t.status FROM tasks t "
@@ -5879,6 +8029,7 @@ def decompose_triage_task(
             "body": "...",                     # optional
             "assignee": "profile-name",        # optional, None -> default fallback
             "parents": [0, 2],                 # indices into this same children list
+            "acceptance_check_requests": [...], # optional declarative checks
         }
 
     Returns the list of created child task ids (in input order) on
@@ -5914,6 +8065,12 @@ def decompose_triage_task(
                 )
             if p == idx:
                 raise ValueError(f"child[{idx}] cannot list itself as a parent")
+        validate_acceptance_check_requests(
+            child.get(
+                "acceptance_check_requests",
+                child.get("acceptance_check_request"),
+            )
+        )
 
     # Detect cycles in the sibling parent graph (Kahn's topological sort).
     # link_tasks() calls _would_cycle() for every new edge; here we check
@@ -5976,6 +8133,12 @@ def decompose_triage_task(
             title = child["title"].strip()
             body = child.get("body")
             assignee = _canonical_assignee(child.get("assignee"))
+            acceptance_requests = validate_acceptance_check_requests(
+                child.get(
+                    "acceptance_check_requests",
+                    child.get("acceptance_check_request"),
+                )
+            )
             conn.execute(
                 "INSERT INTO tasks "
                 "(id, title, body, assignee, status, priority, workspace_kind, "
@@ -6014,8 +8177,19 @@ def decompose_triage_task(
                     "max_runtime_seconds": root_max_runtime,
                     "max_retries": root_max_retries,
                     "session_id": root_session_id,
+                    "acceptance_check_requests": [
+                        req["name"] for req in acceptance_requests
+                    ] or None,
                 },
             )
+            for req in acceptance_requests:
+                _append_acceptance_check_request_event(
+                    conn,
+                    new_id,
+                    req,
+                    run_id=None,
+                    requested_by=author or "decomposer",
+                )
             child_ids.append(new_id)
 
         # Link children to their sibling parents (within the decomposed graph).
@@ -6664,6 +8838,7 @@ def enforce_max_runtime(
     """
     import signal
     timed_out: list[str] = []
+    auto_blocked: list[str] = []
     now = int(time.time())
     host_prefix = f"{_claimer_id().split(':', 1)[0]}:"
 
@@ -6747,7 +8922,7 @@ def enforce_max_runtime(
         # emits a ``gave_up`` event on top of the ``timed_out`` we
         # already emitted.
         if cur.rowcount == 1:
-            _record_task_failure(
+            tripped = _record_task_failure(
                 conn, tid,
                 error=f"elapsed {int(elapsed)}s > limit {int(row['max_runtime_seconds'])}s",
                 outcome="timed_out",
@@ -6755,6 +8930,9 @@ def enforce_max_runtime(
                 end_run=False,
                 event_payload_extra={"pid": pid, "sigkill": killed},
             )
+            if tripped:
+                auto_blocked.append(tid)
+    enforce_max_runtime._last_auto_blocked = auto_blocked  # type: ignore[attr-defined]
     return timed_out
 
 
@@ -7519,6 +9697,11 @@ def dispatch_once(
     if _crash_auto_blocked:
         result.auto_blocked.extend(_crash_auto_blocked)
     result.timed_out = enforce_max_runtime(conn)
+    _timeout_auto_blocked = getattr(
+        enforce_max_runtime, "_last_auto_blocked", []
+    )
+    if _timeout_auto_blocked:
+        result.auto_blocked.extend(_timeout_auto_blocked)
     result.promoted = recompute_ready(conn)
     try:
         from hermes_cli.worker_lanes import (

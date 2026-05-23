@@ -65,7 +65,9 @@ _HERMES_CORE_TOOLS = [
     # profile explicitly enables the kanban toolset. Gated via check_fn in
     # tools/kanban_tools.py.
     "kanban_show", "kanban_list", "kanban_progress", "kanban_acceptance",
-    "kanban_verify", "kanban_advance_acceptance", "kanban_advance_goal",
+    "kanban_verify", "kanban_acceptance_check_request",
+    "kanban_advance_acceptance", "kanban_advance_goal",
+    "kanban_advance_controller", "kanban_worker_lane_request",
     "kanban_reviews", "kanban_review", "kanban_plan_review",
     "kanban_complete", "kanban_block", "kanban_heartbeat",
     "kanban_comment", "kanban_create", "kanban_link",
@@ -254,7 +256,9 @@ TOOLSETS = {
         ),
         "tools": [
             "kanban_show", "kanban_list", "kanban_progress", "kanban_acceptance",
-            "kanban_verify", "kanban_advance_acceptance", "kanban_advance_goal",
+            "kanban_verify", "kanban_acceptance_check_request",
+            "kanban_advance_acceptance", "kanban_advance_goal",
+            "kanban_advance_controller", "kanban_worker_lane_request",
             "kanban_reviews", "kanban_review", "kanban_plan_review",
             "kanban_complete", "kanban_block",
             "kanban_heartbeat", "kanban_comment",

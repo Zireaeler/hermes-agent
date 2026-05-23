@@ -593,7 +593,13 @@ def get_task_progress(
         )
         if snapshot is None:
             raise HTTPException(status_code=404, detail=f"task {task_id} not found")
-        return snapshot.to_dict()
+        payload = snapshot.to_dict()
+        try:
+            from hermes_cli.kanban_progress import attach_progress_diagnostics
+
+            return attach_progress_diagnostics(conn, payload)
+        except Exception:
+            return payload
     finally:
         conn.close()
 
@@ -638,6 +644,13 @@ def list_review_required(
     assignee: Optional[str] = Query(None),
     tenant: Optional[str] = Query(None),
     lane: Optional[str] = Query(None),
+    include_followups: bool = Query(
+        False,
+        description=(
+            "Include review/test follow-up evidence. Defaults to false so "
+            "the review queue lists implementation handoffs only."
+        ),
+    ),
     limit: int = Query(100, ge=1, le=_WORKER_REVIEW_QUEUE_MAX_LIMIT),
     log_tail: Optional[int] = Query(
         None,
@@ -658,6 +671,7 @@ def list_review_required(
             worker_lane=lane,
             limit=limit,
             log_tail_bytes=log_tail,
+            include_followups=include_followups,
             board=board,
         )
         return {
@@ -715,12 +729,23 @@ class VerifyTaskBody(BaseModel):
     source_run_id: Optional[int] = Field(default=None, ge=1)
 
 
+class AcceptanceCheckRequestBody(BaseModel):
+    acceptance_check_request: dict[str, Any] = Field(
+        ...,
+        description="Safe task-scoped acceptance check request object",
+    )
+    source_run_id: Optional[int] = Field(default=None, ge=1)
+    requested_by: Optional[str] = None
+
+
 class AdvanceAcceptanceBody(BaseModel):
     review_assignee: Optional[str] = "codex-review"
     test_assignee: Optional[str] = "codex-test"
     dispatch: bool = True
     dry_run: bool = False
     dispatch_max: Optional[int] = Field(default=None, ge=1, le=64)
+    loop: bool = False
+    max_iterations: int = Field(default=8, ge=1, le=64)
     verify: bool = True
     approve: bool = True
     request_changes_on_failure: bool = True
@@ -731,6 +756,12 @@ class AdvanceAcceptanceBody(BaseModel):
 
 class AdvanceGoalBody(AdvanceAcceptanceBody):
     pass
+
+
+class AdvanceControllerBody(AdvanceAcceptanceBody):
+    max_items: int = Field(default=8, ge=1, le=128)
+    include_goals: bool = True
+    include_review_required: bool = True
 
 
 class WorkerLaneRequestBody(BaseModel):
@@ -796,7 +827,13 @@ def plan_task_review_followups(
             out = plan.to_dict()
             if payload.dispatch:
                 followup_ids = [
-                    tid for tid in (plan.review_task_id, plan.test_task_id) if tid
+                    tid
+                    for tid in (
+                        plan.review_task_id,
+                        *plan.review_shard_task_ids,
+                        plan.test_task_id,
+                    )
+                    if tid
                 ]
                 result = kanban_db.dispatch_once(
                     conn,
@@ -840,6 +877,44 @@ def verify_task_acceptance(
         conn.close()
 
 
+@router.post("/tasks/{task_id}/acceptance-check-requests")
+def submit_task_acceptance_check_request(
+    task_id: str,
+    payload: AcceptanceCheckRequestBody,
+    board: Optional[str] = Query(None),
+):
+    """Attach a validated task-scoped deterministic acceptance check."""
+    board = _resolve_board(board)
+    conn = _conn(board=board)
+    try:
+        try:
+            out = kanban_db.add_acceptance_check_request(
+                conn,
+                task_id,
+                payload.acceptance_check_request,
+                source_run_id=payload.source_run_id,
+                requested_by=payload.requested_by or "dashboard",
+            )
+            gate = kanban_db.acceptance_check_gate_status(
+                conn,
+                task_id,
+                source_run_id=out.get("source_run_id"),
+            )
+            return {
+                "valid": True,
+                "task_id": task_id,
+                "source_run_id": out.get("source_run_id"),
+                "request": out.get("request"),
+                "acceptance_check_gate": gate,
+            }
+        except ValueError as exc:
+            msg = str(exc)
+            status_code = 404 if msg.startswith("unknown task ") else 400
+            raise HTTPException(status_code=status_code, detail=msg)
+    finally:
+        conn.close()
+
+
 @router.post("/tasks/{task_id}/advance-acceptance")
 def advance_task_acceptance(
     task_id: str,
@@ -851,21 +926,31 @@ def advance_task_acceptance(
     conn = _conn(board=board)
     try:
         try:
+            common_kwargs = {
+                "review_assignee": payload.review_assignee or "codex-review",
+                "test_assignee": payload.test_assignee or "codex-test",
+                "dispatch": payload.dispatch,
+                "dry_run": payload.dry_run,
+                "dispatch_max": payload.dispatch_max,
+                "verify": payload.verify,
+                "approve": payload.approve,
+                "request_changes_on_failure": payload.request_changes_on_failure,
+                "reviewer": payload.reviewer or "dashboard",
+                "summary": payload.summary,
+                "result": payload.result,
+                "board": board,
+            }
+            if payload.loop:
+                return kanban_db.advance_acceptance_workflow_until_idle(
+                    conn,
+                    task_id,
+                    max_iterations=payload.max_iterations,
+                    **common_kwargs,
+                )
             return kanban_db.advance_acceptance_workflow(
                 conn,
                 task_id,
-                review_assignee=payload.review_assignee or "codex-review",
-                test_assignee=payload.test_assignee or "codex-test",
-                dispatch=payload.dispatch,
-                dry_run=payload.dry_run,
-                dispatch_max=payload.dispatch_max,
-                verify=payload.verify,
-                approve=payload.approve,
-                request_changes_on_failure=payload.request_changes_on_failure,
-                reviewer=payload.reviewer or "dashboard",
-                summary=payload.summary,
-                result=payload.result,
-                board=board,
+                **common_kwargs,
             )
         except ValueError as exc:
             msg = str(exc)
@@ -886,9 +971,52 @@ def advance_goal_acceptance(
     conn = _conn(board=board)
     try:
         try:
+            common_kwargs = {
+                "review_assignee": payload.review_assignee or "codex-review",
+                "test_assignee": payload.test_assignee or "codex-test",
+                "dispatch": payload.dispatch,
+                "dry_run": payload.dry_run,
+                "dispatch_max": payload.dispatch_max,
+                "verify": payload.verify,
+                "approve": payload.approve,
+                "request_changes_on_failure": payload.request_changes_on_failure,
+                "reviewer": payload.reviewer or "dashboard",
+                "summary": payload.summary,
+                "result": payload.result,
+                "board": board,
+            }
+            if payload.loop:
+                return kanban_db.advance_goal_acceptance_workflow_until_idle(
+                    conn,
+                    task_id,
+                    max_iterations=payload.max_iterations,
+                    **common_kwargs,
+                )
             return kanban_db.advance_goal_acceptance_workflow(
                 conn,
                 task_id,
+                **common_kwargs,
+            )
+        except ValueError as exc:
+            msg = str(exc)
+            status_code = 404 if msg.startswith("unknown task ") else 400
+            raise HTTPException(status_code=status_code, detail=msg)
+    finally:
+        conn.close()
+
+
+@router.post("/advance-controller")
+def advance_controller(
+    payload: AdvanceControllerBody,
+    board: Optional[str] = Query(None),
+):
+    """Run one autonomous bounded Kanban controller tick."""
+    board = _resolve_board(board)
+    conn = _conn(board=board)
+    try:
+        try:
+            return kanban_db.advance_controller_once(
+                conn,
                 review_assignee=payload.review_assignee or "codex-review",
                 test_assignee=payload.test_assignee or "codex-test",
                 dispatch=payload.dispatch,
@@ -901,11 +1029,13 @@ def advance_goal_acceptance(
                 summary=payload.summary,
                 result=payload.result,
                 board=board,
+                max_iterations=payload.max_iterations,
+                max_items=payload.max_items,
+                include_goals=payload.include_goals,
+                include_review_required=payload.include_review_required,
             )
         except ValueError as exc:
-            msg = str(exc)
-            status_code = 404 if msg.startswith("unknown task ") else 400
-            raise HTTPException(status_code=status_code, detail=msg)
+            raise HTTPException(status_code=400, detail=str(exc))
     finally:
         conn.close()
 

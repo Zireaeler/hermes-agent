@@ -150,6 +150,135 @@ def test_goal_create_routes_to_kanban_without_setting_standing_goal(server, sess
     assert GoalManager(session_key).state is None
 
 
+def test_goal_advance_routes_current_kanban_goal(server, session, tmp_path, monkeypatch):
+    import json
+    from hermes_cli import kanban_db as kb
+    from hermes_cli import profiles
+    from hermes_cli.goals import create_kanban_task_from_goal
+
+    sid, session_key, _ = session
+    monkeypatch.setattr(profiles, "profile_exists", lambda name: True)
+    root = create_kanban_task_from_goal(
+        "tui advance current root",
+        session_id=session_key,
+        assignee="orchestrator",
+        workspace_kind="dir",
+        workspace_path=str(tmp_path),
+    )
+    with kb.connect() as conn:
+        child_ids = kb.decompose_triage_task(
+            conn,
+            root,
+            root_assignee="orchestrator",
+            children=[{"title": "implement from tui advance", "assignee": "codex-deep"}],
+            author="planner",
+        )
+        assert child_ids is not None
+
+    r = _call(
+        server,
+        "command.dispatch",
+        name="goal",
+        arg="advance --dry-run --json",
+        session_id=sid,
+    )
+    payload = json.loads(r["result"]["output"])
+    spawned_ids = {
+        item["task_id"]
+        for step in payload["steps"]
+        if step["kind"] == "dispatch_goal_children"
+        for item in step["dispatch"]["spawned"]
+    }
+
+    assert payload["task_id"] == root
+    assert spawned_ids == {child_ids[0]}
+
+
+def test_goal_status_after_create_reads_kanban_goal_without_interrupting_worker(
+    server,
+):
+    sid = "sid-goal-status"
+    session_key = "tui-goal-status-session"
+    server._sessions[sid] = {
+        "session_key": session_key,
+        "history": [],
+        "history_lock": threading.Lock(),
+        "history_version": 0,
+        "running": False,
+        "attached_images": [],
+        "cols": 120,
+    }
+    r = _call(
+        server,
+        "command.dispatch",
+        name="goal",
+        arg="create 'build status bridge' --assignee orchestrator",
+        session_id=sid,
+    )
+    assert "Goal task:" in r["result"]["output"]
+
+    from hermes_cli import kanban_db as kb
+    from hermes_cli.goals import GoalManager
+
+    with kb.connect() as conn:
+        roots = kb.list_tasks(conn, session_id=session_key)
+        root = next(
+            task
+            for task in roots
+            if (task.idempotency_key or "").startswith(f"goal:{session_key}:")
+        )
+        child_ids = kb.decompose_triage_task(
+            conn,
+            root.id,
+            root_assignee="orchestrator",
+            children=[{"title": "implement tui status", "assignee": "codex-deep"}],
+            author="planner",
+        )
+        assert child_ids is not None
+        running_id = child_ids[0]
+        running = kb.claim_task(conn, running_id, claimer="worker:codex-deep")
+        assert running is not None
+        kb._set_worker_pid(conn, running_id, 54321)
+        kb.record_task_event(
+            conn,
+            running_id,
+            "worker_progress",
+            {
+                "lane": "codex-deep",
+                "items": [
+                    {"index": 1, "status": "running", "text": "render tui status"},
+                ],
+            },
+            run_id=running.current_run_id,
+        )
+        before = kb.get_task(conn, running_id)
+
+    status = _call(
+        server,
+        "command.dispatch",
+        name="goal",
+        arg="status",
+        session_id=sid,
+    )
+
+    with kb.connect() as conn:
+        after = kb.get_task(conn, running_id)
+
+    output = status["result"]["output"]
+    assert status["result"]["type"] == "exec"
+    assert "Kanban goal" in output
+    assert root.id in output
+    assert "root-next: wait_for_workers" in output
+    assert "children=0/1 done running=1 review-required=0" in output
+    assert "progress=running: render tui status" in output
+    assert "No active goal" not in output
+    assert GoalManager(session_key).state is None
+    assert after.status == before.status == "running"
+    assert after.claim_lock == before.claim_lock
+    assert after.current_run_id == before.current_run_id
+    assert after.worker_pid == before.worker_pid == 54321
+
+
 def test_goal_pause_after_set(server, session):
     sid, session_key, _ = session
     _call(server, "command.dispatch", name="goal", arg="write a story", session_id=sid)

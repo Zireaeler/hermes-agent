@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -182,6 +183,71 @@ def test_run_slash_context_output_format(kanban_home):
     assert "tech spec" in ctx
     assert "write an RFC" in ctx
     assert "performance section" in ctx
+
+
+def test_run_slash_create_attaches_acceptance_check_request(
+    kanban_home,
+    tmp_path,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    req = tmp_path / "acceptance.yaml"
+    req.write_text(
+        "acceptance_check_request:\n"
+        "  name: expected-file\n"
+        "  type: file_content\n"
+        "  path: ok.txt\n"
+        "  contains: ok\n",
+        encoding="utf-8",
+    )
+
+    payload = json.loads(kc.run_slash(
+        "create 'task with acceptance' "
+        "--assignee codex-deep "
+        f"--workspace dir:{workspace} "
+        f"--acceptance-check-request {req} "
+        "--json"
+    ))
+
+    with kb.connect() as conn:
+        gate = kb.acceptance_check_gate_status(
+            conn,
+            payload["id"],
+            source_run_id=None,
+        )
+        events = kb.list_events(conn, payload["id"])
+
+    assert payload["acceptance_check_gate"]["items"][0]["name"] == "expected-file"
+    assert gate is not None
+    assert gate["items"][0]["requested"] is True
+    assert any(event.kind == "acceptance_check_requested" for event in events)
+
+
+def test_run_slash_create_rejects_unsafe_acceptance_request(
+    kanban_home,
+    tmp_path,
+):
+    req = tmp_path / "unsafe.yaml"
+    req.write_text(
+        "acceptance_check_request:\n"
+        "  name: bad\n"
+        "  type: file_content\n"
+        "  path: ok.txt\n"
+        "  contains: ok\n"
+        "  argv: [pytest, -q]\n",
+        encoding="utf-8",
+    )
+
+    out = kc.run_slash(
+        "create 'unsafe acceptance' "
+        "--assignee codex-deep "
+        f"--acceptance-check-request {req}"
+    )
+
+    assert "acceptance-check-request" in out
+    assert "executable command fields" in out
+    with kb.connect() as conn:
+        assert kb.list_tasks(conn) == []
 
 
 def test_run_slash_tenant_filter(kanban_home):
@@ -489,12 +555,176 @@ def test_run_slash_progress_children_json_summarizes_goal_workers(kanban_home):
     assert payload["child_summary"]["running"] == 1
     assert payload["child_summary"]["review_required"] == 1
     assert payload["child_summary"]["relationship_counts"]["decomposed_child"] == 2
+    assert payload["child_summary"]["recommended_actions"] == {
+        "plan_review_followups": 1,
+        "wait_for_implementation": 1,
+    }
     by_id = {child["task"]["id"]: child for child in payload["children"]}
     assert by_id[running_id]["worker_progress"]["items"][0]["text"] == "mock"
+    assert by_id[running_id]["acceptance"]["recommended_action"] == "wait_for_implementation"
     assert by_id[review_id]["worker_lane"]["name"] == "codex-deep"
+    assert by_id[review_id]["acceptance"]["recommended_action"] == "plan_review_followups"
     assert by_id[review_id]["verification"]["commands"] == ["pytest -q"]
     assert after.status == "running"
     assert after.claim_lock == before.claim_lock
+
+
+def test_run_slash_progress_children_surfaces_child_next_action(
+    kanban_home,
+):
+    with kb.connect() as conn:
+        root = kb.create_task(conn, title="goal with review child", triage=True)
+        child_ids = kb.decompose_triage_task(
+            conn,
+            root,
+            root_assignee="orchestrator",
+            children=[{"title": "implement", "assignee": "codex-deep"}],
+            author="planner",
+        )
+        assert child_ids is not None
+        child = child_ids[0]
+        claimed = kb.claim_task(conn, child, claimer="worker:codex-deep")
+        assert claimed is not None
+        assert kb.block_task(
+            conn,
+            child,
+            reason="review-required",
+            expected_run_id=claimed.current_run_id,
+            metadata={
+                "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+                "verification": {"commands": ["python3 -m pytest -q"], "summary": "passed"},
+                "review": {"required": True, "reason": "needs review"},
+            },
+        )
+
+    payload = json.loads(kc.run_slash(f"progress {root} --children --json"))
+    text = kc.run_slash(f"progress {root} --children")
+
+    assert payload["child_summary"]["recommended_actions"] == {
+        "plan_review_followups": 1,
+    }
+    child_payload = payload["children"][0]
+    assert child_payload["acceptance"]["recommended_action"] == "plan_review_followups"
+    assert child_payload["acceptance"]["request_changes_allowed"] is True
+    assert "next: plan_review_followups=1" in text
+    assert f"{child} blocked @codex-deep" in text
+    assert "next: plan_review_followups" in text
+
+
+def test_run_slash_progress_children_surfaces_child_diagnostics(
+    kanban_home,
+):
+    with kb.connect() as conn:
+        root = kb.create_task(conn, title="goal with diagnostic child", triage=True)
+        child_ids = kb.decompose_triage_task(
+            conn,
+            root,
+            root_assignee="orchestrator",
+            children=[{"title": "implementation with failed acceptance", "assignee": "codex-deep"}],
+            author="planner",
+        )
+        assert child_ids is not None
+        child = child_ids[0]
+        claimed = kb.claim_task(conn, child, claimer="worker:codex-deep")
+        assert claimed is not None
+        assert kb.block_task(
+            conn,
+            child,
+            reason="review-required",
+            expected_run_id=claimed.current_run_id,
+            metadata={
+                "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+                "review": {"required": True, "reason": "needs review"},
+            },
+        )
+        kb.record_task_event(
+            conn,
+            child,
+            "acceptance_check_completed",
+            {
+                "name": "unit-tests",
+                "source_run_id": claimed.current_run_id,
+                "passed": False,
+                "exit_code": 2,
+                "stderr_tail": "assertion failed",
+            },
+            run_id=claimed.current_run_id,
+        )
+
+    payload = json.loads(kc.run_slash(f"progress {root} --children --json"))
+    text = kc.run_slash(f"progress {root} --children")
+    child_payload = payload["children"][0]
+
+    assert child_payload["diagnostics"][0]["kind"] == "acceptance_check_gate_failed"
+    assert child_payload["warnings"]["kinds"]["acceptance_check_gate_failed"] == 1
+    assert "diagnostics: acceptance_check_gate_failed" in text
+
+
+def test_run_slash_progress_without_task_id_reads_session_goal(
+    kanban_home,
+    tmp_path,
+    monkeypatch,
+):
+    from hermes_cli.goals import create_kanban_task_from_goal
+
+    session_id = "cli-session-progress"
+    monkeypatch.setenv("HERMES_SESSION_ID", session_id)
+    root = create_kanban_task_from_goal(
+        "cli session progress goal",
+        session_id=session_id,
+        assignee="orchestrator",
+        workspace_kind="dir",
+        workspace_path=str(tmp_path),
+    )
+    with kb.connect() as conn:
+        child_ids = kb.decompose_triage_task(
+            conn,
+            root,
+            root_assignee="orchestrator",
+            children=[{"title": "implement", "assignee": "codex-deep"}],
+            author="planner",
+        )
+        assert child_ids is not None
+        child = child_ids[0]
+        running = kb.claim_task(conn, child, claimer="worker:codex-deep")
+        assert running is not None
+        kb.record_task_event(
+            conn,
+            child,
+            "worker_progress",
+            {
+                "lane": "codex-deep",
+                "items": [{"index": 1, "status": "running", "text": "cli session"}],
+            },
+            run_id=running.current_run_id,
+        )
+        before = kb.get_task(conn, child)
+
+    payload = json.loads(kc.run_slash("progress --children --json"))
+    text = kc.run_slash("progress --children")
+
+    with kb.connect() as conn:
+        after = kb.get_task(conn, child)
+
+    assert payload["resolved_from_session_goal"] is True
+    assert payload["session_id"] == session_id
+    assert payload["task"]["id"] == root
+    assert payload["child_summary"]["running"] == 1
+    assert payload["children"][0]["worker_progress"]["items"][0]["text"] == "cli session"
+    assert f"current session goal ({session_id})" in text
+    assert after.status == before.status == "running"
+    assert after.claim_lock == before.claim_lock
+
+
+def test_run_slash_progress_without_task_id_requires_session_goal(
+    kanban_home,
+    monkeypatch,
+):
+    monkeypatch.delenv("HERMES_SESSION_ID", raising=False)
+
+    out = kc.run_slash("progress --json")
+
+    assert "task_id is required unless HERMES_SESSION_ID" in out
 
 
 def test_run_slash_reviews_lists_review_required_evidence(
@@ -534,6 +764,64 @@ def test_run_slash_reviews_lists_review_required_evidence(
     assert tid in human
     assert "codex-deep" in human
     assert "review-required: Codex completed" in human
+
+
+def test_run_slash_reviews_hides_followup_evidence_by_default(
+    kanban_home,
+    tmp_path,
+):
+    metadata = {
+        "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+        "verification": {"commands": ["pytest -q"], "summary": "passed"},
+        "review": {"required": True, "reason": "Codex completed; Hermes review required"},
+    }
+    with kb.connect() as conn:
+        tid = kb.create_task(
+            conn,
+            title="implementation review",
+            assignee="codex-deep",
+            workspace_kind="dir",
+            workspace_path=str(tmp_path),
+        )
+        task = kb.claim_task(conn, tid, claimer="worker:codex-deep")
+        assert task is not None
+        assert kb.block_task(
+            conn,
+            tid,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=task.current_run_id,
+            metadata=metadata,
+        )
+        plan = kb.plan_review_followups(conn, tid)
+        for followup_id, lane, verdict in (
+            (plan.review_task_id, "codex-review", "approve"),
+            (plan.test_task_id, "codex-test", "pass"),
+        ):
+            follow = kb.claim_task(conn, followup_id, claimer=f"worker:{lane}")
+            assert follow is not None
+            assert kb.block_task(
+                conn,
+                followup_id,
+                reason="review-required: Codex completed; Hermes review required",
+                expected_run_id=follow.current_run_id,
+                metadata={
+                    "worker_lane": {"name": lane, "kind": "codex_cli", "exit_code": 0},
+                    "verification": {"commands": [], "summary": f"Verdict: {verdict}"},
+                    "review": {
+                        "required": True,
+                        "reason": "Codex completed; Hermes review required",
+                    },
+                },
+            )
+
+    default_payload = json.loads(kc.run_slash("reviews --json"))
+    followup_payload = json.loads(kc.run_slash("reviews --include-followups --json"))
+
+    assert [item["task"]["id"] for item in default_payload] == [tid]
+    assert {
+        item["task"]["id"]
+        for item in followup_payload
+    } == {tid, plan.review_task_id, plan.test_task_id}
 
 
 def test_run_slash_worker_lanes_lists_active_instances(kanban_home):
@@ -717,9 +1005,14 @@ def test_run_slash_plan_review_dispatch_dry_run_scopes_to_followups(
     tmp_path,
     all_assignees_spawnable,
 ):
+    changed_files = [f"pkg/module_{index}.py" for index in range(8)]
     metadata = {
         "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
         "verification": {"commands": ["pytest -q"], "summary": "passed"},
+        "git": {
+            "changed_files": changed_files,
+            "diff_summary": "\n".join(f" {path} | 2 +-" for path in changed_files),
+        },
         "review": {"required": True, "reason": "Codex completed; Hermes review required"},
     }
     with kb.connect() as conn:
@@ -751,15 +1044,23 @@ def test_run_slash_plan_review_dispatch_dry_run_scopes_to_followups(
         f"plan-review {tid} --dispatch --dry-run --json"
     ))
     spawned_ids = {item["task_id"] for item in payload["dispatch"]["spawned"]}
+    expected_ids = {
+        payload["review_task_id"],
+        payload["test_task_id"],
+        *payload["review_shard_task_ids"],
+    }
 
     with kb.connect() as conn:
         unrelated_task = kb.get_task(conn, unrelated)
         review_task = kb.get_task(conn, payload["review_task_id"])
         test_task = kb.get_task(conn, payload["test_task_id"])
+        shard_task = kb.get_task(conn, payload["review_shard_task_ids"][0])
 
-    assert spawned_ids == {payload["review_task_id"], payload["test_task_id"]}
+    assert len(payload["review_shard_task_ids"]) == 1
+    assert spawned_ids == expected_ids
     assert unrelated_task.status == "ready"
     assert review_task.status == "ready"
+    assert shard_task.status == "ready"
     assert test_task.status == "ready"
 
 
@@ -808,14 +1109,132 @@ def test_run_slash_verify_runs_configured_acceptance_check(
     assert acceptance["acceptance_check_gate"]["ready"] is True
 
 
+def test_run_slash_acceptance_check_request_runs_task_scoped_file_check(
+    kanban_home,
+    tmp_path,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "ok.txt").write_text("ok\n", encoding="utf-8")
+    req = tmp_path / "acceptance.yaml"
+    req.write_text(
+        "acceptance_check_request:\n"
+        "  name: expected-file\n"
+        "  type: file_content\n"
+        "  path: ok.txt\n"
+        "  equals: \"ok\\n\"\n",
+        encoding="utf-8",
+    )
+    metadata = {
+        "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+        "review": {"required": True, "reason": "Codex completed; Hermes review required"},
+    }
+    with kb.connect() as conn:
+        tid = kb.create_task(
+            conn,
+            title="acceptance request via slash",
+            assignee="codex-deep",
+            workspace_kind="dir",
+            workspace_path=str(workspace),
+        )
+        task = kb.claim_task(conn, tid, claimer="worker:codex-deep")
+        assert task is not None
+        assert kb.block_task(
+            conn,
+            tid,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=task.current_run_id,
+            metadata=metadata,
+        )
+
+    requested = json.loads(kc.run_slash(
+        f"acceptance-check-request {tid} {req} --json"
+    ))
+    verified = json.loads(kc.run_slash(f"verify {tid} --json"))
+
+    assert requested["request"]["name"] == "expected-file"
+    assert requested["acceptance_check_gate"]["missing"] == 1
+    assert verified["checks"][0]["type"] == "file_content"
+    assert verified["checks"][0]["passed"] is True
+
+
+def test_run_slash_acceptance_check_request_runs_command_template(
+    kanban_home,
+    tmp_path,
+):
+    workspace = tmp_path / "workspace"
+    tests_dir = workspace / "tests"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "test_smoke.py").write_text(
+        "def test_ok():\n"
+        "    assert True\n",
+        encoding="utf-8",
+    )
+    (kanban_home / "config.yaml").write_text(
+        "kanban:\n"
+        "  acceptance_templates:\n"
+        "    pytest-target:\n"
+        f"      argv_template: [{json.dumps(sys.executable)}, -m, pytest, \"{{target}}\", -q]\n"
+        "      allowed_args: [target]\n"
+        "      arg_types:\n"
+        "        target: relative_path\n",
+        encoding="utf-8",
+    )
+    req = tmp_path / "acceptance-template.yaml"
+    req.write_text(
+        "acceptance_check_request:\n"
+        "  name: pytest-smoke\n"
+        "  type: command_template\n"
+        "  template: pytest-target\n"
+        "  args:\n"
+        "    target: tests/test_smoke.py\n",
+        encoding="utf-8",
+    )
+    metadata = {
+        "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+        "review": {"required": True, "reason": "Codex completed; Hermes review required"},
+    }
+    with kb.connect() as conn:
+        tid = kb.create_task(
+            conn,
+            title="command template request via slash",
+            assignee="codex-deep",
+            workspace_kind="dir",
+            workspace_path=str(workspace),
+        )
+        task = kb.claim_task(conn, tid, claimer="worker:codex-deep")
+        assert task is not None
+        assert kb.block_task(
+            conn,
+            tid,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=task.current_run_id,
+            metadata=metadata,
+        )
+
+    requested = json.loads(kc.run_slash(
+        f"acceptance-check-request {tid} {req} --json"
+    ))
+    verified = json.loads(kc.run_slash(f"verify {tid} --json"))
+
+    assert requested["request"]["type"] == "command_template"
+    assert verified["checks"][0]["type"] == "command_template"
+    assert verified["checks"][0]["passed"] is True
+
+
 def test_run_slash_advance_acceptance_dry_run_plans_scoped_followups(
     kanban_home,
     tmp_path,
     all_assignees_spawnable,
 ):
+    changed_files = [f"pkg/module_{index}.py" for index in range(8)]
     metadata = {
         "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
         "verification": {"commands": ["pytest -q"], "summary": "passed"},
+        "git": {
+            "changed_files": changed_files,
+            "diff_summary": "\n".join(f" {path} | 2 +-" for path in changed_files),
+        },
         "review": {"required": True, "reason": "Codex completed; Hermes review required"},
     }
     with kb.connect() as conn:
@@ -848,19 +1267,27 @@ def test_run_slash_advance_acceptance_dry_run_plans_scoped_followups(
     ))
     plan = payload["steps"][0]["plan"]
     spawned_ids = {item["task_id"] for item in payload["steps"][1]["dispatch"]["spawned"]}
+    expected_ids = {
+        plan["review_task_id"],
+        plan["test_task_id"],
+        *plan["review_shard_task_ids"],
+    }
 
     with kb.connect() as conn:
         unrelated_task = kb.get_task(conn, unrelated)
         review_task = kb.get_task(conn, plan["review_task_id"])
         test_task = kb.get_task(conn, plan["test_task_id"])
+        shard_task = kb.get_task(conn, plan["review_shard_task_ids"][0])
 
     assert [step["kind"] for step in payload["steps"]] == [
         "plan_review_followups",
         "dispatch_followups",
     ]
-    assert spawned_ids == {plan["review_task_id"], plan["test_task_id"]}
+    assert len(plan["review_shard_task_ids"]) == 1
+    assert spawned_ids == expected_ids
     assert unrelated_task.status == "ready"
     assert review_task.status == "ready"
+    assert shard_task.status == "ready"
     assert test_task.status == "ready"
     assert payload["final"]["recommended_action"] == "wait_for_followups"
 
@@ -933,6 +1360,82 @@ def test_run_slash_advance_acceptance_no_request_changes_reports_blocked(
     assert comments == []
 
 
+def test_run_slash_advance_acceptance_loop_approves_ready_gates(
+    kanban_home,
+    tmp_path,
+):
+    metadata = {
+        "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+        "verification": {"commands": ["pytest -q"], "summary": "passed"},
+        "review": {"required": True, "reason": "Codex completed; Hermes review required"},
+    }
+    with kb.connect() as conn:
+        tid = kb.create_task(
+            conn,
+            title="advance loop via slash",
+            assignee="codex-deep",
+            workspace_kind="dir",
+            workspace_path=str(tmp_path),
+        )
+        task = kb.claim_task(conn, tid, claimer="worker:codex-deep")
+        assert task is not None
+        assert kb.block_task(
+            conn,
+            tid,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=task.current_run_id,
+            metadata=metadata,
+        )
+        plan = kb.plan_review_followups(conn, tid)
+        review = kb.claim_task(conn, plan.review_task_id, claimer="worker:codex-review")
+        assert review is not None
+        assert kb.block_task(
+            conn,
+            plan.review_task_id,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=review.current_run_id,
+            metadata={
+                "worker_lane": {
+                    "name": "codex-review",
+                    "kind": "codex_cli",
+                    "exit_code": 0,
+                },
+                "verification": {"summary": "Verdict: approve"},
+                "review": {"required": True},
+            },
+        )
+        test = kb.claim_task(conn, plan.test_task_id, claimer="worker:codex-test")
+        assert test is not None
+        assert kb.block_task(
+            conn,
+            plan.test_task_id,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=test.current_run_id,
+            metadata={
+                "worker_lane": {
+                    "name": "codex-test",
+                    "kind": "codex_cli",
+                    "exit_code": 0,
+                },
+                "verification": {"summary": "Verdict: pass"},
+                "review": {"required": True},
+            },
+        )
+
+    payload = json.loads(kc.run_slash(
+        f"advance-acceptance {tid} --loop --json"
+    ))
+
+    with kb.connect() as conn:
+        task_after = kb.get_task(conn, tid)
+
+    assert payload["stop_reason"] == "done"
+    assert payload["iteration_count"] == 1
+    assert payload["iterations"][0]["steps"][0]["kind"] == "approve"
+    assert payload["final"]["recommended_action"] == "done"
+    assert task_after.status == "done"
+
+
 def test_run_slash_advance_goal_dry_run_scopes_child_dispatch(
     kanban_home,
     tmp_path,
@@ -976,6 +1479,659 @@ def test_run_slash_advance_goal_dry_run_scopes_child_dispatch(
     assert child.status == "ready"
     assert unrelated_task.status == "ready"
     assert payload["final"]["task"]["status"] == "todo"
+
+
+def test_run_slash_advance_goal_loop_stops_on_running_child(
+    kanban_home,
+    tmp_path,
+):
+    with kb.connect() as conn:
+        root = kb.create_task(
+            conn,
+            title="goal loop via slash",
+            workspace_kind="dir",
+            workspace_path=str(tmp_path),
+            triage=True,
+        )
+        child_ids = kb.decompose_triage_task(
+            conn,
+            root,
+            root_assignee="orchestrator",
+            children=[{"title": "implement", "assignee": "codex-deep"}],
+            author="planner",
+        )
+        assert child_ids is not None
+        child = child_ids[0]
+        running = kb.claim_task(conn, child, claimer="worker:codex-deep")
+        assert running is not None
+        before = kb.get_task(conn, child)
+
+    payload = json.loads(kc.run_slash(
+        f"advance-goal {root} --loop --no-dispatch --json"
+    ))
+
+    with kb.connect() as conn:
+        after = kb.get_task(conn, child)
+
+    assert payload["stop_reason"] == "waiting"
+    assert payload["iteration_count"] == 1
+    assert payload["iterations"][0]["steps"][0]["kind"] == "wait_for_child"
+    assert after.status == "running"
+    assert after.claim_lock == before.claim_lock
+
+
+def test_run_slash_advance_goal_without_task_id_reads_session_goal(
+    kanban_home,
+    tmp_path,
+    monkeypatch,
+    all_assignees_spawnable,
+):
+    from hermes_cli.goals import create_kanban_task_from_goal
+
+    session_id = "cli-session-advance"
+    monkeypatch.setenv("HERMES_SESSION_ID", session_id)
+    root = create_kanban_task_from_goal(
+        "cli session advance goal",
+        session_id=session_id,
+        assignee="orchestrator",
+        workspace_kind="dir",
+        workspace_path=str(tmp_path),
+    )
+    with kb.connect() as conn:
+        child_ids = kb.decompose_triage_task(
+            conn,
+            root,
+            root_assignee="orchestrator",
+            children=[{"title": "implement", "assignee": "codex-deep"}],
+            author="planner",
+        )
+        assert child_ids is not None
+        unrelated = kb.create_task(
+            conn,
+            title="unrelated",
+            assignee="alice",
+            workspace_kind="dir",
+            workspace_path=str(tmp_path),
+        )
+
+    payload = json.loads(kc.run_slash("advance-goal --dry-run --json"))
+    text = kc.run_slash("advance-goal --dry-run")
+    spawned_ids = {item["task_id"] for item in payload["steps"][0]["dispatch"]["spawned"]}
+
+    with kb.connect() as conn:
+        child = kb.get_task(conn, child_ids[0])
+        unrelated_task = kb.get_task(conn, unrelated)
+
+    assert payload["resolved_from_session_goal"] is True
+    assert payload["session_id"] == session_id
+    assert payload["task_id"] == root
+    assert spawned_ids == {child_ids[0]}
+    assert f"current session goal ({session_id})" in text
+    assert child.status == "ready"
+    assert unrelated_task.status == "ready"
+
+
+def test_run_slash_advance_goal_without_task_id_requires_session_goal(
+    kanban_home,
+    monkeypatch,
+):
+    monkeypatch.delenv("HERMES_SESSION_ID", raising=False)
+
+    out = kc.run_slash("advance-goal --json")
+
+    assert "task_id is required unless HERMES_SESSION_ID" in out
+
+
+def test_run_slash_advance_controller_advances_goal(
+    kanban_home,
+    tmp_path,
+):
+    metadata = {
+        "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+        "verification": {"commands": ["pytest -q"], "summary": "passed"},
+        "review": {"required": True, "reason": "Codex completed; Hermes review required"},
+    }
+    with kb.connect() as conn:
+        root = kb.create_task(
+            conn,
+            title="controller slash root",
+            workspace_kind="dir",
+            workspace_path=str(tmp_path),
+            triage=True,
+        )
+        child_ids = kb.decompose_triage_task(
+            conn,
+            root,
+            root_assignee="orchestrator",
+            children=[{"title": "implement", "assignee": "codex-deep"}],
+            author="planner",
+        )
+        assert child_ids is not None
+        child = child_ids[0]
+        claimed = kb.claim_task(conn, child, claimer="worker:codex-deep")
+        assert claimed is not None
+        assert kb.block_task(
+            conn,
+            child,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=claimed.current_run_id,
+            metadata=metadata,
+        )
+        plan = kb.plan_review_followups(conn, child)
+        review = kb.claim_task(conn, plan.review_task_id, claimer="worker:codex-review")
+        assert review is not None
+        assert kb.block_task(
+            conn,
+            plan.review_task_id,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=review.current_run_id,
+            metadata={
+                "worker_lane": {"name": "codex-review", "kind": "codex_cli", "exit_code": 0},
+                "verification": {"summary": "Verdict: approve"},
+                "review": {"required": True},
+            },
+        )
+        test = kb.claim_task(conn, plan.test_task_id, claimer="worker:codex-test")
+        assert test is not None
+        assert kb.block_task(
+            conn,
+            plan.test_task_id,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=test.current_run_id,
+            metadata={
+                "worker_lane": {"name": "codex-test", "kind": "codex_cli", "exit_code": 0},
+                "verification": {"summary": "Verdict: pass"},
+                "review": {"required": True},
+            },
+        )
+
+    payload = json.loads(kc.run_slash("advance-controller --json"))
+
+    with kb.connect() as conn:
+        root_after = kb.get_task(conn, root)
+        child_after = kb.get_task(conn, child)
+
+    assert payload["item_count"] == 1
+    assert payload["items"][0]["kind"] == "goal"
+    assert payload["items"][0]["task_id"] == root
+    assert payload["items"][0]["stop_reason"] == "done"
+    assert root_after.status == "done"
+    assert child_after.status == "done"
+
+
+def test_run_slash_goal_decompose_advance_dispatches_created_children(
+    kanban_home,
+    tmp_path,
+    monkeypatch,
+    all_assignees_spawnable,
+):
+    from hermes_cli.kanban_decompose import DecomposeOutcome
+
+    def fake_decompose(task_id, *, author=None, timeout=None):
+        with kb.connect() as conn:
+            child_ids = kb.decompose_triage_task(
+                conn,
+                task_id,
+                root_assignee="orchestrator",
+                children=[{"title": "implement goal", "assignee": "codex-deep"}],
+                author=author or "test",
+            )
+        return DecomposeOutcome(
+            task_id=task_id,
+            ok=bool(child_ids),
+            reason="fake decomposed",
+            fanout=True,
+            child_ids=child_ids or [],
+        )
+
+    monkeypatch.setattr("hermes_cli.kanban_decompose.decompose_task", fake_decompose)
+    with kb.connect() as conn:
+        unrelated = kb.create_task(
+            conn,
+            title="unrelated ready task",
+            assignee="alice",
+            workspace_kind="dir",
+            workspace_path=str(tmp_path),
+        )
+
+    payload = json.loads(kc.run_slash(
+        "goal 'ship via goal advance' "
+        f"--workspace dir:{tmp_path} "
+        "--assignee orchestrator "
+        "--decompose "
+        "--advance "
+        "--advance-dry-run "
+        "--json"
+    ))
+
+    advance = payload["advance"]
+    spawned_ids = {
+        item["task_id"]
+        for step in advance["steps"]
+        if step["kind"] == "dispatch_goal_children"
+        for item in step["dispatch"]["spawned"]
+    }
+
+    with kb.connect() as conn:
+        root = kb.get_task(conn, payload["task_id"])
+        child = kb.get_task(conn, payload["child_ids"][0])
+        unrelated_task = kb.get_task(conn, unrelated)
+
+    assert payload["decompose"]["ok"] is True
+    assert spawned_ids == {payload["child_ids"][0]}
+    assert root.status == "todo"
+    assert child.status == "ready"
+    assert unrelated_task.status == "ready"
+
+
+def test_run_slash_goal_decompose_advance_loop_completes_reviewed_codex_lane(
+    kanban_home,
+    tmp_path,
+    monkeypatch,
+    request,
+):
+    """Regression for the real /goal -> Codex smoke path.
+
+    Follow-up review/test workers normally finish by blocking with
+    review-required evidence.  The source implementation and root goal become
+    done after the gates consume that evidence; the follow-up task rows do not
+    need to transition to done.
+    """
+    from hermes_cli.kanban_decompose import DecomposeOutcome
+    from hermes_cli.worker_lanes import (
+        WorkerLane,
+        clear_worker_lanes,
+        register_worker_lane,
+    )
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "goal_loop.txt"
+    target.write_text("initial\n", encoding="utf-8")
+    (kanban_home / "config.yaml").write_text(
+        "kanban:\n"
+        "  acceptance_checks:\n"
+        "    exact-goal-file:\n"
+        "      argv:\n"
+        "        - python3\n"
+        "        - -c\n"
+        "        - 'from pathlib import Path; "
+        "assert Path(\"goal_loop.txt\").read_bytes() == "
+        "bytes([100,111,110,101,10])'\n"
+        "      timeout_seconds: 30\n",
+        encoding="utf-8",
+    )
+
+    clear_worker_lanes()
+    request.addfinalizer(clear_worker_lanes)
+
+    def fake_spawn(task, workspace_path, board=None):
+        lane = task.assignee or ""
+        run_id = task.current_run_id
+        progress = {
+            "worker_lane": lane,
+            "lane": lane,
+            "worker_kind": "codex_cli",
+            "run_id": run_id,
+            "items": [{"index": 1, "status": "done", "text": "finish goal file"}],
+        }
+        if lane == "codex-fast":
+            Path(workspace_path, "goal_loop.txt").write_text("done\n", encoding="utf-8")
+            verification = {
+                "commands": ["python3 exact byte check"],
+                "summary": "- command: python3 exact byte check\n  result: passed",
+            }
+            output_tail = (
+                "Progress:\n"
+                "- [x] finish goal file\n\n"
+                "Changed files:\n"
+                "- goal_loop.txt\n\n"
+                "Verification:\n"
+                "- command: python3 exact byte check\n"
+                "  result: passed\n\n"
+                "Recommended reviewer action:\n"
+                "- approve\n"
+            )
+        else:
+            verdict = "approve" if lane == "codex-review" else "pass"
+            verification = {
+                "commands": ["python3 exact byte check"],
+                "summary": f"Verdict: {verdict}\npassed",
+            }
+            output_tail = f"Progress:\n- [x] inspect bounded evidence\n\nVerdict: {verdict}\n"
+        metadata = {
+            "worker_lane": {
+                "name": lane,
+                "kind": "codex_cli",
+                "exit_code": 0,
+                "timed_out": False,
+                "binary_missing": False,
+                "output_tail": output_tail,
+            },
+            "verification": verification,
+            "review": {
+                "required": True,
+                "reason": "Codex completed; Hermes review required",
+            },
+        }
+        with kb.connect(board=board) as conn:
+            kb.record_task_event(conn, task.id, "worker_heartbeat", progress, run_id=run_id)
+            kb.record_task_event(conn, task.id, "worker_progress", progress, run_id=run_id)
+            assert kb.block_task(
+                conn,
+                task.id,
+                reason="review-required: Codex completed; Hermes review required",
+                expected_run_id=run_id,
+                metadata=metadata,
+            )
+        return None
+
+    for lane_name in ("codex-fast", "codex-review", "codex-test"):
+        register_worker_lane(WorkerLane(
+            name=lane_name,
+            kind="codex_cli",
+            description=f"Fake {lane_name} lane",
+            spawn_fn=fake_spawn,
+            success_policy="block_for_review",
+            max_concurrency=1,
+            source="test",
+        ))
+
+    def fake_decompose(task_id, *, author=None, timeout=None):
+        with kb.connect() as conn:
+            child_ids = kb.decompose_triage_task(
+                conn,
+                task_id,
+                root_assignee="orchestrator",
+                children=[{
+                    "title": "Implement goal loop file",
+                    "assignee": "codex-fast",
+                    "body": "Write goal_loop.txt as exactly done newline.",
+                }],
+                author=author or "test",
+            )
+        return DecomposeOutcome(
+            task_id=task_id,
+            ok=bool(child_ids),
+            reason="fake decomposed",
+            fanout=True,
+            child_ids=child_ids or [],
+        )
+
+    monkeypatch.setattr("hermes_cli.kanban_decompose.decompose_task", fake_decompose)
+
+    payload = json.loads(kc.run_slash(
+        "goal 'ship reviewed codex lane goal' "
+        f"--workspace dir:{workspace} "
+        "--assignee orchestrator "
+        "--decompose "
+        "--advance "
+        "--loop "
+        "--max-iterations 4 "
+        "--json"
+    ))
+
+    root_id = payload["task_id"]
+    child_id = payload["child_ids"][0]
+    with kb.connect() as conn:
+        root = kb.get_task(conn, root_id)
+        child = kb.get_task(conn, child_id)
+        root_snapshot = kb.task_progress_snapshot(conn, root_id, include_children=True)
+        acceptance = kb.task_acceptance_snapshot(conn, child_id)
+        child_run = kb.latest_run(conn, child_id)
+        followup_statuses = {
+            item["purpose"]: kb.get_task(conn, item["task_id"]).status
+            for item in acceptance["followups"]
+        }
+
+    assert payload["decompose"]["ok"] is True
+    assert payload["advance"]["stop_reason"] == "done"
+    assert root.status == "done"
+    assert child.status == "done"
+    assert child_run.outcome == "completed"
+    assert child_run.metadata["worker_lane"]["name"] == "codex-fast"
+    assert acceptance["recommended_action"] == "done"
+    assert acceptance["review_followup_gate"]["ready"] is True
+    assert acceptance["acceptance_check_gate"]["ready"] is True
+    assert followup_statuses == {"review": "blocked", "test": "blocked"}
+    assert root_snapshot.child_summary["done"] == 1
+    assert target.read_text(encoding="utf-8") == "done\n"
+
+
+def test_run_slash_goal_decompose_fanout_false_dispatches_goal_task(
+    kanban_home,
+    tmp_path,
+    monkeypatch,
+    request,
+):
+    from hermes_cli.kanban_decompose import DecomposeOutcome
+    from hermes_cli.worker_lanes import (
+        WorkerLane,
+        clear_worker_lanes,
+        register_worker_lane,
+    )
+
+    workspace = tmp_path / "single-workspace"
+    workspace.mkdir()
+    target = workspace / "single_goal.txt"
+    target.write_text("initial\n", encoding="utf-8")
+    (kanban_home / "config.yaml").write_text(
+        "kanban:\n"
+        "  acceptance_checks:\n"
+        "    exact-single-goal-file:\n"
+        "      argv:\n"
+        "        - python3\n"
+        "        - -c\n"
+        "        - 'from pathlib import Path; "
+        "assert Path(\"single_goal.txt\").read_bytes() == "
+        "bytes([115,105,110,103,108,101,10])'\n"
+        "      timeout_seconds: 30\n",
+        encoding="utf-8",
+    )
+
+    clear_worker_lanes()
+    request.addfinalizer(clear_worker_lanes)
+
+    def fake_spawn(task, workspace_path, board=None):
+        lane = task.assignee or ""
+        run_id = task.current_run_id
+        if lane == "codex-fast":
+            Path(workspace_path, "single_goal.txt").write_text("single\n", encoding="utf-8")
+            verdict = None
+            verification = {
+                "commands": ["python3 exact byte check"],
+                "summary": "- command: python3 exact byte check\n  result: passed",
+            }
+            output_tail = (
+                "Progress:\n"
+                "- [x] finish single goal file\n\n"
+                "Changed files:\n"
+                "- single_goal.txt\n\n"
+                "Verification:\n"
+                "- command: python3 exact byte check\n"
+                "  result: passed\n"
+            )
+        else:
+            verdict = "approve" if lane == "codex-review" else "pass"
+            verification = {
+                "commands": ["python3 exact byte check"],
+                "summary": f"Verdict: {verdict}\npassed",
+            }
+            output_tail = f"Verdict: {verdict}\n"
+        metadata = {
+            "worker_lane": {
+                "name": lane,
+                "kind": "codex_cli",
+                "exit_code": 0,
+                "timed_out": False,
+                "binary_missing": False,
+                "output_tail": output_tail,
+            },
+            "verification": verification,
+            "review": {
+                "required": True,
+                "reason": "Codex completed; Hermes review required",
+            },
+        }
+        progress = {
+            "worker_lane": lane,
+            "worker_kind": "codex_cli",
+            "run_id": run_id,
+            "items": [{
+                "index": 1,
+                "status": "done",
+                "text": f"{verdict or 'finish'} single goal",
+            }],
+        }
+        with kb.connect(board=board) as conn:
+            kb.record_task_event(conn, task.id, "worker_heartbeat", progress, run_id=run_id)
+            kb.record_task_event(conn, task.id, "worker_progress", progress, run_id=run_id)
+            assert kb.block_task(
+                conn,
+                task.id,
+                reason="review-required: Codex completed; Hermes review required",
+                expected_run_id=run_id,
+                metadata=metadata,
+            )
+        return None
+
+    for lane_name in ("codex-fast", "codex-review", "codex-test"):
+        register_worker_lane(WorkerLane(
+            name=lane_name,
+            kind="codex_cli",
+            description=f"Fake {lane_name} lane",
+            spawn_fn=fake_spawn,
+            success_policy="block_for_review",
+            max_concurrency=1,
+            source="test",
+        ))
+
+    def fake_decompose(task_id, *, author=None, timeout=None):
+        with kb.connect() as conn:
+            assert kb.specify_triage_task(
+                conn,
+                task_id,
+                title="Implement single goal file",
+                body="Write single_goal.txt as exactly single newline.",
+                assignee="codex-fast",
+                author=author or "test",
+            )
+        return DecomposeOutcome(
+            task_id=task_id,
+            ok=True,
+            reason="single task (no fanout)",
+            fanout=False,
+            child_ids=[],
+            new_title="Implement single goal file",
+        )
+
+    monkeypatch.setattr("hermes_cli.kanban_decompose.decompose_task", fake_decompose)
+
+    payload = json.loads(kc.run_slash(
+        "goal 'ship single codex lane goal' "
+        f"--workspace dir:{workspace} "
+        "--decompose "
+        "--advance "
+        "--loop "
+        "--max-iterations 4 "
+        "--json"
+    ))
+
+    task_id = payload["task_id"]
+    step_kinds = [
+        step["kind"]
+        for iteration in payload["advance"]["iterations"]
+        for step in iteration["steps"]
+    ]
+    with kb.connect() as conn:
+        task = kb.get_task(conn, task_id)
+        snapshot = kb.task_progress_snapshot(conn, task_id, include_children=True)
+        acceptance = kb.task_acceptance_snapshot(conn, task_id)
+        latest_run = kb.latest_run(conn, task_id)
+
+    assert payload["decompose"]["ok"] is True
+    assert payload["decompose"]["fanout"] is False
+    assert payload["child_ids"] == []
+    assert payload["advance"]["stop_reason"] == "done"
+    assert "dispatch_goal_task" in step_kinds
+    assert "advance_goal_task_acceptance" in step_kinds
+    assert task.status == "done"
+    assert task.assignee == "codex-fast"
+    assert snapshot.child_summary["total"] == 2
+    assert snapshot.child_summary["done"] == 2
+    assert snapshot.child_summary["review_required"] == 0
+    assert snapshot.child_summary["status_counts"] == {"done": 2}
+    assert snapshot.child_summary["recommended_actions"] == {"done": 2}
+    assert snapshot.child_summary["relationship_counts"] == {
+        "review_followup": 1,
+        "test_followup": 1,
+    }
+    assert {
+        child["acceptance"]["followup_gate_item"]["state"]
+        for child in snapshot.children
+    } == {"satisfied"}
+    assert snapshot.worker_progress["items"][0]["text"] == "finish single goal"
+    assert acceptance["recommended_action"] == "done"
+    assert acceptance["review_followup_gate"]["ready"] is True
+    assert acceptance["acceptance_check_gate"]["ready"] is True
+    assert latest_run.outcome == "completed"
+    assert latest_run.metadata["worker_lane"]["name"] == "codex-fast"
+    assert latest_run.metadata["review"]["source_run_id"] == 1
+    assert target.read_text(encoding="utf-8") == "single\n"
+
+
+def test_run_slash_goal_decompose_advance_can_reenter_existing_root(
+    kanban_home,
+    tmp_path,
+    monkeypatch,
+    all_assignees_spawnable,
+):
+    from hermes_cli.kanban_decompose import DecomposeOutcome
+
+    def fake_decompose(task_id, *, author=None, timeout=None):
+        with kb.connect() as conn:
+            task = kb.get_task(conn, task_id)
+            if task and task.status != "triage":
+                return DecomposeOutcome(
+                    task_id=task_id,
+                    ok=False,
+                    reason=f"task is not in triage (status={task.status!r})",
+                )
+            child_ids = kb.decompose_triage_task(
+                conn,
+                task_id,
+                root_assignee="orchestrator",
+                children=[{"title": "implement idempotent goal", "assignee": "codex-deep"}],
+                author=author or "test",
+            )
+        return DecomposeOutcome(
+            task_id=task_id,
+            ok=bool(child_ids),
+            reason="fake decomposed",
+            fanout=True,
+            child_ids=child_ids or [],
+        )
+
+    monkeypatch.setattr("hermes_cli.kanban_decompose.decompose_task", fake_decompose)
+    command = (
+        "goal 'ship idempotent goal advance' "
+        f"--workspace dir:{tmp_path} "
+        "--assignee orchestrator "
+        "--idempotency-key stable-goal "
+        "--decompose "
+        "--advance "
+        "--advance-dry-run "
+        "--json"
+    )
+
+    first = json.loads(kc.run_slash(command))
+    second = json.loads(kc.run_slash(command))
+
+    assert second["task_id"] == first["task_id"]
+    assert second["decompose"]["ok"] is False
+    assert "task is not in triage" in second["decompose"]["reason"]
+    assert second["advance"]["steps"][0]["kind"] == "dispatch_goal_children"
+    assert second["child_ids"] == first["child_ids"]
 
 
 def test_run_slash_worker_lane_request_validates_without_enabling(
@@ -1050,6 +2206,49 @@ def test_run_slash_worker_lane_request_rejects_shell_command(
     out = kc.run_slash(f"worker-lane-request {req} --json")
 
     assert "may not include executable command fields" in out
+
+
+def test_run_slash_diagnostics_flags_missing_review_followup_lane(
+    kanban_home,
+    monkeypatch,
+):
+    from hermes_cli.worker_lanes import WorkerLane, clear_worker_lanes, register_worker_lane
+
+    clear_worker_lanes()
+    register_worker_lane(WorkerLane(
+        name="codex-review",
+        kind="codex_cli",
+        description="Review lane",
+        spawn_fn=lambda task, workspace, **kwargs: 123,
+        source="test",
+    ))
+    monkeypatch.setattr("hermes_cli.profiles.profile_exists", lambda name: False)
+    with kb.connect() as conn:
+        tid = kb.create_task(conn, title="implementation", assignee="codex-deep")
+        claimed = kb.claim_task(conn, tid, claimer="worker:codex-deep")
+        assert claimed is not None
+        assert kb.block_task(
+            conn,
+            tid,
+            reason="review-required",
+            expected_run_id=claimed.current_run_id,
+            metadata={
+                "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+                "review": {"required": True, "reason": "needs review"},
+            },
+        )
+        kb.plan_review_followups(
+            conn,
+            tid,
+            review_assignee="codex-review",
+            test_assignee="codex-test",
+        )
+
+    payload = json.loads(kc.run_slash("diagnostics --json"))
+
+    by_id = {entry["task_id"]: entry for entry in payload}
+    kinds = {diag["kind"] for diag in by_id[tid]["diagnostics"]}
+    assert "review_followup_lane_missing" in kinds
 
 
 def test_run_slash_goal_creates_top_level_task(kanban_home):

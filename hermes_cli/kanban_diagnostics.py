@@ -169,6 +169,28 @@ def _event_ts(ev) -> int:
     return int(t or 0)
 
 
+def _event_run_id(ev) -> Optional[int]:
+    value = _task_field(ev, "run_id", None)
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _run_metadata(run) -> dict:
+    raw = _task_field(run, "metadata", None)
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            return {}
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
 def _active_hallucination_events(
     events: Iterable[Any],
     kind: str,
@@ -914,6 +936,325 @@ def _rule_stranded_in_ready(task, events, runs, now, cfg) -> list[Diagnostic]:
     )]
 
 
+def _rule_review_followup_lane_missing(task, events, runs, now, cfg) -> list[Diagnostic]:
+    """Review-required implementation is waiting on non-spawnable follow-ups."""
+    if _task_field(task, "status") != "blocked":
+        return []
+    ordered_runs = sorted(runs, key=lambda r: _task_field(r, "id", 0))
+    latest = ordered_runs[-1] if ordered_runs else None
+    metadata = _run_metadata(latest)
+    review = metadata.get("review") if isinstance(metadata, dict) else None
+    if not (isinstance(review, dict) and review.get("required")):
+        return []
+
+    missing: list[dict[str, str]] = []
+    for ev in events:
+        if _event_kind(ev) != "worker_review_followups_planned":
+            continue
+        payload = _parse_payload(ev)
+        for purpose, assignee, task_id in (
+            ("review", payload.get("review_assignee"), payload.get("review_task_id")),
+            ("test", payload.get("test_assignee"), payload.get("test_task_id")),
+        ):
+            name = str(assignee or "").strip()
+            if not name:
+                continue
+            try:
+                from hermes_cli.worker_lanes import resolve_worker_assignee
+
+                resolution = resolve_worker_assignee(name)
+            except Exception:
+                continue
+            if resolution.kind != "skipped_nonspawnable":
+                continue
+            item = {
+                "purpose": purpose,
+                "assignee": name,
+                "task_id": str(task_id or ""),
+            }
+            if item not in missing:
+                missing.append(item)
+
+    if not missing:
+        return []
+
+    labels = ", ".join(
+        f"{item['purpose']}={item['assignee']}" for item in missing[:4]
+    )
+    return [Diagnostic(
+        kind="review_followup_lane_missing",
+        severity="warning",
+        title=f"Review/test follow-up lane is not spawnable: {labels}",
+        detail=(
+            "This implementation task is blocked for Hermes review and has "
+            "planned independent review/test follow-up tasks, but at least "
+            "one follow-up assignee is neither a registered worker lane nor "
+            "a Hermes profile. Configure the missing lane or reassign the "
+            "follow-up task before advancing the goal."
+        ),
+        actions=[
+            DiagnosticAction(
+                kind="cli_hint",
+                label="List configured worker lanes",
+                payload={"command": "hermes kanban worker-lanes"},
+                suggested=True,
+            ),
+            DiagnosticAction(
+                kind="cli_hint",
+                label="Configure missing Codex follow-up lanes",
+                payload={
+                    "command": (
+                        "hermes config edit  # add kanban.worker_lanes.codex-review "
+                        "and kanban.worker_lanes.codex-test"
+                    )
+                },
+            ),
+            DiagnosticAction(
+                kind="reassign",
+                label="Reassign follow-up task(s) to a spawnable lane",
+                payload={"missing": missing},
+            ),
+        ],
+        first_seen_at=now,
+        last_seen_at=now,
+        count=len(missing),
+        run_id=(
+            int(_task_field(latest, "id"))
+            if latest is not None and _task_field(latest, "id") is not None
+            else None
+        ),
+        data={"missing": missing},
+    )]
+
+
+def _rule_acceptance_check_gate_failed(task, events, runs, now, cfg) -> list[Diagnostic]:
+    """Review-required implementation has failed deterministic checks.
+
+    The controller may automatically request changes after a failed
+    acceptance gate. When that has not happened yet, or when operators disable
+    automatic request-changes, this diagnostic surfaces the precise failed
+    checks from bounded event payloads so the control plane can explain why a
+    task is still blocked without reading a full worker session.
+    """
+    if _task_field(task, "status") != "blocked":
+        return []
+    ordered_runs = sorted(runs, key=lambda r: _task_field(r, "id", 0))
+    latest = ordered_runs[-1] if ordered_runs else None
+    latest_run_id = _task_field(latest, "id") if latest is not None else None
+    try:
+        latest_run_id = int(latest_run_id) if latest_run_id is not None else None
+    except (TypeError, ValueError):
+        latest_run_id = None
+    metadata = _run_metadata(latest)
+    review = metadata.get("review") if isinstance(metadata, dict) else None
+    if not (isinstance(review, dict) and review.get("required")):
+        return []
+
+    latest_failure_ts = 0
+    failed: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+    for ev in events:
+        kind = _event_kind(ev)
+        event_ts = _event_ts(ev)
+        if event_ts > latest_failure_ts and kind in {
+            "worker_review_changes_requested",
+            "worker_review_approved",
+            "unblocked",
+        }:
+            failed.clear()
+            seen_names.clear()
+            latest_failure_ts = 0
+            continue
+        if kind != "acceptance_check_completed":
+            continue
+        payload = _parse_payload(ev)
+        source_run_id = payload.get("source_run_id")
+        if source_run_id is None:
+            source_run_id = _event_run_id(ev)
+        try:
+            source_run_id = int(source_run_id) if source_run_id is not None else None
+        except (TypeError, ValueError):
+            source_run_id = None
+        if latest_run_id is not None and source_run_id != latest_run_id:
+            continue
+        if payload.get("passed") is True:
+            name = str(payload.get("name") or "").strip()
+            if name:
+                failed = [item for item in failed if item.get("name") != name]
+                seen_names.discard(name)
+            continue
+        name = str(payload.get("name") or "acceptance-check").strip()
+        item = {
+            "name": name,
+            "exit_code": payload.get("exit_code"),
+            "timed_out": bool(payload.get("timed_out")),
+            "error": str(payload.get("error") or "")[:500],
+            "stdout_tail": str(payload.get("stdout_tail") or "")[-500:],
+            "stderr_tail": str(payload.get("stderr_tail") or "")[-500:],
+            "event_id": payload.get("event_id") or _task_field(ev, "id"),
+            "created_at": payload.get("created_at") or event_ts,
+        }
+        if name in seen_names:
+            failed = [existing for existing in failed if existing.get("name") != name]
+        seen_names.add(name)
+        failed.append(item)
+        latest_failure_ts = max(latest_failure_ts, event_ts)
+
+    if not failed:
+        return []
+
+    task_id = _task_field(task, "id") or ""
+    labels = ", ".join(item["name"] for item in failed[:4])
+    detail_bits = []
+    for item in failed[:4]:
+        reason = []
+        if item.get("timed_out"):
+            reason.append("timed out")
+        if item.get("exit_code") is not None:
+            reason.append(f"exit={item.get('exit_code')}")
+        if item.get("error"):
+            reason.append(str(item["error"]))
+        tail = (item.get("stderr_tail") or item.get("stdout_tail") or "").strip()
+        if tail:
+            reason.append(tail.splitlines()[-1][:160])
+        suffix = f" ({'; '.join(reason)})" if reason else ""
+        detail_bits.append(f"{item['name']}{suffix}")
+
+    return [Diagnostic(
+        kind="acceptance_check_gate_failed",
+        severity="error",
+        title=f"Hermes acceptance check failed: {labels}",
+        detail=(
+            "This review-required implementation cannot be approved because "
+            "one or more deterministic Hermes acceptance checks failed for "
+            f"the current worker run: {', '.join(detail_bits)}. Inspect the "
+            "acceptance snapshot, then request changes or rerun the checks "
+            "after fixing the workspace."
+        ),
+        actions=[
+            DiagnosticAction(
+                kind="cli_hint",
+                label="Inspect acceptance evidence",
+                payload={"command": f"hermes kanban acceptance {task_id} --json"},
+                suggested=True,
+            ),
+            DiagnosticAction(
+                kind="cli_hint",
+                label="Advance controller",
+                payload={"command": f"hermes kanban advance-acceptance {task_id} --json"},
+            ),
+            DiagnosticAction(
+                kind="comment",
+                label="Request changes with the failed check output",
+                payload={"failed_checks": failed},
+            ),
+        ],
+        first_seen_at=latest_failure_ts or now,
+        last_seen_at=latest_failure_ts or now,
+        count=len(failed),
+        run_id=latest_run_id,
+        data={"failed_checks": failed},
+    )]
+
+
+def _rule_auto_request_changes_exhausted(task, events, runs, now, cfg) -> list[Diagnostic]:
+    """Controller has stopped retrying this implementation automatically."""
+    if _task_field(task, "status") != "blocked":
+        return []
+    ordered_runs = sorted(runs, key=lambda r: _task_field(r, "id", 0))
+    latest = ordered_runs[-1] if ordered_runs else None
+    latest_run_id = _task_field(latest, "id") if latest is not None else None
+    try:
+        latest_run_id = int(latest_run_id) if latest_run_id is not None else None
+    except (TypeError, ValueError):
+        latest_run_id = None
+    metadata = _run_metadata(latest)
+    review = metadata.get("review") if isinstance(metadata, dict) else None
+    if not (isinstance(review, dict) and review.get("required")):
+        return []
+
+    latest_exhausted = None
+    latest_exhausted_ts = 0
+    for ev in events:
+        kind = _event_kind(ev)
+        event_ts = _event_ts(ev)
+        if latest_exhausted_ts and event_ts > latest_exhausted_ts and kind in {
+            "worker_review_changes_requested",
+            "worker_review_approved",
+            "unblocked",
+        }:
+            latest_exhausted = None
+            latest_exhausted_ts = 0
+            continue
+        if kind != "worker_review_auto_retry_exhausted":
+            continue
+        payload = _parse_payload(ev)
+        source_run_id = payload.get("source_run_id")
+        if source_run_id is None:
+            source_run_id = _event_run_id(ev)
+        try:
+            source_run_id = int(source_run_id) if source_run_id is not None else None
+        except (TypeError, ValueError):
+            source_run_id = None
+        # Older exhausted events did not record run_id; keep them relevant
+        # when they are the latest active signal for the still-blocked task.
+        if (
+            latest_run_id is not None
+            and source_run_id is not None
+            and source_run_id != latest_run_id
+        ):
+            continue
+        latest_exhausted = payload
+        latest_exhausted_ts = event_ts
+
+    if not isinstance(latest_exhausted, dict):
+        return []
+
+    task_id = _task_field(task, "id") or ""
+    limit = latest_exhausted.get("limit")
+    used = latest_exhausted.get("used")
+    limit_text = (
+        f"{used}/{limit}"
+        if used is not None and limit is not None
+        else "configured limit"
+    )
+    return [Diagnostic(
+        kind="auto_request_changes_exhausted",
+        severity="error",
+        title="Automatic request-changes retry limit reached",
+        detail=(
+            "The controller has already requested bounded implementation "
+            f"changes {limit_text} times for this review-required run and "
+            "will not keep retrying automatically. Inspect the acceptance "
+            "and follow-up evidence, then either request targeted changes, "
+            "reassign the task, or adjust the retry policy deliberately."
+        ),
+        actions=[
+            DiagnosticAction(
+                kind="cli_hint",
+                label="Inspect acceptance evidence",
+                payload={"command": f"hermes kanban acceptance {task_id} --json"},
+                suggested=True,
+            ),
+            DiagnosticAction(
+                kind="reassign",
+                label="Reassign to a different implementation lane",
+                payload={"reclaim_first": False},
+            ),
+            DiagnosticAction(
+                kind="comment",
+                label="Add manual review guidance",
+                payload={"auto_retry_exhausted": latest_exhausted},
+            ),
+        ],
+        first_seen_at=latest_exhausted_ts or now,
+        last_seen_at=latest_exhausted_ts or now,
+        count=1,
+        run_id=latest_run_id,
+        data={"auto_request_changes": latest_exhausted},
+    )]
+
+
 # Registry — order matters: rules higher on the list render first when
 # severity ties. Add new rules here.
 _RULES: list[RuleFn] = [
@@ -923,6 +1264,9 @@ _RULES: list[RuleFn] = [
     _rule_repeated_failures,
     _rule_repeated_crashes,
     _rule_stuck_in_blocked,
+    _rule_review_followup_lane_missing,
+    _rule_acceptance_check_gate_failed,
+    _rule_auto_request_changes_exhausted,
     _rule_stranded_in_ready,
 ]
 
@@ -936,6 +1280,9 @@ DIAGNOSTIC_KINDS = (
     "repeated_failures",
     "repeated_crashes",
     "stuck_in_blocked",
+    "review_followup_lane_missing",
+    "acceptance_check_gate_failed",
+    "auto_request_changes_exhausted",
     "stranded_in_ready",
 )
 

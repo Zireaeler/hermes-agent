@@ -1554,6 +1554,20 @@ DEFAULT_CONFIG = {
         # large bulk-load of triage tasks from spending a burst of aux
         # LLM calls in one tick. Excess tasks defer to the next tick.
         "auto_decompose_per_tick": 3,
+        # When true, the gateway dispatcher also runs a bounded controller
+        # tick after dispatching workers. The controller advances decomposed
+        # goals and review-required external-worker handoffs to the next safe
+        # idle boundary: plan review/test follow-ups, dispatch scoped workers,
+        # run configured acceptance checks, approve passed gates, or request
+        # bounded changes. It never waits for or interrupts running workers.
+        "advance_controller_in_gateway": True,
+        # Per gateway tick caps for the autonomous controller.
+        "advance_controller_max_items": 8,
+        "advance_controller_max_iterations": 8,
+        "advance_controller_dispatch_max": 8,
+        "advance_controller_review_assignee": "codex-review",
+        "advance_controller_test_assignee": "codex-test",
+        "advance_controller_request_changes_on_failure": True,
         # Stale detection: running tasks that have exceeded this many
         # seconds without a heartbeat (since ``last_heartbeat_at``) are
         # auto-reclaimed to ``ready`` on the next dispatcher tick. The
@@ -1564,6 +1578,17 @@ DEFAULT_CONFIG = {
         # assignee strings in this order: configured/plugin worker lane, Hermes
         # profile, skipped_nonspawnable. Codex CLI is the first built-in adapter.
         "worker_lanes": {},
+        # Independent review/test follow-ups stay evidence-bounded. For larger
+        # implementation diffs, Hermes can add extra review shard tasks that
+        # each inspect a subset of changed files; every shard verdict must pass
+        # before the source task can be approved.
+        "deep_review": {
+            "enabled": True,
+            "changed_files_threshold": 8,
+            "diff_summary_lines_threshold": 80,
+            "max_files_per_shard": 8,
+            "max_shards": 8,
+        },
         # Named deterministic commands Hermes can run itself during final
         # acceptance. CLI/tool/API callers select these by name; they cannot
         # pass arbitrary shell command strings at runtime. Each entry is:
@@ -1572,6 +1597,17 @@ DEFAULT_CONFIG = {
         #     timeout_seconds: 300
         #     description: "unit test suite"
         "acceptance_checks": {},
+        # Named acceptance command templates that task-scoped acceptance
+        # requests may choose with type=command_template. Models/skills still
+        # cannot provide argv or shell strings; they can only select a trusted
+        # template and pass allowlisted args. Each entry is:
+        #   pytest-file:
+        #     argv_template: ["python3", "-m", "pytest", "{target}", "-q"]
+        #     allowed_args: ["target"]
+        #     arg_types: {"target": "relative_path"}
+        #     timeout_seconds: 300
+        #     description: "Run pytest for one workspace-relative target"
+        "acceptance_templates": {},
     },
 
     # execute_code settings — controls the tool used for programmatic tool calls.

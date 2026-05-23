@@ -1023,6 +1023,153 @@
 .hermes-kanban-worker-progress-item--running .hermes-kanban-worker-progress-status {
   color: #d4b348;
 }
+.hermes-kanban-worker-child-summary {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+}
+.hermes-kanban-worker-child-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  gap: 0.2rem 0.65rem;
+}
+.hermes-kanban-worker-child-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.hermes-kanban-worker-child-action {
+  border: 1px solid var(--color-border);
+  border-radius: 9999px;
+  padding: 0.08rem 0.45rem;
+  font-size: 0.7rem;
+  color: var(--color-muted-foreground);
+  background: color-mix(in srgb, var(--color-muted-foreground) 7%, transparent);
+}
+.hermes-kanban-worker-child-list {
+  display: grid;
+  gap: 0.4rem;
+}
+.hermes-kanban-worker-child {
+  border: 1px solid var(--color-border);
+  border-radius: 0.4rem;
+  padding: 0.5rem 0.55rem;
+  background: color-mix(in srgb, var(--color-card, #111) 78%, transparent);
+}
+.hermes-kanban-worker-child-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: start;
+}
+.hermes-kanban-worker-child-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.hermes-kanban-worker-child-status {
+  flex: 0 0 auto;
+  border-radius: 9999px;
+  padding: 0.05rem 0.4rem;
+  font-size: 0.68rem;
+  color: var(--color-muted-foreground);
+  background: color-mix(in srgb, var(--color-muted-foreground) 8%, transparent);
+}
+.hermes-kanban-worker-child-status--running {
+  color: #d4b348;
+  background: color-mix(in srgb, #d4b348 10%, transparent);
+}
+.hermes-kanban-worker-child-status--blocked {
+  color: #d4b348;
+  background: color-mix(in srgb, #d4b348 10%, transparent);
+}
+.hermes-kanban-worker-child-status--done {
+  color: #3fb97d;
+  background: color-mix(in srgb, #3fb97d 10%, transparent);
+}
+.hermes-kanban-worker-child-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.3rem;
+  font-size: 0.72rem;
+  color: var(--color-muted-foreground);
+}
+.hermes-kanban-worker-child-meta code {
+  font-size: 0.7rem;
+}
+.hermes-kanban-worker-child-review {
+  color: #d4b348;
+}
+.hermes-kanban-worker-child-next,
+.hermes-kanban-worker-child-progress {
+  display: grid;
+  grid-template-columns: 3.2rem minmax(0, 1fr);
+  gap: 0.35rem;
+  margin-top: 0.28rem;
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+.hermes-kanban-worker-child-next-label {
+  color: var(--color-muted-foreground);
+}
+.hermes-kanban-worker-goal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+.hermes-kanban-worker-acceptance {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+}
+.hermes-kanban-worker-gate {
+  border: 1px solid var(--color-border);
+  border-radius: 0.4rem;
+  padding: 0.4rem 0.5rem;
+  background: color-mix(in srgb, var(--color-card, #111) 82%, transparent);
+}
+.hermes-kanban-worker-gate-summary {
+  cursor: pointer;
+  font-size: 0.76rem;
+  color: var(--color-muted-foreground);
+}
+.hermes-kanban-worker-gate-item {
+  display: grid;
+  grid-template-columns: minmax(5rem, 0.8fr) minmax(4rem, 0.7fr) minmax(0, 1fr) auto;
+  gap: 0.4rem;
+  align-items: start;
+  margin-top: 0.35rem;
+  font-size: 0.72rem;
+}
+.hermes-kanban-worker-gate-item code {
+  font-size: 0.68rem;
+}
+.hermes-kanban-worker-gate-files,
+.hermes-kanban-worker-gate-reason {
+  grid-column: 1 / -1;
+  color: var(--color-muted-foreground);
+  word-break: break-word;
+}
+.hermes-kanban-worker-gate-reason {
+  color: var(--color-destructive, #d14a4a);
+}
+.hermes-kanban-worker-gate-purpose {
+  font-weight: 600;
+}
+.hermes-kanban-worker-gate-item--satisfied {
+  color: #3fb97d;
+}
+.hermes-kanban-worker-gate-item--failed,
+.hermes-kanban-worker-gate-item--missing {
+  color: var(--color-destructive, #d14a4a);
+}
+.hermes-kanban-worker-gate-item--running,
+.hermes-kanban-worker-gate-item--pending {
+  color: #d4b348;
+}
 .hermes-kanban-worker-command-list {
   margin: 0.2rem 0 0.45rem 1.1rem;
   padding: 0;

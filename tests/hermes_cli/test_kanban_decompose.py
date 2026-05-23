@@ -118,6 +118,106 @@ def test_decompose_with_fanout_creates_children(kanban_home):
     assert c1.assignee == "engineer"
 
 
+def test_decompose_with_fanout_attaches_child_acceptance_requests(kanban_home, tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    with kb.connect() as conn:
+        tid = kb.create_task(
+            conn,
+            title="ship a verified feature",
+            workspace_kind="dir",
+            workspace_path=str(workspace),
+            triage=True,
+        )
+
+    llm_payload = jsonlib.dumps({
+        "fanout": True,
+        "rationale": "implementation has a concrete file acceptance check",
+        "tasks": [
+            {
+                "title": "Implement file output",
+                "body": "Create ok.txt with expected content.",
+                "assignee": "engineer",
+                "parents": [],
+                "acceptance_check_requests": [
+                    {
+                        "name": "expected-file",
+                        "type": "file_content",
+                        "path": "ok.txt",
+                        "equals": "ok\n",
+                    },
+                ],
+            },
+        ],
+    })
+
+    patches = _patch_list_profiles(["orchestrator", "engineer"])
+    for p in patches:
+        p.start()
+    try:
+        with _patch_aux_client(llm_payload), _patch_extra_body():
+            outcome = decomp.decompose_task(tid, author="me")
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert outcome.ok, outcome.reason
+    assert outcome.child_ids and len(outcome.child_ids) == 1
+    with kb.connect() as conn:
+        gate = kb.acceptance_check_gate_status(
+            conn,
+            outcome.child_ids[0],
+            source_run_id=None,
+        )
+        events = kb.list_events(conn, outcome.child_ids[0])
+
+    assert gate is not None
+    assert gate["items"][0]["name"] == "expected-file"
+    assert gate["items"][0]["requested"] is True
+    assert any(event.kind == "acceptance_check_requested" for event in events)
+
+
+def test_decompose_rejects_unsafe_child_acceptance_requests(kanban_home):
+    with kb.connect() as conn:
+        tid = kb.create_task(conn, title="unsafe acceptance", triage=True)
+
+    llm_payload = jsonlib.dumps({
+        "fanout": True,
+        "rationale": "bad request",
+        "tasks": [
+            {
+                "title": "Do work",
+                "body": "Do it.",
+                "assignee": "engineer",
+                "parents": [],
+                "acceptance_check_requests": [
+                    {
+                        "name": "bad",
+                        "type": "file_content",
+                        "path": "ok.txt",
+                        "contains": "ok",
+                        "command": "pytest -q",
+                    },
+                ],
+            },
+        ],
+    })
+
+    patches = _patch_list_profiles(["orchestrator", "engineer"])
+    for p in patches:
+        p.start()
+    try:
+        with _patch_aux_client(llm_payload), _patch_extra_body():
+            outcome = decomp.decompose_task(tid, author="me")
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert outcome.ok is False
+    assert "acceptance_check_requests invalid" in outcome.reason
+    assert "executable command fields" in outcome.reason
+
+
 def test_decompose_can_route_children_to_worker_lanes(kanban_home):
     from hermes_cli.worker_lanes import WorkerLane, register_worker_lane
 
@@ -235,6 +335,45 @@ def test_decompose_fanout_false_assigns_default_when_unassigned(kanban_home):
     assert task.status == "ready"
     assert task.title == "Tightened title"
     assert task.assignee == "fallback"
+
+
+def test_decompose_fanout_false_attaches_acceptance_requests(kanban_home):
+    with kb.connect() as conn:
+        tid = kb.create_task(conn, title="just one verified thing", triage=True)
+
+    llm_payload = jsonlib.dumps({
+        "fanout": False,
+        "rationale": "single unit",
+        "title": "Tightened title",
+        "body": "Create ok.txt.",
+        "assignee": "engineer",
+        "acceptance_check_requests": [
+            {
+                "name": "expected-file",
+                "type": "file_content",
+                "path": "ok.txt",
+                "contains": "ok",
+            },
+        ],
+    })
+
+    patches = _patch_list_profiles(["orchestrator", "engineer"])
+    for p in patches:
+        p.start()
+    try:
+        with _patch_aux_client(llm_payload), _patch_extra_body():
+            outcome = decomp.decompose_task(tid, author="me")
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert outcome.ok, outcome.reason
+    with kb.connect() as conn:
+        gate = kb.acceptance_check_gate_status(conn, tid, source_run_id=None)
+        events = kb.list_events(conn, tid)
+    assert gate is not None
+    assert gate["items"][0]["name"] == "expected-file"
+    assert any(event.kind == "acceptance_check_requested" for event in events)
 
 
 def test_decompose_fanout_false_preserves_existing_assignee(kanban_home):

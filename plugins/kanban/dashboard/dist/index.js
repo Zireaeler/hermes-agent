@@ -579,6 +579,24 @@
       });
     }, [loadWorkerLanes, loadBoard]);
 
+    const runControllerTick = useCallback(function () {
+      return SDK.fetchJSON(withBoard(`${API}/advance-controller`, board), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          dispatch: true,
+          dry_run: false,
+          dispatch_max: 8,
+          max_items: 8,
+          max_iterations: 8,
+        }),
+      }).then(function (res) {
+        loadBoard();
+        loadWorkerLanes();
+        return res;
+      });
+    }, [board, loadBoard, loadWorkerLanes]);
+
     // --- load list of boards for the switcher ------------------------------
     const loadBoardList = useCallback(function () {
       return SDK.fetchJSON(withBoard(`${API}/boards`, board))
@@ -1061,6 +1079,9 @@
                 loadWorkerLanes();
               })
               .catch(function (e) { setError(String(e.message || e)); });
+          },
+          onRunController: function () {
+            runControllerTick().catch(function (e) { setError(String(e.message || e)); });
           },
           onRefresh: function () {
             loadBoard();
@@ -2075,6 +2096,11 @@
         size: "sm",
         title: "Wake the dispatcher to claim ready tasks now instead of waiting for the next tick. Use this after adding tasks if you want them picked up immediately.",
       }, tx(t, "nudgeDispatcher", "Nudge dispatcher")),
+      h(Button, {
+        onClick: props.onRunController,
+        size: "sm",
+        title: "Run one bounded controller tick now. This advances decomposed goals and review-required worker evidence to the next idle boundary without interrupting running workers.",
+      }, tx(t, "runController", "Run controller")),
       h(Button, {
         onClick: props.onRefresh,
         size: "sm",
@@ -3613,16 +3639,32 @@
   // endpoint only; it does not claim, heartbeat, or interrupt a running worker.
   function WorkerEvidenceSection(props) {
     const { t } = useI18n();
-    const [state, setState] = useState({ loading: false, data: null, err: null, busy: null });
+    const [state, setState] = useState({
+      loading: false,
+      data: null,
+      acceptance: null,
+      err: null,
+      busy: null,
+    });
 
     const load = useCallback(function () {
       setState(function (prev) {
         return Object.assign({}, prev, { loading: true, err: null });
       });
-      return SDK.fetchJSON(
-        withBoard(`${API}/tasks/${encodeURIComponent(props.taskId)}/progress?log_tail=65536`, props.boardSlug)
-      ).then(function (d) {
-        setState({ loading: false, data: d, err: null, busy: null });
+      const progressReq = SDK.fetchJSON(
+        withBoard(`${API}/tasks/${encodeURIComponent(props.taskId)}/progress?log_tail=65536&children=true`, props.boardSlug)
+      );
+      const acceptanceReq = SDK.fetchJSON(
+        withBoard(`${API}/tasks/${encodeURIComponent(props.taskId)}/acceptance`, props.boardSlug)
+      ).catch(function () { return null; });
+      return Promise.all([progressReq, acceptanceReq]).then(function (values) {
+        setState({
+          loading: false,
+          data: values[0],
+          acceptance: values[1],
+          err: null,
+          busy: null,
+        });
       }).catch(function (e) {
         setState(function (prev) {
           return Object.assign({}, prev, { loading: false, err: parseApiErrorMessage(e), busy: null });
@@ -3633,16 +3675,65 @@
     useEffect(function () { load(); }, [load, props.eventTick]);
 
     const data = state.data;
+    const acceptance = state.acceptance;
     const evidence = (data && data.evidence) || {};
     const workerLane = (data && data.worker_lane) || evidence.worker_lane || null;
     const progress = data && data.worker_progress;
     const progressItems = progress && Array.isArray(progress.items) ? progress.items : [];
+    const children = data && Array.isArray(data.children) ? data.children : [];
+    const childSummary = (data && data.child_summary) || null;
+    const childActions = childSummary && childSummary.recommended_actions
+      ? Object.entries(childSummary.recommended_actions).filter(function (entry) {
+          return Number(entry[1]) > 0;
+        })
+      : [];
+    const hasChildProgress = !!(children.length || childSummary && childSummary.total);
+    const canAdvanceGoal = hasChildProgress;
+    const reviewGate = acceptance && acceptance.review_followup_gate;
+    const acceptanceGate = acceptance && acceptance.acceptance_check_gate;
+    const followupSummary = acceptance && acceptance.followup_summary;
+    const recommendedAction = acceptance && acceptance.recommended_action;
+    const hasAcceptanceState = !!(
+      acceptance &&
+      (
+        recommendedAction ||
+        acceptance.followups_planned ||
+        followupSummary ||
+        reviewGate ||
+        acceptanceGate ||
+        acceptance.approval_allowed ||
+        acceptance.request_changes_allowed
+      )
+    );
+    const gateItems = function (gate) {
+      return gate && Array.isArray(gate.items) ? gate.items : [];
+    };
+    const gateSummary = function (gate) {
+      if (!gate) return "";
+      const parts = [];
+      if (gate.ready) parts.push("ready");
+      if (gate.satisfied !== undefined) parts.push(`satisfied ${gate.satisfied}`);
+      if (gate.running) parts.push(`running ${gate.running}`);
+      if (gate.pending) parts.push(`pending ${gate.pending}`);
+      if (gate.failed) parts.push(`failed ${gate.failed}`);
+      if (gate.missing) parts.push(`missing ${gate.missing}`);
+      return parts.join(" · ") || "not ready";
+    };
+    const gateItemFiles = function (item) {
+      const files = Array.isArray(item.files) ? item.files : [];
+      if (!files.length) return null;
+      const shown = files.slice(0, 4);
+      const suffix = files.length > shown.length ? ` +${files.length - shown.length}` : "";
+      return shown.join(", ") + suffix;
+    };
     const verification = (data && data.verification) || evidence.verification || null;
     const git = (data && data.git) || evidence.git || null;
     const hasEvidence = !!(
       workerLane ||
       data && data.review_required ||
       progressItems.length ||
+      hasChildProgress ||
+      hasAcceptanceState ||
       verification ||
       git ||
       data && data.worker_log_tail
@@ -3681,6 +3772,72 @@
         body: JSON.stringify(body),
       }).then(function (d) {
         setState({ loading: false, data: d, err: null, busy: null });
+        if (props.onReload) props.onReload();
+        if (props.onRefresh) props.onRefresh();
+      }).catch(function (e) {
+        setState(function (prev) {
+          return Object.assign({}, prev, { busy: null, err: parseApiErrorMessage(e) });
+        });
+      });
+    };
+
+    const doAdvanceGoal = function () {
+      const body = {
+        dispatch: true,
+        dry_run: false,
+        verify: true,
+        approve: true,
+        request_changes_on_failure: true,
+        loop: true,
+        max_iterations: 8,
+        reviewer: "dashboard",
+      };
+      setState(function (prev) {
+        return Object.assign({}, prev, { busy: "advance-goal", err: null });
+      });
+      return SDK.fetchJSON(
+        withBoard(`${API}/tasks/${encodeURIComponent(props.taskId)}/advance-goal`, props.boardSlug),
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      ).then(function () {
+        return load();
+      }).then(function () {
+        if (props.onReload) props.onReload();
+        if (props.onRefresh) props.onRefresh();
+      }).catch(function (e) {
+        setState(function (prev) {
+          return Object.assign({}, prev, { busy: null, err: parseApiErrorMessage(e) });
+        });
+      });
+    };
+
+    const doAdvanceAcceptance = function () {
+      const body = {
+        dispatch: true,
+        dry_run: false,
+        verify: true,
+        approve: true,
+        request_changes_on_failure: true,
+        loop: true,
+        max_iterations: 8,
+        reviewer: "dashboard",
+      };
+      setState(function (prev) {
+        return Object.assign({}, prev, { busy: "advance-acceptance", err: null });
+      });
+      return SDK.fetchJSON(
+        withBoard(`${API}/tasks/${encodeURIComponent(props.taskId)}/advance-acceptance`, props.boardSlug),
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      ).then(function () {
+        return load();
+      }).then(function () {
         if (props.onReload) props.onReload();
         if (props.onRefresh) props.onRefresh();
       }).catch(function (e) {
@@ -3739,6 +3896,200 @@
                   status === "done" ? "[x]" : status === "running" ? "[>]" : "[ ]"),
                 h("span", null, item.text || ""));
             }),
+          )
+        : null,
+      hasChildProgress
+        ? h("div", { className: "hermes-kanban-worker-child-summary" },
+            h("div", { className: "hermes-kanban-run-meta-label" },
+              tx(t, "childWorkerStatus", "Child worker status")),
+            childSummary
+              ? h("div", { className: "hermes-kanban-worker-child-metrics" },
+                  h(MetaRow, {
+                    label: tx(t, "children", "Children"),
+                    value: String(childSummary.total || 0),
+                  }),
+                  h(MetaRow, {
+                    label: tx(t, "running", "Running"),
+                    value: String(childSummary.running || 0),
+                  }),
+                  h(MetaRow, {
+                    label: tx(t, "reviewRequired", "Review required"),
+                    value: String(childSummary.review_required || 0),
+                  }),
+                  childSummary.auto_retry_exhausted
+                    ? h(MetaRow, {
+                        label: tx(t, "autoRetry", "Auto retry"),
+                        value: tx(t, "exhausted", "exhausted"),
+                      })
+                    : null,
+                )
+              : null,
+            childActions.length
+              ? h("div", { className: "hermes-kanban-worker-child-actions" },
+                  childActions.map(function (entry) {
+                    return h("span", {
+                      key: entry[0],
+                      className: "hermes-kanban-worker-child-action",
+                    }, `${entry[0]}: ${entry[1]}`);
+                  }),
+                )
+              : null,
+            children.length
+              ? h("div", { className: "hermes-kanban-worker-child-list" },
+                  children.map(function (child) {
+                    const task = child.task || {};
+                    const acceptance = child.acceptance || {};
+                    const childLane = child.worker_lane || {};
+                    const childProgress = child.worker_progress || {};
+                    const items = Array.isArray(childProgress.items) ? childProgress.items : [];
+                    const firstItem = items.length ? items[0] : null;
+                    const action = acceptance.recommended_action || "none";
+                    const lane = childLane.name || task.assignee || "";
+                    return h("div", {
+                      key: task.id || child.relationship || task.title,
+                      className: "hermes-kanban-worker-child",
+                    },
+                      h("div", { className: "hermes-kanban-worker-child-head" },
+                        h("span", { className: "hermes-kanban-worker-child-title" },
+                          task.title || task.id || "(child task)"),
+                        h("span", {
+                          className: cn("hermes-kanban-worker-child-status",
+                            `hermes-kanban-worker-child-status--${task.status || "unknown"}`),
+                        }, task.status || "unknown"),
+                      ),
+                      h("div", { className: "hermes-kanban-worker-child-meta" },
+                        task.id ? h("code", null, task.id) : null,
+                        lane ? h("span", null, lane) : null,
+                        child.review_required
+                          ? h("span", { className: "hermes-kanban-worker-child-review" },
+                              tx(t, "reviewRequired", "review required"))
+                          : null,
+                      ),
+                      h("div", { className: "hermes-kanban-worker-child-next" },
+                        h("span", { className: "hermes-kanban-worker-child-next-label" },
+                          tx(t, "next", "Next")),
+                        h("span", null, action),
+                      ),
+                      firstItem
+                        ? h("div", { className: "hermes-kanban-worker-child-progress" },
+                            h("span", { className: "hermes-kanban-worker-progress-status" },
+                              firstItem.status === "done" ? "[x]" :
+                                firstItem.status === "running" ? "[>]" : "[ ]"),
+                            h("span", null, firstItem.text || ""),
+                          )
+                        : null,
+                    );
+                  }),
+                )
+              : null,
+          )
+        : null,
+      canAdvanceGoal
+        ? h("div", { className: "hermes-kanban-worker-goal-actions" },
+            h(Button, {
+              size: "sm",
+              variant: "outline",
+              onClick: doAdvanceGoal,
+              disabled: !!state.busy,
+              title: tx(t, "advanceGoalWorkflow", "Advance goal workflow to the next idle boundary"),
+            }, state.busy === "advance-goal"
+              ? tx(t, "advancingGoal", "Advancing…")
+              : tx(t, "advanceGoal", "Advance goal")),
+          )
+        : null,
+      hasAcceptanceState
+        ? h("div", { className: "hermes-kanban-worker-acceptance" },
+            h("div", { className: "hermes-kanban-run-meta-label" },
+              tx(t, "acceptanceState", "Acceptance state")),
+            h("div", { className: "hermes-kanban-worker-evidence-grid" },
+              h(MetaRow, {
+                label: tx(t, "recommendedAction", "Recommended action"),
+                value: recommendedAction || "none",
+              }),
+              h(MetaRow, {
+                label: tx(t, "followupsPlanned", "Follow-ups planned"),
+                value: acceptance && acceptance.followups_planned ? "true" : "false",
+              }),
+              h(MetaRow, {
+                label: tx(t, "approvalAllowed", "Approval allowed"),
+                value: acceptance && acceptance.approval_allowed ? "true" : "false",
+              }),
+              h(MetaRow, {
+                label: tx(t, "requestChangesAllowed", "Request changes"),
+                value: acceptance && acceptance.request_changes_allowed ? "true" : "false",
+              }),
+              followupSummary && followupSummary.review_shards
+                ? h(MetaRow, {
+                    label: tx(t, "reviewShards", "Review shards"),
+                    value: `${followupSummary.review_shards} / ${followupSummary.review_shard_files || 0} files`,
+                  })
+                : null,
+            ),
+            reviewGate
+              ? h("details", { className: "hermes-kanban-worker-gate", open: true },
+                  h("summary", { className: "hermes-kanban-worker-gate-summary" },
+                    tx(t, "reviewTestGate", "Review/test gate"),
+                    " · ",
+                    gateSummary(reviewGate)),
+                  gateItems(reviewGate).map(function (item, idx) {
+                    return h("div", {
+                      key: `${item.task_id || idx}:${item.purpose || ""}`,
+                      className: cn("hermes-kanban-worker-gate-item",
+                        `hermes-kanban-worker-gate-item--${item.state || "pending"}`),
+                    },
+                      h("span", { className: "hermes-kanban-worker-gate-purpose" },
+                        item.purpose || "follow-up"),
+                      h("span", null, item.state || "pending"),
+                      item.verdict ? h("span", null, `verdict: ${item.verdict}`) : null,
+                      item.task_id ? h("code", null, item.task_id) : null,
+                      gateItemFiles(item)
+                        ? h("span", { className: "hermes-kanban-worker-gate-files" },
+                            gateItemFiles(item))
+                        : null,
+                      item.failure_reason
+                        ? h("span", { className: "hermes-kanban-worker-gate-reason" },
+                            item.failure_reason)
+                        : null,
+                    );
+                  }),
+                )
+              : null,
+            acceptanceGate
+              ? h("details", { className: "hermes-kanban-worker-gate" },
+                  h("summary", { className: "hermes-kanban-worker-gate-summary" },
+                    tx(t, "acceptanceCheckGate", "Acceptance check gate"),
+                    " · ",
+                    gateSummary(acceptanceGate)),
+                  gateItems(acceptanceGate).map(function (item, idx) {
+                    const run = item.run || {};
+                    return h("div", {
+                      key: item.name || idx,
+                      className: cn("hermes-kanban-worker-gate-item",
+                        `hermes-kanban-worker-gate-item--${item.state || "pending"}`),
+                    },
+                      h("span", { className: "hermes-kanban-worker-gate-purpose" },
+                        item.name || "check"),
+                      h("span", null, item.state || "pending"),
+                      run.exit_code !== undefined && run.exit_code !== null
+                        ? h("span", null, `exit: ${run.exit_code}`)
+                        : null,
+                    );
+                  }),
+                )
+              : null,
+            data && data.review_required
+              ? h("div", { className: "hermes-kanban-worker-goal-actions" },
+                  h(Button, {
+                    size: "sm",
+                    variant: "outline",
+                    onClick: doAdvanceAcceptance,
+                    disabled: !!state.busy,
+              title: tx(t, "advanceAcceptanceWorkflow", "Advance acceptance workflow to the next idle boundary"),
+                  }, state.busy === "advance-acceptance"
+                    ? tx(t, "advancingAcceptance", "Advancing…")
+                    : tx(t, "advanceAcceptance", "Advance acceptance")),
+                )
+              : null,
           )
         : null,
       verification

@@ -323,6 +323,18 @@ def test_dashboard_worker_lane_request_dialog_uses_validator_endpoint():
     assert "hermes-kanban-worker-lane-request-grid" in css
 
 
+def test_dashboard_bundle_has_controller_tick_action():
+    repo_root = Path(__file__).resolve().parents[2]
+    js = (
+        repo_root / "plugins" / "kanban" / "dashboard" / "dist" / "index.js"
+    ).read_text()
+
+    assert "runControllerTick" in js
+    assert "`${API}/advance-controller`" in js
+    assert "Run controller" in js
+    assert "next idle boundary" in js
+
+
 def test_dashboard_initial_board_uses_backend_current_when_unpinned():
     """Fresh browsers should open the backend current board, not default.
 
@@ -1497,11 +1509,62 @@ def test_task_progress_endpoint_includes_decomposed_child_workers(client):
     assert data["child_summary"]["running"] == 1
     assert data["child_summary"]["review_required"] == 1
     assert data["child_summary"]["relationship_counts"]["decomposed_child"] == 2
+    assert data["child_summary"]["recommended_actions"] == {
+        "plan_review_followups": 1,
+        "wait_for_implementation": 1,
+    }
     by_id = {child["task"]["id"]: child for child in data["children"]}
     assert by_id[running_id]["worker_progress"]["items"][0]["text"] == "mock"
+    assert by_id[running_id]["acceptance"]["recommended_action"] == "wait_for_implementation"
     assert by_id[review_id]["worker_lane"]["name"] == "codex-deep"
+    assert by_id[review_id]["acceptance"]["recommended_action"] == "plan_review_followups"
     assert after.status == "running"
     assert after.claim_lock == before.claim_lock
+
+
+def test_task_progress_endpoint_includes_child_diagnostics(client):
+    conn = kb.connect()
+    try:
+        root = kb.create_task(conn, title="dashboard diagnostic goal", triage=True)
+        child_ids = kb.decompose_triage_task(
+            conn,
+            root,
+            root_assignee="orchestrator",
+            children=[{"title": "implementation with exhausted retry", "assignee": "codex-deep"}],
+            author="planner",
+        )
+        assert child_ids is not None
+        child = child_ids[0]
+        claimed = kb.claim_task(conn, child, claimer="worker:codex-deep")
+        assert claimed is not None
+        assert kb.block_task(
+            conn,
+            child,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=claimed.current_run_id,
+            metadata={
+                "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+                "review": {"required": True, "reason": "Codex completed; Hermes review required"},
+            },
+        )
+        kb.record_task_event(
+            conn,
+            child,
+            "worker_review_auto_retry_exhausted",
+            {"limit": 1, "limit_source": "task", "used": 1},
+            run_id=claimed.current_run_id,
+        )
+    finally:
+        conn.close()
+
+    r = client.get(f"/api/plugins/kanban/tasks/{root}/progress?children=true")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    child_payload = data["children"][0]
+
+    assert child_payload["task"]["id"] == child
+    assert child_payload["diagnostics"][0]["kind"] == "auto_request_changes_exhausted"
+    assert child_payload["warnings"]["kinds"]["auto_request_changes_exhausted"] == 1
 
 
 def test_reviews_endpoint_lists_review_required_evidence(client, tmp_path):
@@ -1530,6 +1593,23 @@ def test_reviews_endpoint_lists_review_required_evidence(client, tmp_path):
             expected_run_id=task.current_run_id,
             metadata=metadata,
         )
+        plan = kb.plan_review_followups(conn, tid)
+        follow = kb.claim_task(conn, plan.review_task_id, claimer="worker:codex-review")
+        assert follow is not None
+        assert kb.block_task(
+            conn,
+            plan.review_task_id,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=follow.current_run_id,
+            metadata={
+                "worker_lane": {"name": "codex-review", "kind": "codex_cli", "exit_code": 0},
+                "verification": {"commands": [], "summary": "Verdict: approve"},
+                "review": {
+                    "required": True,
+                    "reason": "Codex completed; Hermes review required",
+                },
+            },
+        )
         other = kb.create_task(conn, title="ordinary", assignee="codex-deep")
         assert other
     finally:
@@ -1542,6 +1622,14 @@ def test_reviews_endpoint_lists_review_required_evidence(client, tmp_path):
     assert [item["task"]["id"] for item in data["tasks"]] == [tid]
     assert data["tasks"][0]["worker_lane"]["name"] == "codex-deep"
     assert data["tasks"][0]["verification"]["commands"] == ["pytest -q"]
+
+    with_followups = client.get("/api/plugins/kanban/reviews?include_followups=true&limit=5")
+    assert with_followups.status_code == 200, with_followups.text
+    with_followups_data = with_followups.json()
+    assert {item["task"]["id"] for item in with_followups_data["tasks"]} == {
+        tid,
+        plan.review_task_id,
+    }
 
 
 def test_review_endpoint_approve_and_request_changes(client, tmp_path):
@@ -1705,9 +1793,14 @@ def test_plan_review_endpoint_dispatch_dry_run_scopes_to_followups(
     from hermes_cli import profiles
 
     monkeypatch.setattr(profiles, "profile_exists", lambda name: True)
+    changed_files = [f"pkg/module_{index}.py" for index in range(8)]
     metadata = {
         "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
         "verification": {"commands": ["pytest -q"], "summary": "passed"},
+        "git": {
+            "changed_files": changed_files,
+            "diff_summary": "\n".join(f" {path} | 2 +-" for path in changed_files),
+        },
         "review": {"required": True, "reason": "Codex completed; Hermes review required"},
     }
     conn = kb.connect()
@@ -1746,14 +1839,22 @@ def test_plan_review_endpoint_dispatch_dry_run_scopes_to_followups(
     assert r.status_code == 200, r.text
     data = r.json()
     spawned_ids = {item["task_id"] for item in data["dispatch"]["spawned"]}
+    expected_ids = {
+        data["review_task_id"],
+        data["test_task_id"],
+        *data["review_shard_task_ids"],
+    }
     conn = kb.connect()
     try:
         unrelated_task = kb.get_task(conn, unrelated)
+        shard_task = kb.get_task(conn, data["review_shard_task_ids"][0])
     finally:
         conn.close()
 
-    assert spawned_ids == {data["review_task_id"], data["test_task_id"]}
+    assert len(data["review_shard_task_ids"]) == 1
+    assert spawned_ids == expected_ids
     assert unrelated_task.status == "ready"
+    assert shard_task.status == "ready"
 
 
 def test_verify_endpoint_runs_configured_acceptance_check(
@@ -1811,6 +1912,134 @@ def test_verify_endpoint_runs_configured_acceptance_check(
     assert acceptance.json()["acceptance_check_gate"]["ready"] is True
 
 
+def test_acceptance_check_request_endpoint_runs_task_scoped_file_check(
+    client,
+    tmp_path,
+):
+    from hermes_cli import kanban_db as kb
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "ok.txt").write_text("ok\n", encoding="utf-8")
+    metadata = {
+        "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+        "review": {"required": True, "reason": "Codex completed; Hermes review required"},
+    }
+    conn = kb.connect()
+    try:
+        tid = kb.create_task(
+            conn,
+            title="acceptance request via api",
+            assignee="codex-deep",
+            workspace_kind="dir",
+            workspace_path=str(workspace),
+        )
+        task = kb.claim_task(conn, tid, claimer="worker:codex-deep")
+        assert task is not None
+        assert kb.block_task(
+            conn,
+            tid,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=task.current_run_id,
+            metadata=metadata,
+        )
+    finally:
+        conn.close()
+
+    response = client.post(
+        f"/api/plugins/kanban/tasks/{tid}/acceptance-check-requests",
+        json={
+            "acceptance_check_request": {
+                "name": "expected-file",
+                "type": "file_content",
+                "path": "ok.txt",
+                "equals": "ok\n",
+            },
+            "requested_by": "api-test",
+        },
+    )
+    assert response.status_code == 200, response.text
+    requested = response.json()
+    assert requested["request"]["name"] == "expected-file"
+    assert requested["acceptance_check_gate"]["missing"] == 1
+
+    verified = client.post(f"/api/plugins/kanban/tasks/{tid}/verify", json={})
+    assert verified.status_code == 200, verified.text
+    assert verified.json()["checks"][0]["passed"] is True
+
+
+def test_acceptance_check_request_endpoint_runs_command_template(
+    client,
+    tmp_path,
+    kanban_home,
+):
+    from hermes_cli import kanban_db as kb
+
+    workspace = tmp_path / "workspace"
+    tests_dir = workspace / "tests"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "test_smoke.py").write_text(
+        "def test_ok():\n"
+        "    assert True\n",
+        encoding="utf-8",
+    )
+    (kanban_home / "config.yaml").write_text(
+        "kanban:\n"
+        "  acceptance_templates:\n"
+        "    pytest-target:\n"
+        f"      argv_template: ['{sys.executable}', -m, pytest, \"{{target}}\", -q]\n"
+        "      allowed_args: [target]\n"
+        "      arg_types:\n"
+        "        target: relative_path\n",
+        encoding="utf-8",
+    )
+    metadata = {
+        "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+        "review": {"required": True, "reason": "Codex completed; Hermes review required"},
+    }
+    conn = kb.connect()
+    try:
+        tid = kb.create_task(
+            conn,
+            title="command template request via api",
+            assignee="codex-deep",
+            workspace_kind="dir",
+            workspace_path=str(workspace),
+        )
+        task = kb.claim_task(conn, tid, claimer="worker:codex-deep")
+        assert task is not None
+        assert kb.block_task(
+            conn,
+            tid,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=task.current_run_id,
+            metadata=metadata,
+        )
+    finally:
+        conn.close()
+
+    response = client.post(
+        f"/api/plugins/kanban/tasks/{tid}/acceptance-check-requests",
+        json={
+            "acceptance_check_request": {
+                "name": "pytest-smoke",
+                "type": "command_template",
+                "template": "pytest-target",
+                "args": {"target": "tests/test_smoke.py"},
+            },
+            "requested_by": "api-test",
+        },
+    )
+    assert response.status_code == 200, response.text
+    requested = response.json()
+    assert requested["request"]["type"] == "command_template"
+
+    verified = client.post(f"/api/plugins/kanban/tasks/{tid}/verify", json={})
+    assert verified.status_code == 200, verified.text
+    assert verified.json()["checks"][0]["type"] == "command_template"
+    assert verified.json()["checks"][0]["passed"] is True
+
+
 def test_advance_acceptance_endpoint_dry_run_plans_scoped_followups(
     client,
     tmp_path,
@@ -1820,9 +2049,14 @@ def test_advance_acceptance_endpoint_dry_run_plans_scoped_followups(
     from hermes_cli import profiles
 
     monkeypatch.setattr(profiles, "profile_exists", lambda name: True)
+    changed_files = [f"pkg/module_{index}.py" for index in range(8)]
     metadata = {
         "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
         "verification": {"commands": ["pytest -q"], "summary": "passed"},
+        "git": {
+            "changed_files": changed_files,
+            "diff_summary": "\n".join(f" {path} | 2 +-" for path in changed_files),
+        },
         "review": {"required": True, "reason": "Codex completed; Hermes review required"},
     }
     conn = kb.connect()
@@ -1862,11 +2096,17 @@ def test_advance_acceptance_endpoint_dry_run_plans_scoped_followups(
     data = response.json()
     plan = data["steps"][0]["plan"]
     spawned_ids = {item["task_id"] for item in data["steps"][1]["dispatch"]["spawned"]}
+    expected_ids = {
+        plan["review_task_id"],
+        plan["test_task_id"],
+        *plan["review_shard_task_ids"],
+    }
     conn = kb.connect()
     try:
         unrelated_task = kb.get_task(conn, unrelated)
         review_task = kb.get_task(conn, plan["review_task_id"])
         test_task = kb.get_task(conn, plan["test_task_id"])
+        shard_task = kb.get_task(conn, plan["review_shard_task_ids"][0])
     finally:
         conn.close()
 
@@ -1874,9 +2114,11 @@ def test_advance_acceptance_endpoint_dry_run_plans_scoped_followups(
         "plan_review_followups",
         "dispatch_followups",
     ]
-    assert spawned_ids == {plan["review_task_id"], plan["test_task_id"]}
+    assert len(plan["review_shard_task_ids"]) == 1
+    assert spawned_ids == expected_ids
     assert unrelated_task.status == "ready"
     assert review_task.status == "ready"
+    assert shard_task.status == "ready"
     assert test_task.status == "ready"
     assert data["final"]["recommended_action"] == "wait_for_followups"
 
@@ -1960,6 +2202,83 @@ def test_advance_acceptance_endpoint_can_disable_request_changes(
     assert comments == []
 
 
+def test_advance_acceptance_endpoint_loop_approves_ready_gates(
+    client,
+    tmp_path,
+):
+    from hermes_cli import kanban_db as kb
+
+    metadata = {
+        "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+        "verification": {"commands": ["pytest -q"], "summary": "passed"},
+        "review": {"required": True, "reason": "Codex completed; Hermes review required"},
+    }
+    conn = kb.connect()
+    try:
+        tid = kb.create_task(
+            conn,
+            title="api loop acceptance",
+            assignee="codex-deep",
+            workspace_kind="dir",
+            workspace_path=str(tmp_path),
+        )
+        task = kb.claim_task(conn, tid, claimer="worker:codex-deep")
+        assert task is not None
+        assert kb.block_task(
+            conn,
+            tid,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=task.current_run_id,
+            metadata=metadata,
+        )
+        plan = kb.plan_review_followups(conn, tid)
+        review = kb.claim_task(conn, plan.review_task_id, claimer="worker:codex-review")
+        assert review is not None
+        assert kb.block_task(
+            conn,
+            plan.review_task_id,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=review.current_run_id,
+            metadata={
+                "worker_lane": {"name": "codex-review", "kind": "codex_cli", "exit_code": 0},
+                "verification": {"summary": "Verdict: approve"},
+                "review": {"required": True},
+            },
+        )
+        test = kb.claim_task(conn, plan.test_task_id, claimer="worker:codex-test")
+        assert test is not None
+        assert kb.block_task(
+            conn,
+            plan.test_task_id,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=test.current_run_id,
+            metadata={
+                "worker_lane": {"name": "codex-test", "kind": "codex_cli", "exit_code": 0},
+                "verification": {"summary": "Verdict: pass"},
+                "review": {"required": True},
+            },
+        )
+    finally:
+        conn.close()
+
+    response = client.post(
+        f"/api/plugins/kanban/tasks/{tid}/advance-acceptance",
+        json={"loop": True},
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    conn = kb.connect()
+    try:
+        task_after = kb.get_task(conn, tid)
+    finally:
+        conn.close()
+
+    assert data["stop_reason"] == "done"
+    assert data["iterations"][0]["steps"][0]["kind"] == "approve"
+    assert task_after.status == "done"
+
+
 def test_advance_goal_endpoint_dry_run_dispatches_goal_children(
     client,
     tmp_path,
@@ -2015,6 +2334,134 @@ def test_advance_goal_endpoint_dry_run_dispatches_goal_children(
     assert spawned_ids == {child_ids[0]}
     assert child.status == "ready"
     assert unrelated_task.status == "ready"
+
+
+def test_advance_goal_endpoint_loop_waits_on_running_child(
+    client,
+    tmp_path,
+):
+    from hermes_cli import kanban_db as kb
+
+    conn = kb.connect()
+    try:
+        root = kb.create_task(
+            conn,
+            title="api loop goal",
+            workspace_kind="dir",
+            workspace_path=str(tmp_path),
+            triage=True,
+        )
+        child_ids = kb.decompose_triage_task(
+            conn,
+            root,
+            root_assignee="orchestrator",
+            children=[{"title": "implement", "assignee": "codex-deep"}],
+            author="planner",
+        )
+        assert child_ids is not None
+        child = child_ids[0]
+        claimed = kb.claim_task(conn, child, claimer="worker:codex-deep")
+        assert claimed is not None
+        before = kb.get_task(conn, child)
+    finally:
+        conn.close()
+
+    response = client.post(
+        f"/api/plugins/kanban/tasks/{root}/advance-goal",
+        json={"loop": True, "dispatch": False},
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    conn = kb.connect()
+    try:
+        after = kb.get_task(conn, child)
+    finally:
+        conn.close()
+
+    assert data["stop_reason"] == "waiting"
+    assert data["iterations"][0]["steps"][0]["kind"] == "wait_for_child"
+    assert after.status == "running"
+    assert after.claim_lock == before.claim_lock
+
+
+def test_advance_controller_endpoint_advances_standalone_review_required(
+    client,
+    tmp_path,
+):
+    from hermes_cli import kanban_db as kb
+
+    metadata = {
+        "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+        "verification": {"commands": ["pytest -q"], "summary": "passed"},
+        "review": {"required": True, "reason": "Codex completed; Hermes review required"},
+    }
+    conn = kb.connect()
+    try:
+        tid = kb.create_task(
+            conn,
+            title="api controller standalone",
+            assignee="codex-deep",
+            workspace_kind="dir",
+            workspace_path=str(tmp_path),
+        )
+        task = kb.claim_task(conn, tid, claimer="worker:codex-deep")
+        assert task is not None
+        assert kb.block_task(
+            conn,
+            tid,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=task.current_run_id,
+            metadata=metadata,
+        )
+        plan = kb.plan_review_followups(conn, tid)
+        review = kb.claim_task(conn, plan.review_task_id, claimer="worker:codex-review")
+        assert review is not None
+        assert kb.block_task(
+            conn,
+            plan.review_task_id,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=review.current_run_id,
+            metadata={
+                "worker_lane": {"name": "codex-review", "kind": "codex_cli", "exit_code": 0},
+                "verification": {"summary": "Verdict: approve"},
+                "review": {"required": True},
+            },
+        )
+        test = kb.claim_task(conn, plan.test_task_id, claimer="worker:codex-test")
+        assert test is not None
+        assert kb.block_task(
+            conn,
+            plan.test_task_id,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=test.current_run_id,
+            metadata={
+                "worker_lane": {"name": "codex-test", "kind": "codex_cli", "exit_code": 0},
+                "verification": {"summary": "Verdict: pass"},
+                "review": {"required": True},
+            },
+        )
+    finally:
+        conn.close()
+
+    response = client.post(
+        "/api/plugins/kanban/advance-controller",
+        json={"include_goals": False},
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    conn = kb.connect()
+    try:
+        task_after = kb.get_task(conn, tid)
+    finally:
+        conn.close()
+
+    assert data["item_count"] == 1
+    assert data["items"][0]["kind"] == "acceptance"
+    assert data["items"][0]["task_id"] == tid
+    assert data["items"][0]["stop_reason"] == "done"
+    assert task_after.status == "done"
 
 
 def test_worker_lane_request_endpoint_validates_without_enabling(client):
@@ -3082,11 +3529,31 @@ def test_dashboard_drawer_renders_worker_evidence_review_controls():
     js = (repo_root / "plugins" / "kanban" / "dashboard" / "dist" / "index.js").read_text()
 
     assert "function WorkerEvidenceSection(props)" in js
-    assert "/progress?log_tail=65536" in js
+    assert "/progress?log_tail=65536&children=true" in js
+    assert "`${API}/tasks/${encodeURIComponent(props.taskId)}/acceptance`" in js
     assert "`${API}/tasks/${encodeURIComponent(props.taskId)}/review`" in js
+    assert "`${API}/tasks/${encodeURIComponent(props.taskId)}/advance-acceptance`" in js
     assert "review required" in js
     assert "Bounded log tail" in js
     assert "Request changes" in js
+    assert "Child worker status" in js
+    assert "recommended_actions" in js
+    assert "recommended_action" in js
+    assert "auto_retry_exhausted" in js
+    assert "advance-goal" in js
+    assert "Advance goal" in js
+    assert "Acceptance state" in js
+    assert "Review/test gate" in js
+    assert "Acceptance check gate" in js
+    assert "followup_summary" in js
+    assert "Review shards" in js
+    assert "review_shard_files" in js
+    assert "gateItemFiles" in js
+    assert "failure_reason" in js
+    assert "Advance acceptance" in js
+    assert "request_changes_on_failure" in js
+    assert "loop: true" in js
+    assert "max_iterations: 8" in js
 
 
 def test_dashboard_worker_evidence_styles_exist():
@@ -3097,4 +3564,12 @@ def test_dashboard_worker_evidence_styles_exist():
     assert ".hermes-kanban-worker-evidence" in css
     assert ".hermes-kanban-review-pill" in css
     assert ".hermes-kanban-worker-progress-item" in css
+    assert ".hermes-kanban-worker-child-summary" in css
+    assert ".hermes-kanban-worker-child-next" in css
+    assert ".hermes-kanban-worker-child-action" in css
+    assert ".hermes-kanban-worker-goal-actions" in css
+    assert ".hermes-kanban-worker-acceptance" in css
+    assert ".hermes-kanban-worker-gate-item" in css
+    assert ".hermes-kanban-worker-gate-files" in css
+    assert ".hermes-kanban-worker-gate-reason" in css
     assert ".hermes-kanban-worker-review-actions" in css

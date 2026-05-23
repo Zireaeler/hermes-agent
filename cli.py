@@ -8750,6 +8750,22 @@ class HermesCLI:
 
         # Bare /goal or /goal status → show current state
         if not arg or lower == "status":
+            if not mgr.has_goal():
+                try:
+                    from hermes_cli.goals import kanban_goal_status_line
+
+                    sid = (
+                        getattr(self, "current_session_id", None)
+                        or getattr(self, "session_id", None)
+                        or ""
+                    )
+                    kanban_status = kanban_goal_status_line(sid)
+                    if kanban_status:
+                        for line in kanban_status.splitlines():
+                            _cprint(f"  {line}")
+                        return
+                except Exception as exc:
+                    logging.debug("kanban goal status fallback failed: %s", exc)
             _cprint(f"  {mgr.status_line()}")
             return
 
@@ -8757,10 +8773,33 @@ class HermesCLI:
             try:
                 from hermes_cli.goals import run_kanban_goal_bridge
 
-                sid = self.current_session_id or ""
+                sid = (
+                    getattr(self, "current_session_id", None)
+                    or getattr(self, "session_id", None)
+                    or ""
+                )
                 out = run_kanban_goal_bridge(arg.split(None, 1)[1] if " " in arg else "", session_id=sid)
             except Exception as exc:
                 out = f"kanban goal bridge failed: {exc}"
+            for line in (out or "").splitlines() or ["(no output)"]:
+                _cprint(f"  {line}")
+            return
+
+        if lower == "advance" or lower.startswith("advance "):
+            try:
+                from hermes_cli.goals import advance_kanban_goal_for_session
+
+                sid = (
+                    getattr(self, "current_session_id", None)
+                    or getattr(self, "session_id", None)
+                    or ""
+                )
+                out = advance_kanban_goal_for_session(
+                    arg.split(None, 1)[1] if " " in arg else "",
+                    session_id=sid,
+                )
+            except Exception as exc:
+                out = f"kanban goal advance failed: {exc}"
             for line in (out or "").splitlines() or ["(no output)"]:
                 _cprint(f"  {line}")
             return

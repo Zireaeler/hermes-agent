@@ -296,11 +296,11 @@ def create_kanban_task_from_goal(
     created_by: str = "goal",
     idempotency_key: Optional[str] = None,
 ) -> str:
-    """Create or return the Kanban top-level task for a standing goal.
+    """Create or return the Kanban top-level task for an opt-in goal bridge.
 
-    This is a bridge point for future `/goal create "..." -> Kanban`
-    orchestration. It deliberately does not alter the existing session-level
-    `/goal` semantics; callers opt in by invoking this helper.
+    This powers explicit `/goal create "..." -> Kanban` orchestration. It
+    deliberately does not alter the existing session-level `/goal` standing
+    goal semantics; callers opt in by invoking this helper.
     """
     clean_goal = (goal or "").strip()
     if not clean_goal:
@@ -311,12 +311,14 @@ def create_kanban_task_from_goal(
     from hermes_cli import kanban_db as kb
 
     body = (
-        "Goal created from a Hermes standing goal.\n\n"
+        "Goal created through the Hermes Kanban goal bridge.\n\n"
         "## Goal\n"
         f"{clean_goal}\n\n"
         "## Orchestration\n"
-        "This top-level task is intended for a future orchestrator to "
-        "decompose into child tasks assigned to Kanban worker lanes."
+        "This top-level task is ready for a Hermes orchestrator or Kanban "
+        "decomposer to create child tasks assigned to worker lanes. Hermes "
+        "tracks progress and acceptance through Kanban; external lanes such "
+        "as Codex CLI perform implementation, review, or verification work."
     )
     with kb.connect(board=board) as conn:
         return kb.create_task(
@@ -348,19 +350,291 @@ def run_kanban_goal_bridge(rest: str, *, session_id: Optional[str] = None) -> st
     sync with ``hermes kanban goal``.
     """
     text = (rest or "").strip()
+    usage = (
+        "Usage: /goal create <objective> [--assignee NAME] "
+        "[--decompose] [--advance] [--loop]"
+    )
     if not text:
-        return "Usage: /goal create <objective> [--assignee NAME] [--decompose]"
+        return usage
     tokens = shlex.split(text)
     flag_start = next((i for i, token in enumerate(tokens) if token.startswith("-")), len(tokens))
     objective = " ".join(tokens[:flag_start]).strip()
     if not objective:
-        return "Usage: /goal create <objective> [--assignee NAME] [--decompose]"
+        return usage
     tokens = [objective] + tokens[flag_start:]
     if session_id and "--session" not in tokens:
         tokens.extend(["--session", session_id])
     from hermes_cli.kanban import run_slash as run_kanban_slash
 
     return run_kanban_slash("goal " + shlex.join(tokens))
+
+
+def advance_kanban_goal_for_session(
+    rest: str = "",
+    *,
+    session_id: Optional[str] = None,
+) -> str:
+    """Advance the latest explicit ``/goal create`` Kanban root for a session."""
+    sid = (session_id or "").strip()
+    if not sid:
+        return "No session id available for /goal advance."
+    snapshot = latest_kanban_goal_snapshot_for_session(sid)
+    if snapshot is None:
+        return "No /goal create Kanban root found for this session."
+    tokens = shlex.split(rest or "")
+    from hermes_cli.kanban import run_slash as run_kanban_slash
+
+    return run_kanban_slash(
+        "advance-goal " + shlex.join([snapshot.task.id, *tokens])
+    )
+
+
+def latest_kanban_goal_snapshot_for_session(
+    session_id: str,
+    *,
+    board: Optional[str] = None,
+) -> Optional[Any]:
+    """Return the newest Kanban goal-root progress snapshot for ``session_id``.
+
+    The explicit ``/goal create`` bridge stores a deterministic idempotency key
+    of ``goal:<session_id>:<objective>`` on the root task. Child tasks inherit
+    the same session id, so this helper filters by that root key instead of
+    treating any session-scoped worker task as the user's top-level goal.
+
+    This is deliberately read-only: it does not advance, dispatch, claim,
+    heartbeat, reclaim, or otherwise touch worker lifecycle state.
+    """
+    sid = (session_id or "").strip()
+    if not sid:
+        return None
+    prefix = f"goal:{sid}:"
+    try:
+        from hermes_cli import kanban_db as kb
+
+        with kb.connect(board=board) as conn:
+            tasks = kb.list_tasks(
+                conn,
+                session_id=sid,
+                include_archived=False,
+                order_by="created-desc",
+            )
+            for task in tasks:
+                if (task.idempotency_key or "").startswith(prefix):
+                    return kb.task_progress_snapshot(
+                        conn,
+                        task.id,
+                        board=board,
+                        include_children=True,
+                    )
+    except Exception as exc:
+        logger.debug("kanban goal status unavailable for session %s: %s", sid, exc)
+    return None
+
+
+def _compact_goal_title(title: Optional[str]) -> str:
+    text = (title or "").strip()
+    if text.startswith("Goal:"):
+        text = text[len("Goal:"):].strip()
+    return _truncate(text, 160)
+
+
+def _render_count_map(values: Any) -> str:
+    if not isinstance(values, dict) or not values:
+        return ""
+    return ", ".join(
+        f"{key}={values[key]}"
+        for key in sorted(values)
+        if values.get(key)
+    )
+
+
+def _child_progress_hint(child: dict[str, Any]) -> str:
+    progress = child.get("worker_progress")
+    items = progress.get("items") if isinstance(progress, dict) else None
+    if not isinstance(items, list) or not items:
+        return ""
+    chosen = None
+    for item in items:
+        if isinstance(item, dict) and item.get("status") == "running":
+            chosen = item
+            break
+    if chosen is None:
+        for item in items:
+            if isinstance(item, dict) and item.get("status") not in {"done", "completed"}:
+                chosen = item
+                break
+    if chosen is None:
+        chosen = items[-1] if isinstance(items[-1], dict) else None
+    if not isinstance(chosen, dict):
+        return ""
+    status = str(chosen.get("status") or "").strip()
+    text = str(chosen.get("text") or "").strip()
+    if not text:
+        return ""
+    label = f"{status}: " if status else ""
+    return _truncate(label + text, 100)
+
+
+def _progress_hint(progress: Any) -> str:
+    if not isinstance(progress, dict):
+        return ""
+    return _child_progress_hint({"worker_progress": progress})
+
+
+def _kanban_goal_next_action(payload: dict[str, Any]) -> Optional[str]:
+    task = payload.get("task") or {}
+    status = str(task.get("status") or "").strip()
+    if status == "done":
+        return "done"
+    if status == "running":
+        return "wait_for_goal_worker"
+    if payload.get("review_required"):
+        gate = payload.get("review_followup_gate")
+        if isinstance(gate, dict) and gate.get("failed"):
+            return "request_changes_or_replan_followups"
+        if isinstance(gate, dict) and not gate.get("ready"):
+            return "wait_for_followups"
+        return "advance_goal_acceptance"
+    if status == "ready":
+        return "dispatch_goal_task"
+    child_summary = payload.get("child_summary") or {}
+    if isinstance(child_summary, dict):
+        if int(child_summary.get("auto_retry_exhausted") or 0) > 0:
+            return "retry_exhausted"
+        if int(child_summary.get("running") or 0) > 0:
+            return "wait_for_workers"
+        actions = child_summary.get("recommended_actions")
+        if isinstance(actions, dict) and actions:
+            return "advance_children: " + _render_count_map(actions)
+        status_counts = child_summary.get("status_counts")
+        ready = (
+            int(status_counts.get("ready") or 0)
+            if isinstance(status_counts, dict)
+            else 0
+        )
+        if ready > 0:
+            return "dispatch_ready_children"
+        total = int(child_summary.get("total") or 0)
+        done = int(child_summary.get("done") or 0)
+        if total > 0 and done >= total:
+            return "ready_to_complete_goal"
+    if status in {"triage", "todo", "scheduled"}:
+        return "decompose_or_advance_goal"
+    return None
+
+
+def kanban_goal_status_line(
+    session_id: str,
+    *,
+    board: Optional[str] = None,
+    max_children: int = 6,
+) -> Optional[str]:
+    """Render a compact read-only status for the latest Kanban goal bridge.
+
+    ``None`` means this session has no explicit ``/goal create`` Kanban root,
+    so callers should fall back to normal session-level ``/goal`` status.
+    """
+    snapshot = latest_kanban_goal_snapshot_for_session(session_id, board=board)
+    if snapshot is None:
+        return None
+    payload = snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
+    if not isinstance(payload, dict):
+        return None
+    try:
+        from hermes_cli import kanban_db as kb
+        from hermes_cli.kanban_progress import attach_progress_diagnostics
+
+        with kb.connect(board=board) as conn:
+            payload = attach_progress_diagnostics(conn, payload)
+    except Exception:
+        pass
+    task = payload.get("task") or {}
+    title = _compact_goal_title(task.get("title"))
+    assignee = task.get("assignee") or "-"
+    lines = [
+        f"Kanban goal {task.get('id')}: {title}",
+        f"status={task.get('status') or '-'} assignee={assignee}",
+    ]
+    next_action = _kanban_goal_next_action(payload)
+    if next_action:
+        lines.append(f"root-next: {next_action}")
+    try:
+        from hermes_cli.kanban_progress import diagnostic_kinds
+
+        diag_kinds = diagnostic_kinds(payload)
+    except Exception:
+        diag_kinds = []
+    if diag_kinds:
+        lines.append(f"diagnostics: {', '.join(diag_kinds)}")
+
+    child_summary = payload.get("child_summary") or {}
+    if child_summary:
+        lines.append(
+            "children="
+            f"{child_summary.get('done', 0)}/{child_summary.get('total', 0)} done "
+            f"running={child_summary.get('running', 0)} "
+            f"review-required={child_summary.get('review_required', 0)}"
+        )
+        statuses = _render_count_map(child_summary.get("status_counts"))
+        if statuses:
+            lines.append(f"child-status: {statuses}")
+        actions = _render_count_map(child_summary.get("recommended_actions"))
+        if actions:
+            lines.append(f"next: {actions}")
+        lanes = _render_count_map(child_summary.get("lanes"))
+        if lanes:
+            lines.append(f"lanes: {lanes}")
+
+    children = payload.get("children") or []
+    if children:
+        limit = max(0, int(max_children or 0))
+        for child in children[:limit]:
+            ctask = child.get("task") or {}
+            lane_meta = child.get("worker_lane") or {}
+            lane = lane_meta.get("name") or ctask.get("assignee") or "-"
+            line = (
+                f"- {ctask.get('id', '-')}: "
+                f"{ctask.get('status', '-')} @{lane} "
+                f"{_truncate(str(ctask.get('title') or ''), 90)}"
+            )
+            acceptance = child.get("acceptance") or {}
+            action = (
+                acceptance.get("recommended_action")
+                if isinstance(acceptance, dict)
+                else None
+            )
+            hint = _child_progress_hint(child)
+            details = []
+            if action:
+                details.append(f"next={action}")
+            if hint:
+                details.append(f"progress={hint}")
+            child_diags = [
+                str(diag.get("kind"))
+                for diag in (child.get("diagnostics") or [])
+                if isinstance(diag, dict) and diag.get("kind")
+            ]
+            if child_diags:
+                details.append(f"diagnostics={','.join(child_diags[:3])}")
+            if details:
+                line += " (" + "; ".join(details) + ")"
+            lines.append(line)
+        remaining = len(children) - limit
+        if remaining > 0:
+            lines.append(f"- ... {remaining} more child task(s)")
+    else:
+        root_hint = _progress_hint(payload.get("worker_progress"))
+        root_details = []
+        if next_action:
+            root_details.append(f"next={next_action}")
+        if root_hint:
+            root_details.append(f"progress={root_hint}")
+        if root_details:
+            lines.append("root-worker: " + "; ".join(root_details))
+        else:
+            lines.append("children=0; next: decompose or advance the Kanban goal")
+
+    return "\n".join(lines)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -843,6 +1117,9 @@ __all__ = [
     "save_goal",
     "clear_goal",
     "create_kanban_task_from_goal",
+    "advance_kanban_goal_for_session",
+    "latest_kanban_goal_snapshot_for_session",
+    "kanban_goal_status_line",
     "run_kanban_goal_bridge",
     "judge_goal",
 ]

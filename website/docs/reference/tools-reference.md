@@ -124,16 +124,18 @@ Registered when the agent is either (a) spawned by the kanban dispatcher (`HERME
 |------|-------------|----------------------|
 | `kanban_show` | Show the active kanban task assigned to this worker (title, description, comments, dependencies). | `HERMES_KANBAN_TASK` or `kanban` toolset |
 | `kanban_list` | List board tasks with filters. Orchestrator-only; hidden from dispatcher-spawned task workers. | profile with `kanban` toolset |
-| `kanban_progress` | Read one task's latest worker progress, heartbeat, bounded evidence, and optional log tail without interrupting the worker. Orchestrator-only. | profile with `kanban` toolset |
+| `kanban_progress` | Read one task's latest worker progress, heartbeat, bounded evidence, and optional log tail without interrupting the worker. If `task_id` is omitted, reads the current session's latest `/goal create` Kanban root when available. Orchestrator-only. | profile with `kanban` toolset |
+| `kanban_acceptance_check_request` | Attach a validated task-scoped acceptance check request: `file_content`, or `command_template` selecting a trusted `kanban.acceptance_templates` entry plus allowlisted args. Rejects executable command fields and feeds the request into the task acceptance gate. Orchestrator-only. | profile with `kanban` toolset |
 | `kanban_advance_acceptance` | Advance a review-required external-worker task across review/test follow-ups, deterministic acceptance checks, bounded request-changes feedback for failed gates, and approval without interrupting workers. Orchestrator-only. | profile with `kanban` toolset |
-| `kanban_advance_goal` | Advance a decomposed goal/root task across child dispatch, review/test/acceptance, bounded request-changes feedback for failed child gates, and root completion without interrupting workers. Orchestrator-only. | profile with `kanban` toolset |
-| `kanban_reviews` | List review-required external-worker evidence snapshots. Orchestrator-only. | profile with `kanban` toolset |
+| `kanban_advance_goal` | Advance a decomposed goal/root task across child dispatch, review/test/acceptance, bounded request-changes feedback for failed child gates, and root completion without interrupting workers. If `task_id` is omitted, reads the current session's latest `/goal create` Kanban root when available. Orchestrator-only. | profile with `kanban` toolset |
+| `kanban_advance_controller` | Run one bounded controller tick across decomposed goals and standalone review-required worker handoffs, advancing each to the next idle boundary without interrupting workers. Orchestrator-only. | profile with `kanban` toolset |
+| `kanban_reviews` | List review-required implementation handoff evidence snapshots. Review/test follow-up evidence is omitted by default and can be included only for debugging. Orchestrator-only. | profile with `kanban` toolset |
 | `kanban_review` | Approve bounded worker evidence or request changes, without reading the full worker session. Orchestrator-only. | profile with `kanban` toolset |
 | `kanban_complete` | Mark the current task done with a structured handoff payload (results, artifacts, follow-ups). | `HERMES_KANBAN_TASK` or `kanban` toolset |
 | `kanban_block` | Block the current task on a question for the user — the dispatcher pauses, surfaces the question, and resumes once a human replies. | `HERMES_KANBAN_TASK` or `kanban` toolset |
 | `kanban_heartbeat` | Send a progress heartbeat during a long-running operation so the dispatcher knows the worker is still alive. | `HERMES_KANBAN_TASK` or `kanban` toolset |
 | `kanban_comment` | Add a comment to the task thread without changing its state — useful for surfacing intermediate findings. | `HERMES_KANBAN_TASK` or `kanban` toolset |
-| `kanban_create` | Fan out child tasks from the current task. Used by orchestrators and follow-up-spawning workers. | `HERMES_KANBAN_TASK` or `kanban` toolset |
+| `kanban_create` | Fan out child tasks from the current task. Used by orchestrators and follow-up-spawning workers. Can attach validated declarative `acceptance_check_request(s)` at creation time. | `HERMES_KANBAN_TASK` or `kanban` toolset |
 | `kanban_link` | Link tasks with a parent → child dependency edge. | `HERMES_KANBAN_TASK` or `kanban` toolset |
 | `kanban_unblock` | Return a blocked task to `ready`. Orchestrator-only; hidden from dispatcher-spawned task workers. | profile with `kanban` toolset |
 

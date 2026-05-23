@@ -40,8 +40,9 @@ What you'll see:
 | Command | What it does |
 |---|---|
 | `/goal <text>` | Set (or replace) the standing goal. Kicks off the first turn immediately so you don't need to send a separate message. |
-| `/goal create <objective> [--assignee X] [--workspace dir:/repo] [--decompose]` | Create a Kanban top-level goal task without starting the Ralph loop. Uses the same bridge as `/kanban goal`; `--decompose` can fan out child tasks to registered worker lanes, and child tasks inherit the root workspace. |
-| `/goal` or `/goal status` | Show the current goal, its status, and turns used. |
+| `/goal create <objective> [--assignee X] [--workspace dir:/repo] [--decompose] [--advance] [--loop]` | Create a Kanban top-level goal task without starting the Ralph loop. Uses the same bridge as `/kanban goal`; `--decompose` can fan out child tasks to registered worker lanes, and child tasks inherit the root workspace. |
+| `/goal advance [--loop] [--dry-run]` | Advance this session's latest `/goal create` Kanban root without remembering the root id. Dispatches ready children, advances review/test/acceptance gates, and stops at running-worker boundaries. |
+| `/goal` or `/goal status` | Show the current standing goal, its status, and turns used. If there is no standing goal but this session has an explicit `/goal create` Kanban root, show that root's Kanban child progress instead. |
 | `/goal pause` | Stop the auto-continuation loop without clearing the goal. |
 | `/goal resume` | Resume the loop (resets the turn counter back to zero). |
 | `/goal clear` | Drop the goal entirely. |
@@ -96,6 +97,34 @@ Any real message you send while a goal is active takes priority over the continu
 ### Mid-run safety (gateway)
 
 While an agent is already running, `/goal status`, `/goal pause`, and `/goal clear` are safe to run — they only touch control-plane state and don't interrupt the current turn. Setting a **new** goal mid-run (`/goal <new text>`) is rejected with a message telling you to `/stop` first, so the old continuation can't race the new one.
+
+For `/goal create` Kanban goals, `/goal status` is also read-only. It looks up
+the latest non-archived Kanban root for the current session and renders compact
+child status, worker lane, progress checklist, review-required count, and next
+recommended action from Kanban. It also surfaces active Kanban diagnostics such
+as failed acceptance checks or exhausted automatic request-changes retries, so a
+status query can explain why a child is blocked without touching the worker
+process. It does not dispatch, claim, heartbeat, reclaim, signal, or wait on
+Codex or other external workers.
+
+For the same session-local root, `/goal advance --loop`,
+`hermes kanban progress --children`, and `hermes kanban advance-goal --loop`
+may omit the root task id. They resolve the latest explicit `/goal create`
+Kanban root from `HERMES_SESSION_ID`, so a main agent can read or advance the
+current goal without remembering the root id.
+
+When a goal has concrete acceptance criteria, the orchestrator can attach
+validated task-scoped acceptance requests to child implementation tasks. The
+initial safe request type is `file_content`, for example "README.md must
+contain this line"; Hermes validates the request and later runs it through the
+Kanban acceptance gate. The model still cannot pass arbitrary shell commands as
+task-local acceptance checks.
+
+Orchestrators can attach those requests either after task creation with
+`kanban_acceptance_check_request` or directly inside `kanban_create` via
+`acceptance_check_request` / `acceptance_check_requests`. Direct attachment is
+preferred when the criterion is known during decomposition because the task and
+its gate enter Kanban atomically.
 
 ### Persistence
 

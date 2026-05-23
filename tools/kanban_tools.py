@@ -105,6 +105,20 @@ def _default_task_id(arg: Optional[str]) -> Optional[str]:
     return env_tid or None
 
 
+def _session_goal_snapshot(board: Optional[str] = None):
+    """Return the latest explicit /goal create Kanban root for this session."""
+    session_id = os.environ.get("HERMES_SESSION_ID")
+    if not session_id:
+        return None
+    try:
+        from hermes_cli.goals import latest_kanban_goal_snapshot_for_session
+
+        return latest_kanban_goal_snapshot_for_session(session_id, board=board)
+    except Exception:
+        logger.debug("kanban session goal lookup failed", exc_info=True)
+        return None
+
+
 def _worker_run_id(task_id: str) -> Optional[int]:
     """Return this worker's dispatcher run id when it is scoped to task_id."""
     if os.environ.get("HERMES_KANBAN_TASK") != task_id:
@@ -419,8 +433,6 @@ def _handle_progress(args: dict, **kw) -> str:
     if guard:
         return guard
     tid = args.get("task_id")
-    if not tid:
-        return tool_error("task_id is required")
     log_tail_bytes, int_error = _parse_positive_int_arg(
         args,
         "log_tail_bytes",
@@ -440,16 +452,53 @@ def _handle_progress(args: dict, **kw) -> str:
     try:
         kb, conn = _connect(board=board)
         try:
-            snapshot = kb.task_progress_snapshot(
-                conn,
-                str(tid),
-                log_tail_bytes=log_tail_bytes,
-                include_children=include_children,
-                board=board,
-            )
-            if snapshot is None:
-                return tool_error(f"task {tid} not found")
-            return json.dumps(snapshot.to_dict())
+            resolved_from_session_goal = False
+            if tid:
+                snapshot = kb.task_progress_snapshot(
+                    conn,
+                    str(tid),
+                    log_tail_bytes=log_tail_bytes,
+                    include_children=include_children,
+                    board=board,
+                )
+                if snapshot is None:
+                    return tool_error(f"task {tid} not found")
+            else:
+                snapshot = _session_goal_snapshot(board=board)
+                if snapshot is None:
+                    return tool_error(
+                        "task_id is required unless HERMES_SESSION_ID has a "
+                        "matching /goal create Kanban root"
+                    )
+                if log_tail_bytes:
+                    snapshot = kb.task_progress_snapshot(
+                        conn,
+                        snapshot.task.id,
+                        log_tail_bytes=log_tail_bytes,
+                        include_children=True,
+                        board=board,
+                    )
+                elif not include_children:
+                    snapshot = kb.task_progress_snapshot(
+                        conn,
+                        snapshot.task.id,
+                        include_children=False,
+                        board=board,
+                    )
+                if snapshot is None:
+                    return tool_error("session Kanban goal root vanished")
+                resolved_from_session_goal = True
+            payload = snapshot.to_dict()
+            try:
+                from hermes_cli.kanban_progress import attach_progress_diagnostics
+
+                payload = attach_progress_diagnostics(conn, payload)
+            except Exception:
+                logger.debug("kanban_progress diagnostics attachment failed", exc_info=True)
+            if resolved_from_session_goal:
+                payload["resolved_from_session_goal"] = True
+                payload["session_id"] = os.environ.get("HERMES_SESSION_ID")
+            return json.dumps(payload)
         finally:
             conn.close()
     except ValueError as e:
@@ -547,6 +596,58 @@ def _handle_verify(args: dict, **kw) -> str:
         return tool_error(f"kanban_verify: {e}")
 
 
+def _handle_acceptance_check_request(args: dict, **kw) -> str:
+    """Validate and attach a safe task-scoped acceptance check request."""
+    guard = _require_orchestrator_tool("kanban_acceptance_check_request")
+    if guard:
+        return guard
+    tid = args.get("task_id")
+    if not tid:
+        return tool_error("task_id is required")
+    request = args.get("acceptance_check_request") or args.get("request")
+    if not isinstance(request, dict):
+        return tool_error("acceptance_check_request must be an object")
+    source_run_id, source_error = _parse_positive_int_arg(
+        args,
+        "source_run_id",
+        default=None,
+        maximum=10**12,
+    )
+    if source_error:
+        return tool_error(source_error)
+    requested_by = args.get("requested_by") or os.environ.get("HERMES_PROFILE") or "agent"
+    board = args.get("board")
+    try:
+        kb, conn = _connect(board=board)
+        try:
+            payload = kb.add_acceptance_check_request(
+                conn,
+                str(tid),
+                request,
+                source_run_id=source_run_id,
+                requested_by=str(requested_by),
+            )
+            gate = kb.acceptance_check_gate_status(
+                conn,
+                str(tid),
+                source_run_id=payload.get("source_run_id"),
+            )
+            return json.dumps({
+                "valid": True,
+                "task_id": str(tid),
+                "source_run_id": payload.get("source_run_id"),
+                "request": payload.get("request"),
+                "acceptance_check_gate": gate,
+            })
+        finally:
+            conn.close()
+    except ValueError as e:
+        return tool_error(f"kanban_acceptance_check_request: {e}")
+    except Exception as e:
+        logger.exception("kanban_acceptance_check_request failed")
+        return tool_error(f"kanban_acceptance_check_request: {e}")
+
+
 def _handle_advance_acceptance(args: dict, **kw) -> str:
     """Advance review/test/verify/approval workflow to the next safe point."""
     guard = _require_orchestrator_tool("kanban_advance_acceptance")
@@ -582,27 +683,49 @@ def _handle_advance_acceptance(args: dict, **kw) -> str:
     )
     if dispatch_max_error:
         return tool_error(dispatch_max_error)
+    loop, loop_error = _parse_bool_arg(args, "loop", default=False)
+    if loop_error:
+        return tool_error(loop_error)
+    max_iterations, max_iterations_error = _parse_positive_int_arg(
+        args,
+        "max_iterations",
+        default=8,
+        maximum=64,
+    )
+    if max_iterations_error:
+        return tool_error(max_iterations_error)
     reviewer = args.get("reviewer") or os.environ.get("HERMES_PROFILE") or "agent"
     board = args.get("board")
     try:
         kb, conn = _connect(board=board)
         try:
-            payload = kb.advance_acceptance_workflow(
-                conn,
-                str(tid),
-                review_assignee=args.get("review_assignee") or "codex-review",
-                test_assignee=args.get("test_assignee") or "codex-test",
-                dispatch=dispatch,
-                dry_run=dry_run,
-                dispatch_max=dispatch_max,
-                verify=verify,
-                approve=approve,
-                request_changes_on_failure=request_changes_on_failure,
-                reviewer=str(reviewer),
-                summary=args.get("summary"),
-                result=args.get("result"),
-                board=board,
-            )
+            common_kwargs = {
+                "review_assignee": args.get("review_assignee") or "codex-review",
+                "test_assignee": args.get("test_assignee") or "codex-test",
+                "dispatch": dispatch,
+                "dry_run": dry_run,
+                "dispatch_max": dispatch_max,
+                "verify": verify,
+                "approve": approve,
+                "request_changes_on_failure": request_changes_on_failure,
+                "reviewer": str(reviewer),
+                "summary": args.get("summary"),
+                "result": args.get("result"),
+                "board": board,
+            }
+            if loop:
+                payload = kb.advance_acceptance_workflow_until_idle(
+                    conn,
+                    str(tid),
+                    max_iterations=max_iterations or 8,
+                    **common_kwargs,
+                )
+            else:
+                payload = kb.advance_acceptance_workflow(
+                    conn,
+                    str(tid),
+                    **common_kwargs,
+                )
             return json.dumps(payload)
         finally:
             conn.close()
@@ -619,8 +742,6 @@ def _handle_advance_goal(args: dict, **kw) -> str:
     if guard:
         return guard
     tid = args.get("task_id")
-    if not tid:
-        return tool_error("task_id is required")
     dispatch, dispatch_error = _parse_bool_arg(args, "dispatch", default=True)
     if dispatch_error:
         return tool_error(dispatch_error)
@@ -648,14 +769,141 @@ def _handle_advance_goal(args: dict, **kw) -> str:
     )
     if dispatch_max_error:
         return tool_error(dispatch_max_error)
+    loop, loop_error = _parse_bool_arg(args, "loop", default=False)
+    if loop_error:
+        return tool_error(loop_error)
+    max_iterations, max_iterations_error = _parse_positive_int_arg(
+        args,
+        "max_iterations",
+        default=8,
+        maximum=64,
+    )
+    if max_iterations_error:
+        return tool_error(max_iterations_error)
     reviewer = args.get("reviewer") or os.environ.get("HERMES_PROFILE") or "agent"
     board = args.get("board")
     try:
         kb, conn = _connect(board=board)
         try:
-            payload = kb.advance_goal_acceptance_workflow(
+            resolved_from_session_goal = False
+            if not tid:
+                session_snapshot = _session_goal_snapshot(board=board)
+                if session_snapshot is None:
+                    return tool_error(
+                        "task_id is required unless HERMES_SESSION_ID has a "
+                        "matching /goal create Kanban root"
+                    )
+                tid = session_snapshot.task.id
+                resolved_from_session_goal = True
+            common_kwargs = {
+                "review_assignee": args.get("review_assignee") or "codex-review",
+                "test_assignee": args.get("test_assignee") or "codex-test",
+                "dispatch": dispatch,
+                "dry_run": dry_run,
+                "dispatch_max": dispatch_max,
+                "verify": verify,
+                "approve": approve,
+                "request_changes_on_failure": request_changes_on_failure,
+                "reviewer": str(reviewer),
+                "summary": args.get("summary"),
+                "result": args.get("result"),
+                "board": board,
+            }
+            if loop:
+                payload = kb.advance_goal_acceptance_workflow_until_idle(
+                    conn,
+                    str(tid),
+                    max_iterations=max_iterations or 8,
+                    **common_kwargs,
+                )
+            else:
+                payload = kb.advance_goal_acceptance_workflow(
+                    conn,
+                    str(tid),
+                    **common_kwargs,
+                )
+            if resolved_from_session_goal:
+                payload["resolved_from_session_goal"] = True
+                payload["session_id"] = os.environ.get("HERMES_SESSION_ID")
+            return json.dumps(payload)
+        finally:
+            conn.close()
+    except ValueError as e:
+        return tool_error(f"kanban_advance_goal: {e}")
+    except Exception as e:
+        logger.exception("kanban_advance_goal failed")
+        return tool_error(f"kanban_advance_goal: {e}")
+
+
+def _handle_advance_controller(args: dict, **kw) -> str:
+    """Run one autonomous Kanban controller tick."""
+    guard = _require_orchestrator_tool("kanban_advance_controller")
+    if guard:
+        return guard
+    dispatch, dispatch_error = _parse_bool_arg(args, "dispatch", default=True)
+    if dispatch_error:
+        return tool_error(dispatch_error)
+    dry_run, dry_run_error = _parse_bool_arg(args, "dry_run", default=False)
+    if dry_run_error:
+        return tool_error(dry_run_error)
+    verify, verify_error = _parse_bool_arg(args, "verify", default=True)
+    if verify_error:
+        return tool_error(verify_error)
+    approve, approve_error = _parse_bool_arg(args, "approve", default=True)
+    if approve_error:
+        return tool_error(approve_error)
+    request_changes_on_failure, request_changes_error = _parse_bool_arg(
+        args,
+        "request_changes_on_failure",
+        default=True,
+    )
+    if request_changes_error:
+        return tool_error(request_changes_error)
+    include_goals, include_goals_error = _parse_bool_arg(
+        args,
+        "include_goals",
+        default=True,
+    )
+    if include_goals_error:
+        return tool_error(include_goals_error)
+    include_review_required, include_review_error = _parse_bool_arg(
+        args,
+        "include_review_required",
+        default=True,
+    )
+    if include_review_error:
+        return tool_error(include_review_error)
+    dispatch_max, dispatch_max_error = _parse_positive_int_arg(
+        args,
+        "dispatch_max",
+        default=None,
+        maximum=64,
+    )
+    if dispatch_max_error:
+        return tool_error(dispatch_max_error)
+    max_iterations, max_iterations_error = _parse_positive_int_arg(
+        args,
+        "max_iterations",
+        default=8,
+        maximum=64,
+    )
+    if max_iterations_error:
+        return tool_error(max_iterations_error)
+    max_items, max_items_error = _parse_positive_int_arg(
+        args,
+        "max_items",
+        default=8,
+        maximum=128,
+    )
+    if max_items_error:
+        return tool_error(max_items_error)
+    reviewer = args.get("reviewer") or os.environ.get("HERMES_PROFILE") or "agent"
+    board = args.get("board")
+    try:
+        kb, conn = _connect(board=board)
+        try:
+            payload = kb.advance_controller_once(
                 conn,
-                str(tid),
                 review_assignee=args.get("review_assignee") or "codex-review",
                 test_assignee=args.get("test_assignee") or "codex-test",
                 dispatch=dispatch,
@@ -668,15 +916,73 @@ def _handle_advance_goal(args: dict, **kw) -> str:
                 summary=args.get("summary"),
                 result=args.get("result"),
                 board=board,
+                max_iterations=max_iterations or 8,
+                max_items=max_items or 8,
+                include_goals=include_goals,
+                include_review_required=include_review_required,
             )
             return json.dumps(payload)
         finally:
             conn.close()
     except ValueError as e:
-        return tool_error(f"kanban_advance_goal: {e}")
+        return tool_error(f"kanban_advance_controller: {e}")
     except Exception as e:
-        logger.exception("kanban_advance_goal failed")
-        return tool_error(f"kanban_advance_goal: {e}")
+        logger.exception("kanban_advance_controller failed")
+        return tool_error(f"kanban_advance_controller: {e}")
+
+
+def _handle_worker_lane_request(args: dict, **kw) -> str:
+    """Validate and optionally enable a skill-generated worker lane request."""
+    guard = _require_orchestrator_tool("kanban_worker_lane_request")
+    if guard:
+        return guard
+    request = args.get("worker_lane_request")
+    if not isinstance(request, dict):
+        return tool_error("worker_lane_request is required and must be an object")
+    enable, enable_error = _parse_bool_arg(args, "enable", default=False)
+    if enable_error:
+        return tool_error(enable_error)
+    persist, persist_error = _parse_bool_arg(args, "persist", default=False)
+    if persist_error:
+        return tool_error(persist_error)
+    replace, replace_error = _parse_bool_arg(args, "replace", default=False)
+    if replace_error:
+        return tool_error(replace_error)
+    try:
+        from hermes_cli.worker_lanes import (
+            enable_worker_lane_request,
+            validate_worker_lane_request,
+        )
+
+        valid = validate_worker_lane_request(request)
+        enabled = False
+        lane_info = None
+        if enable or persist:
+            lane = enable_worker_lane_request(
+                request,
+                persist=persist,
+                replace=replace,
+            )
+            enabled = True
+            lane_info = {
+                "name": lane.name,
+                "kind": lane.kind,
+                "source": lane.source,
+                "success_policy": lane.success_policy,
+                "max_concurrency": lane.max_concurrency,
+            }
+        return json.dumps({
+            "valid": True,
+            "enabled": enabled,
+            "persisted": persist,
+            "lane": lane_info,
+            "config": valid,
+        })
+    except ValueError as e:
+        return tool_error(f"kanban_worker_lane_request: {e}")
+    except Exception as e:
+        logger.exception("kanban_worker_lane_request failed")
+        return tool_error(f"kanban_worker_lane_request: {e}")
 
 
 def _handle_reviews(args: dict, **kw) -> str:
@@ -711,6 +1017,7 @@ def _handle_reviews(args: dict, **kw) -> str:
                 worker_lane=args.get("lane"),
                 limit=limit or KANBAN_REVIEWS_DEFAULT_LIMIT,
                 log_tail_bytes=log_tail_bytes,
+                include_followups=bool(args.get("include_followups")),
                 board=board,
             )
             return json.dumps({
@@ -825,7 +1132,11 @@ def _handle_plan_review(args: dict, **kw) -> str:
             if dispatch:
                 followup_ids = [
                     task_id
-                    for task_id in (plan.review_task_id, plan.test_task_id)
+                    for task_id in (
+                        plan.review_task_id,
+                        *plan.review_shard_task_ids,
+                        plan.test_task_id,
+                    )
                     if task_id
                 ]
                 result = kb.dispatch_once(
@@ -1124,6 +1435,9 @@ def _handle_create(args: dict, **kw) -> str:
     idempotency_key = args.get("idempotency_key")
     max_runtime_seconds = args.get("max_runtime_seconds")
     initial_status = args.get("initial_status") or "running"
+    acceptance_check_requests = args.get("acceptance_check_requests")
+    if acceptance_check_requests is None:
+        acceptance_check_requests = args.get("acceptance_check_request")
     skills = args.get("skills")
     if isinstance(skills, str):
         # Accept a single skill name as a string for convenience.
@@ -1162,11 +1476,26 @@ def _handle_create(args: dict, **kw) -> str:
                 initial_status=str(initial_status),
                 created_by=os.environ.get("HERMES_PROFILE") or "worker",
                 session_id=session_id,
+                acceptance_check_requests=acceptance_check_requests,
             )
             new_task = kb.get_task(conn, new_tid)
+            gate = kb.acceptance_check_gate_status(
+                conn,
+                new_tid,
+                source_run_id=None,
+            )
             return _ok(
                 task_id=new_tid,
                 status=new_task.status if new_task else None,
+                acceptance_check_requests=(
+                    [
+                        item.get("name")
+                        for item in gate.get("items", [])
+                        if item.get("requested")
+                    ]
+                    if gate
+                    else []
+                ),
             )
         finally:
             conn.close()
@@ -1329,7 +1658,9 @@ KANBAN_PROGRESS_SCHEMA = {
         "claiming, reclaiming, heartbeating, or interrupting the worker. "
         "Returns task state, latest run summary/metadata, latest progress "
         "event, latest heartbeat, review-required flag, and optional bounded "
-        "worker-log tail. Orchestrator-only; dispatcher-spawned task workers "
+        "worker-log tail. If task_id is omitted, the tool reads the current "
+        "HERMES_SESSION_ID session's latest explicit /goal create Kanban root "
+        "when one exists. Orchestrator-only; dispatcher-spawned task workers "
         "never see this tool."
     ),
     "parameters": {
@@ -1337,7 +1668,11 @@ KANBAN_PROGRESS_SCHEMA = {
         "properties": {
             "task_id": {
                 "type": "string",
-                "description": "Task id to inspect.",
+                "description": (
+                    "Task id to inspect. Omit to inspect the current session's "
+                    "latest /goal create Kanban root, when HERMES_SESSION_ID "
+                    "is available."
+                ),
             },
             "log_tail_bytes": {
                 "type": "integer",
@@ -1356,7 +1691,6 @@ KANBAN_PROGRESS_SCHEMA = {
             },
             "board": _board_schema_prop(),
         },
-        "required": ["task_id"],
     },
 }
 
@@ -1428,6 +1762,62 @@ KANBAN_VERIFY_SCHEMA = {
     },
 }
 
+KANBAN_ACCEPTANCE_CHECK_REQUEST_SCHEMA = {
+    "name": "kanban_acceptance_check_request",
+    "description": (
+        "Validate and attach a safe task-scoped acceptance check request. "
+        "This lets a skill/orchestrator express concrete acceptance intent "
+        "without passing shell commands. Supported types: file_content with "
+        "a workspace-relative path and exactly one of equals or contains; "
+        "command_template selecting a trusted kanban.acceptance_templates "
+        "entry plus allowlisted args. The request becomes part of the task "
+        "acceptance gate and is run by kanban_verify or the controller. "
+        "Orchestrator-only."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "task_id": {
+                "type": "string",
+                "description": "Implementation task id to attach the request to.",
+            },
+            "acceptance_check_request": {
+                "type": "object",
+                "description": (
+                    "Request object. file_content keys: name, type, path, "
+                    "equals or contains, description. command_template keys: "
+                    "name, type, template, args, description."
+                ),
+                "properties": {
+                    "name": {"type": "string"},
+                    "type": {"type": "string", "enum": ["file_content", "command_template"]},
+                    "path": {"type": "string"},
+                    "equals": {"type": "string"},
+                    "contains": {"type": "string"},
+                    "template": {"type": "string"},
+                    "args": {"type": "object", "additionalProperties": {"type": "string"}},
+                    "description": {"type": "string"},
+                },
+                "required": ["name", "type"],
+                "additionalProperties": False,
+            },
+            "source_run_id": {
+                "type": "integer",
+                "description": (
+                    "Optional implementation run id to scope the request. "
+                    "Defaults to the latest run."
+                ),
+            },
+            "requested_by": {
+                "type": "string",
+                "description": "Controller/skill identity for the request event.",
+            },
+            "board": _board_schema_prop(),
+        },
+        "required": ["task_id", "acceptance_check_request"],
+    },
+}
+
 KANBAN_ADVANCE_ACCEPTANCE_SCHEMA = {
     "name": "kanban_advance_acceptance",
     "description": (
@@ -1467,6 +1857,17 @@ KANBAN_ADVANCE_ACCEPTANCE_SCHEMA = {
             "dispatch_max": {
                 "type": "integer",
                 "description": "Scoped follow-up spawn cap. Max 64.",
+            },
+            "loop": {
+                "type": "boolean",
+                "description": (
+                    "Repeat bounded controller passes until done, waiting on "
+                    "workers, blocked, idle, or max_iterations. Default false."
+                ),
+            },
+            "max_iterations": {
+                "type": "integer",
+                "description": "With loop=true, cap controller passes. Max 64, default 8.",
             },
             "verify": {
                 "type": "boolean",
@@ -1508,14 +1909,20 @@ KANBAN_ADVANCE_GOAL_SCHEMA = {
         "Advance a decomposed goal/root task without interrupting workers: "
         "dispatch ready child implementation tasks, advance review-required "
         "children through review/test/acceptance, and complete the root once "
-        "all related children are terminal. Orchestrator-only."
+        "all related children are terminal. If task_id is omitted, the tool "
+        "advances the current HERMES_SESSION_ID session's latest explicit "
+        "/goal create Kanban root when one exists. Orchestrator-only."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "task_id": {
                 "type": "string",
-                "description": "Goal/root task id to advance.",
+                "description": (
+                    "Goal/root task id to advance. Omit to advance the "
+                    "current session's latest /goal create Kanban root, when "
+                    "HERMES_SESSION_ID is available."
+                ),
             },
             "review_assignee": {
                 "type": "string",
@@ -1536,6 +1943,17 @@ KANBAN_ADVANCE_GOAL_SCHEMA = {
             "dispatch_max": {
                 "type": "integer",
                 "description": "Scoped child/follow-up spawn cap. Max 64.",
+            },
+            "loop": {
+                "type": "boolean",
+                "description": (
+                    "Repeat bounded controller passes until done, waiting on "
+                    "workers, blocked, idle, or max_iterations. Default false."
+                ),
+            },
+            "max_iterations": {
+                "type": "integer",
+                "description": "With loop=true, cap controller passes. Max 64, default 8.",
             },
             "verify": {
                 "type": "boolean",
@@ -1567,7 +1985,140 @@ KANBAN_ADVANCE_GOAL_SCHEMA = {
             },
             "board": _board_schema_prop(),
         },
-        "required": ["task_id"],
+    },
+}
+
+KANBAN_ADVANCE_CONTROLLER_SCHEMA = {
+    "name": "kanban_advance_controller",
+    "description": (
+        "Run one autonomous bounded Kanban controller tick. It scans "
+        "decomposed goal roots and standalone review-required implementation "
+        "tasks, dispatches scoped child/follow-up workers when configured, "
+        "runs acceptance checks, approves passed gates, and requests bounded "
+        "changes on failed gates. It never waits for or interrupts running "
+        "workers. Orchestrator-only."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "review_assignee": {
+                "type": "string",
+                "description": "Review worker lane. Default codex-review.",
+            },
+            "test_assignee": {
+                "type": "string",
+                "description": "Test worker lane. Default codex-test.",
+            },
+            "dispatch": {
+                "type": "boolean",
+                "description": "Whether to run scoped dispatcher passes. Default true.",
+            },
+            "dry_run": {
+                "type": "boolean",
+                "description": "With dispatch=true, report spawns without claiming tasks.",
+            },
+            "dispatch_max": {
+                "type": "integer",
+                "description": "Spawn cap across this controller tick. Max 64.",
+            },
+            "max_items": {
+                "type": "integer",
+                "description": "Max workflows to inspect this tick. Max 128, default 8.",
+            },
+            "max_iterations": {
+                "type": "integer",
+                "description": "Max bounded passes per workflow. Max 64, default 8.",
+            },
+            "include_goals": {
+                "type": "boolean",
+                "description": "Whether to scan decomposed goal roots. Default true.",
+            },
+            "include_review_required": {
+                "type": "boolean",
+                "description": (
+                    "Whether to scan standalone review-required implementation "
+                    "tasks. Default true."
+                ),
+            },
+            "verify": {
+                "type": "boolean",
+                "description": "Whether to run configured acceptance checks. Default true.",
+            },
+            "approve": {
+                "type": "boolean",
+                "description": "Whether to approve workflows whose gates pass. Default true.",
+            },
+            "request_changes_on_failure": {
+                "type": "boolean",
+                "description": (
+                    "Whether failed review/test or acceptance gates should "
+                    "request bounded changes. Default true."
+                ),
+            },
+            "reviewer": {
+                "type": "string",
+                "description": "Controller/reviewer identity.",
+            },
+            "summary": {
+                "type": "string",
+                "description": "Approval summary if a workflow reaches approve.",
+            },
+            "result": {
+                "type": "string",
+                "description": "Task result if a workflow reaches approve.",
+            },
+            "board": _board_schema_prop(),
+        },
+        "required": [],
+    },
+}
+
+KANBAN_WORKER_LANE_REQUEST_SCHEMA = {
+    "name": "kanban_worker_lane_request",
+    "description": (
+        "Validate a skill-generated external worker lane request and, when "
+        "explicitly requested by a trusted orchestrator, enable or persist the "
+        "sanitized lane config. The request is checked by a deterministic "
+        "allowlist validator; arbitrary shell command fields are rejected. "
+        "Use this when a skill needs a new Codex/external worker lane instead "
+        "of treating model output as executable config. Orchestrator-only."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "worker_lane_request": {
+                "type": "object",
+                "description": (
+                    "Requested lane fields: name, type, model, sandbox, "
+                    "approval, max_concurrency, success_policy, optional "
+                    "timeout_seconds, and reason. Command/argv/shell fields "
+                    "are not allowed."
+                ),
+                "additionalProperties": True,
+            },
+            "enable": {
+                "type": "boolean",
+                "description": (
+                    "Register the validated lane in this Hermes process. "
+                    "Default false."
+                ),
+            },
+            "persist": {
+                "type": "boolean",
+                "description": (
+                    "Write sanitized adapter fields under kanban.worker_lanes "
+                    "in config.yaml and register the lane. Default false."
+                ),
+            },
+            "replace": {
+                "type": "boolean",
+                "description": (
+                    "Allow replacing an existing lane with the same name. "
+                    "Default false."
+                ),
+            },
+        },
+        "required": ["worker_lane_request"],
     },
 }
 
@@ -1603,6 +2154,13 @@ KANBAN_REVIEWS_SCHEMA = {
                 "description": (
                     "Optional worker-log tail bytes per task. Max 65536. "
                     "Omit for compact queue reads."
+                ),
+            },
+            "include_followups": {
+                "type": "boolean",
+                "description": (
+                    "Include review/test follow-up task evidence. Defaults to "
+                    "false so the queue lists implementation handoffs only."
                 ),
             },
             "board": _board_schema_prop(),
@@ -2013,6 +2571,50 @@ KANBAN_CREATE_SCHEMA = {
                     "assignee's profile."
                 ),
             },
+            "acceptance_check_request": {
+                "type": "object",
+                "description": (
+                    "Optional single declarative acceptance check to attach "
+                    "when creating the task. Same shape as "
+                    "kanban_acceptance_check_request; executable command "
+                    "fields are rejected."
+                ),
+                "properties": {
+                    "name": {"type": "string"},
+                    "type": {"type": "string", "enum": ["file_content", "command_template"]},
+                    "path": {"type": "string"},
+                    "equals": {"type": "string"},
+                    "contains": {"type": "string"},
+                    "template": {"type": "string"},
+                    "args": {"type": "object", "additionalProperties": {"type": "string"}},
+                    "description": {"type": "string"},
+                },
+                "required": ["name", "type"],
+                "additionalProperties": False,
+            },
+            "acceptance_check_requests": {
+                "type": "array",
+                "description": (
+                    "Optional list of declarative acceptance checks to attach "
+                    "when creating the task. Use this for concrete criteria "
+                    "the controller should verify before approval."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "type": {"type": "string", "enum": ["file_content", "command_template"]},
+                        "path": {"type": "string"},
+                        "equals": {"type": "string"},
+                        "contains": {"type": "string"},
+                        "template": {"type": "string"},
+                        "args": {"type": "object", "additionalProperties": {"type": "string"}},
+                        "description": {"type": "string"},
+                    },
+                    "required": ["name", "type"],
+                    "additionalProperties": False,
+                },
+            },
             "board": _board_schema_prop(),
         },
         "required": ["title", "assignee"],
@@ -2108,6 +2710,15 @@ registry.register(
 )
 
 registry.register(
+    name="kanban_acceptance_check_request",
+    toolset="kanban",
+    schema=KANBAN_ACCEPTANCE_CHECK_REQUEST_SCHEMA,
+    handler=_handle_acceptance_check_request,
+    check_fn=_check_kanban_orchestrator_mode,
+    emoji="🧪",
+)
+
+registry.register(
     name="kanban_advance_acceptance",
     toolset="kanban",
     schema=KANBAN_ADVANCE_ACCEPTANCE_SCHEMA,
@@ -2123,6 +2734,24 @@ registry.register(
     handler=_handle_advance_goal,
     check_fn=_check_kanban_orchestrator_mode,
     emoji="⏩",
+)
+
+registry.register(
+    name="kanban_advance_controller",
+    toolset="kanban",
+    schema=KANBAN_ADVANCE_CONTROLLER_SCHEMA,
+    handler=_handle_advance_controller,
+    check_fn=_check_kanban_orchestrator_mode,
+    emoji="🔁",
+)
+
+registry.register(
+    name="kanban_worker_lane_request",
+    toolset="kanban",
+    schema=KANBAN_WORKER_LANE_REQUEST_SCHEMA,
+    handler=_handle_worker_lane_request,
+    check_fn=_check_kanban_orchestrator_mode,
+    emoji="🛤",
 )
 
 registry.register(

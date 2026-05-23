@@ -101,6 +101,38 @@ def _snapshot_to_dict(snapshot: kb.TaskProgressSnapshot) -> dict[str, Any]:
     return snapshot.to_dict()
 
 
+def _attach_progress_diagnostics(conn, payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        from hermes_cli.kanban_progress import attach_progress_diagnostics
+
+        return attach_progress_diagnostics(conn, payload)
+    except Exception:
+        return payload
+
+
+def _session_goal_snapshot_from_env() -> tuple[Optional[kb.TaskProgressSnapshot], Optional[str]]:
+    """Return latest /goal create root for HERMES_SESSION_ID, if any."""
+    session_id = os.environ.get("HERMES_SESSION_ID")
+    if not session_id:
+        return None, None
+    try:
+        from hermes_cli.goals import latest_kanban_goal_snapshot_for_session
+
+        return latest_kanban_goal_snapshot_for_session(session_id), session_id
+    except Exception:
+        return None, session_id
+
+
+def _resolve_optional_goal_task_id(task_id: Optional[str]) -> tuple[Optional[str], bool, Optional[str]]:
+    """Resolve an optional root task id through the current session goal."""
+    if task_id:
+        return str(task_id), False, None
+    snapshot, session_id = _session_goal_snapshot_from_env()
+    if snapshot is None:
+        return None, False, session_id
+    return snapshot.task.id, True, session_id
+
+
 def _render_progress_items(items: list[dict[str, Any]]) -> list[str]:
     lines: list[str] = []
     for item in items:
@@ -368,6 +400,19 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
                           help="Initial card status. Use 'blocked' for cards "
                                "that require immediate human ops (R3 gate) "
                                "to skip the brief running-to-blocked transition.")
+    p_create.add_argument(
+        "--acceptance-check-request",
+        "--acceptance-request",
+        action="append",
+        default=[],
+        dest="acceptance_check_requests",
+        metavar="PATH",
+        help=(
+            "JSON/YAML file containing a declarative acceptance_check_request "
+            "to attach at task creation time. Repeatable. Use '-' for stdin. "
+            "Safe types: file_content or trusted command_template."
+        ),
+    )
     p_create.add_argument("--json", action="store_true", help="Emit JSON output")
 
     # --- goal bridge ---
@@ -395,6 +440,66 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
         "--decompose",
         action="store_true",
         help="Immediately run the Kanban decomposer on the new triage task",
+    )
+    p_goal.add_argument(
+        "--advance",
+        action="store_true",
+        help=(
+            "After decomposition, run one scoped goal-controller pass to "
+            "dispatch ready children or advance review/test gates"
+        ),
+    )
+    p_goal.add_argument(
+        "--loop",
+        action="store_true",
+        help=(
+            "With --advance, repeat bounded controller passes until done, "
+            "waiting on workers, blocked, idle, or the iteration cap"
+        ),
+    )
+    p_goal.add_argument(
+        "--max-iterations",
+        type=int,
+        default=8,
+        metavar="N",
+        help="With --advance --loop, cap controller passes (1-64, default 8)",
+    )
+    p_goal.add_argument(
+        "--advance-dry-run",
+        action="store_true",
+        help="With --advance, report scoped dispatches without claiming tasks",
+    )
+    p_goal.add_argument(
+        "--dispatch-max",
+        type=int,
+        default=None,
+        metavar="N",
+        help="With --advance, cap scoped child/follow-up worker spawns",
+    )
+    p_goal.add_argument(
+        "--review-assignee",
+        default="codex-review",
+        help="With --advance, review worker lane for child follow-ups",
+    )
+    p_goal.add_argument(
+        "--test-assignee",
+        default="codex-test",
+        help="With --advance, test worker lane for child follow-ups",
+    )
+    p_goal.add_argument(
+        "--no-verify",
+        action="store_true",
+        help="With --advance, do not run configured acceptance checks",
+    )
+    p_goal.add_argument(
+        "--no-approve",
+        action="store_true",
+        help="With --advance, stop before approving children or completing the root",
+    )
+    p_goal.add_argument(
+        "--no-request-changes",
+        action="store_true",
+        help="With --advance, report failed gates instead of requesting changes",
     )
     p_goal.add_argument(
         "--author",
@@ -480,7 +585,14 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
         "progress",
         help="Read a task progress/evidence snapshot without interrupting its worker",
     )
-    p_progress.add_argument("task_id")
+    p_progress.add_argument(
+        "task_id",
+        nargs="?",
+        help=(
+            "Task id. Omit to inspect the current HERMES_SESSION_ID "
+            "session's latest /goal create Kanban root."
+        ),
+    )
     p_progress.add_argument("--json", action="store_true")
     p_progress.add_argument(
         "--log-tail",
@@ -536,6 +648,32 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     )
     p_verify.add_argument("--json", action="store_true")
 
+    # --- acceptance-check-request ---
+    p_acceptance_req = sub.add_parser(
+        "acceptance-check-request",
+        aliases=["acceptance-request"],
+        help="Validate and attach a safe task-scoped acceptance check request",
+    )
+    p_acceptance_req.add_argument("task_id")
+    p_acceptance_req.add_argument(
+        "path",
+        nargs="?",
+        default="-",
+        help="JSON/YAML file containing acceptance_check_request, or '-' for stdin",
+    )
+    p_acceptance_req.add_argument(
+        "--source-run-id",
+        type=int,
+        default=None,
+        help="Implementation run id this request belongs to",
+    )
+    p_acceptance_req.add_argument(
+        "--requested-by",
+        default=None,
+        help="Controller/skill identity for the request event",
+    )
+    p_acceptance_req.add_argument("--json", action="store_true")
+
     # --- advance-acceptance ---
     p_advance = sub.add_parser(
         "advance-acceptance",
@@ -560,6 +698,21 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
         "--dry-run",
         action="store_true",
         help="With dispatch enabled, report follow-up spawns without claiming tasks",
+    )
+    p_advance.add_argument(
+        "--loop",
+        action="store_true",
+        help=(
+            "Repeat bounded controller passes until done, waiting on workers, "
+            "blocked, idle, or the iteration cap"
+        ),
+    )
+    p_advance.add_argument(
+        "--max-iterations",
+        type=int,
+        default=8,
+        metavar="N",
+        help="With --loop, cap controller passes (1-64, default 8)",
     )
     p_advance.add_argument(
         "--no-verify",
@@ -601,7 +754,14 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
         "advance-goal",
         help="Advance a decomposed goal/root task and its worker children",
     )
-    p_advance_goal.add_argument("task_id")
+    p_advance_goal.add_argument(
+        "task_id",
+        nargs="?",
+        help=(
+            "Goal/root task id. Omit to advance the current HERMES_SESSION_ID "
+            "session's latest /goal create Kanban root."
+        ),
+    )
     p_advance_goal.add_argument("--review-assignee", default="codex-review")
     p_advance_goal.add_argument("--test-assignee", default="codex-test")
     p_advance_goal.add_argument(
@@ -620,6 +780,21 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
         "--dry-run",
         action="store_true",
         help="With dispatch enabled, report spawns without claiming tasks",
+    )
+    p_advance_goal.add_argument(
+        "--loop",
+        action="store_true",
+        help=(
+            "Repeat bounded controller passes until done, waiting on workers, "
+            "blocked, idle, or the iteration cap"
+        ),
+    )
+    p_advance_goal.add_argument(
+        "--max-iterations",
+        type=int,
+        default=8,
+        metavar="N",
+        help="With --loop, cap controller passes (1-64, default 8)",
     )
     p_advance_goal.add_argument(
         "--no-verify",
@@ -656,6 +831,87 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     )
     p_advance_goal.add_argument("--json", action="store_true")
 
+    # --- advance-controller ---
+    p_controller = sub.add_parser(
+        "advance-controller",
+        aliases=["controller-tick"],
+        help="Run one autonomous Kanban controller tick across ready workflows",
+    )
+    p_controller.add_argument("--review-assignee", default="codex-review")
+    p_controller.add_argument("--test-assignee", default="codex-test")
+    p_controller.add_argument(
+        "--no-dispatch",
+        action="store_true",
+        help="Inspect/plan only; do not dispatch child or follow-up workers",
+    )
+    p_controller.add_argument(
+        "--dispatch-max",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Cap worker spawns across this controller tick",
+    )
+    p_controller.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="With dispatch enabled, report spawns without claiming tasks",
+    )
+    p_controller.add_argument(
+        "--max-items",
+        type=int,
+        default=8,
+        metavar="N",
+        help="Max goal/review-required workflows to inspect this tick (1-128)",
+    )
+    p_controller.add_argument(
+        "--max-iterations",
+        type=int,
+        default=8,
+        metavar="N",
+        help="Max bounded passes per workflow (1-64)",
+    )
+    p_controller.add_argument(
+        "--no-goals",
+        action="store_true",
+        help="Do not scan decomposed goal roots",
+    )
+    p_controller.add_argument(
+        "--no-review-required",
+        action="store_true",
+        help="Do not scan standalone review-required implementation tasks",
+    )
+    p_controller.add_argument(
+        "--no-verify",
+        action="store_true",
+        help="Do not run configured Hermes acceptance checks",
+    )
+    p_controller.add_argument(
+        "--no-approve",
+        action="store_true",
+        help="Stop before approving even if all gates pass",
+    )
+    p_controller.add_argument(
+        "--no-request-changes",
+        action="store_true",
+        help="Report failed gates instead of requesting bounded changes",
+    )
+    p_controller.add_argument(
+        "--reviewer",
+        default=None,
+        help="Reviewer/controller name for planned tasks and approvals",
+    )
+    p_controller.add_argument(
+        "--summary",
+        default=None,
+        help="Approval summary when a workflow reaches approve",
+    )
+    p_controller.add_argument(
+        "--result",
+        default=None,
+        help="Task result when a workflow reaches approve",
+    )
+    p_controller.add_argument("--json", action="store_true")
+
     # --- reviews ---
     p_reviews = sub.add_parser(
         "reviews",
@@ -671,6 +927,14 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
         default=None,
         metavar="BYTES",
         help="Include the last N bytes of each worker log in JSON output",
+    )
+    p_reviews.add_argument(
+        "--include-followups",
+        action="store_true",
+        help=(
+            "Include review/test follow-up task evidence. By default the "
+            "review queue lists only implementation handoffs."
+        ),
     )
     p_reviews.add_argument("--json", action="store_true")
 
@@ -1253,8 +1517,12 @@ def kanban_command(args: argparse.Namespace) -> int:
         "progress": _cmd_progress,
         "acceptance": _cmd_acceptance,
         "verify": _cmd_verify,
+        "acceptance-check-request": _cmd_acceptance_check_request,
+        "acceptance-request": _cmd_acceptance_check_request,
         "advance-acceptance": _cmd_advance_acceptance,
         "advance-goal": _cmd_advance_goal,
+        "advance-controller": _cmd_advance_controller,
+        "controller-tick": _cmd_advance_controller,
         "reviews":  _cmd_reviews,
         "review":   _cmd_review,
         "plan-review": _cmd_plan_review,
@@ -1700,6 +1968,80 @@ def _load_lane_request_payload(path: str) -> dict[str, Any]:
     return req
 
 
+def _load_acceptance_check_request_payload(path: str) -> dict[str, Any]:
+    raw_path = (path or "-").strip()
+    if raw_path == "-":
+        text = sys.stdin.read()
+    else:
+        text = Path(raw_path).expanduser().read_text(encoding="utf-8")
+    if not text.strip():
+        raise ValueError("acceptance check request input is empty")
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        if yaml is None:
+            raise ValueError(
+                "acceptance check request is not JSON and PyYAML is unavailable"
+            )
+        data = yaml.safe_load(text)
+    if not isinstance(data, dict):
+        raise ValueError("acceptance check request input must be a mapping")
+    req = data.get("acceptance_check_request", data)
+    if not isinstance(req, dict):
+        raise ValueError("acceptance_check_request must be a mapping")
+    return req
+
+
+def _cmd_acceptance_check_request(args: argparse.Namespace) -> int:
+    try:
+        req = _load_acceptance_check_request_payload(args.path)
+        valid = kb.validate_acceptance_check_request(req)
+        with kb.connect() as conn:
+            payload = kb.add_acceptance_check_request(
+                conn,
+                args.task_id,
+                valid,
+                source_run_id=getattr(args, "source_run_id", None),
+                requested_by=(
+                    getattr(args, "requested_by", None)
+                    or os.environ.get("HERMES_PROFILE")
+                    or "agent"
+                ),
+            )
+            gate = kb.acceptance_check_gate_status(
+                conn,
+                args.task_id,
+                source_run_id=payload.get("source_run_id"),
+            )
+        out = {
+            "valid": True,
+            "task_id": args.task_id,
+            "source_run_id": payload.get("source_run_id"),
+            "request": valid,
+            "acceptance_check_gate": gate,
+        }
+    except Exception as exc:
+        print(f"kanban acceptance-check-request: {exc}", file=sys.stderr)
+        return 1
+    if getattr(args, "json", False):
+        print(json.dumps(out, indent=2, ensure_ascii=False))
+        return 0
+    print(f"Acceptance check request attached to {args.task_id}: {valid['name']}")
+    print(f"  type: {valid['type']}")
+    if valid.get("description"):
+        print(f"  description: {valid['description']}")
+    if valid.get("path"):
+        print(f"  path: {valid['path']}")
+    gate = out.get("acceptance_check_gate") or {}
+    if gate:
+        print(
+            "  gate: "
+            f"ready={gate.get('ready')} "
+            f"satisfied={gate.get('satisfied', 0)}/{gate.get('required', 0)}"
+        )
+    return 0
+
+
 def _cmd_worker_lane_request(args: argparse.Namespace) -> int:
     from hermes_cli.worker_lanes import (
         enable_worker_lane_request,
@@ -1783,6 +2125,17 @@ def _cmd_create(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+    acceptance_requests: list[dict[str, Any]] = []
+    try:
+        for path in getattr(args, "acceptance_check_requests", None) or []:
+            acceptance_requests.append(_load_acceptance_check_request_payload(path))
+        if acceptance_requests:
+            acceptance_requests = kb.validate_acceptance_check_requests(
+                acceptance_requests
+            )
+    except ValueError as exc:
+        print(f"kanban create: acceptance-check-request: {exc}", file=sys.stderr)
+        return 2
     with kb.connect() as conn:
         task_id = kb.create_task(
             conn,
@@ -1802,12 +2155,29 @@ def _cmd_create(args: argparse.Namespace) -> int:
             skills=getattr(args, "skills", None) or None,
             max_retries=max_retries,
             initial_status=getattr(args, "initial_status", "running"),
+            acceptance_check_requests=acceptance_requests,
         )
         task = kb.get_task(conn, task_id)
+        acceptance_gate = (
+            kb.acceptance_check_gate_status(conn, task_id, source_run_id=None)
+            if acceptance_requests
+            else None
+        )
     if getattr(args, "json", False):
-        print(json.dumps(_task_to_dict(task), indent=2, ensure_ascii=False))
+        payload = _task_to_dict(task)
+        if acceptance_gate is not None:
+            payload["acceptance_check_gate"] = acceptance_gate
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
     else:
         print(f"Created {task_id}  ({task.status}, assignee={task.assignee or '-'})")
+        if acceptance_gate is not None:
+            names = [
+                str(item.get("name"))
+                for item in acceptance_gate.get("items", [])
+                if item.get("requested") and item.get("name")
+            ]
+            if names:
+                print("Acceptance requests: " + ", ".join(names))
 
         # Warn when the task would sit in `ready` because no dispatcher is
         # present. Only warn on ready+assigned tasks — triage/todo are
@@ -1825,6 +2195,19 @@ def _cmd_create(args: argparse.Namespace) -> int:
 
 def _cmd_goal(args: argparse.Namespace) -> int:
     from hermes_cli.goals import create_kanban_task_from_goal
+
+    def _goal_child_ids_from_db(conn, root_id: str) -> list[str]:
+        linked_ids = kb.child_ids(conn, root_id)
+        if linked_ids:
+            return linked_ids
+        events = kb.list_events(conn, root_id)
+        for event in reversed(events):
+            if event.kind != "decomposed" or not isinstance(event.payload, dict):
+                continue
+            raw_ids = event.payload.get("child_ids")
+            if isinstance(raw_ids, list):
+                return [item for item in raw_ids if isinstance(item, str)]
+        return []
 
     try:
         ws_kind, ws_path = _parse_workspace_flag(getattr(args, "workspace", "scratch"))
@@ -1869,6 +2252,8 @@ def _cmd_goal(args: argparse.Namespace) -> int:
         return 2
 
     outcome = None
+    advance_payload = None
+    decompose_blocked_advance = False
     if getattr(args, "decompose", False):
         try:
             from hermes_cli.kanban_decompose import decompose_task
@@ -1881,12 +2266,70 @@ def _cmd_goal(args: argparse.Namespace) -> int:
             print(f"kanban goal: decomposer error: {exc}", file=sys.stderr)
             return 1
 
+    if getattr(args, "advance", False):
+        should_try_advance = True
+        if outcome is not None and not outcome.ok:
+            reason = outcome.reason or ""
+            # Idempotent /goal create calls can return an existing root that
+            # was already decomposed. In that case the decomposer correctly
+            # refuses to run again because the root is no longer in triage,
+            # but the controller pass is still valid and should continue.
+            should_try_advance = reason.startswith("task is not in triage")
+            decompose_blocked_advance = not should_try_advance
+        if not should_try_advance:
+            advance_payload = {
+                "advanced": False,
+                "steps": [
+                    {
+                        "kind": "blocked",
+                        "reason": "decomposition did not complete",
+                    }
+                ],
+            }
+        else:
+            try:
+                with kb.connect(board=getattr(args, "board", None)) as conn:
+                    common_kwargs = {
+                        "review_assignee": getattr(args, "review_assignee", None),
+                        "test_assignee": getattr(args, "test_assignee", None),
+                        "dispatch": True,
+                        "dry_run": bool(getattr(args, "advance_dry_run", False)),
+                        "dispatch_max": getattr(args, "dispatch_max", None),
+                        "verify": not bool(getattr(args, "no_verify", False)),
+                        "approve": not bool(getattr(args, "no_approve", False)),
+                        "request_changes_on_failure": not bool(
+                            getattr(args, "no_request_changes", False)
+                        ),
+                        "reviewer": (
+                            getattr(args, "author", None)
+                            or getattr(args, "created_by", None)
+                            or _profile_author()
+                        ),
+                        "board": getattr(args, "board", None),
+                    }
+                    if getattr(args, "loop", False):
+                        advance_payload = kb.advance_goal_acceptance_workflow_until_idle(
+                            conn,
+                            task_id,
+                            max_iterations=getattr(args, "max_iterations", 8),
+                            **common_kwargs,
+                        )
+                    else:
+                        advance_payload = kb.advance_goal_acceptance_workflow(
+                            conn,
+                            task_id,
+                            **common_kwargs,
+                        )
+            except ValueError as exc:
+                print(f"kanban goal: advance failed: {exc}", file=sys.stderr)
+                return 2
+
     with kb.connect(board=getattr(args, "board", None)) as conn:
         task = kb.get_task(conn, task_id)
-        linked_child_ids = kb.child_ids(conn, task_id)
+        linked_child_ids = _goal_child_ids_from_db(conn, task_id)
     created_child_ids = (
         list(outcome.child_ids or [])
-        if outcome is not None
+        if outcome is not None and outcome.child_ids
         else linked_child_ids
     )
     payload = {
@@ -1903,11 +2346,14 @@ def _cmd_goal(args: argparse.Namespace) -> int:
                 "new_title": outcome.new_title,
             }
         ),
+        "advance": advance_payload,
         "child_ids": created_child_ids,
     }
     if getattr(args, "json", False):
         print(json.dumps(payload, indent=2, ensure_ascii=False))
-        return 0 if outcome is None or outcome.ok else 1
+        if outcome is not None and not outcome.ok and decompose_blocked_advance:
+            return 1
+        return 0
 
     if task is None:
         print(f"Goal task {task_id} created, but could not be reloaded.")
@@ -1918,9 +2364,37 @@ def _cmd_goal(args: argparse.Namespace) -> int:
         print(f"Decompose: {status} — {outcome.reason}")
         if outcome.child_ids:
             print("Children: " + ", ".join(outcome.child_ids))
+        elif not outcome.ok and getattr(args, "advance", False) and not decompose_blocked_advance:
+            print("Decompose: existing non-triage root; continuing with advance")
     else:
         print("Next: run `hermes kanban decompose {}` to create child tasks.".format(task_id))
-    return 0 if outcome is None or outcome.ok else 1
+    if advance_payload is not None:
+        final = advance_payload.get("final") or {}
+        if advance_payload.get("iterations"):
+            print(
+                "Advance loop: "
+                f"{advance_payload.get('iteration_count')} iteration(s), "
+                f"stop={advance_payload.get('stop_reason')}"
+            )
+        child_summary = final.get("child_summary") or {}
+        if advance_payload.get("iterations"):
+            iterations = advance_payload.get("iterations") or []
+            steps = (
+                (iterations[-1].get("steps") or [])
+                if iterations and isinstance(iterations[-1], dict)
+                else []
+            )
+        else:
+            steps = advance_payload.get("steps") or []
+        print("Advance: " + (", ".join(str(step.get("kind")) for step in steps) or "no action"))
+        if child_summary:
+            print(
+                "Child status: "
+                f"{child_summary.get('done', 0)}/{child_summary.get('total', 0)} done"
+            )
+    if outcome is not None and not outcome.ok and decompose_blocked_advance:
+        return 1
+    return 0
 
 
 def _cmd_swarm(args: argparse.Namespace) -> int:
@@ -2172,17 +2646,35 @@ def _cmd_show(args: argparse.Namespace) -> int:
 
 
 def _cmd_progress(args: argparse.Namespace) -> int:
+    tid, resolved_from_session_goal, session_id = _resolve_optional_goal_task_id(
+        getattr(args, "task_id", None)
+    )
+    if not tid:
+        print(
+            "kanban progress: task_id is required unless HERMES_SESSION_ID "
+            "has a matching /goal create Kanban root",
+            file=sys.stderr,
+        )
+        return 2
     with kb.connect() as conn:
         snapshot = kb.task_progress_snapshot(
             conn,
-            args.task_id,
+            tid,
             log_tail_bytes=getattr(args, "log_tail", None),
             include_children=bool(getattr(args, "children", False)),
         )
+        payload = (
+            _attach_progress_diagnostics(conn, _snapshot_to_dict(snapshot))
+            if snapshot is not None
+            else None
+        )
     if snapshot is None:
-        print(f"no such task: {args.task_id}", file=sys.stderr)
+        print(f"no such task: {tid}", file=sys.stderr)
         return 1
-    payload = _snapshot_to_dict(snapshot)
+    assert payload is not None
+    if resolved_from_session_goal:
+        payload["resolved_from_session_goal"] = True
+        payload["session_id"] = session_id
     if getattr(args, "json", False):
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
@@ -2190,6 +2682,8 @@ def _cmd_progress(args: argparse.Namespace) -> int:
     task = payload["task"]
     run = payload.get("run") or {}
     print(f"Task {task['id']}: {task['title']}")
+    if resolved_from_session_goal:
+        print(f"  resolved:  current session goal ({session_id})")
     print(f"  status:    {task['status']}")
     print(f"  assignee:  {task.get('assignee') or '-'}")
     print(f"  run:       {run.get('id') or '-'} ({run.get('outcome') or run.get('status') or 'no run'})")
@@ -2218,6 +2712,16 @@ def _cmd_progress(args: argparse.Namespace) -> int:
         exit_code = worker_lane.get("exit_code")
         timed_out = worker_lane.get("timed_out")
         print(f"\nWorker lane: {lane or '-'} exit_code={exit_code} timed_out={timed_out}")
+    diagnostics = payload.get("diagnostics") or []
+    if diagnostics:
+        print("\nDiagnostics:")
+        for diag in diagnostics[:6]:
+            if not isinstance(diag, dict):
+                continue
+            print(
+                f"  - [{diag.get('severity', '-')}] "
+                f"{diag.get('kind', '-')}: {diag.get('title', '')}"
+            )
     last_event = payload.get("last_event")
     if last_event:
         print(f"Last event: {last_event['kind']} at {_fmt_ts(last_event['created_at'])}")
@@ -2236,17 +2740,29 @@ def _cmd_progress(args: argparse.Namespace) -> int:
             f"running={child_summary.get('running', 0)} "
             f"review_required={child_summary.get('review_required', 0)}"
         )
+        actions = child_summary.get("recommended_actions") or {}
+        if actions:
+            rendered_actions = ", ".join(
+                f"{name}={count}" for name, count in sorted(actions.items())
+            )
+            print(f"  next: {rendered_actions}")
+        if child_summary.get("auto_retry_exhausted"):
+            print(f"  auto_retry_exhausted={child_summary.get('auto_retry_exhausted')}")
         for child in children:
             ctask = child.get("task") or {}
             lane_meta = child.get("worker_lane") or {}
             lane = lane_meta.get("name") or ctask.get("assignee") or "-"
             run = child.get("run") or {}
             summary = (run.get("summary") or "").splitlines()[0]
+            acceptance = child.get("acceptance") or {}
+            action = acceptance.get("recommended_action") if isinstance(acceptance, dict) else None
             print(
                 f"  - {ctask.get('id', '-')} "
                 f"{ctask.get('status', '-')} @{lane}: "
                 f"{ctask.get('title', '')[:80]}"
             )
+            if action:
+                print(f"      next: {action}")
             progress = child.get("worker_progress") or {}
             items = progress.get("items") if isinstance(progress, dict) else None
             if items:
@@ -2254,6 +2770,27 @@ def _cmd_progress(args: argparse.Namespace) -> int:
                 print(f"      progress: {rendered[:160]}")
             if child.get("review_required"):
                 print("      review: required")
+            diagnostics = child.get("diagnostics") or []
+            if diagnostics:
+                kinds = ", ".join(
+                    str(diag.get("kind") or "-")
+                    for diag in diagnostics[:4]
+                    if isinstance(diag, dict)
+                )
+                if kinds:
+                    print(f"      diagnostics: {kinds}")
+            auto_request_changes = (
+                acceptance.get("auto_request_changes")
+                if isinstance(acceptance, dict)
+                else None
+            )
+            if (
+                isinstance(auto_request_changes, dict)
+                and auto_request_changes.get("exhausted")
+            ):
+                used = auto_request_changes.get("used")
+                limit = auto_request_changes.get("limit")
+                print(f"      auto-retry: exhausted ({used}/{limit})")
             if summary:
                 print(f"      summary: {summary[:160]}")
     return 0
@@ -2345,23 +2882,34 @@ def _cmd_advance_acceptance(args: argparse.Namespace) -> int:
     reviewer = getattr(args, "reviewer", None) or _profile_author()
     try:
         with kb.connect() as conn:
-            payload = kb.advance_acceptance_workflow(
-                conn,
-                args.task_id,
-                review_assignee=getattr(args, "review_assignee", None),
-                test_assignee=getattr(args, "test_assignee", None),
-                dispatch=not bool(getattr(args, "no_dispatch", False)),
-                dry_run=bool(getattr(args, "dry_run", False)),
-                dispatch_max=getattr(args, "dispatch_max", None),
-                verify=not bool(getattr(args, "no_verify", False)),
-                approve=not bool(getattr(args, "no_approve", False)),
-                request_changes_on_failure=not bool(
+            common_kwargs = {
+                "review_assignee": getattr(args, "review_assignee", None),
+                "test_assignee": getattr(args, "test_assignee", None),
+                "dispatch": not bool(getattr(args, "no_dispatch", False)),
+                "dry_run": bool(getattr(args, "dry_run", False)),
+                "dispatch_max": getattr(args, "dispatch_max", None),
+                "verify": not bool(getattr(args, "no_verify", False)),
+                "approve": not bool(getattr(args, "no_approve", False)),
+                "request_changes_on_failure": not bool(
                     getattr(args, "no_request_changes", False)
                 ),
-                reviewer=reviewer,
-                summary=getattr(args, "summary", None),
-                result=getattr(args, "result", None),
-            )
+                "reviewer": reviewer,
+                "summary": getattr(args, "summary", None),
+                "result": getattr(args, "result", None),
+            }
+            if getattr(args, "loop", False):
+                payload = kb.advance_acceptance_workflow_until_idle(
+                    conn,
+                    args.task_id,
+                    max_iterations=getattr(args, "max_iterations", 8),
+                    **common_kwargs,
+                )
+            else:
+                payload = kb.advance_acceptance_workflow(
+                    conn,
+                    args.task_id,
+                    **common_kwargs,
+                )
     except ValueError as exc:
         print(f"kanban advance-acceptance: {exc}", file=sys.stderr)
         return 2
@@ -2370,6 +2918,11 @@ def _cmd_advance_acceptance(args: argparse.Namespace) -> int:
         return 0
     final = payload.get("final") or {}
     print(f"Advanced acceptance for {args.task_id}:")
+    if payload.get("iterations"):
+        print(
+            f"  loop: {payload.get('iteration_count')} iteration(s), "
+            f"stop={payload.get('stop_reason')}"
+        )
     if not payload.get("steps"):
         print("  - no action")
     for step in payload.get("steps") or []:
@@ -2383,11 +2936,83 @@ def _cmd_advance_acceptance(args: argparse.Namespace) -> int:
 
 def _cmd_advance_goal(args: argparse.Namespace) -> int:
     reviewer = getattr(args, "reviewer", None) or _profile_author()
+    tid, resolved_from_session_goal, session_id = _resolve_optional_goal_task_id(
+        getattr(args, "task_id", None)
+    )
+    if not tid:
+        print(
+            "kanban advance-goal: task_id is required unless HERMES_SESSION_ID "
+            "has a matching /goal create Kanban root",
+            file=sys.stderr,
+        )
+        return 2
     try:
         with kb.connect() as conn:
-            payload = kb.advance_goal_acceptance_workflow(
+            common_kwargs = {
+                "review_assignee": getattr(args, "review_assignee", None),
+                "test_assignee": getattr(args, "test_assignee", None),
+                "dispatch": not bool(getattr(args, "no_dispatch", False)),
+                "dry_run": bool(getattr(args, "dry_run", False)),
+                "dispatch_max": getattr(args, "dispatch_max", None),
+                "verify": not bool(getattr(args, "no_verify", False)),
+                "approve": not bool(getattr(args, "no_approve", False)),
+                "request_changes_on_failure": not bool(
+                    getattr(args, "no_request_changes", False)
+                ),
+                "reviewer": reviewer,
+                "summary": getattr(args, "summary", None),
+                "result": getattr(args, "result", None),
+            }
+            if getattr(args, "loop", False):
+                payload = kb.advance_goal_acceptance_workflow_until_idle(
+                    conn,
+                    tid,
+                    max_iterations=getattr(args, "max_iterations", 8),
+                    **common_kwargs,
+                )
+            else:
+                payload = kb.advance_goal_acceptance_workflow(
+                    conn,
+                    tid,
+                    **common_kwargs,
+                )
+    except ValueError as exc:
+        print(f"kanban advance-goal: {exc}", file=sys.stderr)
+        return 2
+    if resolved_from_session_goal:
+        payload["resolved_from_session_goal"] = True
+        payload["session_id"] = session_id
+    if getattr(args, "json", False):
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+    final = payload.get("final") or {}
+    root_task = final.get("task") or {}
+    child_summary = final.get("child_summary") or {}
+    print(f"Advanced goal for {tid}:")
+    if resolved_from_session_goal:
+        print(f"  resolved:           current session goal ({session_id})")
+    if payload.get("iterations"):
+        print(
+            f"  loop: {payload.get('iteration_count')} iteration(s), "
+            f"stop={payload.get('stop_reason')}"
+        )
+    if not payload.get("steps"):
+        print("  - no action")
+    for step in payload.get("steps") or []:
+        print(f"  - {step.get('kind')}")
+    print(f"  status:             {root_task.get('status', '-')}")
+    print(f"  children:           {child_summary.get('done', 0)}/{child_summary.get('total', 0)} done")
+    if payload.get("incomplete_children"):
+        print(f"  incomplete:         {len(payload.get('incomplete_children') or [])}")
+    return 0
+
+
+def _cmd_advance_controller(args: argparse.Namespace) -> int:
+    reviewer = getattr(args, "reviewer", None) or _profile_author()
+    try:
+        with kb.connect() as conn:
+            payload = kb.advance_controller_once(
                 conn,
-                args.task_id,
                 review_assignee=getattr(args, "review_assignee", None),
                 test_assignee=getattr(args, "test_assignee", None),
                 dispatch=not bool(getattr(args, "no_dispatch", False)),
@@ -2401,25 +3026,43 @@ def _cmd_advance_goal(args: argparse.Namespace) -> int:
                 reviewer=reviewer,
                 summary=getattr(args, "summary", None),
                 result=getattr(args, "result", None),
+                max_iterations=getattr(args, "max_iterations", 8),
+                max_items=getattr(args, "max_items", 8),
+                include_goals=not bool(getattr(args, "no_goals", False)),
+                include_review_required=not bool(
+                    getattr(args, "no_review_required", False)
+                ),
             )
     except ValueError as exc:
-        print(f"kanban advance-goal: {exc}", file=sys.stderr)
+        print(f"kanban advance-controller: {exc}", file=sys.stderr)
         return 2
     if getattr(args, "json", False):
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
-    final = payload.get("final") or {}
-    root_task = final.get("task") or {}
-    child_summary = final.get("child_summary") or {}
-    print(f"Advanced goal for {args.task_id}:")
-    if not payload.get("steps"):
+    print("Advanced Kanban controller:")
+    print(
+        f"  items:        {payload.get('item_count', 0)}/"
+        f"{payload.get('max_items', 0)}"
+    )
+    print(f"  stop:         {payload.get('stop_reason')}")
+    print(f"  dispatch:     {payload.get('dispatch_used', 0)}")
+    scanned = payload.get("scanned") or {}
+    print(
+        "  scanned:      "
+        f"goals={scanned.get('goals', 0)} "
+        f"review_required={scanned.get('review_required', 0)}"
+    )
+    if not payload.get("items"):
         print("  - no action")
-    for step in payload.get("steps") or []:
-        print(f"  - {step.get('kind')}")
-    print(f"  status:             {root_task.get('status', '-')}")
-    print(f"  children:           {child_summary.get('done', 0)}/{child_summary.get('total', 0)} done")
-    if payload.get("incomplete_children"):
-        print(f"  incomplete:         {len(payload.get('incomplete_children') or [])}")
+    for item in payload.get("items") or []:
+        final = ((item.get("payload") or {}).get("final") or {})
+        task = final.get("task") or {}
+        print(
+            f"  - {item.get('kind')} {item.get('task_id')}: "
+            f"stop={item.get('stop_reason')} "
+            f"advanced={item.get('advanced')} "
+            f"status={task.get('status', '-')}"
+        )
     return 0
 
 
@@ -2432,6 +3075,7 @@ def _cmd_reviews(args: argparse.Namespace) -> int:
             worker_lane=getattr(args, "lane", None),
             limit=getattr(args, "limit", 100),
             log_tail_bytes=getattr(args, "log_tail", None),
+            include_followups=bool(getattr(args, "include_followups", False)),
         )
     payload = [_snapshot_to_dict(snapshot) for snapshot in snapshots]
     if getattr(args, "json", False):
@@ -2507,7 +3151,13 @@ def _cmd_plan_review(args: argparse.Namespace) -> int:
             dispatch_result = None
             if getattr(args, "dispatch", False):
                 followup_ids = [
-                    tid for tid in (plan.review_task_id, plan.test_task_id) if tid
+                    tid
+                    for tid in (
+                        plan.review_task_id,
+                        *plan.review_shard_task_ids,
+                        plan.test_task_id,
+                    )
+                    if tid
                 ]
                 dispatch_result = kb.dispatch_once(
                     conn,

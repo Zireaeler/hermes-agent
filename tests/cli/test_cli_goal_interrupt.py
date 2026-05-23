@@ -198,6 +198,169 @@ class TestHealthyTurnStillRuns:
         assert mgr.state.status == "done"
 
 
+class TestCliGoalKanbanBridge:
+    def test_goal_advance_routes_current_kanban_goal(
+        self,
+        hermes_home,
+        tmp_path,
+        monkeypatch,
+    ):
+        sid = f"sid-cli-advance-{uuid.uuid4().hex}"
+
+        from cli import HermesCLI
+        from hermes_cli import kanban_db as kb
+        from hermes_cli import profiles
+        from hermes_cli.goals import create_kanban_task_from_goal
+
+        monkeypatch.setattr(profiles, "profile_exists", lambda name: True)
+        root = create_kanban_task_from_goal(
+            "cli advance current root",
+            session_id=sid,
+            assignee="orchestrator",
+            workspace_kind="dir",
+            workspace_path=str(tmp_path),
+        )
+        with kb.connect() as conn:
+            child_ids = kb.decompose_triage_task(
+                conn,
+                root,
+                root_assignee="orchestrator",
+                children=[{"title": "implement cli advance", "assignee": "codex-deep"}],
+                author="planner",
+            )
+            assert child_ids is not None
+
+        cli = HermesCLI.__new__(HermesCLI)
+        cli._pending_input = queue.Queue()
+        cli.session_id = sid
+        cli.agent = MagicMock()
+        cli.agent.session_id = sid
+
+        printed: list[str] = []
+        with patch("cli._cprint", side_effect=lambda msg: printed.append(str(msg))):
+            cli._handle_goal_command("/goal advance --dry-run --json")
+
+        import json
+
+        payload = json.loads("\n".join(line.strip() for line in printed))
+        spawned_ids = {
+            item["task_id"]
+            for step in payload["steps"]
+            if step["kind"] == "dispatch_goal_children"
+            for item in step["dispatch"]["spawned"]
+        }
+
+        assert payload["task_id"] == root
+        assert spawned_ids == {child_ids[0]}
+
+    def test_goal_create_and_status_read_kanban_without_interrupting_worker(
+        self,
+        hermes_home,
+    ):
+        sid = f"sid-cli-kanban-{uuid.uuid4().hex}"
+
+        from cli import HermesCLI
+        from hermes_cli import kanban_db as kb
+        from hermes_cli.goals import GoalManager
+
+        cli = HermesCLI.__new__(HermesCLI)
+        cli._pending_input = queue.Queue()
+        cli.session_id = sid
+        cli.agent = MagicMock()
+        cli.agent.session_id = sid
+
+        printed: list[str] = []
+        with patch("cli._cprint", side_effect=lambda msg: printed.append(str(msg))):
+            cli._handle_goal_command("/goal create 'ship cli bridge' --assignee orchestrator")
+
+        assert any("Goal task:" in line for line in printed)
+        assert GoalManager(sid).state is None
+
+        with kb.connect() as conn:
+            roots = kb.list_tasks(conn, session_id=sid)
+            root = next(
+                task
+                for task in roots
+                if (task.idempotency_key or "").startswith(f"goal:{sid}:")
+            )
+            child_ids = kb.decompose_triage_task(
+                conn,
+                root.id,
+                root_assignee="orchestrator",
+                children=[{"title": "implement cli status", "assignee": "codex-deep"}],
+                author="planner",
+            )
+            assert child_ids is not None
+            running_id = child_ids[0]
+            running = kb.claim_task(conn, running_id, claimer="worker:codex-deep")
+            assert running is not None
+            kb._set_worker_pid(conn, running_id, 65432)
+            kb.record_task_event(
+                conn,
+                running_id,
+                "worker_progress",
+                {
+                    "lane": "codex-deep",
+                    "items": [
+                        {"index": 1, "status": "running", "text": "render cli status"},
+                    ],
+                },
+                run_id=running.current_run_id,
+            )
+            before = kb.get_task(conn, running_id)
+
+        printed.clear()
+        with patch("cli._cprint", side_effect=lambda msg: printed.append(str(msg))):
+            cli._handle_goal_command("/goal status")
+
+        with kb.connect() as conn:
+            after = kb.get_task(conn, running_id)
+
+        output = "\n".join(printed)
+        assert "Kanban goal" in output
+        assert root.id in output
+        assert "root-next: wait_for_workers" in output
+        assert "children=0/1 done running=1 review-required=0" in output
+        assert "progress=running: render cli status" in output
+        assert "No active goal" not in output
+        assert after.status == before.status == "running"
+        assert after.claim_lock == before.claim_lock
+        assert after.current_run_id == before.current_run_id
+        assert after.worker_pid == before.worker_pid == 65432
+
+    def test_standing_goal_status_takes_priority_over_kanban_goal(
+        self,
+        hermes_home,
+    ):
+        sid = f"sid-cli-priority-{uuid.uuid4().hex}"
+
+        from cli import HermesCLI
+        from hermes_cli.goals import GoalManager, create_kanban_task_from_goal
+
+        create_kanban_task_from_goal(
+            "kanban task exists",
+            session_id=sid,
+            assignee="orchestrator",
+        )
+        mgr = GoalManager(session_id=sid, default_max_turns=5)
+        mgr.set("standing goal wins")
+
+        cli = HermesCLI.__new__(HermesCLI)
+        cli._pending_input = queue.Queue()
+        cli.session_id = sid
+        cli.agent = MagicMock()
+        cli.agent.session_id = sid
+        cli._goal_manager = mgr
+
+        printed: list[str] = []
+        with patch("cli._cprint", side_effect=lambda msg: printed.append(str(msg))):
+            cli._handle_goal_command("/goal status")
+
+        output = "\n".join(printed)
+        assert "standing goal wins" in output
+        assert "Kanban goal" not in output
+
+
 class TestInterruptFlagLifecycle:
     def test_chat_resets_flag_at_entry(self, hermes_home):
         """chat() must reset _last_turn_interrupted at the top of each turn.

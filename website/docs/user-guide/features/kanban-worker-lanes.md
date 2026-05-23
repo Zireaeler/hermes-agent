@@ -131,6 +131,8 @@ kanban:
       approval: never
       max_concurrency: 1
       success_policy: block_for_review
+      # Optional: ingest Codex CLI JSONL events into task_events.
+      json_events: true
 
     codex-review:
       type: codex_cli
@@ -139,7 +141,21 @@ kanban:
       approval: never
       max_concurrency: 1
       success_policy: block_for_review
+
+    codex-test:
+      type: codex_cli
+      model: gpt-5.4-mini
+      sandbox: workspace-write
+      approval: never
+      max_concurrency: 1
+      success_policy: block_for_review
 ```
+
+The default review controller uses `codex-review` for independent review and
+`codex-test` for independent verification. Configure both lanes, or pass
+explicit `--review-assignee` / `--test-assignee` values to the review and
+goal-advance commands. Diagnostics will warn when planned review/test follow-up
+tasks reference a lane or profile that is not spawnable.
 
 The adapter runs a Hermes-owned wrapper process, and that wrapper starts Codex with fixed argv:
 
@@ -148,6 +164,17 @@ codex --cd <workspace> --sandbox <sandbox> --ask-for-approval <approval> [--mode
 ```
 
 The command is not taken from model output and is not an arbitrary shell string. The wrapper passes a small allowlisted environment to Codex rather than forwarding every secret variable.
+When `json_events: true` is set for a lane, the wrapper uses Codex CLI JSONL
+mode instead:
+
+```text
+codex --cd <workspace> --sandbox <sandbox> --ask-for-approval <approval> [--model <model>] exec --json -
+```
+
+It records bounded `worker_codex_event` rows for Codex thread, item, command,
+and usage events. Agent-message text and command summaries from those JSONL
+events still feed the same progress, receipt, and metadata parsers. Leave
+`json_events` unset for the legacy stdout/stderr parser path.
 
 Each worker instance records the worker lane, kind, task id, run id, worker pid, claim lock, workspace, and model in events and metadata. Codex output is written to the normal worker log (`hermes kanban log <task_id>`).
 
@@ -159,7 +186,7 @@ hermes kanban worker-lanes --json
 
 The dashboard also reads `GET /api/plugins/kanban/worker-lanes` and shows each registered external lane's kind, model, success policy, active/max concurrency, per-status counts, and active task/run/pid instances. This is a bounded status view; it does not read the full Codex session and does not claim, heartbeat, reclaim, or signal running workers.
 
-The wrapper also heartbeats the task and parses these progress formats into `task_events` as `worker_progress`:
+The wrapper also heartbeats the task and parses these progress formats into `task_events` as `worker_progress`. Codex-specific heartbeat/progress events include `worker_lane`, `worker_kind`, and `run_id` so dashboards and controllers can group status by worker attempt without reading the worker log:
 
 ```text
 o (1) 分析入口
@@ -177,7 +204,13 @@ On success, the default `block_for_review` policy blocks the task with structure
 review-required: Codex completed; Hermes review required
 ```
 
-The metadata includes bounded output tail, git status, changed files, diff summary, verification commands, and review reason. This is distinct from the `review` column's profile-review dispatch path in current Kanban; Codex lane success hands evidence to the Hermes controller without replaying the full Codex session. The usual next step is to plan independent review/test worker tasks from that evidence.
+The metadata includes bounded output tail, parsed receipt sections, an optional
+structured verdict, git status, changed files, diff summary, verification
+commands, and review reason. This is distinct from the `review` column's
+profile-review dispatch path in current Kanban; Codex lane success hands
+evidence to the Hermes controller without replaying the full Codex session. The
+usual next step is to plan independent review/test worker tasks from that
+evidence.
 
 ## Independent review/test follow-ups
 
@@ -192,13 +225,35 @@ By default this creates two idempotent tasks for the implementation run:
 - `Review implementation evidence for <task_id>` assigned to `codex-review`
 - `Verify implementation evidence for <task_id>` assigned to `codex-test`
 
+For larger changes, Hermes can also create extra review shard tasks assigned to
+the review lane. Shards are deterministic, evidence-bounded review tasks scoped
+to subsets of changed files. They let Codex or another review worker inspect a
+large diff in smaller pieces while Hermes still gates approval on structured
+Kanban evidence instead of reading the full implementation session.
+
+```yaml
+kanban:
+  deep_review:
+    enabled: true
+    changed_files_threshold: 8
+    diff_summary_lines_threshold: 80
+    max_files_per_shard: 8
+    max_shards: 8
+```
+
+When `changed_files` or `diff_summary` evidence crosses those thresholds,
+`plan-review` keeps the whole-diff review and test tasks, then adds
+`Review shard <n> for <task_id>` tasks. Each shard body lists its file scope,
+the same bounded implementation evidence, and requires a review verdict. This
+is intentionally a review orchestration aid, not semantic approval by Hermes.
+
 The CLI accepts `--review-assignee`, `--test-assignee`, `--review-only`, and `--test-only`. The Python tool surface exposes the same operation as `kanban_plan_review`, and the dashboard API exposes:
 
 ```text
 POST /api/plugins/kanban/tasks/<task_id>/plan-review
 ```
 
-The follow-up task bodies contain bounded implementation evidence: worker lane identity, source run id, changed files, diff summary, verification commands, verification summary, and a bounded output tail. They instruct the review/test worker to inspect the workspace or diff as needed and return a structured verdict, without marking the source implementation task done.
+The follow-up task bodies contain bounded implementation evidence: worker lane identity, source run id, changed files, diff summary, verification commands, verification summary, and a bounded output tail. They instruct the review/test worker to inspect the workspace or diff as needed and return a structured `Verdict:` line, without marking the source implementation task done. Review workers must end with `Verdict: approve`, `Verdict: request_changes`, or `Verdict: blocked`; test workers must end with `Verdict: pass`, `Verdict: fail`, or `Verdict: blocked`. The Codex adapter parses this receipt into `worker_receipt.verdict`, `worker_lane.receipt`, and `verification.verdict`; text scanning of `output_tail` remains only as a compatibility fallback for older workers.
 
 For scheduling, the follow-up tasks are independent `ready` tasks so a dispatcher can claim them immediately. They are also linked back as dependencies of the blocked implementation task, and the source task receives a `worker_review_followups_planned` event. Progress queries include those follow-ups even though the dependency edge points from follow-up to source:
 
@@ -220,7 +275,7 @@ dashboard/API accepts `{"dispatch": true}` on
 `POST /api/plugins/kanban/tasks/<task_id>/plan-review`. This scoped dispatch
 does not pick unrelated ready cards from the board.
 
-Approval is gated once follow-ups are planned. `hermes kanban review <task_id> approve` refuses to mark the implementation task done until every planned follow-up for the current implementation run has successful worker evidence. For the built-in Codex adapter, a follow-up must exit 0, block with `review.required: true`, and, when it emits a structured `Verdict: ...`, satisfy the purpose-specific verdict: review follow-ups must be `approve`, and test follow-ups must be `pass`. Pending, running, missing, timed out, binary-missing, nonzero-exit, `request_changes`, `fail`, or `blocked` follow-ups block approval with an explicit gate error. Hermes still reviews the bounded receipt, not the full Codex session. `request-changes` remains available at any time and unblocks the implementation task for another worker run.
+Approval is gated once follow-ups are planned. `hermes kanban review <task_id> approve` refuses to mark the implementation task done until every planned follow-up for the current implementation run has successful worker evidence. For the built-in Codex adapter, a follow-up must exit 0, block with `review.required: true`, and satisfy the purpose-specific structured verdict: whole-diff review and review-shard follow-ups must be `approve`, and test follow-ups must be `pass`. Pending, running, missing, timed out, binary-missing, nonzero-exit, missing/mismatched `request_changes`, `fail`, or `blocked` follow-up verdicts block approval with an explicit gate error. Hermes still reviews the bounded receipt, not the full Codex session. `request-changes` remains available at any time and unblocks the implementation task for another worker run.
 
 Hermes can also run deterministic local acceptance checks before approval. Configure named checks under `kanban.acceptance_checks`; each check is a fixed argv list, not a shell string produced by a model:
 
@@ -235,6 +290,91 @@ kanban:
 
 Run them with `hermes kanban verify <implementation_task_id> unit-tests --json`, the `kanban_verify` tool, or `POST /api/plugins/kanban/tasks/<task_id>/verify`. The check runs in the task workspace, strips proxy environment variables, records bounded stdout/stderr, exit code, duration, and an `acceptance_check_completed` event, then `acceptance` exposes an `acceptance_check_gate`. If checks are configured, approval requires them to pass as well as any review/test follow-up gate.
 
+For task-specific acceptance criteria, an orchestrator can attach a validated
+task-scoped acceptance request instead of editing global config. The first
+supported request type is `file_content`, which compares a
+workspace-relative file against literal expected text. It is intentionally not
+an arbitrary command runner:
+
+```yaml
+acceptance_check_request:
+  name: expected-readme
+  type: file_content
+  path: README.md
+  contains: "installation complete"
+  description: "README mentions the installed state"
+```
+
+Attach it with:
+
+```bash
+hermes kanban acceptance-check-request <implementation_task_id> request.yaml --json
+```
+
+The Python tool surface is `kanban_acceptance_check_request`. Orchestrators can
+also attach one request or a list of requests directly when creating a child
+task:
+
+```python
+task = kanban_create(
+    title="Implement README install note",
+    assignee="codex-deep",
+    body="Update README.md so it clearly documents the installed state.",
+    acceptance_check_request={
+        "name": "expected-readme",
+        "type": "file_content",
+        "path": "README.md",
+        "contains": "installation complete",
+    },
+)["task_id"]
+```
+
+The dashboard API route is:
+
+```text
+POST /api/plugins/kanban/tasks/<task_id>/acceptance-check-requests
+```
+
+The validator allows only known request types, workspace-relative paths, and
+literal `equals` or `contains` text. It rejects `argv`, `command`, `cmd`,
+`shell`, and other executable fields. Requests created before the implementation
+worker starts apply to that task's later source run; requests created after a
+run exists are scoped to that run. `kanban_verify`, `advance-acceptance`, and
+`advance-goal` run both configured checks and validated task-scoped requests.
+
+For task-specific tests, configure trusted templates once and let the
+orchestrator choose a template plus allowlisted arguments:
+
+```yaml
+kanban:
+  acceptance_templates:
+    pytest-target:
+      argv_template: ["python3", "-m", "pytest", "{target}", "-q"]
+      allowed_args: ["target"]
+      arg_types:
+        target: relative_path
+      timeout_seconds: 300
+      description: "Run pytest for one workspace-relative target"
+```
+
+Then attach a request:
+
+```yaml
+acceptance_check_request:
+  name: focused-unit-test
+  type: command_template
+  template: pytest-target
+  args:
+    target: tests/test_widget.py
+  description: "Run the focused unit test for this change"
+```
+
+The executable and argv shape still come from trusted `config.yaml`; the request
+cannot change `argv_template[0]`, cannot add unlisted args, and
+`relative_path` args cannot be absolute, escape the workspace, or begin with
+`-`. This gives Hermes a task-specific way to run real tests while keeping
+model output out of the command-construction trust boundary.
+
 Before deciding, controllers can read a single acceptance snapshot:
 
 ```bash
@@ -247,19 +387,27 @@ The Python tool equivalent is `kanban_acceptance`, and the dashboard/API route i
 GET /api/plugins/kanban/tasks/<task_id>/acceptance
 ```
 
-This snapshot combines implementation evidence, planned review/test follow-up evidence, the follow-up gate, Hermes-run acceptance check results, `approval_allowed`, `request_changes_allowed`, and a deterministic `recommended_action`. It is still bounded evidence; it does not replay full external-worker sessions.
+This snapshot combines implementation evidence, planned review/test follow-up evidence, a compact `followup_summary`, the follow-up gate, Hermes-run acceptance check results, `approval_allowed`, `request_changes_allowed`, and a deterministic `recommended_action`. For review shards and failed follow-up workers, the summary and gate items include shard counts, file counts, scoped file samples, verdicts, runtime failure reasons, and worker metadata so the main agent and dashboard can inspect progress without opening full worker sessions. It is still bounded evidence; it does not replay full external-worker sessions.
+The dashboard task drawer reads the same bounded acceptance snapshot for
+review-required worker tasks. Operators can see the recommended next action,
+review/test gate, review shard file scopes, acceptance-check gate, and can
+click **Advance acceptance** to move the workflow to the next safe boundary
+without interrupting any running worker.
 
 Controllers can also advance the whole acceptance workflow one safe step at a time:
 
 ```bash
 hermes kanban advance-acceptance <implementation_task_id> --json
+hermes kanban advance-acceptance <implementation_task_id> --loop --json
 ```
 
 The command reads the same acceptance snapshot and then performs only the next
 deterministic control-plane action:
 
 - plan missing review/test follow-up tasks;
-- optionally run one dispatcher pass scoped only to those follow-ups;
+- optionally run one dispatcher pass scoped only to pending follow-ups;
+- run a maintenance-only dispatcher pass for already-running follow-ups so
+  crashed or timed-out workers are detected without spawning duplicates;
 - return if implementation, review, or test workers are still running;
 - run configured Hermes acceptance checks once worker evidence is ready;
 - request changes with bounded failure evidence when a review/test or
@@ -267,11 +415,15 @@ deterministic control-plane action:
 - approve the implementation task only when every gate passes.
 
 It never waits for, signals, or replays a running Codex worker. Use
-`--no-dispatch`, `--dispatch-max`, `--dry-run`, `--no-verify`, or
-`--no-approve` to stop at a specific boundary. Failed gates default to
-`request-changes`, which writes a reviewer comment containing only bounded
-follow-up verdicts, worker metadata, verification summaries, and deterministic
-check output tails, then unblocks the implementation for another worker run.
+`--loop` when a controller should keep making bounded deterministic progress
+until the task is done, idle, waiting on a running worker, blocked, or the
+`--max-iterations` cap is reached. Without `--loop`, one invocation performs
+one safe step. Use `--no-dispatch`, `--dispatch-max`, `--dry-run`,
+`--no-verify`, or `--no-approve` to stop at a specific boundary. Failed gates
+default to `request-changes`, which writes a reviewer comment containing only
+bounded follow-up verdicts, worker metadata, verification summaries, runtime
+failure reasons, and deterministic check output tails, then unblocks the
+implementation for another worker run.
 On the next claim, the worker context includes a dedicated
 `Requested changes to address before finishing` section with the latest
 reviewer, source run id, timestamp, and bounded comment, so an implementation
@@ -281,10 +433,9 @@ is bounded by the task's `max_retries` value, or by `kanban.failure_limit` when
 the task has no override. Once that limit is reached, the controller leaves the
 implementation task blocked and records `worker_review_auto_retry_exhausted`
 instead of dispatching another coding run; a human or higher-level planner can
-still decide what to do next.
-Use `--no-request-changes` or API/tool
-`request_changes_on_failure=false` when a controller wants to inspect the
-failed gate without mutating task state. The Python tool equivalent is
+still decide what to do next. Use `--no-request-changes` or API/tool
+`request_changes_on_failure=false` when a controller wants to inspect the failed
+gate without mutating task state. The Python tool equivalent is
 `kanban_advance_acceptance`, and the dashboard/API route is:
 
 ```text
@@ -295,6 +446,9 @@ For decomposed goal/root tasks, use the root-level controller:
 
 ```bash
 hermes kanban advance-goal <goal_or_root_task_id> --json
+hermes kanban advance-goal <goal_or_root_task_id> --loop --json
+# Inside the originating session, the root id may be omitted:
+hermes kanban advance-goal --loop --json
 ```
 
 `advance-goal` reads the root's child progress without interrupting workers,
@@ -306,12 +460,27 @@ follow-up or acceptance gate fails, the default behavior is the same bounded
 child is rerun and accepted. That feedback is scoped to the failed
 implementation run: the next implementation claim gets the latest requested
 changes in its worker context, and review/test follow-ups from the old run do
-not satisfy the approval gate for the new run. The tool/API equivalents are
+not satisfy the approval gate for the new run. With `--loop`, the root
+controller repeats these safe passes. For example, if a review follow-up
+returns `Verdict: request_changes`, the controller can write bounded feedback,
+redispatch the child implementation lane, and then stop at the running worker
+boundary without interrupting it. The tool/API equivalents are
 `kanban_advance_goal` and:
 
 ```text
 POST /api/plugins/kanban/tasks/<task_id>/advance-goal
 ```
+
+When an orchestrator is operating inside the same chat session that created the
+root with `/goal create`, both `hermes kanban advance-goal --loop` and
+`kanban_advance_goal(loop=true)` may omit the root task id. They resolve the
+current `HERMES_SESSION_ID` session's latest explicit `/goal create` Kanban
+root, then advance that root through the same scoped controller path. This keeps
+control-plane actions session-local without interrupting running Codex workers.
+
+For goal/root tasks, the dashboard task drawer reads child progress with
+`children=true`, displays each child's compact acceptance state and next
+action, and exposes **Advance goal** for the same scoped controller pass.
 
 ## Skill lane intent
 
@@ -338,12 +507,42 @@ worker_lane_request:
 ```
 
 Model output is not trusted execution config. Requests must pass a deterministic validator: type allowlist, model allowlist, sandbox allowlist, approval allowlist, max concurrency cap, fixed command shape, and no arbitrary shell command fields.
+For the Codex adapter, the validator also accepts only a boolean
+`json_events` flag; it never accepts an arbitrary event command or shell
+pipeline.
+The built-in lane-request validator currently enables only the trusted
+`codex_cli` adapter. Other external workers, such as Claude Code, OpenCode,
+containers, or local services, should be added by a trusted plugin calling
+`ctx.register_worker_lane(...)` until those adapters have their own validators.
 
 Operators can validate a request without enabling it:
 
 ```bash
 hermes kanban worker-lane-request request.yaml --json
 ```
+
+Configured orchestrator profiles with the `kanban` toolset can use the same
+controlled path without shelling out:
+
+```text
+kanban_worker_lane_request({
+  "worker_lane_request": {
+    "name": "codex-long-context",
+    "type": "codex_cli",
+    "model": "gpt-5.5",
+    "sandbox": "workspace-write",
+    "approval": "never",
+    "max_concurrency": 1,
+    "success_policy": "block_for_review",
+    "reason": "large refactor requiring stronger reasoning"
+  }
+})
+```
+
+The tool defaults to validate-only. A trusted orchestrator can pass
+`enable=true` to register the lane in the current Hermes process, or
+`persist=true` to write sanitized adapter fields to `config.yaml` and register
+the lane. Dispatcher-spawned workers cannot see or call this tool.
 
 Dashboard/plugin clients can use the same validator through:
 
@@ -392,13 +591,21 @@ Progress queries should read Kanban state, events, logs, and run metadata:
 - `hermes kanban runs <task_id> --json`
 
 These reads do not interrupt a running external worker.
+Progress snapshots also attach active diagnostics for the root task and, when
+children are included, for each child. This lets `kanban_progress`,
+`hermes kanban progress --children`, `/goal status`, and the dashboard progress
+drawer explain states such as `acceptance_check_gate_failed` or
+`auto_request_changes_exhausted` from bounded Kanban evidence without opening or
+interrupting the Codex session.
 
-`hermes kanban reviews` lists tasks whose latest run metadata says
-`review.required: true`, optionally filtered with `--assignee`, `--tenant`, or
-`--lane`. This is the review queue for Codex/external-worker handoffs: it reads
-the bounded evidence already written to `task_runs.metadata`, the latest
-progress event, and an optional worker-log tail without replaying the complete
-Codex session.
+`hermes kanban reviews` lists implementation handoffs whose latest run metadata
+says `review.required: true`, optionally filtered with `--assignee`, `--tenant`,
+or `--lane`. Review/test follow-up rows also store review-required evidence, but
+they are consumed by the source task's follow-up gate and are hidden from this
+queue by default; use `--include-followups` only when debugging those rows.
+This review queue reads the bounded evidence already written to
+`task_runs.metadata`, the latest progress event, and an optional worker-log tail
+without replaying the complete Codex session.
 
 Reviewers can close the handoff through the same bounded-evidence path:
 
@@ -422,7 +629,9 @@ assigned lane.
 Configured orchestrator/main-agent profiles can use the equivalent tools:
 `kanban_reviews` for the queue, `kanban_progress` for one task's bounded
 snapshot, `kanban_acceptance` for implementation plus review/test evidence,
-`kanban_verify` to run configured deterministic Hermes-side checks,
+`kanban_acceptance_check_request` to attach validated task-scoped acceptance
+checks, `kanban_verify` to run configured deterministic Hermes-side checks and
+task-scoped requests,
 `kanban_plan_review` to create and optionally dispatch independent review/test
 follow-ups, `kanban_advance_acceptance` to move the control-plane workflow to
 the next safe boundary, `kanban_advance_goal` to advance decomposed goal/root
@@ -432,14 +641,27 @@ them.
 
 Pass `include_children=true` to `kanban_progress` when the task is a goal/root
 task and the controller needs a compact status roll-up without interrupting
-running workers. The snapshot includes `child_summary` counts and a bounded
+running workers. If `task_id` is omitted, `kanban_progress` and
+`hermes kanban progress --children` look up the current `HERMES_SESSION_ID`
+session's latest explicit `/goal create` Kanban root and return that root
+snapshot with `resolved_from_session_goal=true`. This lets the main agent
+answer "how is my goal going?" from Kanban state even when it did not keep the
+root id in conversation context. The matching control-plane action is
+`kanban_advance_goal(loop=true)` or `hermes kanban advance-goal --loop`, which
+can also omit `task_id` for that current-session goal root. The snapshot includes
+`child_summary` counts and a bounded
 `children` list with each related worker task's relationship, status, lane,
 latest run state, latest progress checklist, latest heartbeat event,
-review-required flag, and verification evidence. For ordinary graphs this
-summarizes direct child tasks. For decomposed goals, Hermes also summarizes the
-worker tasks recorded in the root task's `decomposed.child_ids` event, because
-the current decomposer links those worker tasks as dependencies that wake the
-root when complete.
+review-required flag, verification evidence, and compact acceptance state. The
+acceptance state includes each child's deterministic `recommended_action`,
+bounded review/test and acceptance gate summaries, and whether automatic
+request-changes retries are exhausted. Child snapshots also include active
+`diagnostics` and compact `warnings` when a controller or operator needs to know
+why a review-required child is stuck. For ordinary graphs this summarizes
+direct child tasks. For decomposed goals, Hermes also summarizes the worker
+tasks recorded in the root task's `decomposed.child_ids` event, because the
+current decomposer links those worker tasks as dependencies that wake the root
+when complete.
 
 ## Goal bridge
 
@@ -459,6 +681,14 @@ The current `/goal` session-level semantics remain intact. The opt-in bridge is 
 ```bash
 hermes kanban goal "complex objective" --assignee orchestrator --session <session-id>
 hermes kanban goal "complex objective" --assignee orchestrator --workspace dir:/repo --decompose
+hermes kanban goal "complex objective" --assignee orchestrator --workspace dir:/repo --decompose --advance
+hermes kanban goal "complex objective" --assignee orchestrator --workspace dir:/repo --decompose --advance --loop
+```
+
+Gateway `/goal create ...` uses the same bridge and parser:
+
+```text
+/goal create complex objective --assignee orchestrator --workspace dir:/repo --decompose --advance --loop
 ```
 
 `--decompose` runs the existing Kanban decomposer immediately. Its child tasks
@@ -466,17 +696,62 @@ inherit the root task's workspace, branch, tenant, priority, runtime cap, retry
 cap, and session id, so a goal created with `--workspace dir:/repo` can fan out
 Codex child tasks that work in the intended repository without manual DB
 patching. The child tasks can use worker lane assignees from the registry, such
-as `codex-deep`, and the dispatcher later starts those external workers.
+as `codex-deep`, and the dispatcher later starts those external workers. Add
+`--advance` when the create call should immediately run one scoped root
+controller pass after decomposition. That pass dispatches only ready children
+belonging to the new root and can plan/advance review or test follow-ups if the
+root already has review-required children. It still does not wait for or
+interrupt running workers; progress queries should keep reading Kanban state.
+Add `--loop` when the create call should repeat bounded controller passes until
+the root is done, blocked, idle, waiting on running worker lanes, or the
+iteration cap is reached.
 
 After decomposition, a controller can repeatedly call:
 
 ```bash
 hermes kanban progress <goal_or_root_task_id> --children --json
 hermes kanban advance-goal <goal_or_root_task_id> --json
+hermes kanban advance-goal <goal_or_root_task_id> --loop --json
 ```
 
-The first command reports child status; the second performs the next safe
-control-plane action for the root and its children.
+The first command reports child status; the second performs one safe
+control-plane action for the root and its children; the loop form keeps making
+safe deterministic progress until the next async boundary.
+
+Gateway deployments can run the same bounded controller automatically after
+each dispatcher tick:
+
+```yaml
+kanban:
+  dispatch_in_gateway: true
+  advance_controller_in_gateway: true
+  advance_controller_max_items: 8
+  advance_controller_max_iterations: 8
+  advance_controller_dispatch_max: 8
+  advance_controller_review_assignee: codex-review
+  advance_controller_test_assignee: codex-test
+  advance_controller_request_changes_on_failure: true
+```
+
+The controller tick scans decomposed goal roots and standalone
+review-required implementation tasks, advances each to the next idle boundary,
+and then returns. It does not poll or interrupt running Codex workers. Disable
+it with `kanban.advance_controller_in_gateway: false` or the
+`HERMES_KANBAN_ADVANCE_CONTROLLER_IN_GATEWAY=0` environment override when an
+operator wants manual-only advancement.
+
+For an explicit one-shot run, use:
+
+```bash
+hermes kanban advance-controller --json
+hermes kanban controller-tick --dispatch-max 2 --json
+```
+
+The orchestrator tool/API equivalents are `kanban_advance_controller` and:
+
+```text
+POST /api/plugins/kanban/advance-controller
+```
 
 ## Failure modes the dispatcher handles
 
@@ -487,12 +762,17 @@ So lane authors don't have to reimplement these:
 - **Run-level retry** — when a task is retried (post-block, post-crash, post-reclaim), the worker can use the `expected_run_id` parameter on terminating tools to fail fast if its own run was already superseded.
 - **Per-task max runtime** — `task.max_runtime_seconds` hard-caps wall-clock time per run, regardless of PID liveness. Catches genuinely-deadlocked workers that the live-PID extension would otherwise keep running.
 - **Stranded-task detection** — a ready task whose assignee never produces a claim within `kanban.stranded_threshold_seconds` (default 30 min) shows up in `hermes kanban diagnostics` as a `stranded_in_ready` warning. Severity escalates to error at 2x the threshold and critical at 6x. Catches typo'd assignees, deleted profiles, and down external worker pools in one signal — identity-agnostic, no per-board allowlist to curate.
+- **Acceptance-gate diagnostics** — a review-required implementation whose current run has failed deterministic Hermes acceptance checks shows `acceptance_check_gate_failed` in `hermes kanban diagnostics`, dashboard diagnostics, and task drawer warnings. The diagnostic lists the failed check names, exit/tail evidence, and links operators to `hermes kanban acceptance <task_id> --json` or a controller advance/request-changes path. It clears when the check passes for that run, the task is approved, or request-changes/unblock moves the implementation into a new run.
+- **Retry-exhausted diagnostics** — when automatic request-changes reaches the task/config retry limit, diagnostics show `auto_request_changes_exhausted`. This means the controller has deliberately stopped looping; an operator or main agent should inspect bounded acceptance/follow-up evidence, add targeted guidance, reassign, or change the retry policy intentionally.
 
 ## Current limits
 
-- No full Codex event stream integration yet; progress is parsed from wrapper stdout/stderr.
+- Codex JSONL event ingestion is optional per lane (`json_events: true`).
+  Without it, the wrapper still falls back to parsing stdout/stderr. Even in
+  JSONL mode Hermes stores bounded event summaries and maps only known event
+  shapes into progress, receipt, command, and usage evidence.
 - No approval bridge; configure Codex lanes with controlled approval policy.
-- Follow-up gating understands simple structured verdicts (`approve` for review, `pass` for test), and Hermes can run configured deterministic acceptance commands. Failed gates can be fed back as bounded `request-changes` comments, but Hermes does not yet perform automatic semantic acceptance of large diffs beyond those external-worker verdicts and deterministic checks.
+- Follow-up gating understands structured verdicts (`approve` for whole-diff and shard review, `pass` for test), and Hermes can run configured deterministic acceptance commands plus validated task-scoped `file_content` checks. Failed gates can be fed back as bounded `request-changes` comments. Large diffs can be split into review shards, but Hermes still relies on external reviewer verdicts and deterministic checks rather than performing its own semantic code review.
 - External lane command shapes are adapter-defined, not model-defined.
 - Review reads Codex artifacts and bounded metadata, not the full Codex session.
 

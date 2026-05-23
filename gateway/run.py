@@ -5031,11 +5031,43 @@ class GatewayRunner:
             logger.warning("kanban dispatcher: cannot load config (%s); disabled", exc)
             return
         kanban_cfg = cfg.get("kanban", {}) if isinstance(cfg, dict) else {}
-        if not kanban_cfg.get("dispatch_in_gateway", True):
+
+        def _bool_config(key: str, default: bool) -> bool:
+            raw = kanban_cfg.get(key, default)
+            if isinstance(raw, bool):
+                return raw
+            if raw is None:
+                return default
+            if isinstance(raw, (int, float)):
+                return bool(raw)
+            text = str(raw).strip().lower()
+            if text in {"1", "true", "yes", "on"}:
+                return True
+            if text in {"0", "false", "no", "off"}:
+                return False
+            logger.warning(
+                "kanban dispatcher: invalid kanban.%s=%r; using default %s",
+                key,
+                raw,
+                default,
+            )
+            return default
+
+        if not _bool_config("dispatch_in_gateway", True):
             logger.info(
                 "kanban dispatcher: disabled via config kanban.dispatch_in_gateway=false"
             )
             return
+        controller_env_override = (
+            os.environ.get("HERMES_KANBAN_ADVANCE_CONTROLLER_IN_GATEWAY", "")
+            .strip()
+            .lower()
+        )
+        controller_enabled = _bool_config("advance_controller_in_gateway", True)
+        if controller_env_override in {"0", "false", "no", "off"}:
+            controller_enabled = False
+        elif controller_env_override in {"1", "true", "yes", "on"}:
+            controller_enabled = True
 
         try:
             from hermes_cli import kanban_db as _kb
@@ -5050,6 +5082,75 @@ class GatewayRunner:
         max_spawn = kanban_cfg.get("max_spawn", None)
         if max_spawn is not None:
             logger.info(f"kanban dispatcher: max_spawn={max_spawn}")
+
+        def _positive_int_config(
+            key: str,
+            default: int,
+            *,
+            upper: int | None = None,
+        ) -> int:
+            raw = kanban_cfg.get(key, default)
+            try:
+                parsed = int(raw)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "kanban dispatcher: invalid kanban.%s=%r; using default %d",
+                    key,
+                    raw,
+                    default,
+                )
+                parsed = default
+            if parsed < 1:
+                logger.warning(
+                    "kanban dispatcher: kanban.%s=%r is below 1; using default %d",
+                    key,
+                    raw,
+                    default,
+                )
+                parsed = default
+            if upper is not None and parsed > upper:
+                logger.warning(
+                    "kanban dispatcher: kanban.%s=%r exceeds %d; clamping",
+                    key,
+                    raw,
+                    upper,
+                )
+                parsed = upper
+            return parsed
+
+        controller_max_items = _positive_int_config(
+            "advance_controller_max_items",
+            8,
+            upper=128,
+        )
+        controller_max_iterations = _positive_int_config(
+            "advance_controller_max_iterations",
+            8,
+            upper=64,
+        )
+        controller_dispatch_max = _positive_int_config(
+            "advance_controller_dispatch_max",
+            8,
+            upper=64,
+        )
+        controller_review_assignee = (
+            kanban_cfg.get("advance_controller_review_assignee") or "codex-review"
+        )
+        controller_test_assignee = (
+            kanban_cfg.get("advance_controller_test_assignee") or "codex-test"
+        )
+        controller_request_changes = _bool_config(
+            "advance_controller_request_changes_on_failure",
+            True,
+        )
+        if controller_enabled:
+            logger.info(
+                "kanban controller: embedded in gateway "
+                "(max_items=%d, max_iterations=%d, dispatch_max=%d)",
+                controller_max_items,
+                controller_max_iterations,
+                controller_dispatch_max,
+            )
 
         # Cap the number of simultaneously running tasks so slow workers
         # (local LLMs, resource-constrained hosts) don't pile up and time
@@ -5201,6 +5302,54 @@ class GatewayRunner:
                     except Exception:
                         pass
 
+        def _controller_tick_once_for_board(slug: str) -> "Optional[dict]":
+            """Run one bounded controller tick for a specific board."""
+            conn = None
+            fingerprint = _board_db_fingerprint(slug)
+            disabled_fingerprint = disabled_corrupt_boards.get(slug)
+            if disabled_fingerprint == fingerprint:
+                return None
+            if disabled_fingerprint is not None:
+                disabled_corrupt_boards.pop(slug, None)
+            try:
+                conn = _kb.connect(board=slug)
+                return _kb.advance_controller_once(
+                    conn,
+                    board=slug,
+                    review_assignee=controller_review_assignee,
+                    test_assignee=controller_test_assignee,
+                    dispatch=True,
+                    dispatch_max=controller_dispatch_max,
+                    verify=True,
+                    approve=True,
+                    request_changes_on_failure=controller_request_changes,
+                    reviewer="gateway-controller",
+                    max_items=controller_max_items,
+                    max_iterations=controller_max_iterations,
+                )
+            except sqlite3.DatabaseError as exc:
+                if _is_corrupt_board_db_error(exc):
+                    disabled_corrupt_boards[slug] = fingerprint
+                    logger.error(
+                        "kanban controller: board %s database %s is not a valid "
+                        "SQLite database; disabling controller for this board "
+                        "until the file changes or the gateway restarts.",
+                        slug,
+                        fingerprint[0],
+                    )
+                    return None
+                logger.exception("kanban controller: tick failed on board %s", slug)
+                return None
+            except Exception:
+                logger.exception("kanban controller: tick failed on board %s", slug)
+                return None
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
         def _tick_once() -> "list[tuple[str, Optional[object]]]":
             """Run one dispatch_once per board. Returns (slug, result) pairs.
 
@@ -5216,6 +5365,17 @@ class GatewayRunner:
             for b in boards:
                 slug = b.get("slug") or _kb.DEFAULT_BOARD
                 out.append((slug, _tick_once_for_board(slug)))
+            return out
+
+        def _controller_tick_once() -> "list[tuple[str, Optional[dict]]]":
+            try:
+                boards = _kb.list_boards(include_archived=False)
+            except Exception:
+                boards = [_kb.read_board_metadata(_kb.DEFAULT_BOARD)]
+            out: list[tuple[str, "Optional[dict]"]] = []
+            for b in boards:
+                slug = b.get("slug") or _kb.DEFAULT_BOARD
+                out.append((slug, _controller_tick_once_for_board(slug)))
             return out
 
         def _ready_nonempty() -> bool:
@@ -5259,7 +5419,7 @@ class GatewayRunner:
         # ``kanban.auto_decompose_per_tick`` (default 3) so a bulk-load
         # of triage tasks doesn't burst-spend the aux LLM in one tick;
         # remainder defers to subsequent ticks.
-        auto_decompose_enabled = bool(kanban_cfg.get("auto_decompose", True))
+        auto_decompose_enabled = _bool_config("auto_decompose", True)
         try:
             auto_decompose_per_tick = int(
                 kanban_cfg.get("auto_decompose_per_tick", 3) or 3
@@ -5370,6 +5530,18 @@ class GatewayRunner:
                             len(res.timed_out) if hasattr(res.timed_out, "__len__") else 0,
                             res.promoted,
                             len(res.auto_blocked) if hasattr(res.auto_blocked, "__len__") else 0,
+                        )
+                if controller_enabled:
+                    controller_results = await asyncio.to_thread(_controller_tick_once)
+                    for slug, payload in (controller_results or []):
+                        if not payload or not payload.get("advanced"):
+                            continue
+                        logger.info(
+                            "kanban controller [%s]: items=%d dispatch=%d stop=%s",
+                            slug,
+                            int(payload.get("item_count") or 0),
+                            int(payload.get("dispatch_used") or 0),
+                            payload.get("stop_reason"),
                         )
                 # Health telemetry (aggregate across boards)
                 ready_pending = await asyncio.to_thread(_ready_nonempty)
@@ -10439,6 +10611,16 @@ class GatewayRunner:
             return t("gateway.goal.unavailable")
 
         if not args or lower == "status":
+            if not mgr.has_goal():
+                try:
+                    from hermes_cli.goals import kanban_goal_status_line
+
+                    sid = getattr(session_entry, "session_id", None) or ""
+                    kanban_status = kanban_goal_status_line(sid)
+                    if kanban_status:
+                        return kanban_status
+                except Exception as exc:
+                    logger.debug("kanban goal status fallback failed: %s", exc)
             return mgr.status_line()
 
         if lower == "create" or lower.startswith("create "):
@@ -10450,6 +10632,16 @@ class GatewayRunner:
                 return run_kanban_goal_bridge(rest, session_id=sid)
             except Exception as exc:
                 return f"kanban goal bridge failed: {exc}"
+
+        if lower == "advance" or lower.startswith("advance "):
+            try:
+                from hermes_cli.goals import advance_kanban_goal_for_session
+
+                rest = args.split(None, 1)[1] if " " in args else ""
+                sid = getattr(session_entry, "session_id", None) or ""
+                return advance_kanban_goal_for_session(rest, session_id=sid)
+            except Exception as exc:
+                return f"kanban goal advance failed: {exc}"
 
         if lower == "pause":
             state = mgr.pause(reason="user-paused")

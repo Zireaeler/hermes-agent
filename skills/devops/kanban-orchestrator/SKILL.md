@@ -13,19 +13,21 @@ metadata:
 
 > The **core worker lifecycle** (including the `kanban_create` fan-out pattern and the "decompose, don't execute" rule) is auto-injected into every kanban process via the `KANBAN_GUIDANCE` system-prompt block. This skill is the deeper playbook when you're an orchestrator profile whose whole job is routing.
 
-## Profiles are user-configured — not a fixed roster
+## Assignees Are User-Configured — Not a Fixed Roster
 
-Hermes setups vary widely. Some users run a single profile that does everything; some run a small fleet (`docker-worker`, `cron-worker`); some run a curated specialist team they've named themselves. There is **no default specialist roster** — the orchestrator skill does not know what profiles exist on this machine.
+Hermes setups vary widely. Some users run a single profile that does everything; some run a small fleet (`docker-worker`, `cron-worker`); some run external worker lanes such as `codex-deep`, `codex-review`, or `codex-test`; some run a curated specialist team they've named themselves. There is **no default specialist roster** — the orchestrator skill does not know what assignees exist on this machine.
 
-Before fanning out, you must ground the decomposition in the profiles that actually exist. The dispatcher silently fails to spawn unknown assignee names — it doesn't autocorrect, doesn't suggest, doesn't fall back. So a card assigned to `researcher` on a setup that only has `docker-worker` just sits in `ready` forever.
+Before fanning out, ground the decomposition in the Hermes profiles and registered worker lanes that actually exist. The dispatcher only spawns known profiles or trusted worker lanes. Unknown terminal/control-plane names remain unspawned and appear as `skipped_nonspawnable`, so a card assigned to a made-up `researcher` on a setup that only has `docker-worker` and `codex-deep` just sits in `ready`.
 
-**Step 0: discover available profiles before planning.**
+**Step 0: discover available assignees before planning.**
 
 Use one of these:
 
-- `hermes profile list` — prints the table of profiles configured on this machine. Run it through your terminal tool if you have one; otherwise ask the user.
-- `kanban_list(assignee="<some-name>")` — sanity-check a single name. Returns an empty list (rather than an error) for an unknown assignee, so this only confirms a name you're already considering.
-- **Just ask the user.** "What profiles do you have set up?" is a fine first turn when the goal needs more than one specialist.
+- `hermes profile list` — prints Hermes profiles configured on this machine.
+- `hermes kanban worker-lanes --json` — prints trusted external worker lanes, capacity, and active instances.
+- `hermes kanban assignees --json` — prints the combined board assignee view, including worker lanes when available.
+- `kanban_worker_lane_request(...)` — propose a new lane only as a structured request through the deterministic validator; never invent a lane by simply assigning a task to a new name.
+- **Just ask the user.** "What profiles or worker lanes do you have set up?" is a fine first turn when the goal needs more than one specialist.
 
 Cache the result in your working memory for the rest of the conversation. Re-asking every turn wastes a tool call.
 
@@ -51,7 +53,7 @@ Your job description says "route, don't execute." The rules that enforce that:
 - **Split multi-lane requests before creating cards.** A user prompt can contain several independent workstreams. Extract those lanes first, then create one card per lane instead of bundling unrelated work into a single implementer card.
 - **Run independent lanes in parallel.** If two cards do not need each other's output, leave them unlinked so the dispatcher can fan them out. Link only true data dependencies.
 - **Never create dependent work as independent ready cards.** If a card must wait for another card, pass `parents=[...]` in the original `kanban_create` call. Do not create it first and link it later, and do not rely on prose like "wait for T1" inside the body.
-- **If no specialist fits the available profiles, ask the user which profile to create or which existing profile to use.** Do not invent profile names; the dispatcher will silently drop unknown assignees.
+- **If no specialist fits the available assignees, ask the user which profile/lane to use or submit a worker lane request.** Do not invent profile or lane names; the dispatcher will not treat model output as trusted execution config.
 - **Decompose, route, and summarize — that's the whole job.**
 
 ## Decomposition playbook
@@ -65,12 +67,12 @@ Ask clarifying questions if the goal is ambiguous. Cheap to ask; expensive to sp
 Before creating anything, draft the graph out loud (in your response to the user). Treat every concrete workstream as a candidate card:
 
 1. Extract the lanes from the request.
-2. Map each lane to one of the profiles you discovered in Step 0. If a lane doesn't fit any existing profile, ask the user which to use or create.
+2. Map each lane to one of the profiles or worker lanes you discovered in Step 0. Coding implementation usually belongs on an execution lane such as `codex-deep`; independent review and verification can use `codex-review` and `codex-test` when configured.
 3. Decide whether each lane is independent or gated by another lane.
 4. Create independent lanes as parallel cards with no parent links.
 5. Create synthesis/review/integration cards with parent links to the lanes they depend on. A child created with unfinished parents starts in `todo`; the dispatcher promotes it to `ready` only after every parent is done.
 
-Examples of prompts that should fan out (using placeholder profile names — substitute whatever exists on the user's setup):
+Examples of prompts that should fan out (using placeholder assignee names — substitute whatever exists on the user's setup):
 
 - "Build an app" → one card to a design-oriented profile for product/UI direction, one or two cards to engineering profiles for implementation, plus a later integration/review card if the user has a reviewer profile.
 - "Fix blockers and check model variants" → one implementation card for the blocker fixes plus one discovery/research card for config/source verification. A final reviewer card can depend on both.
@@ -79,36 +81,36 @@ Examples of prompts that should fan out (using placeholder profile names — sub
 
 Words like "also," "finally," or "and" do not automatically imply a dependency. They often mean "make sure this is covered before reporting back." Only link tasks when one card cannot start until another card's output exists.
 
-Show the graph to the user before creating cards. Let them correct it — including which actual profile name should own each lane.
+Show the graph to the user before creating cards. Let them correct it — including which actual profile or worker lane should own each lane.
 
 ### Step 3 — Create tasks and link
 
-Use the profile names from Step 0. The example below uses placeholders `<profile-A>`, `<profile-B>`, `<profile-C>` — replace them with what the user actually has.
+Use the assignee names from Step 0. The example below uses placeholders `<assignee-A>`, `<assignee-B>`, `<assignee-C>` — replace them with the actual Hermes profile or worker lane names on this setup.
 
 ```python
 t1 = kanban_create(
     title="research: Postgres cost vs current",
-    assignee="<profile-A>",  # whichever profile handles research on this setup
+    assignee="<assignee-A>",  # whichever profile/lane handles research on this setup
     body="Compare estimated infrastructure costs, migration costs, and ongoing ops costs over a 3-year window. Sources: AWS/GCP pricing, team time estimates, current Postgres bills from peers.",
     tenant=os.environ.get("HERMES_TENANT"),
 )["task_id"]
 
 t2 = kanban_create(
     title="research: Postgres performance vs current",
-    assignee="<profile-A>",  # same profile, run in parallel
+    assignee="<assignee-A>",  # same assignee, run in parallel
     body="Compare query latency, throughput, and scaling characteristics at our expected data volume (~500GB, 10k QPS peak). Sources: benchmark papers, public case studies, pgbench results if easy.",
 )["task_id"]
 
 t3 = kanban_create(
     title="synthesize migration recommendation",
-    assignee="<profile-B>",  # whichever profile does synthesis/analysis
+    assignee="<assignee-B>",  # whichever profile/lane does synthesis/analysis
     body="Read the findings from T1 (cost) and T2 (performance). Produce a 1-page recommendation with explicit trade-offs and a go/no-go call.",
     parents=[t1, t2],
 )["task_id"]
 
 t4 = kanban_create(
     title="draft decision memo",
-    assignee="<profile-C>",  # whichever profile drafts user-facing prose
+    assignee="<assignee-C>",  # whichever profile/lane drafts user-facing prose
     body="Turn the analyst's recommendation into a 2-page memo for the CTO. Match the tone of previous decision memos in the team's knowledge base.",
     parents=[t3],
 )["task_id"]
@@ -117,6 +119,14 @@ t4 = kanban_create(
 `parents=[...]` gates promotion — children stay in `todo` until every parent reaches `done`, then auto-promote to `ready`. No manual coordination needed; the dispatcher and dependency engine handle it.
 
 If the task graph has dependencies, create the parent cards first, capture their returned ids, and include those ids in the child card's `parents` list during the child `kanban_create` call. Avoid creating all cards in parallel and linking them afterward; that creates a window where the dispatcher can claim a child before its inputs exist.
+
+When a child task has a concrete deterministic acceptance condition, attach it
+in the same `kanban_create` call with `acceptance_check_request` or
+`acceptance_check_requests`. These are declarative requests, not executable
+commands: use `file_content` with a workspace-relative path plus exactly one of
+`equals`/`contains`, or `command_template` selecting a trusted configured
+template plus allowlisted args. Do not put `command`, `cmd`, `shell`, `argv`, or
+`executable` in the request.
 
 ### Step 4 — Complete your own task
 
@@ -127,10 +137,10 @@ kanban_complete(
     summary="decomposed into T1-T4: 2 research lanes in parallel, 1 synthesis on their outputs, 1 prose draft on the recommendation",
     metadata={
         "task_graph": {
-            "T1": {"assignee": "<profile-A>", "parents": []},
-            "T2": {"assignee": "<profile-A>", "parents": []},
-            "T3": {"assignee": "<profile-B>", "parents": ["T1", "T2"]},
-            "T4": {"assignee": "<profile-C>", "parents": ["T3"]},
+            "T1": {"assignee": "<assignee-A>", "parents": []},
+            "T2": {"assignee": "<assignee-A>", "parents": []},
+            "T3": {"assignee": "<assignee-B>", "parents": ["T1", "T2"]},
+            "T4": {"assignee": "<assignee-C>", "parents": ["T3"]},
         },
     },
 )
@@ -138,15 +148,49 @@ kanban_complete(
 
 ### Step 5 — Report back to the user
 
-Tell them what you created in plain prose, naming the actual profiles you used:
+Tell them what you created in plain prose, naming the actual assignees you used:
 
 > I've queued 4 tasks:
-> - **T1** (`<profile-A>`): cost comparison
-> - **T2** (`<profile-A>`): performance comparison, in parallel with T1
-> - **T3** (`<profile-B>`): synthesizes T1 + T2 into a recommendation
-> - **T4** (`<profile-C>`): turns T3 into a CTO memo
+> - **T1** (`<assignee-A>`): cost comparison
+> - **T2** (`<assignee-A>`): performance comparison, in parallel with T1
+> - **T3** (`<assignee-B>`): synthesizes T1 + T2 into a recommendation
+> - **T4** (`<assignee-C>`): turns T3 into a CTO memo
 >
 > The dispatcher will pick up T1 and T2 now. T3 starts when both finish. You'll get a gateway ping when T4 completes. Use the dashboard or `hermes kanban tail <id>` to follow along.
+
+## External Worker Lanes
+
+External worker lanes are execution lanes registered in the worker lane registry. They are not Hermes profiles and they are not model providers. Assigning a task to `codex-deep` means the Kanban dispatcher starts Codex CLI through the trusted adapter for that lane.
+
+Use external worker lanes this way:
+
+1. Create implementation tasks with `assignee` set to an existing execution lane, for example `codex-deep`.
+2. Attach concrete acceptance checks during `kanban_create` when possible, so
+   the controller can verify them after Codex returns bounded evidence.
+3. Do not wait on or interrupt the running worker. Read progress with `kanban_progress(task_id=...)` or `hermes kanban progress <task_id> --json`. For the current session's explicit `/goal create` root, `kanban_progress(include_children=True)` can omit `task_id` and resolve the latest session goal root automatically.
+4. When the Codex lane finishes, expect the task to be `blocked` with `review.required: true`, not `done`.
+5. Advance the task with `kanban_advance_acceptance(..., loop=True)` or `hermes kanban advance-acceptance <task_id> --loop`. This plans independent review/test tasks, dispatches `codex-review` / `codex-test` when configured, runs deterministic Hermes acceptance checks, feeds bounded request-changes comments back to implementation lanes, and approves only when gates pass.
+6. For decomposed roots, call `kanban_advance_goal(..., loop=True)` or `hermes kanban advance-goal <root_task_id> --loop` to dispatch children, advance review/test/acceptance, redispatch bounded reruns when gates request changes, and complete the root when all children are terminal. For the current session's explicit `/goal create` root, `kanban_advance_goal(loop=True)` can omit `task_id` and resolve the latest session goal root automatically. The loop stops at running-worker boundaries and does not interrupt Codex.
+7. For unattended operation, prefer `kanban_advance_controller(...)` or let the gateway controller tick run from `kanban.advance_controller_in_gateway`. It scans decomposed roots and standalone review-required tasks, advances each to the next idle boundary, and never waits on or interrupts running workers.
+
+When a needed external lane does not exist, submit a lane request instead of inventing an assignee:
+
+```python
+kanban_worker_lane_request(
+    worker_lane_request={
+        "name": "codex-long-context",
+        "type": "codex_cli",
+        "model": "gpt-5.5",
+        "sandbox": "workspace-write",
+        "approval": "never",
+        "max_concurrency": 1,
+        "success_policy": "block_for_review",
+        "reason": "large refactor requiring stronger reasoning",
+    }
+)
+```
+
+The request defaults to validate-only. A trusted operator or orchestrator may pass `enable=True` for the current process or `persist=True` to write sanitized config. The validator rejects arbitrary command, shell, argv, and executable fields.
 
 ## Common patterns
 
@@ -162,7 +206,7 @@ Tell them what you created in plain prose, naming the actual profiles you used:
 
 ## Pitfalls
 
-**Inventing profile names that don't exist.** The dispatcher silently fails to spawn unknown assignees — the card just sits in `ready` forever. Always assign to a profile from your Step 0 discovery; ask the user if you're unsure.
+**Inventing profile or lane names that don't exist.** The dispatcher will not spawn unknown assignees — the card just sits in `ready` and appears in skipped/nonspawnable diagnostics. Always assign to a profile or worker lane from your Step 0 discovery; ask the user or submit a validated lane request if you're unsure.
 
 **Bundling independent lanes into one card.** If the user asks for two independent outcomes, create two cards. Example: "fix blockers and check model variants" is not one fixer task; create a fixer/engineer card for the fixes and an explorer/researcher card for the variant check, then optionally gate review on both.
 

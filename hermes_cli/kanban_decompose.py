@@ -71,7 +71,15 @@ Output a single JSON object with this exact shape:
         "title": "<concrete task title, imperative voice, <= 80 chars>",
         "body":  "<detailed spec for the worker on this child task>",
         "assignee": "<assignee name from the roster, or null for default>",
-        "parents": [<int>, ...]
+        "parents": [<int>, ...],
+        "acceptance_check_requests": [
+          {
+            "name": "<kebab-case id>",
+            "type": "file_content",
+            "path": "<workspace-relative path>",
+            "contains": "<expected text>"
+          }
+        ]
       },
       ...
     ]
@@ -93,6 +101,12 @@ Rules:
     lane names and do not output worker lane configuration.
   - Each child task body is what a fresh worker will read with no other
     context — be specific about goal, approach, and acceptance criteria.
+  - When the task has a concrete deterministic acceptance condition, attach
+    it as "acceptance_check_requests". Only use declarative checks:
+    "file_content" with a workspace-relative path and exactly one of
+    "equals" or "contains", or "command_template" by naming an already
+    configured trusted template plus allowlisted args. Never output command,
+    cmd, shell, executable, or argv.
 
 When the task is genuinely a single unit of work (no useful decomposition),
 return:
@@ -102,7 +116,8 @@ return:
     "rationale": "<one sentence>",
     "title": "<tightened title>",
     "body":  "<concrete spec for a single worker>",
-    "assignee": "<assignee name from the roster, or null for default>"
+    "assignee": "<assignee name from the roster, or null for default>",
+    "acceptance_check_requests": []
   }
 
 In that case the task stays as one work item, just with a tightened spec and
@@ -400,6 +415,19 @@ def decompose_task(
             return DecomposeOutcome(
                 task_id, False, "decomposer returned fanout=false with no title/body",
             )
+        try:
+            acceptance_requests = kb.validate_acceptance_check_requests(
+                parsed.get(
+                    "acceptance_check_requests",
+                    parsed.get("acceptance_check_request"),
+                )
+            )
+        except ValueError as exc:
+            return DecomposeOutcome(
+                task_id,
+                False,
+                f"decomposer returned invalid acceptance_check_requests: {exc}",
+            )
         with kb.connect() as conn:
             ok = kb.specify_triage_task(
                 conn,
@@ -409,6 +437,13 @@ def decompose_task(
                 assignee=assignee_val,
                 author=audit_author,
             )
+            if ok and acceptance_requests:
+                kb.add_acceptance_check_requests(
+                    conn,
+                    task_id,
+                    acceptance_requests,
+                    requested_by=audit_author,
+                )
         if not ok:
             return DecomposeOutcome(
                 task_id, False, "task moved out of triage before promotion",
@@ -461,11 +496,25 @@ def decompose_task(
             parents = []
         # Clean parent indices: drop non-int and out-of-range.
         clean_parents = [p for p in parents if isinstance(p, int) and 0 <= p < len(raw_tasks) and p != idx]
+        try:
+            acceptance_requests = kb.validate_acceptance_check_requests(
+                entry.get(
+                    "acceptance_check_requests",
+                    entry.get("acceptance_check_request"),
+                )
+            )
+        except ValueError as exc:
+            return DecomposeOutcome(
+                task_id,
+                False,
+                f"tasks[{idx}].acceptance_check_requests invalid: {exc}",
+            )
         children.append({
             "title": title.strip()[:200],
             "body": body.strip(),
             "assignee": chosen,
             "parents": clean_parents,
+            "acceptance_check_requests": acceptance_requests,
         })
 
     try:

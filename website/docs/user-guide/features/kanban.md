@@ -604,6 +604,7 @@ This is the surface **you** (or scripts, cron, the dashboard) use to drive the b
 ```
 hermes kanban init                                     # create kanban.db + print daemon hint
 hermes kanban create "<title>" [--body ...] [--assignee <profile>]
+        [--acceptance-check-request request.yaml]
                                 [--parent <id>]... [--tenant <name>]
                                 [--workspace scratch|worktree|worktree:<path>|dir:<path>]
                                 [--branch <name>]
@@ -742,6 +743,21 @@ hermes kanban create "monthly report" \
 ```
 
 Workers receive `$HERMES_TENANT` and namespace their memory writes by prefix. The board, the dispatcher, and the profile definitions are all shared; only the data is scoped.
+
+For tasks with concrete deterministic criteria, attach safe task-scoped
+acceptance requests at creation time:
+
+```bash
+hermes kanban create "update README install note" \
+    --assignee codex-deep \
+    --workspace dir:/repo \
+    --acceptance-check-request expected-readme.yaml
+```
+
+The request file uses the same validated `acceptance_check_request` shape as
+`hermes kanban acceptance-check-request`: `file_content`, or a
+`command_template` that selects a trusted template configured in `config.yaml`.
+Arbitrary command, shell, argv, or executable fields are rejected.
 
 ## Gateway notifications
 

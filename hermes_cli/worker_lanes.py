@@ -270,6 +270,20 @@ def validate_worker_lane_request(request: dict[str, Any]) -> dict[str, Any]:
         if timeout < 1:
             raise ValueError("timeout_seconds must be >= 1")
         out["timeout_seconds"] = timeout
+    if request.get("json_events") is not None:
+        raw_json_events = request["json_events"]
+        if isinstance(raw_json_events, bool):
+            out["json_events"] = raw_json_events
+        elif isinstance(raw_json_events, str):
+            lowered = raw_json_events.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                out["json_events"] = True
+            elif lowered in {"0", "false", "no", "off"}:
+                out["json_events"] = False
+            else:
+                raise ValueError("json_events must be a boolean")
+        else:
+            raise ValueError("json_events must be a boolean")
     return out
 
 
