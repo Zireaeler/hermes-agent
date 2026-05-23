@@ -323,6 +323,36 @@ def test_dashboard_worker_lane_request_dialog_uses_validator_endpoint():
     assert "hermes-kanban-worker-lane-request-grid" in css
 
 
+def test_dashboard_drawer_surfaces_worker_lane_request_intents():
+    """Decomposer lane intents should be approvable from the task drawer."""
+    repo_root = Path(__file__).resolve().parents[2]
+    js = (
+        repo_root / "plugins" / "kanban" / "dashboard" / "dist" / "index.js"
+    ).read_text()
+    css = (
+        repo_root / "plugins" / "kanban" / "dashboard" / "dist" / "style.css"
+    ).read_text()
+
+    assert "function workerLaneRequestIntents(events)" in js
+    assert "function WorkerLaneIntentSection(props)" in js
+    assert "worker_lane_request_intent" in js
+    assert "worker_lane_request_approved" in js
+    assert "resolved.add(String(payload.source_event_id))" in js
+    assert "resolved.has(`name:${config.name}`)" in js
+    assert "Pending worker lane requests" in js
+    assert "Skill output is treated as intent only" in js
+    assert "source_event_id: intent.event_id" in js
+    assert "task_id: props.task.id" in js
+    assert "worker_lane_request: intent.config" in js
+    assert "onWorkerLaneRequest: submitWorkerLaneRequest" in js
+    assert "onWorkerLaneRequest: props.onWorkerLaneRequest" in js
+    assert "withBoard(`${API}/worker-lane-requests`, board)" in js
+    assert "Sanitized config" in js
+    assert ".hermes-kanban-worker-lane-intents" in css
+    assert ".hermes-kanban-worker-lane-intent-actions" in css
+    assert ".hermes-kanban-worker-lane-intent-result" in css
+
+
 def test_dashboard_bundle_has_controller_tick_action():
     repo_root = Path(__file__).resolve().parents[2]
     js = (
@@ -2613,6 +2643,81 @@ def test_worker_lane_request_endpoint_persists_sanitized_config(client):
     assert stored["max_concurrency"] == 2
     assert "reason" not in stored
     assert "command" not in stored
+
+
+def test_worker_lane_request_endpoint_records_task_audit_event(client):
+    from hermes_cli import kanban_db as kb
+    from hermes_cli.worker_lanes import clear_worker_lanes, get_worker_lane
+
+    clear_worker_lanes()
+    task = client.post(
+        "/api/plugins/kanban/tasks",
+        json={"title": "lane intent root"},
+    ).json()["task"]
+    conn = kb.connect()
+    try:
+        kb.record_task_event(
+            conn,
+            task["id"],
+            "worker_lane_request_intent",
+            {
+                "requested_by": "decomposer",
+                "requests": [
+                    {
+                        "source": "root:codex-intent",
+                        "config": {
+                            "name": "codex-intent",
+                            "type": "codex_cli",
+                            "model": "gpt-5.4-mini",
+                            "sandbox": "workspace-write",
+                            "approval": "never",
+                            "max_concurrency": 1,
+                            "success_policy": "block_for_review",
+                        },
+                    }
+                ],
+                "approval_required": True,
+            },
+        )
+        source_event_id = kb.list_events(conn, task["id"])[-1].id
+    finally:
+        conn.close()
+
+    r = client.post(
+        "/api/plugins/kanban/worker-lane-requests",
+        json={
+            "enable": True,
+            "task_id": task["id"],
+            "source_event_id": source_event_id,
+            "requested_by": "dashboard-test",
+            "worker_lane_request": {
+                "name": "codex-intent",
+                "type": "codex_cli",
+                "model": "gpt-5.4-mini",
+                "sandbox": "workspace-write",
+                "approval": "never",
+                "max_concurrency": 1,
+                "success_policy": "block_for_review",
+            },
+        },
+    )
+
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["enabled"] is True
+    assert data["lane"]["name"] == "codex-intent"
+    assert get_worker_lane("codex-intent") is not None
+    conn = kb.connect()
+    try:
+        events = kb.list_events(conn, task["id"])
+    finally:
+        conn.close()
+    approved = [event for event in events if event.kind == "worker_lane_request_approved"]
+    assert approved
+    assert approved[-1].payload["requested_by"] == "dashboard-test"
+    assert approved[-1].payload["source_event_id"] == source_event_id
+    assert approved[-1].payload["config"]["name"] == "codex-intent"
+    assert approved[-1].payload["enabled"] is True
 
 
 def test_worker_lanes_endpoint_lists_capacity_and_active_instances(client):

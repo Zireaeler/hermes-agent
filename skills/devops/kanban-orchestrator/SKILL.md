@@ -198,6 +198,10 @@ If you are using `hermes kanban decompose`, model-produced
 they do not make the requested name a valid assignee. Keep assigning child
 tasks to existing lanes from Step 0 until a trusted operator enables or persists
 the request.
+Dashboard operators can approve those task-scoped intents from the root task
+drawer. The approval path re-runs the deterministic validator, can enable only
+for the current process or persist sanitized config, and records an audit event
+on the task. It still does not accept arbitrary shell command fields.
 
 ## Common patterns
 

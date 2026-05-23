@@ -364,6 +364,62 @@
   }
 }
 
+/* ---- Task-scoped worker lane request intents ------------------------ */
+
+.hermes-kanban-worker-lane-intents {
+  border-left: 2px solid color-mix(in srgb, #d4b348 70%, var(--color-border));
+  padding-left: 0.65rem;
+}
+.hermes-kanban-worker-lane-intent-list {
+  display: grid;
+  gap: 0.45rem;
+}
+.hermes-kanban-worker-lane-intent {
+  border: 1px solid var(--color-border);
+  border-radius: 0.4rem;
+  padding: 0.5rem 0.55rem;
+  background: color-mix(in srgb, var(--color-card, #111) 82%, transparent);
+}
+.hermes-kanban-worker-lane-intent-head {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+.hermes-kanban-worker-lane-intent-name {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+.hermes-kanban-worker-lane-intent-meta,
+.hermes-kanban-worker-lane-intent-reason {
+  font-size: 0.68rem;
+  color: var(--color-muted-foreground);
+}
+.hermes-kanban-worker-lane-intent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.2rem 0.65rem;
+  margin-top: 0.35rem;
+}
+.hermes-kanban-worker-lane-intent-reason {
+  margin-top: 0.35rem;
+  line-height: 1.4;
+}
+.hermes-kanban-worker-lane-intent-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.45rem;
+}
+.hermes-kanban-worker-lane-intent-result {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid color-mix(in srgb, #3fb97d 45%, var(--color-border));
+  border-radius: var(--radius-sm, 0.25rem);
+  background: color-mix(in srgb, #3fb97d 10%, transparent);
+  font-size: 0.72rem;
+}
+
 /* ---- Card ------------------------------------------------------------ */
 
 .hermes-kanban-card {

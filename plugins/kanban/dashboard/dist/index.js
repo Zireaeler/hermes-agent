@@ -568,7 +568,7 @@
     }, [board]);
 
     const submitWorkerLaneRequest = useCallback(function (payload) {
-      return SDK.fetchJSON(`${API}/worker-lane-requests`, {
+      return SDK.fetchJSON(withBoard(`${API}/worker-lane-requests`, board), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -1120,6 +1120,7 @@
           boardSlug: board,
           onClose: function () { setSelectedTaskId(null); },
           onRefresh: loadBoard,
+          onWorkerLaneRequest: submitWorkerLaneRequest,
           renderMarkdown: renderMd,
           allTasks: boardData.columns.reduce(function (acc, c) { return acc.concat(c.tasks); }, []),
           assignees: (boardData && (boardData.assignee_details || boardData.assignees)) || [],
@@ -3340,6 +3341,7 @@
           homeChannels: homeChannels,
           homeBusy: homeBusy,
           onToggleHomeSub: toggleHomeSubscription,
+          onWorkerLaneRequest: props.onWorkerLaneRequest,
           onRefresh: props.onRefresh,
           onReload: load,
         }) : null,
@@ -3370,6 +3372,7 @@
     const comments = props.data.comments || [];
     const events = props.data.events || [];
     const links = props.data.links || { parents: [], children: [] };
+    const laneRequests = workerLaneRequestIntents(events);
 
     return h("div", { className: "hermes-kanban-drawer-body" },
       h("div", { className: "hermes-kanban-drawer-title" },
@@ -3415,6 +3418,13 @@
         assignees: props.assignees,
         diagnostics: t.diagnostics || [],
         onRefresh: props.onRefresh,
+      }),
+      h(WorkerLaneIntentSection, {
+        task: t,
+        requests: laneRequests,
+        onSubmit: props.onWorkerLaneRequest,
+        onRefresh: props.onRefresh,
+        onReload: props.onReload,
       }),
       h(HomeSubsSection, {
         homeChannels: props.homeChannels || [],
@@ -3510,6 +3520,145 @@
         onReload: props.onReload,
       }),
       h(RunHistorySection, { runs: props.data.runs || [] }),
+    );
+  }
+
+  function workerLaneRequestIntents(events) {
+    const out = [];
+    const resolved = new Set();
+    (events || []).forEach(function (event) {
+      if (!event || event.kind !== "worker_lane_request_approved") return;
+      const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+      if (payload.source_event_id) resolved.add(String(payload.source_event_id));
+      const config = payload.config && typeof payload.config === "object" ? payload.config : {};
+      if (config.name) resolved.add(`name:${config.name}`);
+    });
+    (events || []).forEach(function (event) {
+      if (!event || event.kind !== "worker_lane_request_intent") return;
+      if (event.id && resolved.has(String(event.id))) return;
+      const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+      const requests = Array.isArray(payload.requests) ? payload.requests : [];
+      requests.forEach(function (entry, idx) {
+        const config = entry && entry.config && typeof entry.config === "object"
+          ? entry.config
+          : null;
+        if (!config) return;
+        if (config.name && resolved.has(`name:${config.name}`)) return;
+        out.push({
+          key: `${event.id || "event"}:${idx}`,
+          event_id: event.id,
+          created_at: event.created_at,
+          source: entry.source || "model",
+          requested_by: payload.requested_by || "",
+          config: config,
+        });
+      });
+    });
+    return out;
+  }
+
+  function WorkerLaneIntentSection(props) {
+    const { t } = useI18n();
+    const [busy, setBusy] = useState(null);
+    const [result, setResult] = useState(null);
+    const [err, setErr] = useState(null);
+    const requests = props.requests || [];
+    if (!requests.length) return null;
+
+    function submit(intent, opts) {
+      if (!props.onSubmit) return Promise.resolve();
+      const persist = !!(opts && opts.persist);
+      const payload = {
+        enable: true,
+        persist: persist,
+        replace: !!(opts && opts.replace),
+        task_id: props.task.id,
+        source_event_id: intent.event_id || null,
+        requested_by: "dashboard",
+        worker_lane_request: intent.config,
+      };
+      const key = `${intent.key}:${persist ? "persist" : "enable"}`;
+      setBusy(key);
+      setErr(null);
+      setResult(null);
+      return props.onSubmit(payload).then(function (res) {
+        setResult(res);
+        if (props.onReload) props.onReload();
+        if (props.onRefresh) props.onRefresh();
+      }).catch(function (e) {
+        setErr(parseApiErrorMessage(e));
+      }).then(function () {
+        setBusy(null);
+      });
+    }
+
+    return h("div", { className: "hermes-kanban-section hermes-kanban-worker-lane-intents" },
+      h("div", { className: "hermes-kanban-section-head" },
+        tx(t, "pendingWorkerLaneRequests", "Pending worker lane requests")),
+      h("div", { className: "text-xs text-muted-foreground" },
+        "Skill output is treated as intent only. These actions re-run the deterministic validator; no shell command is accepted."),
+      err ? h("div", { className: "text-xs text-destructive" }, err) : null,
+      result ? h("div", { className: "hermes-kanban-worker-lane-intent-result" },
+        result.enabled
+          ? `Enabled ${result.lane && result.lane.name ? result.lane.name : "lane"}`
+          : `Validated ${result.config && result.config.name ? result.config.name : "lane"}`)
+        : null,
+      h("div", { className: "hermes-kanban-worker-lane-intent-list" },
+        requests.map(function (intent) {
+          const cfg = intent.config || {};
+          const name = cfg.name || "(unnamed)";
+          const model = cfg.model || "default";
+          const source = intent.source || "model";
+          const eventAgo = intent.created_at && timeAgo ? timeAgo(intent.created_at) : "";
+          return h("div", {
+            key: intent.key,
+            className: "hermes-kanban-worker-lane-intent",
+          },
+            h("div", { className: "hermes-kanban-worker-lane-intent-head" },
+              h("span", { className: "hermes-kanban-worker-lane-intent-name" }, name),
+              h("span", { className: "hermes-kanban-worker-lane-intent-meta" },
+                `${cfg.type || "worker_lane"} · ${model}`),
+              source ? h("span", { className: "hermes-kanban-worker-lane-intent-meta" }, source) : null,
+              eventAgo ? h("span", { className: "hermes-kanban-worker-lane-intent-meta" }, eventAgo) : null,
+            ),
+            h("div", { className: "hermes-kanban-worker-lane-intent-grid" },
+              h(MetaRow, { label: tx(t, "sandbox", "Sandbox"), value: cfg.sandbox || "-" }),
+              h(MetaRow, { label: tx(t, "approval", "Approval"), value: cfg.approval || "-" }),
+              h(MetaRow, { label: tx(t, "concurrency", "Concurrency"), value: String(cfg.max_concurrency || 1) }),
+              h(MetaRow, { label: tx(t, "policy", "Policy"), value: cfg.success_policy || "-" }),
+            ),
+            cfg.reason
+              ? h("div", { className: "hermes-kanban-worker-lane-intent-reason" },
+                  cfg.reason)
+              : null,
+            h("details", { className: "hermes-kanban-run-meta-block" },
+              h("summary", { className: "hermes-kanban-run-meta-label" },
+                tx(t, "sanitizedConfig", "Sanitized config")),
+              h("pre", { className: "hermes-kanban-run-meta" },
+                JSON.stringify(cfg, null, 2)),
+            ),
+            h("div", { className: "hermes-kanban-worker-lane-intent-actions" },
+              h(Button, {
+                size: "sm",
+                variant: "outline",
+                disabled: !!busy || !props.onSubmit,
+                onClick: function () { submit(intent, { persist: false }); },
+                title: "Enable this validated lane in the current Hermes process only.",
+              }, busy === `${intent.key}:enable`
+                ? tx(t, "enabling", "Enabling…")
+                : tx(t, "enable", "Enable")),
+              h(Button, {
+                size: "sm",
+                disabled: !!busy || !props.onSubmit,
+                onClick: function () { submit(intent, { persist: true }); },
+                title: "Persist this sanitized lane under kanban.worker_lanes.",
+              }, busy === `${intent.key}:persist`
+                ? tx(t, "persisting", "Persisting…")
+                : tx(t, "persist", "Persist")),
+            ),
+          );
+        }),
+      ),
     );
   }
 

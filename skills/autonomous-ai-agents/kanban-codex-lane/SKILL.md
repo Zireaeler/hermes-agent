@@ -124,6 +124,9 @@ When decomposition output contains `worker_lane_request` or
 `worker_lane_request_intent` event on the root task but does not register the
 lane. Assign work only to already registered lanes until the request is
 explicitly enabled or persisted through the trusted validator path.
+In the dashboard, open the root task drawer and use the Pending worker lane
+requests section to validate, enable for the current process, or persist the
+sanitized config. That approval writes an audit event back to the task.
 
 ## Progress And Review
 

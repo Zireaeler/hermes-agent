@@ -772,6 +772,9 @@ class WorkerLaneRequestBody(BaseModel):
     enable: bool = False
     persist: bool = False
     replace: bool = False
+    task_id: Optional[str] = None
+    source_event_id: Optional[int] = Field(default=None, ge=1)
+    requested_by: Optional[str] = None
 
 
 @router.post("/tasks/{task_id}/review")
@@ -1041,7 +1044,10 @@ def advance_controller(
 
 
 @router.post("/worker-lane-requests")
-def submit_worker_lane_request(payload: WorkerLaneRequestBody):
+def submit_worker_lane_request(
+    payload: WorkerLaneRequestBody,
+    board: Optional[str] = Query(None),
+):
     """Validate and optionally enable/persist a worker lane request.
 
     Model/skill output is accepted only as a request object. Execution config
@@ -1074,6 +1080,37 @@ def submit_worker_lane_request(payload: WorkerLaneRequestBody):
             "success_policy": lane.success_policy,
             "max_concurrency": lane.max_concurrency,
         }
+
+    if payload.task_id:
+        resolved_board = _resolve_board(board)
+        conn = _conn(board=resolved_board)
+        try:
+            if kanban_db.get_task(conn, payload.task_id) is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"task {payload.task_id} not found",
+                )
+            event_payload = {
+                "requested_by": payload.requested_by or "dashboard",
+                "source_event_id": payload.source_event_id,
+                "enabled": enabled,
+                "persisted": payload.persist,
+                "replace": payload.replace,
+                "config": valid,
+                "lane": lane_info,
+            }
+            kanban_db.record_task_event(
+                conn,
+                payload.task_id,
+                (
+                    "worker_lane_request_approved"
+                    if enabled
+                    else "worker_lane_request_validated"
+                ),
+                event_payload,
+            )
+        finally:
+            conn.close()
 
     return {
         "valid": True,
