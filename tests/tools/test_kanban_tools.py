@@ -758,6 +758,74 @@ def test_worker_lane_request_tool_enables_in_process(
     assert lane.max_concurrency == 2
 
 
+def test_worker_lane_request_tool_records_task_audit_event(
+    monkeypatch,
+    worker_env,
+):
+    monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
+    from hermes_cli import kanban_db as kb
+    from hermes_cli.worker_lanes import clear_worker_lanes, get_worker_lane
+    from tools import kanban_tools as kt
+
+    clear_worker_lanes()
+    with kb.connect() as conn:
+        task_id = kb.create_task(conn, title="tool lane request root")
+        kb.record_task_event(
+            conn,
+            task_id,
+            "worker_lane_request_intent",
+            {
+                "requests": [
+                    {
+                        "config": {
+                            "name": "codex-tool-audit",
+                            "type": "codex_cli",
+                            "model": "gpt-5.4-mini",
+                            "sandbox": "workspace-write",
+                            "approval": "never",
+                            "max_concurrency": 1,
+                            "success_policy": "block_for_review",
+                        }
+                    }
+                ],
+                "approval_required": True,
+            },
+        )
+        source_event_id = kb.list_events(conn, task_id)[-1].id
+
+    out = kt._handle_worker_lane_request({
+        "worker_lane_request": {
+            "name": "codex-tool-audit",
+            "type": "codex_cli",
+            "model": "gpt-5.4-mini",
+            "sandbox": "workspace-write",
+            "approval": "never",
+            "max_concurrency": 1,
+            "success_policy": "block_for_review",
+        },
+        "enable": True,
+        "task_id": task_id,
+        "source_event_id": source_event_id,
+        "requested_by": "tool-test",
+    })
+    d = json.loads(out)
+
+    assert d["enabled"] is True
+    assert d["task_id"] == task_id
+    assert d["source_event_id"] == source_event_id
+    assert d["requested_by"] == "tool-test"
+    assert d["audit_event"] == "worker_lane_request_approved"
+    assert get_worker_lane("codex-tool-audit") is not None
+    with kb.connect() as conn:
+        events = kb.list_events(conn, task_id)
+    approved = [event for event in events if event.kind == "worker_lane_request_approved"]
+    assert approved
+    assert approved[-1].payload["requested_by"] == "tool-test"
+    assert approved[-1].payload["source_event_id"] == source_event_id
+    assert approved[-1].payload["enabled"] is True
+    assert approved[-1].payload["config"]["name"] == "codex-tool-audit"
+
+
 def test_worker_lane_request_tool_persists_sanitized_config(
     monkeypatch,
     worker_env,

@@ -187,6 +187,22 @@ argv, and executable fields. Validated requests are only enabled or persisted by
 a trusted operator/control path; decomposition output records lane request
 intent on the task but does not automatically create executable lanes.
 
+Trusted control paths can validate, enable, or persist a task-scoped intent and
+write the decision back to `task_events`:
+
+```bash
+hermes kanban worker-lane-request lane.yaml \
+  --enable \
+  --task-id <root_task_id> \
+  --source-event-id <worker_lane_request_intent_event_id> \
+  --requested-by orchestrator
+```
+
+Tool callers use `kanban_worker_lane_request` with the same `task_id`,
+`source_event_id`, and `requested_by` fields. Dashboard approvals use the same
+audit event kinds: `worker_lane_request_validated` for validate-only and
+`worker_lane_request_approved` when a lane is enabled or persisted.
+
 ## Goal Bridge
 
 The initial goal bridge preserves existing `/goal` semantics while adding

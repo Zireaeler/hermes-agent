@@ -948,7 +948,24 @@ def _handle_worker_lane_request(args: dict, **kw) -> str:
     replace, replace_error = _parse_bool_arg(args, "replace", default=False)
     if replace_error:
         return tool_error(replace_error)
+    task_id = args.get("task_id")
+    if task_id is not None:
+        task_id = str(task_id).strip()
+        if not task_id:
+            return tool_error("task_id cannot be empty")
+    source_event_id = args.get("source_event_id")
+    if source_event_id is not None:
+        try:
+            source_event_id = int(source_event_id)
+        except (TypeError, ValueError):
+            return tool_error("source_event_id must be an integer")
+    requested_by = (
+        args.get("requested_by")
+        or os.environ.get("HERMES_PROFILE")
+        or "agent"
+    )
     try:
+        from hermes_cli import kanban_db as kb
         from hermes_cli.worker_lanes import (
             enable_worker_lane_request,
             validate_worker_lane_request,
@@ -971,13 +988,48 @@ def _handle_worker_lane_request(args: dict, **kw) -> str:
                 "success_policy": lane.success_policy,
                 "max_concurrency": lane.max_concurrency,
             }
-        return json.dumps({
+        audit_event = None
+        if task_id:
+            conn = kb.connect()
+            try:
+                if kb.get_task(conn, task_id) is None:
+                    return tool_error(f"kanban_worker_lane_request: task {task_id} not found")
+                audit_event = (
+                    "worker_lane_request_approved"
+                    if enabled
+                    else "worker_lane_request_validated"
+                )
+                kb.record_task_event(
+                    conn,
+                    task_id,
+                    audit_event,
+                    {
+                        "requested_by": str(requested_by),
+                        "source_event_id": source_event_id,
+                        "enabled": enabled,
+                        "persisted": persist,
+                        "replace": replace,
+                        "config": valid,
+                        "lane": lane_info,
+                    },
+                )
+            finally:
+                conn.close()
+        payload = {
             "valid": True,
             "enabled": enabled,
             "persisted": persist,
             "lane": lane_info,
             "config": valid,
-        })
+        }
+        if task_id:
+            payload.update({
+                "task_id": task_id,
+                "source_event_id": source_event_id,
+                "requested_by": str(requested_by),
+                "audit_event": audit_event,
+            })
+        return json.dumps(payload)
     except ValueError as e:
         return tool_error(f"kanban_worker_lane_request: {e}")
     except Exception as e:
@@ -2116,6 +2168,25 @@ KANBAN_WORKER_LANE_REQUEST_SCHEMA = {
                     "Allow replacing an existing lane with the same name. "
                     "Default false."
                 ),
+            },
+            "task_id": {
+                "type": "string",
+                "description": (
+                    "Optional Kanban task id to receive a lane request audit "
+                    "event. Use this when approving a task-scoped "
+                    "worker_lane_request_intent."
+                ),
+            },
+            "source_event_id": {
+                "type": "integer",
+                "description": (
+                    "Optional event id for the worker_lane_request_intent "
+                    "being validated or approved."
+                ),
+            },
+            "requested_by": {
+                "type": "string",
+                "description": "Controller, skill, or operator identity for the audit event.",
             },
         },
         "required": ["worker_lane_request"],

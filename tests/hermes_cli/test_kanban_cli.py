@@ -2183,6 +2183,71 @@ def test_run_slash_worker_lane_request_validates_without_enabling(
     assert get_worker_lane("codex-cli-request") is None
 
 
+def test_run_slash_worker_lane_request_records_task_audit_event(
+    kanban_home, tmp_path,
+):
+    from hermes_cli.worker_lanes import clear_worker_lanes, get_worker_lane
+
+    clear_worker_lanes()
+    with kb.connect() as conn:
+        task_id = kb.create_task(conn, title="cli lane request root")
+        kb.record_task_event(
+            conn,
+            task_id,
+            "worker_lane_request_intent",
+            {
+                "requests": [
+                    {
+                        "config": {
+                            "name": "codex-cli-audit",
+                            "type": "codex_cli",
+                            "model": "gpt-5.4-mini",
+                            "sandbox": "workspace-write",
+                            "approval": "never",
+                            "max_concurrency": 1,
+                            "success_policy": "block_for_review",
+                        }
+                    }
+                ],
+                "approval_required": True,
+            },
+        )
+        source_event_id = kb.list_events(conn, task_id)[-1].id
+
+    req = tmp_path / "lane.json"
+    req.write_text(json.dumps({
+        "worker_lane_request": {
+            "name": "codex-cli-audit",
+            "type": "codex_cli",
+            "model": "gpt-5.4-mini",
+            "sandbox": "workspace-write",
+            "approval": "never",
+            "max_concurrency": 1,
+            "success_policy": "block_for_review",
+        }
+    }), encoding="utf-8")
+
+    payload = json.loads(kc.run_slash(
+        f"worker-lane-request {req} --enable "
+        f"--task-id {task_id} --source-event-id {source_event_id} "
+        "--requested-by cli-test --json"
+    ))
+
+    assert payload["enabled"] is True
+    assert payload["task_id"] == task_id
+    assert payload["source_event_id"] == source_event_id
+    assert payload["audit_event"] == "worker_lane_request_approved"
+    assert get_worker_lane("codex-cli-audit") is not None
+    with kb.connect() as conn:
+        events = kb.list_events(conn, task_id)
+    approved = [event for event in events if event.kind == "worker_lane_request_approved"]
+    assert approved
+    assert approved[-1].payload["requested_by"] == "cli-test"
+    assert approved[-1].payload["source_event_id"] == source_event_id
+    assert approved[-1].payload["enabled"] is True
+    assert approved[-1].payload["config"]["name"] == "codex-cli-audit"
+
+
 def test_run_slash_worker_lane_request_persist_enables_config_lane(
     kanban_home, tmp_path,
 ):

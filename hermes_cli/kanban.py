@@ -1365,6 +1365,22 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
         action="store_true",
         help="Replace an existing lane with the same name",
     )
+    p_lane_req.add_argument(
+        "--task-id",
+        default=None,
+        help="Optional task id to receive a lane request audit event",
+    )
+    p_lane_req.add_argument(
+        "--source-event-id",
+        type=int,
+        default=None,
+        help="Optional worker_lane_request_intent event id being resolved",
+    )
+    p_lane_req.add_argument(
+        "--requested-by",
+        default=None,
+        help="Controller/skill/operator identity for the audit event",
+    )
     p_lane_req.add_argument("--json", action="store_true")
 
     # --- context --- (for spawned workers)
@@ -2113,6 +2129,40 @@ def _cmd_worker_lane_request(args: argparse.Namespace) -> int:
             "max_concurrency": lane.max_concurrency,
         }
 
+    task_id = getattr(args, "task_id", None)
+    source_event_id = getattr(args, "source_event_id", None)
+    requested_by = (
+        getattr(args, "requested_by", None)
+        or os.environ.get("HERMES_PROFILE")
+        or "cli"
+    )
+    if task_id:
+        try:
+            with kb.connect() as conn:
+                if kb.get_task(conn, task_id) is None:
+                    raise ValueError(f"task {task_id} not found")
+                kb.record_task_event(
+                    conn,
+                    task_id,
+                    (
+                        "worker_lane_request_approved"
+                        if enabled
+                        else "worker_lane_request_validated"
+                    ),
+                    {
+                        "requested_by": requested_by,
+                        "source_event_id": source_event_id,
+                        "enabled": enabled,
+                        "persisted": bool(getattr(args, "persist", False)),
+                        "replace": bool(getattr(args, "replace", False)),
+                        "config": valid,
+                        "lane": lane_info,
+                    },
+                )
+        except Exception as exc:
+            print(f"kanban worker-lane-request: {exc}", file=sys.stderr)
+            return 1
+
     payload = {
         "valid": True,
         "enabled": enabled,
@@ -2120,6 +2170,17 @@ def _cmd_worker_lane_request(args: argparse.Namespace) -> int:
         "lane": lane_info,
         "config": valid,
     }
+    if task_id:
+        payload.update({
+            "task_id": task_id,
+            "source_event_id": source_event_id,
+            "requested_by": requested_by,
+            "audit_event": (
+                "worker_lane_request_approved"
+                if enabled
+                else "worker_lane_request_validated"
+            ),
+        })
     if getattr(args, "json", False):
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0

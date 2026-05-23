@@ -127,6 +127,9 @@ explicitly enabled or persisted through the trusted validator path.
 In the dashboard, open the root task drawer and use the Pending worker lane
 requests section to validate, enable for the current process, or persist the
 sanitized config. That approval writes an audit event back to the task.
+CLI and tool callers can write the same task-scoped audit trail with
+`hermes kanban worker-lane-request ... --task-id <id> --source-event-id <event>`
+or `kanban_worker_lane_request(task_id=..., source_event_id=...)`.
 
 ## Progress And Review
 
