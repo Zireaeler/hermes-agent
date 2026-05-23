@@ -1784,6 +1784,74 @@ def test_plan_review_endpoint_creates_review_and_test_followups(client, tmp_path
     assert "review follow-up gate is not satisfied" in early.json()["detail"]
 
 
+def test_task_progress_endpoint_includes_bounded_codex_events(client, tmp_path):
+    from hermes_cli import kanban_db as kb
+
+    conn = kb.connect()
+    try:
+        tid = kb.create_task(
+            conn,
+            title="codex events via dashboard api",
+            assignee="codex-deep",
+            workspace_kind="dir",
+            workspace_path=str(tmp_path),
+        )
+        task = kb.claim_task(conn, tid, claimer="worker:codex-deep")
+        assert task is not None
+        run_id = task.current_run_id
+        assert run_id is not None
+        kb.record_task_event(
+            conn,
+            tid,
+            "worker_codex_event",
+            {
+                "worker_lane": "codex-deep",
+                "worker_kind": "codex_cli",
+                "run_id": run_id,
+                "event_type": "item.completed",
+                "item": {
+                    "type": "command_execution",
+                    "status": "completed",
+                    "exit_code": 0,
+                    "command": "pytest " + ("x" * 1000),
+                    "output_tail": "passed\n" + ("A" * 4000),
+                },
+                "usage": {
+                    "input_tokens": 12,
+                    "output_tokens": 34,
+                    "reasoning_output_tokens": 5,
+                },
+            },
+            run_id=run_id,
+        )
+    finally:
+        conn.close()
+
+    r = client.get(
+        f"/api/plugins/kanban/tasks/{tid}/progress",
+        params={"children": "true", "log_tail": "1024"},
+    )
+
+    assert r.status_code == 200, r.text
+    data = r.json()
+    events = data["worker_codex_events"]
+    assert len(events) == 1
+    assert events[0]["run_id"] == run_id
+    payload = events[0]["payload"]
+    assert payload["worker_lane"] == "codex-deep"
+    assert payload["event_type"] == "item.completed"
+    assert payload["usage"]["reasoning_output_tokens"] == 5
+    item = payload["item"]
+    assert item["type"] == "command_execution"
+    assert item["status"] == "completed"
+    assert item["exit_code"] == 0
+    assert item["command"].startswith("pytest ")
+    assert len(item["command"]) < 900
+    assert "truncated" in item["command"]
+    assert len(item["output_tail"]) < 1300
+    assert "truncated" in item["output_tail"]
+
+
 def test_plan_review_endpoint_dispatch_dry_run_scopes_to_followups(
     client,
     tmp_path,
@@ -3554,6 +3622,13 @@ def test_dashboard_drawer_renders_worker_evidence_review_controls():
     assert "request_changes_on_failure" in js
     assert "loop: true" in js
     assert "max_iterations: 8" in js
+    assert "worker_codex_events" in js
+    assert "Recent Codex activity" in js
+    assert "function (event, idx)" in js
+    assert "command_execution" in js
+    assert "file_change" in js
+    assert "output_tail" in js
+    assert "reasoning_output_tokens" in js
 
 
 def test_dashboard_worker_evidence_styles_exist():
@@ -3573,3 +3648,7 @@ def test_dashboard_worker_evidence_styles_exist():
     assert ".hermes-kanban-worker-gate-files" in css
     assert ".hermes-kanban-worker-gate-reason" in css
     assert ".hermes-kanban-worker-review-actions" in css
+    assert ".hermes-kanban-codex-events" in css
+    assert ".hermes-kanban-codex-event-list" in css
+    assert ".hermes-kanban-codex-event-status--completed" in css
+    assert ".hermes-kanban-codex-event-tail" in css

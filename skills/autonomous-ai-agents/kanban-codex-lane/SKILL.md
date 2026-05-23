@@ -135,6 +135,13 @@ kanban_acceptance(task_id=task)
 kanban_reviews(lane="codex-deep")
 ```
 
+Operators can view the same bounded evidence in the dashboard task drawer:
+the Worker evidence section shows checklist progress, recent Codex JSON
+activity snapshots, bounded log tail, git/test metadata, child worker state,
+and review controls. The CLI equivalent is
+`hermes kanban progress <task_id> --children --log-tail 4096` or `--json` for
+the full bounded payload.
+
 The Codex adapter parses simple checklist output into `worker_progress` task events, records lane/run-scoped worker heartbeats, and writes logs under the normal Kanban worker log path. The main agent and dashboard should read these records instead of asking the running Codex process for status.
 
 Review strategy:

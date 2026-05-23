@@ -1023,6 +1023,80 @@
 .hermes-kanban-worker-progress-item--running .hermes-kanban-worker-progress-status {
   color: #d4b348;
 }
+.hermes-kanban-codex-events {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.55rem;
+}
+.hermes-kanban-codex-events > summary {
+  cursor: pointer;
+}
+.hermes-kanban-codex-event-list {
+  display: grid;
+  gap: 0.35rem;
+}
+.hermes-kanban-codex-event {
+  border: 1px solid var(--color-border);
+  border-radius: 0.4rem;
+  padding: 0.45rem 0.5rem;
+  background: color-mix(in srgb, var(--color-card, #111) 82%, transparent);
+}
+.hermes-kanban-codex-event-head {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.hermes-kanban-codex-event-type {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-foreground);
+}
+.hermes-kanban-codex-event-status {
+  border-radius: 9999px;
+  padding: 0.04rem 0.35rem;
+  font-size: 0.66rem;
+  color: var(--color-muted-foreground);
+  background: color-mix(in srgb, var(--color-muted-foreground) 8%, transparent);
+}
+.hermes-kanban-codex-event-status--completed {
+  color: #3fb97d;
+  background: color-mix(in srgb, #3fb97d 10%, transparent);
+}
+.hermes-kanban-codex-event-status--failed {
+  color: var(--color-destructive, #d14a4a);
+  background: color-mix(in srgb, var(--color-destructive, #d14a4a) 10%, transparent);
+}
+.hermes-kanban-codex-event-meta,
+.hermes-kanban-codex-event-usage {
+  font-size: 0.68rem;
+  color: var(--color-muted-foreground);
+}
+.hermes-kanban-codex-event-summary {
+  margin-top: 0.25rem;
+  font-size: 0.74rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.hermes-kanban-codex-event-changes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.16rem;
+  margin-top: 0.25rem;
+  font-size: 0.7rem;
+  color: var(--color-muted-foreground);
+}
+.hermes-kanban-codex-event-change code {
+  font-size: 0.68rem;
+}
+.hermes-kanban-codex-event-tail {
+  max-height: 8rem;
+  overflow: auto;
+  margin-top: 0.3rem;
+  font-size: 0.7rem;
+}
 .hermes-kanban-worker-child-summary {
   display: grid;
   gap: 0.45rem;

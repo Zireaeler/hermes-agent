@@ -492,15 +492,38 @@ def test_run_slash_progress_json_is_read_only(kanban_home):
             {"lane": "codex-deep", "items": [{"index": 1, "status": "done", "text": "mock"}]},
             run_id=run_id,
         )
+        kb.record_task_event(
+            conn,
+            tid,
+            "worker_codex_event",
+            {
+                "worker_lane": "codex-deep",
+                "worker_kind": "codex_cli",
+                "run_id": run_id,
+                "event_type": "item.completed",
+                "item": {
+                    "type": "command_execution",
+                    "status": "completed",
+                    "exit_code": 0,
+                    "command": "pytest -q",
+                },
+            },
+            run_id=run_id,
+        )
         before = kb.get_task(conn, tid)
 
     payload = json.loads(kc.run_slash(f"progress {tid} --json"))
+    text = kc.run_slash(f"progress {tid}")
 
     with kb.connect() as conn:
         after = kb.get_task(conn, tid)
     assert payload["task"]["status"] == "running"
     assert payload["task"]["worker_pid"] == 4242
     assert payload["worker_progress"]["items"][0]["text"] == "mock"
+    assert payload["worker_codex_events"][0]["payload"]["item"]["command"] == "pytest -q"
+    assert "Recent Codex activity:" in text
+    assert "command_execution" in text
+    assert "pytest -q" in text
     assert after.status == "running"
     assert after.claim_lock == before.claim_lock
 

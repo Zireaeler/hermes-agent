@@ -3504,6 +3504,7 @@
       h(WorkerEvidenceSection, {
         taskId: t.id,
         boardSlug: props.boardSlug,
+        timeAgo: timeAgo,
         eventTick: events.length ? events[events.length - 1].id : 0,
         onRefresh: props.onRefresh,
         onReload: props.onReload,
@@ -3680,6 +3681,9 @@
     const workerLane = (data && data.worker_lane) || evidence.worker_lane || null;
     const progress = data && data.worker_progress;
     const progressItems = progress && Array.isArray(progress.items) ? progress.items : [];
+    const codexEvents = data && Array.isArray(data.worker_codex_events)
+      ? data.worker_codex_events
+      : [];
     const children = data && Array.isArray(data.children) ? data.children : [];
     const childSummary = (data && data.child_summary) || null;
     const childActions = childSummary && childSummary.recommended_actions
@@ -3732,6 +3736,7 @@
       workerLane ||
       data && data.review_required ||
       progressItems.length ||
+      codexEvents.length ||
       hasChildProgress ||
       hasAcceptanceState ||
       verification ||
@@ -3847,6 +3852,52 @@
       });
     };
 
+    const codexEventPayload = function (event) {
+      return event && event.payload && typeof event.payload === "object"
+        ? event.payload
+        : {};
+    };
+    const codexEventItem = function (payload) {
+      return payload && payload.item && typeof payload.item === "object"
+        ? payload.item
+        : {};
+    };
+    const codexEventRunId = function (event, payload) {
+      if (payload && payload.run_id !== undefined && payload.run_id !== null) return payload.run_id;
+      if (event && event.run_id !== undefined && event.run_id !== null) return event.run_id;
+      return null;
+    };
+    const codexEventTitle = function (payload, item) {
+      return item.type || payload.event_type || tx(t, "codexEvent", "Codex event");
+    };
+    const codexEventSummary = function (payload, item) {
+      const type = item.type || payload.event_type || "";
+      if (type === "command_execution") {
+        return item.command || tx(t, "commandExecution", "command execution");
+      }
+      if (type === "file_change") {
+        const changes = Array.isArray(item.changes) ? item.changes : [];
+        if (changes.length) {
+          return changes.slice(0, 3).map(function (change) {
+            return change.path || "";
+          }).filter(Boolean).join(", ");
+        }
+        return tx(t, "fileChange", "file change");
+      }
+      if (item.text_tail) return item.text_tail;
+      if (payload.thread_id) return payload.thread_id;
+      return "";
+    };
+    const codexEventUsage = function (usage) {
+      if (!usage || typeof usage !== "object") return "";
+      const parts = [];
+      if (usage.input_tokens !== undefined) parts.push(`in ${usage.input_tokens}`);
+      if (usage.cached_input_tokens !== undefined) parts.push(`cached ${usage.cached_input_tokens}`);
+      if (usage.output_tokens !== undefined) parts.push(`out ${usage.output_tokens}`);
+      if (usage.reasoning_output_tokens !== undefined) parts.push(`reasoning ${usage.reasoning_output_tokens}`);
+      return parts.join(" · ");
+    };
+
     if (!state.loading && !state.err && !hasEvidence) return null;
 
     return h("div", { className: "hermes-kanban-section hermes-kanban-worker-evidence" },
@@ -3896,6 +3947,73 @@
                   status === "done" ? "[x]" : status === "running" ? "[>]" : "[ ]"),
                 h("span", null, item.text || ""));
             }),
+          )
+        : null,
+      codexEvents.length
+        ? h("details", { className: "hermes-kanban-codex-events", open: true },
+            h("summary", { className: "hermes-kanban-run-meta-label" },
+              tx(t, "recentCodexActivity", "Recent Codex activity")),
+            h("div", { className: "hermes-kanban-codex-event-list" },
+              codexEvents.map(function (event, idx) {
+                const payload = codexEventPayload(event);
+                const item = codexEventItem(payload);
+                const runId = codexEventRunId(event, payload);
+                const title = codexEventTitle(payload, item);
+                const summary = codexEventSummary(payload, item);
+                const usage = codexEventUsage(payload.usage);
+                const changes = Array.isArray(item.changes) ? item.changes : [];
+                return h("div", {
+                  key: event.id || `${runId || "run"}:${idx}`,
+                  className: "hermes-kanban-codex-event",
+                },
+                  h("div", { className: "hermes-kanban-codex-event-head" },
+                    h("span", { className: "hermes-kanban-codex-event-type" }, title),
+                    item.status
+                      ? h("span", {
+                          className: cn("hermes-kanban-codex-event-status",
+                            `hermes-kanban-codex-event-status--${item.status}`),
+                        }, item.status)
+                      : null,
+                    item.exit_code !== undefined && item.exit_code !== null
+                      ? h("span", { className: "hermes-kanban-codex-event-meta" },
+                          `exit ${item.exit_code}`)
+                      : null,
+                    runId !== null
+                      ? h("span", { className: "hermes-kanban-codex-event-meta" },
+                          `run ${runId}`)
+                      : null,
+                    event.created_at && props.timeAgo
+                      ? h("span", { className: "hermes-kanban-codex-event-meta" },
+                          props.timeAgo(event.created_at))
+                      : null,
+                  ),
+                  summary
+                    ? h("div", { className: "hermes-kanban-codex-event-summary" },
+                        summary)
+                    : null,
+                  changes.length
+                    ? h("div", { className: "hermes-kanban-codex-event-changes" },
+                        changes.slice(0, 5).map(function (change, changeIdx) {
+                          return h("span", {
+                            key: `${change.path || changeIdx}:${change.kind || ""}`,
+                            className: "hermes-kanban-codex-event-change",
+                          },
+                            change.kind ? h("span", null, `${change.kind}: `) : null,
+                            h("code", null, change.path || "(unknown)"),
+                          );
+                        }))
+                    : null,
+                  item.output_tail
+                    ? h("pre", { className: "hermes-kanban-pre hermes-kanban-codex-event-tail" },
+                        item.output_tail)
+                    : null,
+                  usage
+                    ? h("div", { className: "hermes-kanban-codex-event-usage" },
+                        usage)
+                    : null,
+                );
+              }),
+            ),
           )
         : null,
       hasChildProgress

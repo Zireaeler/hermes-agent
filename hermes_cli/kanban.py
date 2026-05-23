@@ -144,6 +144,43 @@ def _render_progress_items(items: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def _render_codex_activity(events: list[dict[str, Any]], *, limit: int = 5) -> list[str]:
+    lines: list[str] = []
+    for event in events[-max(1, limit):]:
+        if not isinstance(event, dict):
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        item = payload.get("item") if isinstance(payload.get("item"), dict) else {}
+        title = item.get("type") or payload.get("event_type") or "codex_event"
+        bits = [str(title)]
+        if item.get("status"):
+            bits.append(str(item.get("status")))
+        if item.get("exit_code") is not None:
+            bits.append(f"exit={item.get('exit_code')}")
+        run_id = payload.get("run_id", event.get("run_id"))
+        if run_id is not None:
+            bits.append(f"run={run_id}")
+
+        summary = ""
+        if item.get("type") == "command_execution":
+            summary = str(item.get("command") or "")
+        elif item.get("type") == "file_change":
+            changes = item.get("changes") if isinstance(item.get("changes"), list) else []
+            summary = ", ".join(
+                str(change.get("path"))
+                for change in changes[:3]
+                if isinstance(change, dict) and change.get("path")
+            )
+        else:
+            summary = str(item.get("text_tail") or payload.get("thread_id") or "")
+
+        line = " · ".join(bits)
+        if summary:
+            line += f": {summary}"
+        lines.append(line[:200])
+    return lines
+
+
 def _parse_workspace_flag(value: str) -> tuple[str, Optional[str]]:
     """Parse ``--workspace`` into ``(kind, path|None)``.
 
@@ -2698,6 +2735,11 @@ def _cmd_progress(args: argparse.Namespace) -> int:
         print("\nProgress:")
         for line in _render_progress_items(items):
             print(f"  {line}")
+    codex_events = payload.get("worker_codex_events") or []
+    if codex_events:
+        print("\nRecent Codex activity:")
+        for line in _render_codex_activity(codex_events):
+            print(f"  - {line}")
     if payload.get("review_required"):
         print("\nReview: required")
     verification = payload.get("verification") or {}
