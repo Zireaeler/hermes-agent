@@ -2072,6 +2072,72 @@ def test_advance_acceptance_workflow_plans_and_dispatches_followups(
     assert progress.review_followup_gate["running"] == 0
 
 
+def test_advance_acceptance_blocks_when_followup_lane_is_not_spawnable(
+    kanban_home,
+    tmp_path,
+    monkeypatch,
+    request,
+):
+    from hermes_cli import profiles
+    from hermes_cli.worker_lanes import WorkerLane, clear_worker_lanes, register_worker_lane
+
+    metadata = {
+        "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+        "verification": {"commands": ["pytest -q"], "summary": "passed"},
+        "review": {"required": True, "reason": "Codex completed; Hermes review required"},
+    }
+    clear_worker_lanes()
+    request.addfinalizer(clear_worker_lanes)
+    register_worker_lane(WorkerLane(
+        name="codex-review",
+        kind="codex_cli",
+        description="review lane",
+        spawn_fn=lambda task, workspace, **kwargs: 123,
+        source="test",
+    ))
+    monkeypatch.setattr(profiles, "profile_exists", lambda name: False)
+
+    with kb.connect() as conn:
+        tid = kb.create_task(
+            conn,
+            title="advance missing followup lane",
+            assignee="codex-deep",
+            workspace_kind="dir",
+            workspace_path=str(tmp_path),
+        )
+        task = kb.claim_task(conn, tid, claimer="worker:codex-deep")
+        assert task is not None
+        assert kb.block_task(
+            conn,
+            tid,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=task.current_run_id,
+            metadata=metadata,
+        )
+        payload = kb.advance_acceptance_workflow(
+            conn,
+            tid,
+            reviewer="controller",
+            dispatch=True,
+        )
+
+    assert [step["kind"] for step in payload["steps"]] == [
+        "plan_review_followups",
+        "dispatch_followups",
+        "blocked",
+    ]
+    blocked = payload["steps"][-1]
+    assert blocked["reason"] == "review/test follow-up lane is not spawnable"
+    assert blocked["missing_lanes"] == [{
+        "purpose": "test",
+        "task_id": payload["steps"][0]["plan"]["test_task_id"],
+        "assignee": "codex-test",
+        "state": "pending",
+    }]
+    assert blocked["review_followup_gate"]["pending"] == 1
+    assert blocked["review_followup_gate"]["running"] == 1
+
+
 def test_advance_acceptance_workflow_runs_checks_and_approves(
     kanban_home,
     tmp_path,

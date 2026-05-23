@@ -1492,6 +1492,62 @@ def test_advance_acceptance_tool_dry_run_plans_scoped_followups(
     assert test_task.status == "ready"
 
 
+def test_advance_acceptance_tool_blocks_on_missing_followup_lane(
+    monkeypatch,
+    worker_env,
+    tmp_path,
+    request,
+):
+    monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
+    from hermes_cli import kanban_db as kb
+    from hermes_cli import profiles
+    from hermes_cli.worker_lanes import WorkerLane, clear_worker_lanes, register_worker_lane
+    from tools import kanban_tools as kt
+
+    clear_worker_lanes()
+    request.addfinalizer(clear_worker_lanes)
+    register_worker_lane(WorkerLane(
+        name="codex-review",
+        kind="codex_cli",
+        description="review lane",
+        spawn_fn=lambda task, workspace, **kwargs: 123,
+        source="test",
+    ))
+    monkeypatch.setattr(profiles, "profile_exists", lambda name: False)
+    metadata = {
+        "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+        "verification": {"commands": ["pytest -q"], "summary": "passed"},
+        "review": {"required": True, "reason": "Codex completed; Hermes review required"},
+    }
+    with kb.connect() as conn:
+        tid = kb.create_task(
+            conn,
+            title="tool missing followup lane",
+            assignee="codex-deep",
+            workspace_kind="dir",
+            workspace_path=str(tmp_path),
+        )
+        task = kb.claim_task(conn, tid, claimer="worker:codex-deep")
+        assert task is not None
+        assert kb.block_task(
+            conn,
+            tid,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=task.current_run_id,
+            metadata=metadata,
+        )
+
+    out = kt._handle_advance_acceptance({
+        "task_id": tid,
+        "loop": True,
+    })
+    d = json.loads(out)
+
+    assert d["stop_reason"] == "blocked"
+    assert d["iterations"][0]["steps"][-1]["kind"] == "blocked"
+    assert d["iterations"][0]["steps"][-1]["missing_lanes"][0]["assignee"] == "codex-test"
+
+
 def test_advance_acceptance_tool_requests_changes_on_failed_followup(
     monkeypatch,
     worker_env,

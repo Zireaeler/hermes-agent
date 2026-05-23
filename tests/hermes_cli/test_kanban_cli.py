@@ -1315,6 +1315,55 @@ def test_run_slash_advance_acceptance_dry_run_plans_scoped_followups(
     assert payload["final"]["recommended_action"] == "wait_for_followups"
 
 
+def test_run_slash_advance_acceptance_blocks_on_missing_followup_lane(
+    kanban_home,
+    tmp_path,
+    monkeypatch,
+    request,
+):
+    from hermes_cli import profiles
+    from hermes_cli.worker_lanes import WorkerLane, clear_worker_lanes, register_worker_lane
+
+    clear_worker_lanes()
+    request.addfinalizer(clear_worker_lanes)
+    register_worker_lane(WorkerLane(
+        name="codex-review",
+        kind="codex_cli",
+        description="review lane",
+        spawn_fn=lambda task, workspace, **kwargs: 123,
+        source="test",
+    ))
+    monkeypatch.setattr(profiles, "profile_exists", lambda name: False)
+    metadata = {
+        "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+        "verification": {"commands": ["pytest -q"], "summary": "passed"},
+        "review": {"required": True, "reason": "Codex completed; Hermes review required"},
+    }
+    with kb.connect() as conn:
+        tid = kb.create_task(
+            conn,
+            title="advance missing followup lane via slash",
+            assignee="codex-deep",
+            workspace_kind="dir",
+            workspace_path=str(tmp_path),
+        )
+        task = kb.claim_task(conn, tid, claimer="worker:codex-deep")
+        assert task is not None
+        assert kb.block_task(
+            conn,
+            tid,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=task.current_run_id,
+            metadata=metadata,
+        )
+
+    payload = json.loads(kc.run_slash(f"advance-acceptance {tid} --loop --json"))
+
+    assert payload["stop_reason"] == "blocked"
+    assert payload["iterations"][0]["steps"][-1]["kind"] == "blocked"
+    assert payload["iterations"][0]["steps"][-1]["missing_lanes"][0]["assignee"] == "codex-test"
+
+
 def test_run_slash_advance_acceptance_no_request_changes_reports_blocked(
     kanban_home,
     tmp_path,

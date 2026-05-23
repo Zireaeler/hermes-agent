@@ -154,6 +154,12 @@ session transcript. The intended flow is:
 6. Failed gates produce bounded request-changes feedback and can return the
    implementation task to `ready` until retry limits are exhausted.
 
+If a planned review/test follow-up is assigned to a lane that is not a
+registered worker lane and not a Hermes profile, the advance controller returns
+a `blocked` step with `missing_lanes` instead of silently waiting forever. The
+fix is to register the lane, persist an approved lane request, or reassign the
+follow-up task to a spawnable assignee.
+
 Large diffs can trigger review shard follow-ups. These shards are bounded
 review tasks over subsets of changed files; every shard verdict must pass before
 the source task can be approved. They are a control-plane review workflow, not a

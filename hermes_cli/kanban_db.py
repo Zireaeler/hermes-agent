@@ -4788,6 +4788,14 @@ def advance_acceptance_workflow(
         # before this call returned.
         gate = snapshot.get("review_followup_gate")
         if gate and not gate.get("ready"):
+            missing_lanes = _nonspawnable_followup_lane_items(conn, gate)
+            if missing_lanes:
+                steps.append({
+                    "kind": "blocked",
+                    "reason": "review/test follow-up lane is not spawnable",
+                    "missing_lanes": missing_lanes,
+                    "review_followup_gate": gate,
+                })
             return {
                 "task_id": task_id,
                 "steps": steps,
@@ -4900,6 +4908,14 @@ def advance_acceptance_workflow(
                 "advanced": bool(steps),
             }
         if gate.get("ready") is not True:
+            missing_lanes = _nonspawnable_followup_lane_items(conn, gate)
+            if missing_lanes:
+                steps.append({
+                    "kind": "blocked",
+                    "reason": "review/test follow-up lane is not spawnable",
+                    "missing_lanes": missing_lanes,
+                    "review_followup_gate": gate,
+                })
             return {
                 "task_id": task_id,
                 "steps": steps,
@@ -5027,6 +5043,49 @@ def _dispatch_lifecycle_changed(payload: dict[str, Any]) -> bool:
         or payload.get("stale")
         or payload.get("auto_blocked")
     )
+
+
+def _nonspawnable_followup_lane_items(
+    conn: sqlite3.Connection,
+    gate: Optional[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return pending follow-ups whose assignee cannot be spawned."""
+    missing: list[dict[str, Any]] = []
+    if not isinstance(gate, dict):
+        return missing
+    try:
+        from hermes_cli.worker_lanes import resolve_worker_assignee
+    except Exception:
+        return missing
+
+    for item in gate.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        state = str(item.get("state") or "")
+        if state not in {"pending", "missing"}:
+            continue
+        task_id = str(item.get("task_id") or "").strip()
+        followup = get_task(conn, task_id) if task_id else None
+        assignee = str(
+            item.get("assignee")
+            or (followup.assignee if followup is not None else "")
+            or ""
+        ).strip()
+        if not assignee:
+            continue
+        try:
+            resolution = resolve_worker_assignee(assignee)
+            resolution_kind = resolution.kind
+        except Exception:
+            resolution_kind = "skipped_nonspawnable"
+        if resolution_kind == "skipped_nonspawnable":
+            missing.append({
+                "purpose": item.get("purpose"),
+                "task_id": task_id,
+                "assignee": assignee,
+                "state": state,
+            })
+    return missing
 
 
 def _review_followup_plan_task_ids(plan: ReviewFollowupPlan) -> list[str]:
