@@ -98,7 +98,12 @@ Rules:
     and the system will route to the default_assignee.
   - Worker lanes are trusted external execution lanes already registered in
     Hermes. You may choose an existing worker lane by name, but do not invent
-    lane names and do not output worker lane configuration.
+    lane names by assigning them directly.
+  - If a task would benefit from a new worker lane that is not in the roster,
+    you may include "worker_lane_request" (or a top-level
+    "worker_lane_requests" list) as a structured request. Hermes will only
+    validate and record that request for approval; it will not execute or
+    enable arbitrary lane configuration from model output.
   - Each child task body is what a fresh worker will read with no other
     context — be specific about goal, approach, and acceptance criteria.
   - When the task has a concrete deterministic acceptance condition, attach
@@ -313,6 +318,87 @@ def _normalize_assignee_choice(
     return chosen
 
 
+def _raw_worker_lane_requests(parsed: dict) -> tuple[list[dict], list[str]]:
+    """Return model-proposed lane requests without trusting them."""
+    raw = parsed.get("worker_lane_requests")
+    if raw is None:
+        raw = parsed.get("worker_lane_request")
+    if raw is None:
+        return [], []
+    if isinstance(raw, dict):
+        return [raw], []
+    if isinstance(raw, list):
+        requests: list[dict] = []
+        errors: list[str] = []
+        for index, item in enumerate(raw):
+            if isinstance(item, dict):
+                requests.append(item)
+            else:
+                errors.append(f"worker_lane_requests[{index}]: must be an object")
+        return requests, errors
+    return [], ["worker_lane_request must be an object or list"]
+
+
+def _validate_worker_lane_requests(
+    parsed: dict,
+    *,
+    source: str,
+) -> tuple[list[dict], list[str]]:
+    requests, errors = _raw_worker_lane_requests(parsed)
+    if not requests:
+        return [], errors
+    try:
+        from hermes_cli.worker_lanes import validate_worker_lane_request
+    except Exception as exc:
+        errors.append(f"worker lane request validator unavailable: {exc}")
+        return [], errors
+
+    valid: list[dict] = []
+    for index, request in enumerate(requests):
+        request_source = source if len(requests) == 1 else f"{source}[{index}]"
+        try:
+            valid.append({
+                "source": request_source,
+                "config": validate_worker_lane_request(request),
+            })
+        except Exception as exc:
+            name = request.get("name") if isinstance(request, dict) else None
+            label = f"{request_source}:{name}" if name else request_source
+            errors.append(f"{label}: {exc}")
+    return valid, errors
+
+
+def _record_worker_lane_request_intent(
+    conn,
+    task_id: str,
+    *,
+    author: str,
+    valid_requests: list[dict],
+    errors: list[str],
+) -> None:
+    """Persist validated lane intent for later trusted approval.
+
+    This deliberately does not enable or persist a worker lane.  Model output
+    may express intent, but the existing worker-lane-request tool/API/CLI path
+    remains the only trust boundary that can register an executable adapter.
+    """
+    if not valid_requests and not errors:
+        return
+    payload = {
+        "requested_by": author,
+        "requests": valid_requests,
+        "errors": errors,
+        "enabled": False,
+        "approval_required": True,
+    }
+    kb.record_task_event(
+        conn,
+        task_id,
+        "worker_lane_request_intent",
+        payload,
+    )
+
+
 def decompose_task(
     task_id: str,
     *,
@@ -397,6 +483,10 @@ def decompose_task(
 
     fanout = bool(parsed.get("fanout"))
     audit_author = author or _profile_author()
+    top_lane_requests, top_lane_request_errors = _validate_worker_lane_requests(
+        parsed,
+        source="root",
+    )
 
     if not fanout:
         # Fall back to single-task spec promotion (same effect as specify).
@@ -444,6 +534,14 @@ def decompose_task(
                     acceptance_requests,
                     requested_by=audit_author,
                 )
+            if ok:
+                _record_worker_lane_request_intent(
+                    conn,
+                    task_id,
+                    author=audit_author,
+                    valid_requests=top_lane_requests,
+                    errors=top_lane_request_errors,
+                )
         if not ok:
             return DecomposeOutcome(
                 task_id, False, "task moved out of triage before promotion",
@@ -462,6 +560,9 @@ def decompose_task(
     # Rewrite invalid assignees to the default fallback. Never leave a
     # task with assignee=None — the user explicitly does not want that.
     children: list[dict] = []
+    child_lane_requests: list[dict] = []
+    child_lane_request_errors: list[str] = list(top_lane_request_errors)
+    child_lane_requests.extend(top_lane_requests)
     for idx, entry in enumerate(raw_tasks):
         if not isinstance(entry, dict):
             return DecomposeOutcome(
@@ -509,6 +610,12 @@ def decompose_task(
                 False,
                 f"tasks[{idx}].acceptance_check_requests invalid: {exc}",
             )
+        lane_requests, lane_request_errors = _validate_worker_lane_requests(
+            entry,
+            source=f"tasks[{idx}]",
+        )
+        child_lane_requests.extend(lane_requests)
+        child_lane_request_errors.extend(lane_request_errors)
         children.append({
             "title": title.strip()[:200],
             "body": body.strip(),
@@ -527,6 +634,14 @@ def decompose_task(
                 author=audit_author,
                 auto_promote=auto_promote,
             )
+            if child_ids is not None:
+                _record_worker_lane_request_intent(
+                    conn,
+                    task_id,
+                    author=audit_author,
+                    valid_requests=child_lane_requests,
+                    errors=child_lane_request_errors,
+                )
     except ValueError as exc:
         return DecomposeOutcome(task_id, False, f"DB rejected graph: {exc}")
     except Exception as exc:

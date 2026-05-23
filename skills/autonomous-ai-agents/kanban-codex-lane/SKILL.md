@@ -119,6 +119,12 @@ kanban_worker_lane_request(
 
 The default is validate-only. A trusted operator/orchestrator can pass `enable=True` for this process or `persist=True` to write sanitized config. The validator allowlists lane type, model, sandbox, approval policy, success policy, and concurrency; it rejects arbitrary command, shell, argv, and executable fields.
 
+When decomposition output contains `worker_lane_request` or
+`worker_lane_requests`, Hermes records a validated
+`worker_lane_request_intent` event on the root task but does not register the
+lane. Assign work only to already registered lanes until the request is
+explicitly enabled or persisted through the trusted validator path.
+
 ## Progress And Review
 
 Progress queries must read Kanban state without touching the worker process:

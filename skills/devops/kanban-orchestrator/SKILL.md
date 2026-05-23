@@ -192,6 +192,13 @@ kanban_worker_lane_request(
 
 The request defaults to validate-only. A trusted operator or orchestrator may pass `enable=True` for the current process or `persist=True` to write sanitized config. The validator rejects arbitrary command, shell, argv, and executable fields.
 
+If you are using `hermes kanban decompose`, model-produced
+`worker_lane_request` / `worker_lane_requests` are only recorded as
+`worker_lane_request_intent` events on the root task. They are not enabled and
+they do not make the requested name a valid assignee. Keep assigning child
+tasks to existing lanes from Step 0 until a trusted operator enables or persists
+the request.
+
 ## Common patterns
 
 **Fan-out + fan-in (research → synthesize):** N research-style cards with no parents, one synthesis card with all of them as parents.

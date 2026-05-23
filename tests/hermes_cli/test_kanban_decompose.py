@@ -280,6 +280,136 @@ def test_decompose_can_route_children_to_worker_lanes(kanban_home):
     assert "Codex CLI lane for deep code implementation" in user_msg
 
 
+def test_decompose_records_valid_worker_lane_request_intent_without_enabling(
+    kanban_home,
+):
+    from hermes_cli.worker_lanes import get_worker_lane
+
+    with kb.connect() as conn:
+        tid = kb.create_task(conn, title="needs stronger lane", triage=True)
+
+    llm_payload = jsonlib.dumps({
+        "fanout": True,
+        "rationale": "new lane might help but must be approved",
+        "worker_lane_request": {
+            "name": "codex-long-context",
+            "type": "codex_cli",
+            "model": "gpt-5.5",
+            "sandbox": "workspace-write",
+            "approval": "never",
+            "max_concurrency": 1,
+            "success_policy": "block_for_review",
+            "json_events": True,
+            "reason": "large refactor requiring stronger reasoning",
+        },
+        "tasks": [
+            {
+                "title": "Implement with available lane",
+                "body": "Use the fallback lane until the request is approved.",
+                "assignee": "codex-long-context",
+                "parents": [],
+            },
+        ],
+    })
+
+    patches = _patch_list_profiles(["orchestrator", "fallback"])
+    for p in patches:
+        p.start()
+    try:
+        with _patch_aux_client(llm_payload), _patch_extra_body(), patch(
+            "hermes_cli.kanban_decompose._load_config",
+            return_value={
+                "kanban": {
+                    "orchestrator_profile": "orchestrator",
+                    "default_assignee": "fallback",
+                }
+            },
+        ):
+            outcome = decomp.decompose_task(tid, author="me")
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert outcome.ok, outcome.reason
+    assert get_worker_lane("codex-long-context") is None
+    with kb.connect() as conn:
+        child = kb.get_task(conn, outcome.child_ids[0])
+        events = kb.list_events(conn, tid)
+
+    assert child.assignee == "fallback"
+    intent = [event for event in events if event.kind == "worker_lane_request_intent"]
+    assert len(intent) == 1
+    payload = intent[0].payload
+    assert payload["approval_required"] is True
+    assert payload["enabled"] is False
+    assert payload["errors"] == []
+    request = payload["requests"][0]
+    assert request["source"] == "root"
+    assert request["config"]["name"] == "codex-long-context"
+    assert request["config"]["json_events"] is True
+    assert request["config"]["model"] == "gpt-5.5"
+
+
+def test_decompose_records_invalid_worker_lane_request_errors(
+    kanban_home,
+):
+    with kb.connect() as conn:
+        tid = kb.create_task(conn, title="bad lane request", triage=True)
+
+    llm_payload = jsonlib.dumps({
+        "fanout": True,
+        "rationale": "bad request should not block normal fallback routing",
+        "tasks": [
+            {
+                "title": "Implement safely",
+                "body": "Do the work with fallback.",
+                "assignee": "missing-lane",
+                "parents": [],
+                "worker_lane_request": {
+                    "name": "unsafe-lane",
+                    "type": "codex_cli",
+                    "model": "gpt-5.5",
+                    "sandbox": "workspace-write",
+                    "approval": "never",
+                    "command": "rm -rf /",
+                },
+            },
+        ],
+    })
+
+    patches = _patch_list_profiles(["orchestrator", "fallback"])
+    for p in patches:
+        p.start()
+    try:
+        with _patch_aux_client(llm_payload), _patch_extra_body(), patch(
+            "hermes_cli.kanban_decompose._load_config",
+            return_value={
+                "kanban": {
+                    "orchestrator_profile": "orchestrator",
+                    "default_assignee": "fallback",
+                }
+            },
+        ):
+            outcome = decomp.decompose_task(tid, author="me")
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert outcome.ok, outcome.reason
+    with kb.connect() as conn:
+        child = kb.get_task(conn, outcome.child_ids[0])
+        events = kb.list_events(conn, tid)
+
+    assert child.assignee == "fallback"
+    intent = [event for event in events if event.kind == "worker_lane_request_intent"]
+    assert len(intent) == 1
+    payload = intent[0].payload
+    assert payload["requests"] == []
+    assert payload["approval_required"] is True
+    assert "tasks[0]:unsafe-lane" in payload["errors"][0]
+    assert "executable command fields" in payload["errors"][0]
+
+
 def test_decompose_roster_keeps_worker_lanes_when_profile_listing_fails(kanban_home):
     from hermes_cli.worker_lanes import WorkerLane, register_worker_lane
 
@@ -374,6 +504,50 @@ def test_decompose_fanout_false_attaches_acceptance_requests(kanban_home):
     assert gate is not None
     assert gate["items"][0]["name"] == "expected-file"
     assert any(event.kind == "acceptance_check_requested" for event in events)
+
+
+def test_decompose_fanout_false_records_worker_lane_request_intent(kanban_home):
+    with kb.connect() as conn:
+        tid = kb.create_task(conn, title="single lane request", triage=True)
+
+    llm_payload = jsonlib.dumps({
+        "fanout": False,
+        "rationale": "single unit but stronger lane requested",
+        "title": "Tightened title",
+        "body": "Do the work.",
+        "assignee": "engineer",
+        "worker_lane_request": {
+            "name": "codex-single",
+            "type": "codex_cli",
+            "model": "gpt-5.4",
+            "sandbox": "workspace-write",
+            "approval": "never",
+            "max_concurrency": 1,
+            "success_policy": "block_for_review",
+        },
+    })
+
+    patches = _patch_list_profiles(["orchestrator", "engineer"])
+    for p in patches:
+        p.start()
+    try:
+        with _patch_aux_client(llm_payload), _patch_extra_body():
+            outcome = decomp.decompose_task(tid, author="me")
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert outcome.ok, outcome.reason
+    with kb.connect() as conn:
+        task = kb.get_task(conn, tid)
+        events = kb.list_events(conn, tid)
+
+    assert task.assignee == "engineer"
+    intent = [event for event in events if event.kind == "worker_lane_request_intent"]
+    assert len(intent) == 1
+    assert intent[0].payload["requests"][0]["source"] == "root"
+    assert intent[0].payload["requests"][0]["config"]["name"] == "codex-single"
+    assert intent[0].payload["enabled"] is False
 
 
 def test_decompose_fanout_false_preserves_existing_assignee(kanban_home):

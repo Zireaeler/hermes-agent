@@ -514,6 +514,11 @@ Model output is not trusted execution config. Requests must pass a deterministic
 For the Codex adapter, the validator also accepts only a boolean
 `json_events` flag; it never accepts an arbitrary event command or shell
 pipeline.
+When the Kanban decomposer sees `worker_lane_request` or
+`worker_lane_requests` in model output, it validates and records the sanitized
+request as a `worker_lane_request_intent` task event on the root task. It does
+not enable or persist that lane. Child task assignees are still resolved only
+against the existing roster and otherwise rewritten to `default_assignee`.
 The built-in lane-request validator currently enables only the trusted
 `codex_cli` adapter. Other external workers, such as Claude Code, OpenCode,
 containers, or local services, should be added by a trusted plugin calling
