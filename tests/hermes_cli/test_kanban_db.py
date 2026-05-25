@@ -708,7 +708,7 @@ def test_review_worker_evidence_approve_requires_planned_followups(
     assert approved_events[-1].payload["review_followup_gate"]["ready"] is True
 
 
-def test_plan_review_followups_adds_deep_review_shards_for_large_diff(
+def test_plan_review_followups_adds_review_shards_for_large_diff(
     kanban_home,
     tmp_path,
 ):
@@ -777,7 +777,74 @@ def test_plan_review_followups_adds_deep_review_shards_for_large_diff(
     assert len(planned_events[-1].payload["review_shards"]) == 2
 
 
-def test_review_followup_gate_requires_deep_review_shards_to_pass(
+def test_plan_review_followups_prefers_review_shards_config_alias(
+    kanban_home,
+    tmp_path,
+):
+    (kanban_home / "config.yaml").write_text(
+        """
+kanban:
+  review_shards:
+    enabled: true
+    changed_files_threshold: 3
+    diff_summary_lines_threshold: 100
+    max_files_per_shard: 2
+    max_shards: 4
+  deep_review:
+    enabled: true
+    changed_files_threshold: 99
+    diff_summary_lines_threshold: 100
+    max_files_per_shard: 99
+    max_shards: 1
+""",
+        encoding="utf-8",
+    )
+    changed_files = [f"pkg/review_shard_{index}.py" for index in range(5)]
+    metadata = {
+        "worker_lane": {"name": "codex-deep", "kind": "codex_cli", "exit_code": 0},
+        "verification": {"commands": ["pytest -q"], "summary": "passed"},
+        "git": {
+            "changed_files": changed_files,
+            "diff_summary": "\n".join(f" {path} | 3 ++-" for path in changed_files),
+        },
+        "review": {"required": True, "reason": "Codex completed; Hermes review required"},
+    }
+    with kb.connect() as conn:
+        tid = kb.create_task(
+            conn,
+            title="review shard config alias",
+            assignee="codex-deep",
+            workspace_kind="dir",
+            workspace_path=str(tmp_path),
+        )
+        task = kb.claim_task(conn, tid, claimer="worker:codex-deep")
+        assert task is not None
+        assert kb.block_task(
+            conn,
+            tid,
+            reason="review-required: Codex completed; Hermes review required",
+            expected_run_id=task.current_run_id,
+            metadata=metadata,
+        )
+        plan = kb.plan_review_followups(conn, tid)
+        events = kb.list_events(conn, tid)
+
+    plan_dict = plan.to_dict()
+    assert len(plan.review_shard_task_ids) == 3
+    assert plan.review_shard_plan["changed_files_threshold"] == 3
+    assert plan.review_shard_plan["max_files_per_shard"] == 2
+    assert plan.deep_review is plan.review_shard_plan
+    assert plan_dict["review_shard_plan"] == plan.review_shard_plan
+    assert plan_dict["deep_review"] == plan.review_shard_plan
+    planned_events = [
+        event for event in events
+        if event.kind == "worker_review_followups_planned"
+    ]
+    assert planned_events[-1].payload["review_shard_plan"] == plan.review_shard_plan
+    assert planned_events[-1].payload["deep_review"] == plan.review_shard_plan
+
+
+def test_review_followup_gate_requires_review_shards_to_pass(
     kanban_home,
     tmp_path,
 ):
@@ -920,7 +987,7 @@ def test_review_shard_gate_requires_review_approval_verdict(
     assert "does not satisfy" in shard_items[0]["failure_reason"]
 
 
-def test_advance_acceptance_dispatch_includes_deep_review_shards(
+def test_advance_acceptance_dispatch_includes_review_shards(
     kanban_home,
     tmp_path,
     monkeypatch,

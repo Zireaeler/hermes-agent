@@ -936,9 +936,15 @@ class ReviewFollowupPlan:
     existing: list[str]
     review_assignee: Optional[str]
     test_assignee: Optional[str]
-    deep_review: Optional[dict[str, Any]] = None
+    review_shard_plan: Optional[dict[str, Any]] = None
+
+    @property
+    def deep_review(self) -> Optional[dict[str, Any]]:
+        """Compatibility alias for the external review shard plan."""
+        return self.review_shard_plan
 
     def to_dict(self) -> dict[str, Any]:
+        review_shard_plan = self.review_shard_plan
         return {
             "source_task_id": self.source_task_id,
             "source_run_id": self.source_run_id,
@@ -949,7 +955,10 @@ class ReviewFollowupPlan:
             "existing": list(self.existing),
             "review_assignee": self.review_assignee,
             "test_assignee": self.test_assignee,
-            "deep_review": self.deep_review,
+            "review_shard_plan": review_shard_plan,
+            # Compatibility alias for callers written before the plan was
+            # named after the external worker shard workflow.
+            "deep_review": review_shard_plan,
         }
 
 
@@ -6229,14 +6238,19 @@ def _diff_summary_lines_from_snapshot(snapshot: TaskProgressSnapshot) -> list[st
     return _metadata_text_lines(diff_summary, limit=500)
 
 
-def _load_deep_review_config() -> dict[str, Any]:
+def _load_review_shard_config() -> dict[str, Any]:
     cfg: dict[str, Any] = {}
     try:
         from hermes_cli.config import load_config
 
-        cfg = ((load_config() or {}).get("kanban") or {}).get("deep_review") or {}
+        kanban_cfg = (load_config() or {}).get("kanban") or {}
+        cfg = (
+            kanban_cfg.get("review_shards")
+            or kanban_cfg.get("deep_review")
+            or {}
+        )
     except Exception as exc:
-        _log.debug("Could not load kanban.deep_review config: %s", exc)
+        _log.debug("Could not load kanban.review_shards config: %s", exc)
     if not isinstance(cfg, dict):
         cfg = {}
 
@@ -6277,7 +6291,7 @@ def _load_deep_review_config() -> dict[str, Any]:
 
 
 def _review_shard_plan(snapshot: TaskProgressSnapshot) -> dict[str, Any]:
-    cfg = _load_deep_review_config()
+    cfg = _load_review_shard_config()
     changed_files = _changed_files_from_snapshot(snapshot)
     diff_lines = _diff_summary_lines_from_snapshot(snapshot)
     enabled = bool(cfg.get("enabled"))
@@ -6460,8 +6474,9 @@ def _review_followup_body(
 
 def _review_followup_event_payload(plan: ReviewFollowupPlan) -> dict[str, Any]:
     review_shards: list[dict[str, Any]] = []
-    if isinstance(plan.deep_review, dict):
-        for shard in plan.deep_review.get("shards") or []:
+    review_shard_plan = plan.review_shard_plan
+    if isinstance(review_shard_plan, dict):
+        for shard in review_shard_plan.get("shards") or []:
             if not isinstance(shard, dict):
                 continue
             task_id = shard.get("task_id")
@@ -6486,7 +6501,9 @@ def _review_followup_event_payload(plan: ReviewFollowupPlan) -> dict[str, Any]:
         "existing": list(plan.existing),
         "review_assignee": plan.review_assignee,
         "test_assignee": plan.test_assignee,
-        "deep_review": plan.deep_review,
+        "review_shard_plan": review_shard_plan,
+        # Compatibility alias for existing dashboard/tool/test consumers.
+        "deep_review": review_shard_plan,
     }
 
 
@@ -6525,7 +6542,7 @@ def plan_review_followups(
     review_task_id: Optional[str] = None
     test_task_id: Optional[str] = None
     review_shard_task_ids: list[str] = []
-    deep_review = _review_shard_plan(snapshot) if include_review else None
+    review_shard_plan = _review_shard_plan(snapshot) if include_review else None
 
     if include_review:
         key = f"review-followup:{task_id}:{source_run_id}:review"
@@ -6557,7 +6574,7 @@ def plan_review_followups(
             created.append(review_task_id)
         link_tasks(conn, review_task_id, task_id)
 
-        for shard in (deep_review or {}).get("shards") or []:
+        for shard in (review_shard_plan or {}).get("shards") or []:
             if not isinstance(shard, dict):
                 continue
             shard_index = int(shard.get("index") or (len(review_shard_task_ids) + 1))
@@ -6636,7 +6653,7 @@ def plan_review_followups(
         existing=existing,
         review_assignee=review_name if include_review else None,
         test_assignee=test_name if include_test else None,
-        deep_review=deep_review,
+        review_shard_plan=review_shard_plan,
     )
     with write_txn(conn):
         _append_event(

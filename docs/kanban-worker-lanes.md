@@ -160,10 +160,10 @@ a `blocked` step with `missing_lanes` instead of silently waiting forever. The
 fix is to register the lane, persist an approved lane request, or reassign the
 follow-up task to a spawnable assignee.
 
-Large diffs can trigger review shard follow-ups. These shards are bounded
-review tasks over subsets of changed files; every shard verdict must pass before
-the source task can be approved. They are a control-plane review workflow, not a
-claim that Hermes has semantically audited an arbitrary large diff by itself.
+Large diffs can trigger external review shard follow-ups. These shards are
+bounded review-worker tasks over subsets of changed files; every shard verdict
+must pass before the source task can be approved. They are dispatched to review
+lanes such as `codex-review`, not reviewed inside the Hermes main agent.
 
 ## Real Codex E2E Smoke
 
@@ -264,9 +264,11 @@ Running workers are not interrupted for user progress queries.
   snapshots and output tails, not the complete session.
 - No Codex approval bridge is implemented. Lanes should use non-interactive
   approval settings such as `approval: never`.
-- Deep review is workflow-based. Review shards and review/test lanes can be
-  planned and gated, but Hermes still relies on worker verdicts and
-  deterministic checks rather than automatically proving a large diff correct.
+- Large-diff review is worker-based. `kanban.review_shards` can plan extra
+  external review shard tasks, but Hermes still relies on worker verdicts and
+  deterministic checks rather than loading the complete code context into the
+  main agent. The old `kanban.deep_review` key is still accepted as a
+  compatibility alias.
 - Lane requests are intentionally conservative. They cannot define arbitrary
   executables or shell commands.
 - Real deployment still needs configured Codex CLI auth and workspace access on

@@ -1578,11 +1578,13 @@ DEFAULT_CONFIG = {
         # assignee strings in this order: configured/plugin worker lane, Hermes
         # profile, skipped_nonspawnable. Codex CLI is the first built-in adapter.
         "worker_lanes": {},
-        # Independent review/test follow-ups stay evidence-bounded. For larger
-        # implementation diffs, Hermes can add extra review shard tasks that
-        # each inspect a subset of changed files; every shard verdict must pass
-        # before the source task can be approved.
-        "deep_review": {
+        # Independent review/test follow-ups stay evidence-bounded and run as
+        # external worker tasks. For larger implementation diffs, Hermes can
+        # add extra review shard follow-up tasks that each ask a review worker
+        # to inspect a subset of changed files; every shard verdict must pass
+        # before the source task can be approved. The old ``deep_review`` key
+        # remains accepted as a compatibility alias.
+        "review_shards": {
             "enabled": True,
             "changed_files_threshold": 8,
             "diff_summary_lines_threshold": 80,
