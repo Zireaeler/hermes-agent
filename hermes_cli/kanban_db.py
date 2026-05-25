@@ -6429,6 +6429,10 @@ def _review_followup_body(
         lines.extend([
             "",
             "## Required review output",
+            "This is an independent review gate, not an implementation task.",
+            "Do not change files or continue feature work.",
+            "Inspect only the bounded evidence and directly relevant workspace diff.",
+            "Run minimal read-only verification commands if useful.",
             "Return findings grouped by file/hunk where possible.",
             "For a review shard, keep the verdict scoped to the shard files.",
             "End with exactly one structured verdict line:",
@@ -6441,7 +6445,10 @@ def _review_followup_body(
         lines.extend([
             "",
             "## Required test output",
-            "Run or define deterministic verification commands when possible.",
+            "This is an independent test gate, not an implementation task.",
+            "Do not change files or continue feature work.",
+            "Run the smallest deterministic verification needed for the evidence above.",
+            "If an exact check is already shown above, rerun that exact check or an equivalent byte/content assertion.",
             "End with exactly one structured verdict line:",
             "Verdict: pass | fail | blocked",
             "Use pass only when the implementation should pass this test gate.",

@@ -618,6 +618,61 @@ def test_codex_prompt_marks_requested_changes_as_mandatory():
     assert "Fix the failed exact-file acceptance check." in prompt
 
 
+def test_codex_prompt_uses_implementation_role_for_normal_tasks():
+    from hermes_cli.codex_worker import build_codex_prompt
+
+    prompt = build_codex_prompt(
+        "# Kanban task t_impl: Implement the feature\n\nWrite the file.\n",
+        lane="codex-deep",
+        model="gpt-5.5",
+    )
+
+    assert "worker lane `codex-deep`" in prompt
+    assert "Implement the assigned task in the workspace" in prompt
+    assert "review lane `codex-deep`" not in prompt
+    assert "test lane `codex-deep`" not in prompt
+
+
+def test_codex_prompt_uses_review_followup_role():
+    from hermes_cli.codex_worker import build_codex_prompt
+
+    prompt = build_codex_prompt(
+        "# Kanban task t_review: Review implementation evidence\n\n"
+        "## Required review output\n"
+        "End with exactly one structured verdict line:\n"
+        "Verdict: approve | request_changes | blocked\n",
+        lane="codex-review",
+        model="gpt-5.5",
+    )
+
+    assert "review lane `codex-review`" in prompt
+    assert "Review the bounded implementation evidence" in prompt
+    assert "Do not implement feature work" in prompt
+    assert "minimal inspection commands" in prompt
+    assert "final `Verdict: ...` line" in prompt
+    assert "Implement the assigned task in the workspace" not in prompt
+
+
+def test_codex_prompt_uses_test_followup_role():
+    from hermes_cli.codex_worker import build_codex_prompt
+
+    prompt = build_codex_prompt(
+        "# Kanban task t_test: Verify implementation evidence\n\n"
+        "## Required test output\n"
+        "End with exactly one structured verdict line:\n"
+        "Verdict: pass | fail | blocked\n",
+        lane="codex-test",
+        model="gpt-5.5",
+    )
+
+    assert "test lane `codex-test`" in prompt
+    assert "Verify the bounded implementation evidence" in prompt
+    assert "Do not implement feature work" in prompt
+    assert "smallest sufficient verification" in prompt
+    assert "final `Verdict: ...` line" in prompt
+    assert "Implement the assigned task in the workspace" not in prompt
+
+
 def test_codex_env_preserves_existing_writable_codex_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     codex_home = home / ".codex"

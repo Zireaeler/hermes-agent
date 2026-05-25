@@ -977,14 +977,39 @@ def _finish_blocked(
 
 
 def build_codex_prompt(task_context: str, *, lane: str, model: Optional[str]) -> str:
+    is_review_followup = "## Required review output" in task_context
+    is_test_followup = "## Required test output" in task_context
+    if is_review_followup:
+        role_lines = (
+            f"You are Codex CLI running as Hermes Kanban review lane `{lane}`.\n"
+            "Review the bounded implementation evidence and workspace diff. "
+            "Do not implement feature work or modify files unless the review "
+            "task explicitly asks for a verification-only scratch artifact.\n"
+            "Run only the minimal inspection commands needed, then emit the "
+            "required structured review output and final `Verdict: ...` line."
+        )
+    elif is_test_followup:
+        role_lines = (
+            f"You are Codex CLI running as Hermes Kanban test lane `{lane}`.\n"
+            "Verify the bounded implementation evidence with deterministic "
+            "commands. Do not implement feature work or modify files unless "
+            "the test task explicitly asks for a verification-only scratch "
+            "artifact.\n"
+            "Run the smallest sufficient verification, then emit the required "
+            "structured test output and final `Verdict: ...` line."
+        )
+    else:
+        role_lines = (
+            f"You are Codex CLI running as Hermes Kanban worker lane `{lane}`.\n"
+            "Implement the assigned task in the workspace. Do not mark the "
+            "Kanban task done yourself; this wrapper will return your "
+            "structured receipt to Hermes and block the task for review."
+        )
     return f"""{task_context.rstrip()}
 
 ## External worker instructions
 
-You are Codex CLI running as Hermes Kanban worker lane `{lane}`.
-Implement the assigned task in the workspace. Do not mark the Kanban task
-done yourself; this wrapper will return your structured receipt to Hermes
-and block the task for review.
+{role_lines}
 
 If the task context contains an actual markdown section headed exactly
 "## Requested changes to address before finishing", treat only that section as

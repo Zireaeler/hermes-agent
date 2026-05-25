@@ -4218,6 +4218,13 @@ def test_plan_review_followups_creates_independent_review_and_test_tasks(
     assert "pytest -q" in test_task.body
     assert "Required review output" in review_task.body
     assert "Required test output" in test_task.body
+    assert "independent review gate" in review_task.body
+    assert "Do not change files or continue feature work." in review_task.body
+    assert "minimal read-only verification" in review_task.body
+    assert "independent test gate" in test_task.body
+    assert "Do not change files or continue feature work." in test_task.body
+    assert "smallest deterministic verification" in test_task.body
+    assert "rerun that exact check or an equivalent byte/content assertion" in test_task.body
     assert "Verdict: approve | request_changes | blocked" in review_task.body
     assert "Verdict: pass | fail | blocked" in test_task.body
     assert "Hermes reads the Verdict line" in review_task.body
