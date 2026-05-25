@@ -595,8 +595,9 @@ def test_codex_metadata_output_tail_keeps_followup_verdict_without_prompt_prefix
     )
 
     tail = meta["worker_lane"]["output_tail"]
-    assert tail.startswith("Findings:\n- No blocking issues found.")
-    assert "Verdict: approve" in tail
+    assert tail.startswith("Verification:\n- command: pytest smoke")
+    assert "Result" not in tail
+    assert tail.count("Verdict: approve") == 1
     assert "Verdict: approve | request_changes | blocked" not in tail
     assert "Required review output" not in tail
 
@@ -1199,6 +1200,67 @@ def test_codex_receipt_parser_uses_last_real_receipt_block(
     assert receipt["remaining_risks"] == "- none"
     assert receipt["recommended_reviewer_action"] == "- approve"
     assert "External worker instructions" not in receipt["recommended_reviewer_action"]
+
+
+def test_codex_receipt_parser_accepts_markdown_bold_headers():
+    receipt = _extract_worker_receipt(
+        "**Progress:**\n"
+        "- [x] Create final file\n\n"
+        "**Changed files:**\n"
+        "- smoke_result.txt\n\n"
+        "**Verification:**\n"
+        "- command: pytest smoke\n"
+        "  result: passed\n\n"
+        "**Remaining risks:**\n"
+        "- none\n\n"
+        "**Recommended reviewer action:**\n"
+        "- approve\n"
+    )
+
+    assert receipt["sections"]["progress"] == "- [x] Create final file"
+    assert receipt["changed_files_text"] == "- smoke_result.txt"
+    assert receipt["remaining_risks"] == "- none"
+    assert receipt["recommended_reviewer_action"] == "- approve"
+
+
+def test_codex_metadata_output_tail_normalizes_markdown_bold_receipt_headers():
+    meta = _metadata(
+        lane="codex-deep",
+        task_id="t2-md",
+        run_id=9,
+        worker_pid=125,
+        claim_lock="host:125",
+        workspace="/tmp/no-such-workspace",
+        model="gpt-5.5",
+        exit_code=0,
+        timed_out=False,
+        output_tail=(
+            "# Kanban task t2-md: Independent review task\n\n"
+            "## Required review output\n"
+            "End with exactly one structured verdict line:\n"
+            "Verdict: approve | request_changes | blocked\n\n"
+            "codex\n"
+            "I inspected the bounded evidence and workspace.\n"
+            "**Progress:**\n"
+            "- [x] checked evidence\n\n"
+            "**Changed files:**\n"
+            "- smoke_result.txt\n\n"
+            "**Verification:**\n"
+            "- command: pytest smoke\n"
+            "  result: passed\n\n"
+            "**Remaining risks:**\n"
+            "- none\n\n"
+            "**Recommended reviewer action:**\n"
+            "- approve\n\n"
+            "Verdict: approve\n"
+        ),
+    )
+
+    tail = meta["worker_lane"]["output_tail"]
+    assert tail.startswith("Progress:\n- [x] checked evidence")
+    assert "**Progress:**" not in tail
+    assert "Verdict: approve" in tail
+    assert meta["worker_receipt"]["sections"]["progress"] == "- [x] checked evidence"
 
 
 def test_codex_worker_heartbeat_ignores_superseded_run(

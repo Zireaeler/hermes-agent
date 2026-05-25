@@ -69,6 +69,8 @@ _REVIEW_OUTPUT_START_HEADERS = {
     "verification",
 }
 
+_MARKDOWN_HEADING_PREFIX_RE = re.compile(r"^\s*(?:#{1,6}\s*)+")
+
 
 @dataclass(frozen=True)
 class CodexLaneConfig:
@@ -153,6 +155,13 @@ def _as_bool(value: Any, *, default: bool = False) -> bool:
         if lowered in {"0", "false", "no", "off"}:
             return False
     return bool(value)
+
+
+def _normalize_markdown_block_line(raw_line: str) -> str:
+    stripped = raw_line.strip()
+    stripped = _MARKDOWN_HEADING_PREFIX_RE.sub("", stripped)
+    stripped = stripped.strip("*_`")
+    return stripped.strip()
 
 
 def _safe_env_for_worker(task, workspace: str, cfg: CodexLaneConfig, *, board: Optional[str]) -> dict[str, str]:
@@ -712,7 +721,7 @@ def _extract_verification_summary(output: str) -> dict[str, Any]:
 
 
 def _receipt_section_key(raw_line: str) -> Optional[str]:
-    match = _RECEIPT_SECTION_RE.match(raw_line)
+    match = _RECEIPT_SECTION_RE.match(_normalize_markdown_block_line(raw_line))
     if not match:
         return None
     label = match.group(1).strip().lower().replace(" ", "_")
@@ -744,6 +753,9 @@ def _extract_receipt_sections(output: str) -> dict[str, str]:
     sections: Optional[dict[str, list[str]]] = None
     current_key: Optional[str] = None
     for raw_line in (output or "").splitlines():
+        normalized_line = _normalize_markdown_block_line(raw_line)
+        if _VERDICT_LINE_RE.match(normalized_line) or _VERDICT_HEADER_RE.match(normalized_line):
+            continue
         label = _receipt_section_key(raw_line)
         if label:
             if label == "progress":
@@ -785,17 +797,19 @@ def _extract_structured_verdict(output: str) -> Optional[str]:
     lines = (output or "").splitlines()
     verdicts: list[str] = []
     for index, line in enumerate(lines):
-        match = _VERDICT_LINE_RE.match(line)
+        normalized_line = _normalize_markdown_block_line(line)
+        match = _VERDICT_LINE_RE.match(normalized_line)
         if match:
             verdict = normalize(match.group(1))
             if verdict:
                 verdicts.append(verdict)
             continue
-        if _VERDICT_HEADER_RE.match(line):
+        if _VERDICT_HEADER_RE.match(normalized_line):
             for next_line in lines[index + 1 : index + 4]:
-                if not next_line.strip():
+                normalized_next_line = _normalize_markdown_block_line(next_line)
+                if not normalized_next_line.strip():
                     continue
-                bullet = _VERDICT_BULLET_RE.match(next_line)
+                bullet = _VERDICT_BULLET_RE.match(normalized_next_line)
                 if bullet:
                     verdict = normalize(bullet.group(1))
                     if verdict:
@@ -805,7 +819,7 @@ def _extract_structured_verdict(output: str) -> Optional[str]:
 
 
 def _structured_verdict_from_line(line: str) -> Optional[str]:
-    match = _VERDICT_LINE_RE.match(line)
+    match = _VERDICT_LINE_RE.match(_normalize_markdown_block_line(line))
     if not match:
         return None
     value = match.group(1).strip().lower().replace("-", "_")
@@ -813,11 +827,35 @@ def _structured_verdict_from_line(line: str) -> Optional[str]:
 
 
 def _review_output_header_key(raw_line: str) -> Optional[str]:
-    stripped = raw_line.strip()
+    stripped = _normalize_markdown_block_line(raw_line)
     if not stripped.endswith(":"):
         return None
     label = stripped[:-1].strip().lower().replace(" ", "_").replace("-", "_")
     return label if label in _REVIEW_OUTPUT_START_HEADERS else None
+
+
+def _format_receipt_tail(receipt: dict[str, Any]) -> str:
+    sections = receipt.get("sections") if isinstance(receipt, dict) else None
+    if not isinstance(sections, dict):
+        return ""
+    receipt_lines: list[str] = []
+    for label, key in (
+        ("Progress", "progress"),
+        ("Changed files", "changed_files"),
+        ("Verification", "verification"),
+        ("Remaining risks", "remaining_risks"),
+        ("Recommended reviewer action", "recommended_reviewer_action"),
+    ):
+        value = sections.get(key)
+        if isinstance(value, str) and value.strip():
+            receipt_lines.append(f"{label}:")
+            receipt_lines.extend(value.strip().splitlines())
+            receipt_lines.append("")
+    verdict = receipt.get("verdict")
+    if isinstance(verdict, str) and verdict.strip():
+        receipt_lines.append(f"Verdict: {verdict.strip()}")
+    tail = "\n".join(receipt_lines).strip()
+    return _cap(tail, CODEX_OUTPUT_TAIL_BYTES) if tail else ""
 
 
 def _review_output_tail(output: str, receipt: dict[str, Any]) -> str:
@@ -852,30 +890,16 @@ def _review_output_tail(output: str, receipt: dict[str, Any]) -> str:
         else lines[-CODEX_REVIEW_OUTPUT_TAIL_LINES:]
     )
     tail = "\n".join(tail_lines).strip()
+    formatted_receipt_tail = _format_receipt_tail(receipt)
+    if start_index is not None and formatted_receipt_tail:
+        return formatted_receipt_tail
+    if verdict_index is not None and formatted_receipt_tail:
+        return formatted_receipt_tail
     if tail:
         return _cap(tail, CODEX_OUTPUT_TAIL_BYTES)
 
-    sections = receipt.get("sections") if isinstance(receipt, dict) else None
-    if isinstance(sections, dict):
-        receipt_lines: list[str] = []
-        for label, key in (
-            ("Progress", "progress"),
-            ("Changed files", "changed_files"),
-            ("Verification", "verification"),
-            ("Remaining risks", "remaining_risks"),
-            ("Recommended reviewer action", "recommended_reviewer_action"),
-        ):
-            value = sections.get(key)
-            if isinstance(value, str) and value.strip():
-                receipt_lines.append(f"{label}:")
-                receipt_lines.extend(value.strip().splitlines())
-                receipt_lines.append("")
-        verdict = receipt.get("verdict")
-        if isinstance(verdict, str) and verdict.strip():
-            receipt_lines.append(f"Verdict: {verdict.strip()}")
-        tail = "\n".join(receipt_lines).strip()
-        if tail:
-            return _cap(tail, CODEX_OUTPUT_TAIL_BYTES)
+    if formatted_receipt_tail:
+        return formatted_receipt_tail
     return _cap("\n".join(lines[-CODEX_REVIEW_OUTPUT_TAIL_LINES:]).strip(), CODEX_OUTPUT_TAIL_BYTES)
 
 
