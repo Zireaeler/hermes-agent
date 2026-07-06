@@ -6,7 +6,17 @@
 
 ## 一句话架构
 
-系统的连续性只存在于数据库里的 goal contract、job、progress ledger、execution graph、event log、artifact 和 graph patch 记录中。LLM 不作为长期 agent 存活，也不拥有直接写权限；它只在 kernel 认为需要重算结构时被调用一次，输入是压缩后的状态快照和待解决 goal gap，输出是受限 schema 的结构 patch。系统的收敛条件不是“当前 execution graph 跑完”，而是“goal contract 的 required items 被足够 evidence 支持，且没有未解决 hard constraint”。
+系统的事实连续性只存在于数据库里的 goal contract、job、progress ledger、execution graph、event log、artifact 和 graph patch 记录中。LLM 不拥有事实状态，也不直接控制系统；每个 runtime job 可以维护一个长期 decision session 作为推理上下文和缓存友好的决策会话。kernel 基于 DB 事实生成增量 delta 并追加到 session；LLM 只能返回 graph patch proposal；patch 经 validator 校验后才能成为 DB 事实。系统的收敛条件不是“当前 execution graph 跑完”，而是“goal contract 的 required items 被足够 evidence 支持，且没有未解决 hard constraint”。
+
+## Decision Context
+
+runtime state 和 inference context 必须分开。authoritative runtime state 落在数据库里，用于恢复、审计、并发、回滚和本地校验；decision session 是 job 级长期推理上下文，用于让 LLM 不必每次冷启动重新理解项目，同时支持长上下文、缓存友好的稳定前缀和增量追加。两者冲突时永远以 DB 为准。
+
+decision session 可以“记得”之前为什么选择某个方案、哪些路径被否定、哪些 patch 被 validator 拒绝、当前 milestone 为什么这样切分，但这些记忆只影响下一次模型如何提出 patch，不会直接改变系统状态。真正改变 execution graph、progress ledger 或 job state 的唯一方式仍然是模型输出 patch proposal，patch 经过 validator 校验，通过后写入 DB。
+
+请求形态应从 `decision_provider(snapshot) -> patch` 收敛为 `decision_provider(session, delta) -> patch`。`session` 是该 job 长期保留的决策上下文，`delta` 是本轮从 DB 推导出来的新变化。第一次创建 job 时，kernel 创建 decision session，把稳定前缀写进去：runtime 规则、patch schema、validator 硬约束、用户目标、goal contract、workspace、允许的 node type、允许的 patch op、禁止直接完成 job、禁止绕过 verifier、禁止修改 terminal fact 等。后续调用只追加短 delta，例如 node 完成或失败、ledger 更新了哪些 goal item、当前最大 gap 是什么、validator 拒绝了什么。
+
+decision session 的存在不改变调用触发策略。普通 worker progress、heartbeat、日志增长只进入 Kanban 或 progress summary；kernel 先用本地 reducer 更新 DB。只有 reducer 发现当前结构需要决策，例如目标未完成但没有 ready/running node、verifier failed、join point 需要合并/验证、同一 gap 多轮无进展、或 anti-stuck policy 触发时，才向 decision session 追加 delta 并调用 provider。
 
 ## Goal Contract
 
@@ -78,9 +88,11 @@ runtime kernel 不应该绕开这些能力直接管理子进程。kernel 只决�
 
 `graph_patches` 保存每次结构修改。字段包括 `id`、`job_id`、`decision_id`、`base_revision`、`applied_revision`、`patch_json`、`status`、`reject_reason`、`created_at`、`applied_at`。`status` 限制为 `proposed`、`applied`、`rejected`、`noop`。`base_revision` 是 decision provider 看到的 graph revision，patch 默认只能应用到相同 revision 上。
 
-`kernel_decisions` 保存每次决策函数调用。字段包括 `id`、`job_id`、`trigger_event_id`、`snapshot_revision`、`snapshot_json`、`decision_json`、`model`、`decision_session_id`、`status`、`error`、`created_at`、`completed_at`。第一阶段可以用 deterministic fake decision provider，后续再接真实 LLM。
+`kernel_decisions` 保存每次决策函数调用。字段包括 `id`、`job_id`、`trigger_event_id`、`db_revision`、`decision_session_id`、`delta_json`、`decision_json`、`model`、`status`、`validator_result_json`、`error`、`created_at`、`completed_at`。`delta_json` 是本次追加到 decision session 的 DB-derived state delta，不是完整事实快照。第一阶段可以用 deterministic fake decision provider，后续再接真实 LLM。
 
-`decision_sessions` 保存受外部事实约束的长期决策上下文。字段包括 `id`、`job_id`、`profile`、`state`、`context_summary`、`last_synced_revision`、`metadata`、`created_at`、`updated_at`。它可以利用大上下文和前缀缓存保留项目理解，但没有写权限；如果 session memory 与 DB 冲突，DB 优先，并把纠正信息作为 event/summary 追加回 session。
+`decision_sessions` 保存受外部事实约束的长期决策上下文。字段包括 `id`、`job_id`、`profile`、`provider`、`model`、`state`、`stable_prefix_hash`、`session_ref`、`transcript_ref`、`last_appended_event_id`、`last_checkpoint_revision`、`context_state_json`、`metadata`、`created_at`、`updated_at`。`session_ref` 可以是 provider 侧会话 id，也可以为空；`transcript_ref` 可以指向本地归档的 session transcript。架构只要求它是 job 级长期决策上下文，不要求绑定某个模型 API。
+
+`decision_checkpoints` 保存 decision session 的压缩检查点。字段包括 `id`、`job_id`、`decision_session_id`、`revision`、`checkpoint_json`、`transcript_ref`、`created_at`。checkpoint 应保留 goal contract、当前 progress ledger、active milestone、已满足 goal items、未满足 goal gaps、已排除方案、关键架构决策、关键 artifact 索引、最近失败边界和 validator 拒绝历史。旧 transcript 可以归档，新的 decision session 以前一个 checkpoint 作为稳定前缀继续增长。
 
 `node_artifacts` 保存节点产物引用。字段包括 `id`、`job_id`、`node_id`、`artifact_type`、`path_or_ref`、`summary`、`metadata`、`created_at`。这里可以引用 worker 产生的文件、evidence markdown、测试结果、diff 摘要、外部工具结果，但事实状态仍以 DB 行为准。
 
@@ -88,13 +100,15 @@ runtime kernel 不应该绕开这些能力直接管理子进程。kernel 只决�
 
 kernel 是可重复调用的函数，不是长时间思考的 agent。第一阶段可以实现为 `advance_runtime_job(conn, job_id, *, board=None, decision_provider=None, max_patches=1)`，后续再包一层 `supervise_runtime_job()` 做 bounded loop。
 
-每次 advance 做六件事。第一，ingest Kanban worker 状态，把已物化节点绑定的 `task_id` 通过 `task_progress_snapshot()` 读取，识别是否完成、失败、阻塞或产生结构性进展，并写入 `execution_events`。第二，把 worker evidence 映射到 goal items，更新 progress ledger，而不是只更新 node state。第三，运行本地 reducer，重算节点 readiness、job 状态、goal gaps、synthetic audit event、liveness invariant 和 completion rule；所有依赖满足的 `planned` 或 `waiting_dependency` 节点由 reducer 变为 `ready`。第四，把 `ready` 且尚未创建 Kanban task 的节点物化成真实 Kanban task，写回 `task_id`、`run_id`，并记录 `node_materialized`。第五，如果存在 unresolved goal gap、structure audit、failed verifier、no runnable graph 或 manual operator request，就构造压缩 snapshot，调用 decision provider 取得 graph patch。第六，验证并应用 graph patch，然后再次运行 reducer 更新 ledger、gap 和可运行节点。
+每次 advance 做六件事。第一，ingest Kanban worker 状态，把已物化节点绑定的 `task_id` 通过 `task_progress_snapshot()` 读取，识别是否完成、失败、阻塞或产生结构性进展，并写入 `execution_events`。第二，把 worker evidence 映射到 goal items，更新 progress ledger，而不是只更新 node state。第三，运行本地 reducer，重算节点 readiness、job 状态、goal gaps、synthetic audit event、liveness invariant 和 completion rule；所有依赖满足的 `planned` 或 `waiting_dependency` 节点由 reducer 变为 `ready`。第四，把 `ready` 且尚未创建 Kanban task 的节点物化成真实 Kanban task，写回 `task_id`、`run_id`，并记录 `node_materialized`。第五，如果存在 unresolved goal gap、structure audit、failed verifier、no runnable graph 或 manual operator request，就从 DB 构造本轮 state delta，追加到 decision session，并调用 decision provider 取得 graph patch。第六，验证并应用 graph patch，然后再次运行 reducer 更新 ledger、gap 和可运行节点；patch_applied 或 patch_rejected 也要作为 delta 追加回 decision session。
 
 这个循环的关键是不让 LLM 直接改数据库，也不让 LLM 决定节点放行。LLM 或 fake provider 只能返回 patch JSON。所有 patch 都必须经过本地 validator。validator 负责检查引用的 node_key 是否存在、是否重复创建、edge 是否成环、状态迁移是否合法、node type 是否允许、assignee/lane 是否存在或可延后、patch 是否幂等、是否越权修改已完成节点、patch 的 `expected_revision` 是否仍匹配当前 graph revision。
 
-## Snapshot 构造
+## Delta And Snapshot 构造
 
-snapshot 是决策函数唯一输入，不是完整历史。它应该由系统构造，初期包含这些部分。
+decision provider 的输入不是随意拼接的完整数据库，也不是每次冷启动的完整 prompt。稳定项目上下文保存在 decision session 中，本轮输入是由 kernel 从 DB 推导出的 state delta。为了审计和 fallback，kernel 仍然可以构造一个规范化 snapshot，但它的主要职责是生成 delta、校验 session 是否落后、以及在 checkpoint 时重建稳定上下文。
+
+初始 session 前缀应包含这些稳定内容。
 
 `job` 包括 objective、state、workspace、当前未解决约束、用户可见目标、active milestone 和 graph revision。
 
@@ -112,7 +126,7 @@ snapshot 是决策函数唯一输入，不是完整历史。它应该由系统�
 
 `active_assumptions` 保存当前仍被系统采用的压缩假设，例如“目标仓库路径已确认”“失败主要来自认证而非代码逻辑”。这些不是推理链，而是后续结构决策不能丢的事实状态。
 
-`rejected_approaches` 保存已经尝试并排除的方案，例如“直接复用旧 Orchestra phase machine 会造成语义污染”。它应包含简短原因和证据引用，避免 stateless decision provider 重复生成失败路径。
+`rejected_approaches` 保存已经尝试并排除的方案，例如“直接复用旧 Orchestra phase machine 会造成语义污染”。它应包含简短原因和证据引用，避免 decision session 重复生成失败路径。
 
 `known_failure_boundaries` 保存失败边界和不可越过约束，例如“当前没有 GitHub HTTPS 凭据”“某 lane 不可 spawn”“某验证命令在环境中不可用”。这些边界进入 snapshot 后，provider 才能做局部结构调整，而不是反复要求执行不可行动作。
 
@@ -122,7 +136,9 @@ snapshot 是决策函数唯一输入，不是完整历史。它应该由系统�
 
 `policy` 描述本地硬规则，例如不能删除已完成节点、不能绕过 verifier、不能直接标记 job done、不能创建没有 title/description 的节点。
 
-Snapshot 要足够小，可以进入一次 LLM 调用；但它必须包含 graph 拓扑和未解决约束，否则决策函数会退化成自由规划。
+本轮 delta 应只包含新变化和待决策问题，例如新增 terminal node、artifact_ready、progress_ledger_updated、goal_gap_detected、validator rejection、当前没有 ready/running node、或 active milestone 停滞。delta 必须说明这些变化影响了哪些 goal item、哪些 gap 仍未解决、为什么需要结构决策。
+
+snapshot/delta 要足够小，可以进入一次 LLM 调用；但必须包含 graph frontier、goal gaps 和未解决约束，否则决策函数会退化成自由规划。动态字段不要放到稳定前缀中，例如当前时间、随机 id、最近事件列表、节点运行状态变化都应靠后追加。graph、goal item 和 ledger 的渲染顺序必须 canonicalize，例如按 `node_key`、`goal_item_key` 排序，并使用固定字段顺序，避免同样内容因为排序变化破坏缓存命中。
 
 ## Graph Patch schema
 
@@ -202,7 +218,9 @@ CLI/API 第一阶段可以非常薄。
 
 `apply_graph_patch(conn, job_id, patch, decision_id=None)` 校验并事务应用 patch。
 
-`build_decision_snapshot(conn, job_id, trigger_event_id=None)` 构造压缩快照。
+`build_decision_delta(conn, job_id, trigger_event_id=None)` 构造本轮追加到 decision session 的 state delta。
+
+`checkpoint_decision_session(conn, job_id, decision_session_id)` 压缩长期 decision context，生成新的稳定 checkpoint。
 
 `ingest_runtime_node_evidence(conn, node_id, board=None)` 从 Kanban task progress snapshot 吸收结构性结果。
 
@@ -218,7 +236,7 @@ DB 是唯一事实源。Markdown 只能作为 artifact、人读 handoff、eviden
 
 ## 触发策略
 
-不是所有 worker 事件都触发决策。worker streaming/progress event、heartbeat、普通日志增长只进入 Kanban event 或 progress summary，不直接唤醒 decision provider。Codex JSON event 如果作为某个 lane 的进度事件出现，也按这个规则处理。触发结构重算的事件初期只包括 node completed、node failed、node blocked、node uncertain、human decision received、dependency cycle/rejection、manual operator request。
+不是所有 worker 事件都触发决策，也不是所有 DB 变化都追加到 decision session。worker streaming/progress event、heartbeat、普通日志增长只进入 Kanban event 或 progress summary，不直接唤醒 decision provider。Codex JSON event 如果作为某个 lane 的进度事件出现，也按这个规则处理。kernel 先用本地 reducer 更新 DB、node state、dependency readiness、progress ledger 和 goal gaps。只有 reducer 发现“当前结构需要决策”时，才构造 delta 并追加到 decision session，例如目标未完成但没有 ready/running node、verifier failed 需要选择 retry/debug/split/human、多个并行节点到达 join point、同一 gap 多轮没有 progress、或 anti-stuck policy 触发。
 
 这样可以避免每个微小输出都触发 LLM 重算，也能保证系统成本和状态变化可解释。
 
@@ -226,7 +244,7 @@ DB 是唯一事实源。Markdown 只能作为 artifact、人读 handoff、eviden
 
 ## 测试策略
 
-第一批测试应全部使用 deterministic fake decision provider 和 fake worker evidence，不依赖任何真实外部 agent 或网络调用。测试需要覆盖 schema 初始化、job 创建、初始 node 创建、patch validator、DAG cycle rejection、ready 计算、Kanban task materialization、evidence ingest、decision snapshot、patch application、job done rule。
+第一批测试应全部使用 deterministic fake decision provider 和 fake worker evidence，不依赖任何真实外部 agent 或网络调用。测试需要覆盖 schema 初始化、job 创建、初始 node 创建、patch validator、DAG cycle rejection、ready 计算、Kanban task materialization、evidence ingest、decision delta、decision session append、patch application、job done rule。
 
 第二批测试再接入 existing worker lane fixtures，验证 runtime node 物化后能走 `dispatch_once()`、worker receipt 能被 `task_progress_snapshot()` 读取、kernel 能把 worker evidence 转成 node event。这里可以覆盖 Codex lane，但测试目标是 lane/backend abstraction，不是 Codex 专用链路。
 
@@ -240,7 +258,7 @@ DB 是唯一事实源。Markdown 只能作为 artifact、人读 handoff、eviden
 
 ## 分支约束
 
-本设计属于 `feature-kanban-runtime-kernel`。不要在这个分支例行 rebase main。不要把旧超大 session 作为运行上下文恢复。当前旧 Orchestra 分支可以保留为参考和部署验证记录，但新实现线应保持概念干净：Kanban 是执行基座，runtime kernel 是事件驱动图调度层，LLM 是 stateless graph patch decision function，具体 worker backend 是可替换执行单元。
+本设计属于 `feature-kanban-runtime-kernel`。不要在这个分支例行 rebase main。不要把旧超大 session 作为运行上下文恢复。当前旧 Orchestra 分支可以保留为参考和部署验证记录，但新实现线应保持概念干净：Kanban 是执行基座，runtime kernel 是 goal-driven graph runtime，decision session 是受 DB 约束的推理上下文，具体 worker backend 是可替换执行单元。
 
 ## 运行进程形态
 
@@ -272,7 +290,7 @@ DB 是唯一事实源。Markdown 只能作为 artifact、人读 handoff、eviden
 
 `execution_events` 是 kernel 的事件流，不是日志垃圾桶。每条 event 应该有机器可读 payload，并尽量包含一行 `summary`。如果来自 Kanban task_event，`source_event_id` 指向原事件 id，保证 ingest 幂等。对于同一个 `source_event_id` 和 `event_type`，应有唯一性保护或代码层去重。
 
-`kernel_decisions.snapshot_json` 保存压缩快照，而不是完整数据库 dump。`snapshot_revision` 保存该快照对应的 graph revision。`decision_json` 保存 provider 原始返回。即使 patch 被拒绝，decision 也要保留，方便解释为什么被拒绝。`status` 建议为 `started`、`completed`、`failed`、`rejected_patch`。
+`kernel_decisions.delta_json` 保存本次追加到 decision session 的 state delta，而不是完整数据库 dump。`db_revision` 保存该 delta 对应的 DB/graph revision。`decision_json` 保存 provider 原始返回。即使 patch 被拒绝，decision 也要保留，方便解释为什么被拒绝。`status` 建议为 `started`、`completed`、`failed`、`rejected_patch`。
 
 `graph_patches.patch_json` 保存规范化后的 patch。规范化意味着默认值已补齐、node_key 已 trim、op 顺序已确定、不可识别字段已拒绝或移入 metadata。这样后续审计时不依赖 provider 的原始输出。`base_revision` 必须来自 patch 的 `expected_revision`；成功 apply 后递增 job 的 graph revision，并把新 revision 记录到 `applied_revision`。
 
@@ -304,13 +322,17 @@ ingest 必须幂等。每个 node metadata 可以保存 `last_ingested_run_id`�
 
 ## Decision provider 接口
 
-第一阶段 provider 可以是 Python callable，不需要立即接真实 LLM。建议接口形状为 `decision_provider(snapshot: dict) -> dict`。返回值必须是 patch JSON 或明确 noop。真实 LLM provider 只是这个接口的一种实现，负责把 snapshot 渲染成 prompt、调用模型、解析 JSON、返回 patch。fake provider 可以根据 snapshot 中的节点状态确定性返回下一步 patch。
+第一阶段 provider 可以是 Python callable，不需要立即接真实 LLM。建议接口形状为 `decision_provider(session: DecisionSession, delta: dict) -> dict`。返回值必须是 patch JSON 或明确 noop。真实 LLM provider 只是这个接口的一种实现，负责把 stable prefix、checkpoint 和 delta 渲染成 cache-friendly prompt 或 provider session append，调用模型，解析 JSON，返回 patch。fake provider 可以根据 DB-derived delta 和测试用 session state 确定性返回下一步 patch。
 
 provider 不允许访问数据库连接，不允许直接创建 task，不允许写文件。这样可以保证“智能”被限制在结构决策，而不是变成另一个隐式 agent。
 
-真实 LLM provider 的 prompt 必须强调三点：只能返回 JSON，不能返回解释性正文，不能引用 snapshot 之外的信息。`rationale_summary` 可以保留，但它是审计摘要，不参与状态变更。解析失败、schema 不匹配、patch 被拒绝都应该生成 `patch_rejected` event，并停止本轮 advance。
+真实 LLM provider 的 prompt 必须强调三点：只能返回 JSON，不能返回解释性正文，不能把 session 记忆当成事实覆盖 DB delta。`rationale_summary` 可以保留，但它是审计摘要，不参与状态变更。解析失败、schema 不匹配、patch 被拒绝都应该生成 `patch_rejected` event，并停止本轮 advance。
 
-decision session 不是负责人 agent，但也不是完全无上下文的冷启动函数。它是一个受外部事实约束的长期决策上下文，可以保留 job objective、goal contract、重要历史决策、已排除路径、当前 milestone、最近 gap resolution 过程，从而利用大上下文和前缀缓存维持项目理解。它没有写权限，不能直接改变 DB、文件或 Kanban task。每次只能基于 kernel 提供的当前 DB snapshot 和待解决 gap 输出 patch proposal。如果 decision session 的记忆和 DB 事实冲突，DB 优先，并把冲突纠正作为事件或 session summary 追加回 decision session。
+decision session 不是负责人 agent，但也不是完全无上下文的冷启动函数。它是一个受外部事实约束的长期决策上下文，可以保留 job objective、goal contract、重要历史决策、已排除路径、当前 milestone、最近 gap resolution 过程和 validator 拒绝历史，从而维持项目理解。它没有写权限，不能直接改变 DB、文件或 Kanban task。每次只能基于 kernel 提供的当前 DB delta 和待解决 gap 输出 patch proposal。如果 decision session 的记忆和 DB 事实冲突，DB 优先，并把冲突纠正作为 event/delta 追加回 decision session。
+
+前缀缓存是 decision session 的实现目标之一，但不是 correctness 依赖。cache-friendly layout 应把长期不变的 runtime contract 放在最前面，包括 patch schema、validator 硬约束、禁止直接完成 job、禁止绕过 verifier、禁止修改 terminal fact；然后是稳定 goal contract；再后面是 checkpoint；最后才是本次 delta 和待决策问题。只要前面的 token 序列稳定，provider 可以复用前缀计算；即使 provider 不支持缓存，系统 correctness 仍然由 DB、delta、validator 和 event log 保证。
+
+decision session 需要 checkpoint/compaction。session 不能无限增长；当上下文接近窗口、噪声过多或 milestone 切换时，kernel 应生成新的 checkpoint，保留 goal contract、progress ledger、active milestone、已满足 goal items、未满足 goal gaps、已排除方案、关键架构决策、关键 artifact 索引、最近失败边界和 validator 拒绝历史。旧 transcript 可以归档，新 session 以前一个 checkpoint 作为稳定上下文继续增长。
 
 ## Patch validator 细节
 
@@ -320,11 +342,11 @@ validator 是新架构最重要的安全边界。它应该在 apply 前基于当
 
 validator 还要处理部分幂等。例如同一个 `add_dependency` 如果边已存在，可以视为 noop；同一个 `create_node` 如果 node_key 已存在且字段完全一致，可以视为 noop，但如果字段不同必须拒绝。这样 supervisor 重试不会轻易造成重复结构。
 
-## Snapshot 压缩策略
+## Decision Context 压缩策略
 
-snapshot 构造不是简单截断。它应该优先保留会影响结构决策的信息。节点层面保留 node_key、type、state、title、output_summary、verdict、artifact summaries、assumptions summary 和依赖状态；去掉长日志、完整 diff、完整 markdown。事件层面保留最近结构事件和未解决事件；老事件只进入 `history_summary`。artifact 层面保留 path/ref、type、summary、size/hash，不直接塞大内容。约束层面必须完整保留，因为丢约束会导致错误 patch。认知状态层面必须显式保留 active assumptions、rejected approaches、known failure boundaries、open questions 和 risk notes，避免 stateless decision provider 重复探索已否定路径。
+decision delta 和 checkpoint 构造不是简单截断。它应该优先保留会影响结构决策的信息。节点层面保留 node_key、type、state、title、output_summary、verdict、artifact summaries、assumptions summary 和依赖状态；去掉长日志、完整 diff、完整 markdown。事件层面保留最近结构事件和未解决事件；老事件只进入 checkpoint 的 `history_summary`。artifact 层面保留 path/ref、type、summary、size/hash，不直接塞大内容。约束层面必须完整保留，因为丢约束会导致错误 patch。认知状态层面必须显式保留 active assumptions、rejected approaches、known failure boundaries、open questions 和 risk notes，避免 decision session 重复探索已否定路径。
 
-后续可以实现 snapshot budget，例如 `max_nodes`、`max_events`、`max_chars_per_summary`、`max_total_chars`。如果 graph 太大，需要按 active frontier、blocked frontier、recently changed nodes 和 terminal summaries 分层压缩。第一阶段 graph 小，可以先实现简单版本，但接口要为 budget 留参数。
+后续可以实现 context budget，例如 `max_nodes`、`max_events`、`max_chars_per_summary`、`max_total_chars`。如果 graph 太大，需要按 active frontier、blocked frontier、recently changed nodes 和 terminal summaries 分层压缩。第一阶段 graph 小，可以先实现简单版本，但接口要为 budget 留参数。
 
 ## 并发和锁
 
