@@ -12,7 +12,7 @@
 
 旧 Orchestra 的中心是阶段式 manager loop。它用固定 phase 推进任务，典型路径是 planning、plan_review、implementation、review/test、fix、done/blocked，并围绕 planner、coder、reviewer、tester 这些角色创建 invocation。这个模型适合证明“Kanban 可以调起多个 worker 并收集 evidence”，但它已经预设了协作形态。
 
-新 runtime kernel 不预设固定角色和固定阶段。它只维护 execution graph。节点可以是 analysis、implementation、verification、debug、research、human_gate 或 artifact_transform，但这些是 node type，不是固定流程。节点之间的关系由 dependency edge 和 artifact edge 表达。结构如何长出来，由 event 触发的 decision patch 决定。
+新 runtime kernel 不预设固定角色和固定阶段。它只维护 execution graph。节点可以是 analysis、implementation、verification、debug、research、human_gate 或 artifact_transform，但这些是 node type，不是固定流程。node_type 只表示执行意图、能力需求和 worker context 类型，不表达生命周期阶段，也不允许 kernel 根据 node_type 推导固定下一阶段。节点之间的关系由 dependency edge、artifact edge 和本地 policy 表达。结构如何长出来，由 event 触发的 decision patch 决定。
 
 旧 Orchestra 代码可以作为参考，但不作为核心继承对象。可复用的是其中的经验，比如 worker context 如何截断、evidence 如何摘要、dashboard 如何呈现 worker lane、browser smoke 如何验证页面；不可复用的是固定 phase state machine 和 manager mailbox 作为核心调度语义。
 
@@ -36,15 +36,15 @@ runtime kernel 不应该绕开这些能力直接管理子进程。kernel 只决�
 
 `runtime_jobs` 保存一个用户复杂任务的根对象。它对应用户最初提交的 root task 或 job description。字段包括 `id`、`root_task_id`、`board`、`state`、`objective`、`workspace_path`、`decision_profile`、`metadata`、`created_at`、`updated_at`。`state` 初期限制为 `active`、`waiting_worker`、`waiting_decision`、`waiting_human`、`blocked`、`done`、`cancelled`、`failed`。
 
-`execution_nodes` 保存执行图节点。字段包括 `id`、`job_id`、`node_key`、`node_type`、`state`、`title`、`description`、`assignee`、`task_id`、`run_id`、`input_summary`、`output_summary`、`constraints_json`、`metadata`、`created_at`、`updated_at`、`started_at`、`completed_at`。`node_key` 是 job 内稳定键，用于 graph patch 引用。`state` 初期限制为 `planned`、`ready`、`running`、`succeeded`、`failed`、`blocked`、`waiting_dependency`、`waiting_human`、`cancelled`、`superseded`。
+`execution_nodes` 保存执行图节点。字段包括 `id`、`job_id`、`node_key`、`node_type`、`state`、`title`、`description`、`assignee`、`task_id`、`run_id`、`input_summary`、`output_summary`、`assumptions_json`、`constraints_json`、`metadata`、`created_at`、`updated_at`、`started_at`、`completed_at`。`node_key` 是 job 内稳定键，用于 graph patch 引用。`state` 初期限制为 `planned`、`ready`、`running`、`succeeded`、`failed`、`blocked`、`waiting_dependency`、`waiting_human`、`cancelled`、`superseded`。
 
 `execution_edges` 保存图依赖。字段包括 `id`、`job_id`、`from_node_id`、`to_node_id`、`edge_type`、`required`、`metadata`、`created_at`。`edge_type` 初期限制为 `depends_on`、`artifact_input`、`verifies`、`blocks`、`supersedes`。提交 patch 时必须验证 DAG，除非 edge type 明确允许非调度依赖；第一阶段建议全部按 DAG 处理。
 
-`execution_events` 保存结构性事件流。字段包括 `id`、`job_id`、`node_id`、`task_id`、`run_id`、`event_type`、`payload`、`source`、`source_event_id`、`created_at`。这里不是把所有 Kanban task_events 原样复制一遍，而是只记录 kernel 关心的结构性事件，例如 `job_created`、`node_created`、`node_materialized`、`node_started`、`node_progressed`、`node_completed`、`node_failed`、`node_uncertain`、`node_blocked`、`artifact_ready`、`dependency_satisfied`、`decision_requested`、`patch_applied`、`patch_rejected`、`human_required`。
+`execution_events` 保存结构性事件流。字段包括 `id`、`job_id`、`node_id`、`task_id`、`run_id`、`event_type`、`payload`、`source`、`source_event_id`、`graph_revision`、`created_at`。这里不是把所有 Kanban task_events 原样复制一遍，而是只记录 kernel 关心的结构性事件，例如 `job_created`、`node_created`、`node_materialized`、`node_started`、`node_progressed`、`node_completed`、`node_failed`、`node_uncertain`、`node_blocked`、`artifact_ready`、`dependency_satisfied`、`decision_requested`、`patch_applied`、`patch_rejected`、`human_required`、`structure_audit_requested`。
 
-`graph_patches` 保存每次结构修改。字段包括 `id`、`job_id`、`decision_id`、`patch_json`、`status`、`reject_reason`、`created_at`、`applied_at`。`status` 限制为 `proposed`、`applied`、`rejected`、`noop`。
+`graph_patches` 保存每次结构修改。字段包括 `id`、`job_id`、`decision_id`、`base_revision`、`applied_revision`、`patch_json`、`status`、`reject_reason`、`created_at`、`applied_at`。`status` 限制为 `proposed`、`applied`、`rejected`、`noop`。`base_revision` 是 decision provider 看到的 graph revision，patch 默认只能应用到相同 revision 上。
 
-`kernel_decisions` 保存每次决策函数调用。字段包括 `id`、`job_id`、`trigger_event_id`、`snapshot_json`、`decision_json`、`model`、`status`、`error`、`created_at`、`completed_at`。第一阶段可以用 deterministic fake decision provider，后续再接真实 LLM。
+`kernel_decisions` 保存每次决策函数调用。字段包括 `id`、`job_id`、`trigger_event_id`、`snapshot_revision`、`snapshot_json`、`decision_json`、`model`、`status`、`error`、`created_at`、`completed_at`。第一阶段可以用 deterministic fake decision provider，后续再接真实 LLM。
 
 `node_artifacts` 保存节点产物引用。字段包括 `id`、`job_id`、`node_id`、`artifact_type`、`path_or_ref`、`summary`、`metadata`、`created_at`。这里可以引用 worker 产生的文件、evidence markdown、测试结果、diff 摘要、外部工具结果，但事实状态仍以 DB 行为准。
 
@@ -52,9 +52,9 @@ runtime kernel 不应该绕开这些能力直接管理子进程。kernel 只决�
 
 kernel 是可重复调用的函数，不是长时间思考的 agent。第一阶段可以实现为 `advance_runtime_job(conn, job_id, *, board=None, decision_provider=None, max_patches=1)`，后续再包一层 `supervise_runtime_job()` 做 bounded loop。
 
-每次 advance 做五件事。第一，ingest Kanban worker 状态，把已物化节点绑定的 `task_id` 通过 `task_progress_snapshot()` 读取，识别是否完成、失败、阻塞或产生结构性进展，并写入 `execution_events`。第二，重算节点 readiness，所有依赖满足的 `planned` 或 `waiting_dependency` 节点变为 `ready`。第三，把 `ready` 且尚未创建 Kanban task 的节点物化成真实 Kanban task，写回 `task_id`、`run_id`，并记录 `node_materialized`。第四，如果出现需要结构重算的事件，就构造压缩 snapshot，调用 decision provider 取得 graph patch。第五，验证并应用 graph patch，然后再次更新可运行节点。
+每次 advance 做五件事。第一，ingest Kanban worker 状态，把已物化节点绑定的 `task_id` 通过 `task_progress_snapshot()` 读取，识别是否完成、失败、阻塞或产生结构性进展，并写入 `execution_events`。第二，运行本地 reducer，重算节点 readiness、job 状态、synthetic audit event 和 completion rule；所有依赖满足的 `planned` 或 `waiting_dependency` 节点由 reducer 变为 `ready`。第三，把 `ready` 且尚未创建 Kanban task 的节点物化成真实 Kanban task，写回 `task_id`、`run_id`，并记录 `node_materialized`。第四，如果出现需要结构重算的事件，就构造压缩 snapshot，调用 decision provider 取得 graph patch。第五，验证并应用 graph patch，然后再次运行 reducer 更新可运行节点。
 
-这个循环的关键是不让 LLM 直接改数据库。LLM 或 fake provider 只能返回 patch JSON。所有 patch 都必须经过本地 validator。validator 负责检查引用的 node_key 是否存在、是否重复创建、edge 是否成环、状态迁移是否合法、node type 是否允许、assignee/lane 是否存在或可延后、patch 是否幂等、是否越权修改已完成节点。
+这个循环的关键是不让 LLM 直接改数据库，也不让 LLM 决定节点放行。LLM 或 fake provider 只能返回 patch JSON。所有 patch 都必须经过本地 validator。validator 负责检查引用的 node_key 是否存在、是否重复创建、edge 是否成环、状态迁移是否合法、node type 是否允许、assignee/lane 是否存在或可延后、patch 是否幂等、是否越权修改已完成节点、patch 的 `expected_revision` 是否仍匹配当前 graph revision。
 
 ## Snapshot 构造
 
@@ -67,6 +67,14 @@ snapshot 是决策函数唯一输入，不是完整历史。它应该由系统�
 `recent_events` 只取最近 N 条结构性事件，而不是 worker 全量日志。每条事件保留 event_type、node_key、summary、payload 中的关键字段。
 
 `open_constraints` 保存当前没有解决的约束，例如缺少依赖信息、测试失败、需要人工选择、外部资源不可用、需要并行拆分。
+
+`active_assumptions` 保存当前仍被系统采用的压缩假设，例如“目标仓库路径已确认”“失败主要来自认证而非代码逻辑”。这些不是推理链，而是后续结构决策不能丢的事实状态。
+
+`rejected_approaches` 保存已经尝试并排除的方案，例如“直接复用旧 Orchestra phase machine 会造成语义污染”。它应包含简短原因和证据引用，避免 stateless decision provider 重复生成失败路径。
+
+`known_failure_boundaries` 保存失败边界和不可越过约束，例如“当前没有 GitHub HTTPS 凭据”“某 lane 不可 spawn”“某验证命令在环境中不可用”。这些边界进入 snapshot 后，provider 才能做局部结构调整，而不是反复要求执行不可行动作。
+
+`open_questions` 和 `risk_notes` 保存仍需人工或后续节点解决的问题。它们应该来自 worker receipt、human gate 或 synthetic audit，而不是从完整 worker 对话里临时抽取。
 
 `available_actions` 明确告诉决策函数只能返回哪些 patch op。第一阶段 action 集合越小越好。
 
@@ -82,8 +90,6 @@ Snapshot 要足够小，可以进入一次 LLM 调用；但它必须包含 graph
 
 `add_dependency` 添加一条依赖边。必填 `from_node_key`、`to_node_key`，可选 `edge_type`。
 
-`release_node` 把一个可执行节点从 `planned` 或 `waiting_dependency` 推向 `ready`，但 validator 仍然要检查依赖是否满足。
-
 `insert_verifier` 为某个节点创建验证节点，并自动添加 `target -> verifier` 的依赖关系。
 
 `split_node` 把一个未开始或失败待重构节点拆成多个子节点，并把原节点标记为 `superseded`。第一阶段可以先不实现这个 op，而是用 create_node + add_dependency 替代。
@@ -94,11 +100,16 @@ Snapshot 要足够小，可以进入一次 LLM 调用；但它必须包含 graph
 
 `complete_job` 只能在所有 required terminal verifier 通过后生效。第一阶段可以先由本地规则自动 complete，不开放给 LLM patch。
 
+v1 明确不提供 `release_node`。节点是否从 `planned` 或 `waiting_dependency` 进入 `ready`，只能由本地 reducer 根据 dependency、node state、policy、lock、lane availability 和 human gate 状态计算。decision provider 可以改变图结构和约束，但不能直接放行执行。
+
+每个 patch 必须包含 `expected_revision`。如果当前 graph revision 已经变化，validator 必须拒绝该 patch，或在所有 op 都已经等价存在时将其规范化成 noop；不能在过期 snapshot 上盲目 merge。
+
 patch 示例形状如下：
 
 ```json
 {
   "schema": "runtime_graph_patch_v1",
+  "expected_revision": 7,
   "rationale_summary": "implementation evidence shows two independent verification paths are needed",
   "ops": [
     {
@@ -125,9 +136,11 @@ patch 示例形状如下：
 
 第一阶段目标不是做完整智能系统，而是跑通闭环。具体切片如下。
 
-用户或 CLI 创建 root Kanban task，再创建 `runtime_job` 和一个初始 `analysis` node。该 node 被物化成 Kanban task，派给配置中的分析 lane 或测试里的 fake worker lane。worker 完成后写入 evidence。kernel ingest evidence，把 analysis node 标成 succeeded，并记录一个 `node_completed` 事件。decision provider 根据 snapshot 返回 patch，创建一个 `implementation` node 和一个 `verification` node，并建立 implementation 到 verification 的依赖。kernel 应用 patch，把 implementation 物化成 Kanban task。implementation 完成后 verification 被释放并物化。verification 通过后，本地规则把 job 标成 done。
+用户或 CLI 创建 root Kanban task，再创建 `runtime_job` 和一个初始 `analysis` node。该 node 被物化成 Kanban task，派给配置中的分析 lane 或测试里的 fake worker lane。worker 完成后写入 evidence。kernel ingest evidence，把 analysis node 标成 succeeded，并记录一个 `node_completed` 事件。decision provider 根据 snapshot 返回 patch，创建一个 `implementation` node 和一个 `verification` node，并建立 implementation 到 verification 的依赖。kernel 应用 patch，把 implementation 物化成 Kanban task。implementation 完成后，local reducer 根据依赖满足情况自动释放 verification node。verification 通过后，本地规则把 job 标成 done。
 
 这个切片证明四件事：execution graph 是数据库事实源，worker 只是节点执行器，LLM/decision provider 只返回 patch，Kanban 继续承担真实执行生命周期。
+
+这个切片只是 deterministic fixture，用来证明 graph patch、Kanban task materialization、evidence ingest 和本地 completion rule 能跑通。它不是默认任务模板，也不允许实现中硬编码 `analysis -> implementation -> verification`。初始 `analysis` 节点只能建立可执行理解和压缩状态，不能输出完整固定计划链；后续结构必须来自事件、snapshot 和受限 patch。
 
 ## API 初稿
 
@@ -159,6 +172,8 @@ DB 是唯一事实源。Markdown 只能作为 artifact、人读 handoff、eviden
 
 这样可以避免每个微小输出都触发 LLM 重算，也能保证系统成本和状态变化可解释。
 
+显性事件之外，还需要 synthetic audit。runtime reducer 应在本地生成少量结构审计事件，例如 active frontier 长时间没有推进、所有节点都 succeeded 但 open_constraints 没减少、同类失败重复出现、缺少 required verification、没有 runnable node 但 job 也不是 blocked/done、patch 连续被拒绝、或 graph revision 长时间不变化。这类事件可以写成 `structure_audit_requested` 或 `node_uncertain`，再触发一次受限决策。synthetic audit 的作用是发现静默失败，而不是把普通 progress event 升级成 LLM 触发器。
+
 ## 测试策略
 
 第一批测试应全部使用 deterministic fake decision provider 和 fake worker evidence，不依赖任何真实外部 agent 或网络调用。测试需要覆盖 schema 初始化、job 创建、初始 node 创建、patch validator、DAG cycle rejection、ready 计算、Kanban task materialization、evidence ingest、decision snapshot、patch application、job done rule。
@@ -169,7 +184,7 @@ DB 是唯一事实源。Markdown 只能作为 artifact、人读 handoff、eviden
 
 ## 实现顺序
 
-第一步新增 `kanban_runtime_kernel.py`，只包含 schema、dataclass、create/status/list helpers。第二步实现 patch schema 和 validator，不接 LLM。第三步实现 `create_runtime_job()` 和初始 analysis node。第四步实现 node materialization，把 ready node 变成 Kanban task。第五步实现 evidence ingest，从 task snapshot 更新 node 和 event。第六步实现 deterministic decision provider，跑通 analysis -> implementation -> verification -> done。第七步加 CLI/API 薄封装。第八步再考虑 dashboard。
+第一步新增 `kanban_runtime_kernel.py`，只包含 schema、dataclass、create/status/list helpers。第二步实现 patch schema 和 validator，不接 LLM，并确保 v1 patch 不包含 `release_node`。第三步实现 `create_runtime_job()` 和初始 analysis node。第四步实现 reducer 和 node materialization，把本地规则计算出的 ready node 变成 Kanban task。第五步实现 evidence ingest，从 task snapshot 更新 node、assumptions 和 event。第六步实现 deterministic decision provider，跑通 fixture graph 闭环，但不得把 fixture 写成默认流程。第七步加 CLI/API 薄封装。第八步再考虑 dashboard。
 
 这个顺序的原则是先证明状态机和 graph patch，而不是先做 UI 或真实 LLM。
 
@@ -201,15 +216,15 @@ DB 是唯一事实源。Markdown 只能作为 artifact、人读 handoff、eviden
 
 `runtime_jobs.id` 使用短文本 id，例如 `rjob_<hex>`。`root_task_id` 对应 Kanban root task，可以为空只在极早期创建事务中短暂存在，提交后必须有值。`board` 固化创建时所在 board，后续所有 Kanban 读取都必须传入这个 board，避免跨 board 混读。`objective` 是用户目标的规范化文本。`state` 是 job 级状态，不等于所有 node 状态的简单聚合，但应由 node/event 推导更新。`decision_profile` 是决策函数配置名，可以映射到真实 LLM provider、fake provider 或禁用策略。`metadata` 用于存储非核心扩展，例如 `last_event_cursor`、`last_decision_id`、`human_gate`、`completion_rule`。
 
-`execution_nodes.node_key` 必须在同一个 job 内唯一，并且是 graph patch 的稳定引用。它不能用自增 id 暴露给 LLM，因为 LLM 更适合引用语义键，例如 `understand-scope`、`implement-parser`、`verify-regression`。`node_type` 表示执行意图，第一阶段只开放 `analysis`、`implementation`、`verification`、`review`、`debug`、`human_gate`、`artifact_transform`。`assignee` 是 Kanban assignee/lane 名，可以为空；为空时 kernel 可以根据 node_type 和配置选择默认 lane，或者停在 `blocked`/`waiting_human` 要求人工指定。`task_id` 和 `run_id` 是物化后的 Kanban 映射，未物化前为空。`input_summary` 是给 worker 的局部输入摘要，`output_summary` 是 ingest 后的结构化输出摘要。`constraints_json` 保存硬约束，例如必须运行哪些测试、不能修改哪些路径、需要人工确认哪些外部操作。
+`execution_nodes.node_key` 必须在同一个 job 内唯一，并且是 graph patch 的稳定引用。它不能用自增 id 暴露给 LLM，因为 LLM 更适合引用语义键，例如 `understand-scope`、`implement-parser`、`verify-regression`。`node_type` 表示执行意图和能力需求，第一阶段只开放 `analysis`、`implementation`、`verification`、`review`、`debug`、`human_gate`、`artifact_transform`。这些名称不能被解释成固定 phase，也不能触发固定 next step。`assignee` 是 Kanban assignee/lane 名，可以为空；为空时 kernel 可以根据显式配置的 node_type-to-lane policy 选择默认 lane，或者停在 `blocked`/`waiting_human` 要求人工指定，但不能把 lane policy 扩展成流程模板。`task_id` 和 `run_id` 是物化后的 Kanban 映射，未物化前为空。`input_summary` 是给 worker 的局部输入摘要，`output_summary` 是 ingest 后的结构化输出摘要。`assumptions_json` 保存当前节点贡献的压缩认知状态，建议包含 `active_assumptions`、`rejected_approaches`、`known_failure_boundaries`、`open_questions`、`risk_notes`。`constraints_json` 保存硬约束，例如必须运行哪些测试、不能修改哪些路径、需要人工确认哪些外部操作。
 
 `execution_edges` 中 `depends_on` 是调度依赖，表示 from 成功后 to 才能 ready。`artifact_input` 表示 to 需要读取 from 的 artifact。`verifies` 表示 to 验证 from 的结果。第一阶段可以把三者都视为 required dependency，以保证行为简单。后续如果需要软依赖，再引入 `required=0` 和 readiness policy。
 
 `execution_events` 是 kernel 的事件流，不是日志垃圾桶。每条 event 应该有机器可读 payload，并尽量包含一行 `summary`。如果来自 Kanban task_event，`source_event_id` 指向原事件 id，保证 ingest 幂等。对于同一个 `source_event_id` 和 `event_type`，应有唯一性保护或代码层去重。
 
-`kernel_decisions.snapshot_json` 保存压缩快照，而不是完整数据库 dump。`decision_json` 保存 provider 原始返回。即使 patch 被拒绝，decision 也要保留，方便解释为什么被拒绝。`status` 建议为 `started`、`completed`、`failed`、`rejected_patch`。
+`kernel_decisions.snapshot_json` 保存压缩快照，而不是完整数据库 dump。`snapshot_revision` 保存该快照对应的 graph revision。`decision_json` 保存 provider 原始返回。即使 patch 被拒绝，decision 也要保留，方便解释为什么被拒绝。`status` 建议为 `started`、`completed`、`failed`、`rejected_patch`。
 
-`graph_patches.patch_json` 保存规范化后的 patch。规范化意味着默认值已补齐、node_key 已 trim、op 顺序已确定、不可识别字段已拒绝或移入 metadata。这样后续审计时不依赖 provider 的原始输出。
+`graph_patches.patch_json` 保存规范化后的 patch。规范化意味着默认值已补齐、node_key 已 trim、op 顺序已确定、不可识别字段已拒绝或移入 metadata。这样后续审计时不依赖 provider 的原始输出。`base_revision` 必须来自 patch 的 `expected_revision`；成功 apply 后递增 job 的 graph revision，并把新 revision 记录到 `applied_revision`。
 
 ## 状态迁移细节
 
@@ -217,23 +232,25 @@ DB 是唯一事实源。Markdown 只能作为 artifact、人读 handoff、eviden
 
 `execution_nodes` 的状态迁移必须严格。`planned` 可以到 `waiting_dependency` 或 `ready`。`waiting_dependency` 在依赖满足后到 `ready`。`ready` 物化成 Kanban task 后到 `running`。`running` 根据 ingest 到 `succeeded`、`failed`、`blocked`、`waiting_human`。`failed` 可以通过 patch 被 `superseded`，也可以创建 debug/fix 节点依赖它，但不应该原地改回 `ready`，除非这是明确的 retry op。`succeeded` 默认不可修改，只能被后续 verifier 判定为需要补充工作，但不能直接篡改原节点结果。
 
+这些 state 是 materialized execution view，不是任务 phase。它们描述节点是否已计划、是否可运行、是否正在被某个 worker 执行、是否已有终态 evidence。真正的调度语义来自 graph、edge、policy 和 local reducer，而不是来自 `state + node_type` 的手写流程条件。实现中应避免出现“某 state 下某 node_type 固定生成某下一节点”的规则；这类结构变化只能来自 patch 或明确的本地安全规则。
+
 Kanban task 状态和 node 状态的映射不能一一硬绑。Kanban `done` 通常对应 node `succeeded`，但如果 evidence verdict 是 `needs_fix`，node 应是 `failed` 或 `blocked`。Kanban `blocked` 对应 node `blocked`，但如果 block reason 是等待人工输入，node 应是 `waiting_human`。Kanban `running` 对应 node `running`。Kanban `ready` 只应该短暂存在于已物化但未 claim 的 task，node 仍可视为 `running` 或 `ready_materialized`；第一阶段为简单起见可以把已创建 task 的 node 统一标为 `running`，并通过 task snapshot 展示真实 dispatch 状态。
 
 ## Kanban 物化规则
 
-node 物化成 Kanban task 时，task body 不是完整历史，而是 worker context。context 至少包含 root objective、node title/description、node constraints、直接依赖节点的 output_summary、相关 artifact refs、expected receipt schema、完成/阻塞协议。它还要写入机器可读 footer，例如 `runtime_job_id`、`execution_node_id`、`node_key`、`node_type`，方便 worker evidence 和日志回溯。
+node 物化成 Kanban task 时，task body 不是完整历史，而是 worker context。context 至少包含 root objective、node title/description、node constraints、直接依赖节点的 output_summary、相关 artifact refs、expected receipt schema、完成/阻塞协议。expected receipt schema 必须要求 worker 返回 summary、verdict、artifacts、verification、active_assumptions、decisions_made、rejected_approaches、known_failure_boundaries、open_questions、risk_notes。这里保存的是压缩事实，不要求也不鼓励输出完整推理链。task body 还要写入机器可读 footer，例如 `runtime_job_id`、`execution_node_id`、`node_key`、`node_type`，方便 worker evidence 和日志回溯。
 
-新 task 的 `created_by` 建议为 `runtime_kernel`，`tenant` 建议为 `runtime:<job_id>`。`idempotency_key` 必须包含 job_id 和 node_id，避免重复 advance 创建重复 task。`workspace_kind` 和 `workspace_path` 继承 root task/job。`assignee` 来自 node 或 node_type 默认 lane。`initial_status` 可以直接用 `running` 走现有 create path，也可以用 `ready` 让 dispatcher claim；应优先沿用当前 Kanban 创建 worker task 的成熟路径，具体以基线代码 helper 能力为准。
+新 task 的 `created_by` 建议为 `runtime_kernel`，`tenant` 建议为 `runtime:<job_id>`。`idempotency_key` 必须包含 job_id 和 node_id，避免重复 advance 创建重复 task。`workspace_kind` 和 `workspace_path` 继承 root task/job。`assignee` 来自 node 或显式配置的 lane policy；lane policy 只能选择执行后端，不能生成后续流程。`initial_status` 可以直接用 `running` 走现有 create path，也可以用 `ready` 让 dispatcher claim；应优先沿用当前 Kanban 创建 worker task 的成熟路径，具体以基线代码 helper 能力为准。
 
 物化后马上记录 `node_materialized` event，并把 Kanban `task_id`、latest `run_id` 写回 node。若 task 创建成功但写回 node 失败，事务必须整体回滚；不要留下孤儿 task。若使用的 Kanban helper 内部自己开事务，runtime kernel 需要避免外层再开冲突事务，必要时先实现一个内部 helper 或接受“两阶段但幂等”的物化策略。
 
 ## Evidence ingest 规则
 
-ingest 不读取 worker 完整对话，只读 `task_progress_snapshot()` 和必要的 artifact 文件。它应提取这些结构化字段：task status、run outcome、worker verdict、summary、changed_files、verification results、artifact refs、failure reason、human request、recent progress event summary。
+ingest 不读取 worker 完整对话，只读 `task_progress_snapshot()` 和必要的 artifact 文件。它应提取这些结构化字段：task status、run outcome、worker verdict、summary、changed_files、verification results、artifact refs、failure reason、human request、recent progress event summary、active_assumptions、decisions_made、rejected_approaches、known_failure_boundaries、open_questions、risk_notes。
 
 verdict 需要规范化。`pass`、`approved`、`success` 归为 `succeeded`。`needs_fix`、`failed`、`error` 归为 `failed`。`blocked` 归为 `blocked`。`human_required`、`requires_human` 归为 `waiting_human`。无法判断但 task 已结束时归为 `node_uncertain`，触发 decision provider 或人工 gate，而不是假装成功。
 
-ingest 必须幂等。每个 node metadata 可以保存 `last_ingested_run_id`、`last_ingested_event_id`、`ingested_terminal`。如果同一个 run 已经 terminal ingest 过，后续 advance 不应重复写 node_completed 或 node_failed。对于 progress 类事件，可以只保留最后 N 条摘要，不必全部复制到 execution_events。
+ingest 必须幂等。每个 node metadata 可以保存 `last_ingested_run_id`、`last_ingested_event_id`、`ingested_terminal`。如果同一个 run 已经 terminal ingest 过，后续 advance 不应重复写 node_completed 或 node_failed。对于 progress 类事件，可以只保留最后 N 条摘要，不必全部复制到 execution_events。认知状态字段应被合并到 node 的 `assumptions_json`，并由 snapshot builder 汇总到 job 级 `active_assumptions`、`rejected_approaches` 和 `known_failure_boundaries`；不要只把这些内容写入 markdown evidence。
 
 ## Decision provider 接口
 
@@ -247,13 +264,13 @@ provider 不允许访问数据库连接，不允许直接创建 task，不允许
 
 validator 是新架构最重要的安全边界。它应该在 apply 前基于当前 DB 状态构造一个临时 graph，然后逐个 op 模拟执行。所有 op 模拟通过后，再在一个 write transaction 中真正写入。
 
-必须拒绝的情况包括：未知 op、未知 node_key、重复 node_key、空 title/description、未知 node_type、非法状态迁移、给 terminal node 添加会改变其语义的 op、创建自依赖、创建环、绕过 required dependency release node、引用不存在 artifact、assignee 明确不存在且策略要求严格 lane、patch op 数超过上限、patch 尺寸超过上限、同一个 patch 重复应用但不是幂等 noop。
+必须拒绝的情况包括：未知 op、未知 node_key、重复 node_key、空 title/description、未知 node_type、非法状态迁移、给 terminal node 添加会改变其语义的 op、创建自依赖、创建环、直接放行节点执行、引用不存在 artifact、assignee 明确不存在且策略要求严格 lane、`expected_revision` 与当前 graph revision 不匹配、patch op 数超过上限、patch 尺寸超过上限、同一个 patch 重复应用但不是幂等 noop。
 
 validator 还要处理部分幂等。例如同一个 `add_dependency` 如果边已存在，可以视为 noop；同一个 `create_node` 如果 node_key 已存在且字段完全一致，可以视为 noop，但如果字段不同必须拒绝。这样 supervisor 重试不会轻易造成重复结构。
 
 ## Snapshot 压缩策略
 
-snapshot 构造不是简单截断。它应该优先保留会影响结构决策的信息。节点层面保留 node_key、type、state、title、output_summary、verdict、artifact summaries 和依赖状态；去掉长日志、完整 diff、完整 markdown。事件层面保留最近结构事件和未解决事件；老事件只进入 `history_summary`。artifact 层面保留 path/ref、type、summary、size/hash，不直接塞大内容。约束层面必须完整保留，因为丢约束会导致错误 patch。
+snapshot 构造不是简单截断。它应该优先保留会影响结构决策的信息。节点层面保留 node_key、type、state、title、output_summary、verdict、artifact summaries、assumptions summary 和依赖状态；去掉长日志、完整 diff、完整 markdown。事件层面保留最近结构事件和未解决事件；老事件只进入 `history_summary`。artifact 层面保留 path/ref、type、summary、size/hash，不直接塞大内容。约束层面必须完整保留，因为丢约束会导致错误 patch。认知状态层面必须显式保留 active assumptions、rejected approaches、known failure boundaries、open questions 和 risk notes，避免 stateless decision provider 重复探索已否定路径。
 
 后续可以实现 snapshot budget，例如 `max_nodes`、`max_events`、`max_chars_per_summary`、`max_total_chars`。如果 graph 太大，需要按 active frontier、blocked frontier、recently changed nodes 和 terminal summaries 分层压缩。第一阶段 graph 小，可以先实现简单版本，但接口要为 budget 留参数。
 
@@ -262,6 +279,8 @@ snapshot 构造不是简单截断。它应该优先保留会影响结构决策�
 runtime kernel 需要防止两个 supervisor 同时 advance 同一个 job。第一阶段可以依赖 SQLite write transaction 加 job metadata 中的 `advance_lock`。更简单的做法是在 `runtime_jobs` 加 `claim_lock`、`claim_expires_at` 字段，advance 前尝试原子 claim，结束后释放。没有这个保护时，两个 advance 可能同时看到同一个 ready node，然后各自创建 Kanban task。
 
 锁必须有 TTL，防止进程崩溃后 job 永久卡住。若发现过期锁，新的 advance 可以抢占，并记录 `advance_lock_reclaimed` event。锁 owner 可以用 `hostname:pid:uuid`。
+
+锁解决同时执行问题，graph revision 解决过期决策问题。每次结构变更，包括 patch apply、node 创建、edge 创建、node supersede、human gate 结构更新，都应递增 job graph revision。decision provider 基于某个 snapshot revision 返回 patch，apply 时必须校验 revision。若 revision 已变化，应重新构造 snapshot 或把 patch 判定为严格 noop；不能把旧 snapshot 上的 patch 合并进新 graph。
 
 Kanban dispatcher 的并发控制仍归 dispatcher。runtime kernel 不直接限制全局 worker 数，只决定 node 是否 ready 和是否物化。节点并行度可以通过 graph 依赖和 node/job metadata 限制，例如 `max_active_nodes`，但最终进程并发仍由 Kanban lane/max_spawn 控制。
 
@@ -281,7 +300,7 @@ dashboard 或 CLI 可以提供 human decision endpoint，但第一阶段可以�
 
 ## 完成判定
 
-不要让 LLM 直接决定 job done。第一阶段完成规则应本地化：存在至少一个 terminal implementation/result node 成功，并且所有 required verifier/review nodes 成功，且没有 active blocker/human gate/running required node，才可以把 job 置为 done。LLM 可以建议 `complete_job`，但 validator 必须用本地规则确认。
+不要让 LLM 直接决定 job done。第一阶段完成规则应本地化：存在至少一个满足 objective 的 terminal result node 成功，并且所有 required verifier/review nodes 成功，且没有 active blocker/human gate/running required node，才可以把 job 置为 done。LLM 可以建议 `complete_job`，但 validator 必须用本地规则确认。
 
 如果没有 verifier，job 不应自动 done，除非 job metadata 明确允许 `completion_policy=no_verifier_allowed`。默认策略应该偏保守。
 
@@ -299,6 +318,6 @@ main agent 是控制面，不是 runtime kernel。它可以创建 job、查询�
 
 ## 第一阶段验收标准
 
-第一阶段完成时，应该能在单元测试里证明：新分支从 `b5a262c` 起步；`runtime_jobs` 和 graph 表可以初始化；创建 job 会产生初始 analysis node；analysis node 可以物化为 Kanban task；fake evidence 可以被 ingest 成 `node_completed`；fake decision provider 可以返回 graph patch；patch validator 可以应用 implementation 和 verification 节点；依赖满足后 verification 才会 ready；verification 成功后 job 由本地规则 done；所有步骤都有 execution_events 和 graph_patches 记录。
+第一阶段完成时，应该能在单元测试里证明：新分支从 `b5a262c` 起步；`runtime_jobs` 和 graph 表可以初始化；创建 job 会产生初始 analysis node；analysis node 可以物化为 Kanban task；fake evidence 可以被 ingest 成 `node_completed` 并写入 assumptions/rejected approaches/failure boundaries；fake decision provider 可以返回带 `expected_revision` 的 graph patch；patch validator 可以应用 fixture 节点和依赖；reducer 自动计算 readiness，不接受 `release_node`；过期 revision patch 会被拒绝；依赖满足后后续节点才会 ready；验证节点成功后 job 由本地规则 done；synthetic audit 能在无 runnable node 且 job 未终止时生成结构事件；所有步骤都有 execution_events 和 graph_patches 记录。
 
 如果这个闭环没有跑通，不应该投入大量前端工作。前端只能证明展示，不能证明新架构成立。
