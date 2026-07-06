@@ -105,6 +105,7 @@ def test_schema_initializes_runtime_tables(conn):
         "graph_patches",
         "kernel_decisions",
         "decision_sessions",
+        "decision_checkpoints",
         "node_artifacts",
     }.issubset(tables)
 

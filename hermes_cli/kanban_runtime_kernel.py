@@ -335,6 +335,17 @@ def ensure_runtime_schema(conn: sqlite3.Connection) -> None:
             updated_at INTEGER NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS decision_checkpoints (
+            id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL,
+            decision_session_id TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            checkpoint_json TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            transcript_ref TEXT,
+            created_at INTEGER NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS node_artifacts (
             id TEXT PRIMARY KEY,
             job_id TEXT NOT NULL,
@@ -350,6 +361,7 @@ def ensure_runtime_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_runtime_nodes_job_state ON execution_nodes(job_id, state);
         CREATE INDEX IF NOT EXISTS idx_runtime_events_job ON execution_events(job_id, id);
         CREATE INDEX IF NOT EXISTS idx_runtime_gaps_job_state ON goal_gaps(job_id, state);
+        CREATE INDEX IF NOT EXISTS idx_decision_checkpoints_job_revision ON decision_checkpoints(job_id, revision);
         """
     )
 
@@ -1244,6 +1256,8 @@ def advance_runtime_job(
     patch_status = None
     decision_requested = reduction["state"] == "waiting_decision"
     if decision_provider and decision_requested and max_patches > 0:
+        from hermes_cli import kanban_runtime_decision as rd
+
         session = _current_session(conn, job_id)
         if session is None:
             raise ValueError(f"job {job_id} has no active decision session")
@@ -1251,6 +1265,7 @@ def advance_runtime_job(
         append_decision_delta(conn, session["id"], delta)
         decision_id = _id("kdec")
         now = _now()
+        db_revision = int(_job(conn, job_id)["graph_revision"])
         conn.execute(
             """
             INSERT INTO kernel_decisions (
@@ -1258,20 +1273,34 @@ def advance_runtime_job(
                 status, validator_result_json, created_at
             ) VALUES (?, ?, ?, ?, ?, 'started', '{}', ?)
             """,
-            (decision_id, job_id, int(_job(conn, job_id)["graph_revision"]), session["id"], _json(delta), now),
+            (decision_id, job_id, db_revision, session["id"], _json(delta), now),
         )
         try:
-            patch = decision_provider(session, delta)
+            raw_output = decision_provider(session, delta)
+            patch = rd.parse_provider_patch(raw_output, db_revision)
             conn.execute(
                 "UPDATE kernel_decisions SET decision_json = ?, status = 'completed', completed_at = ? WHERE id = ?",
-                (_json(patch), _now(), decision_id),
+                (_json({"raw_output": raw_output, "patch": patch, "parse_status": "parsed"}), _now(), decision_id),
             )
-            result = apply_graph_patch(conn, job_id, patch, decision_id=decision_id)
-            patch_status = result["status"]
+        except rd.ProviderPatchParseError as exc:
+            result = {"status": "parse_failed", "reason": str(exc)}
             conn.execute(
-                "UPDATE kernel_decisions SET validator_result_json = ? WHERE id = ?",
-                (_json(result), decision_id),
+                """
+                UPDATE kernel_decisions
+                   SET decision_json = ?, status = 'parse_failed',
+                       validator_result_json = ?, error = ?, completed_at = ?
+                 WHERE id = ?
+                """,
+                (
+                    _json({"raw_output": locals().get("raw_output"), "parse_status": "failed"}),
+                    _json(result),
+                    str(exc),
+                    _now(),
+                    decision_id,
+                ),
             )
+            _event(conn, job_id, "decision_parse_failed", {"reason": str(exc)})
+            patch_status = "parse_failed"
         except Exception as exc:  # pragma: no cover - defensive path covered by status assertions later.
             conn.execute(
                 "UPDATE kernel_decisions SET status = 'failed', error = ?, completed_at = ? WHERE id = ?",
@@ -1279,6 +1308,13 @@ def advance_runtime_job(
             )
             _event(conn, job_id, "decision_failed", {"error": str(exc)})
             raise
+        else:
+            result = apply_graph_patch(conn, job_id, patch, decision_id=decision_id)
+            patch_status = result["status"]
+            conn.execute(
+                "UPDATE kernel_decisions SET validator_result_json = ? WHERE id = ?",
+                (_json(result), decision_id),
+            )
     final_state = _job(conn, job_id)["state"]
     events = [row["event_type"] for row in conn.execute("SELECT event_type FROM execution_events WHERE job_id = ? ORDER BY id", (job_id,))]
     return AdvanceResult(

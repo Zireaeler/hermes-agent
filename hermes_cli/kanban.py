@@ -1509,6 +1509,21 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
                             help="Use deterministic fixture provider; not a real LLM")
     rt_advance.add_argument("--json", action="store_true")
 
+    rt_decision = runtime_sub.add_parser("decision", help="Show recent runtime decision records")
+    rt_decision.add_argument("job_id")
+    rt_decision.add_argument("--limit", type=int, default=10)
+    rt_decision.add_argument("--json", action="store_true")
+
+    rt_checkpoint = runtime_sub.add_parser("checkpoint", help="Create or show a decision checkpoint")
+    rt_checkpoint.add_argument("job_id")
+    rt_checkpoint.add_argument("--create", action="store_true", help="Create a new DB-derived checkpoint")
+    rt_checkpoint.add_argument("--reason", default="manual", help="Reason recorded when creating a checkpoint")
+    rt_checkpoint.add_argument("--json", action="store_true")
+
+    rt_prompt = runtime_sub.add_parser("prompt", help="Render provider request/prompt input")
+    rt_prompt.add_argument("job_id")
+    rt_prompt.add_argument("--json", action="store_true")
+
     # --- gc ---
     p_gc = sub.add_parser(
         "gc", help="Garbage-collect archived-task workspaces, old events, and old logs",
@@ -1971,6 +1986,12 @@ def _dispatch_runtime(args: argparse.Namespace) -> int:
         return _cmd_runtime_status(args)
     if sub == "advance":
         return _cmd_runtime_advance(args)
+    if sub == "decision":
+        return _cmd_runtime_decision(args)
+    if sub == "checkpoint":
+        return _cmd_runtime_checkpoint(args)
+    if sub == "prompt":
+        return _cmd_runtime_prompt(args)
     print(f"kanban runtime: unknown action {sub!r}", file=sys.stderr)
     return 2
 
@@ -2128,6 +2149,78 @@ def _cmd_runtime_advance(args: argparse.Namespace) -> int:
                 print(f"  Patch:        {step['patch_status']}")
         else:
             print(f"  Steps: {len(result['steps'])}")
+    return 0
+
+
+def _cmd_runtime_decision(args: argparse.Namespace) -> int:
+    with kb.connect() as conn:
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT id, job_id, db_revision, decision_session_id, delta_json,
+                       decision_json, status, validator_result_json, error,
+                       created_at, completed_at
+                  FROM kernel_decisions
+                 WHERE job_id = ?
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT ?
+                """,
+                (args.job_id, max(1, int(args.limit))),
+            ).fetchall()
+        ]
+    for row in rows:
+        for key in ("delta_json", "decision_json", "validator_result_json"):
+            if row.get(key):
+                row[key[:-5]] = json.loads(row[key])
+    if getattr(args, "json", False):
+        print(json.dumps(rows, indent=2, ensure_ascii=False))
+        return 0
+    if not rows:
+        print("(no runtime decisions)")
+        return 0
+    for row in rows:
+        err = f" error={row['error']}" if row.get("error") else ""
+        print(f"{row['id']} rev={row['db_revision']} status={row['status']}{err}")
+    return 0
+
+
+def _cmd_runtime_checkpoint(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_decision as rd
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    with kb.connect() as conn:
+        rk.ensure_runtime_schema(conn)
+        if getattr(args, "create", False):
+            checkpoint = rd.create_decision_checkpoint(conn, args.job_id, reason=args.reason)
+        else:
+            checkpoint = rd.latest_decision_checkpoint(conn, args.job_id)
+            if checkpoint is None:
+                checkpoint = rd.create_decision_checkpoint(conn, args.job_id, reason="initial")
+    if getattr(args, "json", False):
+        print(json.dumps(checkpoint, indent=2, ensure_ascii=False))
+        return 0
+    print(
+        f"Decision checkpoint {checkpoint['id']} "
+        f"job={checkpoint['job_id']} revision={checkpoint['revision']} reason={checkpoint['reason']}"
+    )
+    return 0
+
+
+def _cmd_runtime_prompt(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_decision as rd
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    with kb.connect() as conn:
+        rk.ensure_runtime_schema(conn)
+        delta = rk.build_decision_delta(conn, args.job_id)
+        request = rd.build_decision_provider_request(conn, args.job_id, delta)
+        rendered = rd.render_decision_prompt(request)
+    payload = {"request": request.to_dict(), "rendered": rendered}
+    if getattr(args, "json", False):
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    else:
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0
 
 
