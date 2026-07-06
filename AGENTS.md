@@ -2,6 +2,44 @@
 
 Instructions for AI coding assistants and developers working on the hermes-agent codebase.
 
+## Runtime Kernel Branch Constraints
+
+When working on branch `feature-kanban-runtime-kernel`, treat
+`docs/kanban-runtime-kernel-design.md` and
+`docs/kanban-runtime-kernel-phase1.md` as binding design constraints, not
+background reading. If implementation details conflict with those documents,
+update the relevant design document first or stop and ask for direction.
+
+Do not continue the old Orchestra phase-manager architecture in this branch.
+Do not reuse `kanban_orchestra.py` as the runtime kernel core, do not introduce
+planner/coder/reviewer/tester phase semantics, and do not turn
+`analysis -> implementation -> verification` into a default workflow. That path
+is allowed only as a deterministic Phase 1 fixture driven by goal gaps and graph
+patches.
+
+The runtime kernel must remain goal-driven:
+- DB rows are the authoritative state; decision sessions are non-authoritative
+  inference context only.
+- `goal_contracts` and `progress_ledger` define completion; execution graph
+  completion does not.
+- The local reducer owns readiness, job state, goal gaps, liveness, synthetic
+  audits, and completion.
+- Decision providers may propose graph patches only; they must not release
+  nodes, directly complete jobs, directly write DB state, create Kanban tasks, or
+  freely mark jobs blocked.
+- Every new execution node must link to a goal item, a goal gap, or a human gate
+  reason. Validator code must reject unlinked node creation.
+
+Phase 1 implementation is intentionally narrow. Keep the first code path in
+`hermes_cli/kanban_runtime_kernel.py` with focused tests in
+`tests/hermes_cli/test_kanban_runtime_kernel.py`. Do not make real LLM calls,
+dashboard/API work, a runtime daemon, full checkpoint compaction, old Orchestra
+frontend migration, or real Codex smoke tests prerequisites for Phase 1.
+
+For this branch, do not routinely rebase `main`, and do not restore the old
+oversized session `019e497b-56e0-7bb0-a357-0db06954ae4d` as implementation
+context.
+
 ## Development Environment
 
 ```bash
