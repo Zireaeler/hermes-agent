@@ -1464,6 +1464,51 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
         help="Emit one JSON object per task on stdout",
     )
 
+    # --- runtime kernel control plane ---
+    p_runtime = sub.add_parser(
+        "runtime",
+        help="Create and advance goal-driven runtime kernel jobs",
+    )
+    runtime_sub = p_runtime.add_subparsers(dest="runtime_action")
+
+    rt_create = runtime_sub.add_parser("create", help="Create a runtime job from an objective")
+    rt_create.add_argument("objective")
+    rt_create.add_argument("--assignee", default=None, help="Assignee/worker lane for the initial runtime node")
+    rt_create.add_argument("--workspace", default="scratch",
+                           help="scratch | worktree | worktree:<path> | dir:<path>")
+    rt_create.add_argument("--goal-item", action="append", default=[],
+                           metavar="KEY:DESCRIPTION",
+                           help="Required goal item; repeatable. Defaults to Phase 1 fixture item.")
+    rt_create.add_argument("--created-by", default="runtime", help="Creator recorded on the root Kanban task")
+    rt_create.add_argument("--idempotency-key", default=None, help="Dedup key for the root Kanban task")
+    rt_create.add_argument("--json", action="store_true")
+
+    rt_promote = runtime_sub.add_parser("promote", help="Promote an existing Kanban root task into a runtime job")
+    rt_promote.add_argument("task_id")
+    rt_promote.add_argument("--objective", default=None, help="Override objective; defaults to task body/title")
+    rt_promote.add_argument("--assignee", default=None, help="Assignee/worker lane for the initial runtime node")
+    rt_promote.add_argument("--workspace-path", default=None, help="Override runtime workspace path")
+    rt_promote.add_argument("--goal-item", action="append", default=[], metavar="KEY:DESCRIPTION")
+    rt_promote.add_argument("--json", action="store_true")
+
+    rt_status = runtime_sub.add_parser("status", help="Show runtime job status")
+    rt_status.add_argument("job_id")
+    rt_status.add_argument("--json", action="store_true")
+
+    rt_list = runtime_sub.add_parser("list", aliases=["ls"], help="List runtime jobs")
+    rt_list.add_argument("--state", default=None)
+    rt_list.add_argument("--limit", type=int, default=50)
+    rt_list.add_argument("--json", action="store_true")
+
+    rt_advance = runtime_sub.add_parser("advance", help="Advance a runtime job")
+    rt_advance.add_argument("job_id")
+    rt_advance.add_argument("--loop", action="store_true", help="Run a bounded supervisor loop")
+    rt_advance.add_argument("--max-steps", type=int, default=8)
+    rt_advance.add_argument("--no-create-tasks", action="store_true")
+    rt_advance.add_argument("--fake-provider", action="store_true",
+                            help="Use deterministic fixture provider; not a real LLM")
+    rt_advance.add_argument("--json", action="store_true")
+
     # --- gc ---
     p_gc = sub.add_parser(
         "gc", help="Garbage-collect archived-task workspaces, old events, and old logs",
@@ -1613,6 +1658,7 @@ def kanban_command(args: argparse.Namespace) -> int:
         "context":  _cmd_context,
         "specify":  _cmd_specify,
         "decompose":  _cmd_decompose,
+        "runtime": _dispatch_runtime,
         "gc":       _cmd_gc,
     }
     handler = handlers.get(action)
@@ -1851,6 +1897,238 @@ def _cmd_boards_set_default_workdir(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+
+
+def _parse_runtime_goal_items(values: list[str]) -> Optional[list[dict[str, Any]]]:
+    if not values:
+        return None
+    items: list[dict[str, Any]] = []
+    for raw in values:
+        key, sep, desc = str(raw).partition(":")
+        key = key.strip()
+        desc = desc.strip()
+        if not sep or not key or not desc:
+            raise ValueError("--goal-item must use KEY:DESCRIPTION")
+        items.append(
+            {
+                "item_key": key,
+                "description": desc,
+                "required": True,
+                "verifier_required": True,
+            }
+        )
+    return items
+
+
+def _runtime_summary(status: dict[str, Any]) -> dict[str, Any]:
+    job = status["job"]
+    return {
+        "id": job["id"],
+        "state": job["state"],
+        "root_task_id": job.get("root_task_id"),
+        "objective": job["objective"],
+        "graph_revision": job["graph_revision"],
+        "goal_items": [
+            {
+                "item_key": item["item_key"],
+                "state": item["state"],
+                "required": bool(item["required"]),
+            }
+            for item in status.get("goal_items", [])
+        ],
+        "open_gaps": [
+            {
+                "gap_key": gap["gap_key"],
+                "gap_type": gap["gap_type"],
+                "summary": gap["summary"],
+            }
+            for gap in status.get("goal_gaps", [])
+            if gap.get("state") == "open"
+        ],
+        "frontier": [
+            {
+                "node_key": node["node_key"],
+                "node_type": node["node_type"],
+                "state": node["state"],
+                "task_id": node.get("latest_task_id"),
+                "assignee": node.get("assignee"),
+            }
+            for node in status.get("nodes", [])
+            if node.get("state") in {"ready", "running", "waiting_human", "failed", "succeeded"}
+        ],
+    }
+
+
+def _dispatch_runtime(args: argparse.Namespace) -> int:
+    sub = getattr(args, "runtime_action", None) or "list"
+    if sub in {"list", "ls"}:
+        return _cmd_runtime_list(args)
+    if sub == "create":
+        return _cmd_runtime_create(args)
+    if sub == "promote":
+        return _cmd_runtime_promote(args)
+    if sub == "status":
+        return _cmd_runtime_status(args)
+    if sub == "advance":
+        return _cmd_runtime_advance(args)
+    print(f"kanban runtime: unknown action {sub!r}", file=sys.stderr)
+    return 2
+
+
+def _cmd_runtime_create(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    workspace_kind, workspace_path = _parse_workspace_flag(args.workspace)
+    goal_items = _parse_runtime_goal_items(getattr(args, "goal_item", []))
+    board = kb.get_current_board()
+    with kb.connect() as conn:
+        job_id = rk.create_runtime_job_from_objective(
+            conn,
+            args.objective,
+            board=board,
+            workspace_kind=workspace_kind,
+            workspace_path=workspace_path,
+            assignee=args.assignee,
+            created_by=args.created_by,
+            goal_items=goal_items,
+            idempotency_key=args.idempotency_key,
+        )
+        status = rk.status_runtime_job(conn, job_id)
+    if getattr(args, "json", False):
+        print(json.dumps(_runtime_summary(status), indent=2, ensure_ascii=False))
+    else:
+        print(f"Created runtime job {job_id}")
+        print(f"  Root task: {status['job']['root_task_id']}")
+        print(f"  State:     {status['job']['state']}")
+    return 0
+
+
+def _cmd_runtime_promote(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    goal_items = _parse_runtime_goal_items(getattr(args, "goal_item", []))
+    board = kb.get_current_board()
+    with kb.connect() as conn:
+        job_id = rk.promote_runtime_job(
+            conn,
+            args.task_id,
+            objective=args.objective,
+            board=board,
+            workspace_path=args.workspace_path,
+            goal_items=goal_items,
+            initial_assignee=args.assignee,
+        )
+        status = rk.status_runtime_job(conn, job_id)
+    if getattr(args, "json", False):
+        print(json.dumps(_runtime_summary(status), indent=2, ensure_ascii=False))
+    else:
+        print(f"Promoted {args.task_id} to runtime job {job_id}")
+        print(f"  State: {status['job']['state']}")
+    return 0
+
+
+def _cmd_runtime_status(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    with kb.connect() as conn:
+        status = rk.status_runtime_job(conn, args.job_id)
+    if getattr(args, "json", False):
+        print(json.dumps(status, indent=2, ensure_ascii=False))
+        return 0
+    summary = _runtime_summary(status)
+    print(f"Runtime job {summary['id']} [{summary['state']}] rev={summary['graph_revision']}")
+    print(f"Objective: {summary['objective']}")
+    print("Goal items:")
+    for item in summary["goal_items"]:
+        req = "required" if item["required"] else "optional"
+        print(f"  - {item['item_key']}: {item['state']} ({req})")
+    if summary["open_gaps"]:
+        print("Open gaps:")
+        for gap in summary["open_gaps"]:
+            print(f"  - {gap['gap_key']}: {gap['summary']}")
+    if summary["frontier"]:
+        print("Frontier:")
+        for node in summary["frontier"]:
+            print(
+                f"  - {node['node_key']} "
+                f"[{node['node_type']}/{node['state']}] task={node['task_id'] or '-'}"
+            )
+    return 0
+
+
+def _cmd_runtime_list(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    with kb.connect() as conn:
+        jobs = rk.list_runtime_jobs(conn, state=args.state, limit=args.limit)
+    if getattr(args, "json", False):
+        print(json.dumps(jobs, indent=2, ensure_ascii=False))
+        return 0
+    if not jobs:
+        print("(no runtime jobs)")
+        return 0
+    print(f"{'JOB':18s} {'STATE':16s} {'REV':>4s} {'ROOT':12s} OBJECTIVE")
+    for job in jobs:
+        objective = str(job.get("objective") or "")
+        if len(objective) > 80:
+            objective = objective[:77] + "..."
+        print(
+            f"{job['id']:18s} {job['state']:16s} "
+            f"{int(job['graph_revision']):4d} {str(job.get('root_task_id') or '-'):12s} {objective}"
+        )
+    return 0
+
+
+def _cmd_runtime_advance(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    provider = rk.fixture_decision_provider if getattr(args, "fake_provider", False) else None
+    create_tasks = not getattr(args, "no_create_tasks", False)
+    board = kb.get_current_board()
+    with kb.connect() as conn:
+        if getattr(args, "loop", False):
+            result = rk.advance_runtime_job_until_idle(
+                conn,
+                args.job_id,
+                board=board,
+                create_tasks=create_tasks,
+                decision_provider=provider,
+                max_steps=args.max_steps,
+            )
+        else:
+            tick = rk.advance_runtime_job(
+                conn,
+                args.job_id,
+                board=board,
+                create_tasks=create_tasks,
+                decision_provider=provider,
+            )
+            result = {
+                "job_id": tick.job_id,
+                "state": tick.job_state,
+                "reason": tick.job_state,
+                "step": {
+                    "materialized_nodes": tick.materialized_nodes,
+                    "ingested_nodes": tick.ingested_nodes,
+                    "decision_requested": tick.decision_requested,
+                    "patch_status": tick.patch_status,
+                },
+            }
+    if getattr(args, "json", False):
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        print(f"Advanced runtime job {result['job_id']}: {result['state']} ({result['reason']})")
+        if "step" in result:
+            step = result["step"]
+            if step["materialized_nodes"]:
+                print(f"  Materialized: {', '.join(step['materialized_nodes'])}")
+            if step["ingested_nodes"]:
+                print(f"  Ingested:     {', '.join(step['ingested_nodes'])}")
+            if step["patch_status"]:
+                print(f"  Patch:        {step['patch_status']}")
+        else:
+            print(f"  Steps: {len(result['steps'])}")
+    return 0
 
 
 def _parse_duration(val) -> Optional[int]:

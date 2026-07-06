@@ -6,7 +6,8 @@ Instructions for AI coding assistants and developers working on the hermes-agent
 
 When working on branch `feature-kanban-runtime-kernel`, treat
 `docs/kanban-runtime-kernel-design.md` and
-`docs/kanban-runtime-kernel-phase1.md` as binding design constraints, not
+`docs/kanban-runtime-kernel-phase1.md` and
+`docs/kanban-runtime-kernel-phase2.md` as binding design constraints, not
 background reading. If implementation details conflict with those documents,
 update the relevant design document first or stop and ask for direction.
 
@@ -35,6 +36,13 @@ Phase 1 implementation is intentionally narrow. Keep the first code path in
 `tests/hermes_cli/test_kanban_runtime_kernel.py`. Do not make real LLM calls,
 dashboard/API work, a runtime daemon, full checkpoint compaction, old Orchestra
 frontend migration, or real Codex smoke tests prerequisites for Phase 1.
+
+Phase 2A is a control-plane and execution-substrate wiring stage. Add thin
+`hermes kanban runtime ...` style entry points and tests that prove runtime
+materialized tasks can flow through existing Kanban dispatcher/worker-lane
+fixtures and back through `task_progress_snapshot()` ingest. Do not use this
+stage to introduce a real LLM provider, a persistent runtime daemon, dashboard
+UI migration, or concrete Codex/Claude Code smoke dependency.
 
 For this branch, do not routinely rebase `main`, and do not restore the old
 oversized session `019e497b-56e0-7bb0-a357-0db06954ae4d` as implementation

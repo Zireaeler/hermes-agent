@@ -174,6 +174,37 @@ def test_run_slash_dispatch_dry_run_counts(kanban_home):
     assert "Spawned:" in out
 
 
+def test_run_slash_runtime_create_status_and_list_json(kanban_home):
+    created = json.loads(kc.run_slash("runtime create 'ship runtime control plane' --json"))
+    assert created["state"] == "active"
+    assert created["root_task_id"].startswith("t_")
+    assert created["goal_items"][0]["item_key"] == "initial-runtime-result"
+
+    status = json.loads(kc.run_slash(f"runtime status {created['id']} --json"))
+    assert status["job"]["id"] == created["id"]
+    assert status["nodes"][0]["node_key"] == "understand-scope"
+
+    jobs = json.loads(kc.run_slash("runtime list --json"))
+    assert [job["id"] for job in jobs] == [created["id"]]
+
+
+def test_run_slash_runtime_promote_existing_root_task(kanban_home):
+    root = json.loads(kc.run_slash("create 'existing root' --body 'runtime objective' --json"))
+    promoted = json.loads(kc.run_slash(f"runtime promote {root['id']} --json"))
+    assert promoted["root_task_id"] == root["id"]
+    assert promoted["objective"] == "runtime objective"
+    assert promoted["frontier"][0]["node_key"] == "understand-scope"
+
+
+def test_run_slash_runtime_advance_materializes_initial_node(kanban_home):
+    created = json.loads(kc.run_slash("runtime create 'advance runtime' --json"))
+    first = json.loads(kc.run_slash(f"runtime advance {created['id']} --json"))
+    second = json.loads(kc.run_slash(f"runtime advance {created['id']} --json"))
+
+    assert first["step"]["materialized_nodes"] == ["understand-scope"]
+    assert second["step"]["materialized_nodes"] == []
+
+
 def test_run_slash_context_output_format(kanban_home):
     out = kc.run_slash("create 'tech spec' --assignee alice --body 'write an RFC'")
     import re

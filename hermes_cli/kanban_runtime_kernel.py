@@ -472,6 +472,7 @@ def create_runtime_job(
     board: Optional[str] = None,
     workspace_path: Optional[str] = None,
     goal_items: Optional[list[dict[str, Any]]] = None,
+    initial_assignee: Optional[str] = None,
 ) -> str:
     """Create a runtime job, goal contract, decision session, and first node."""
 
@@ -570,15 +571,16 @@ def create_runtime_job(
         """
         INSERT INTO execution_nodes (
             id, job_id, node_key, node_type, state, title, description,
-            input_summary, assumptions_json, constraints_json, metadata_json,
+            assignee, input_summary, assumptions_json, constraints_json, metadata_json,
             created_at, updated_at
-        ) VALUES (?, ?, 'understand-scope', 'analysis', 'ready', ?, ?, ?, '{}', '{}', ?, ?, ?)
+        ) VALUES (?, ?, 'understand-scope', 'analysis', 'ready', ?, ?, ?, ?, '{}', '{}', ?, ?, ?)
         """,
         (
             node_id,
             job_id,
             "Establish executable understanding",
             "Analyze the objective enough to produce structured evidence for the first runtime gap.",
+            initial_assignee,
             objective.strip(),
             _json({"goal_item_keys": [initial_goal_items[0]["item_key"]], "gap_keys": []}),
             now,
@@ -590,6 +592,94 @@ def create_runtime_job(
     _event(conn, job_id, "node_created", {"node_key": "understand-scope", "node_type": "analysis"}, node_id=node_id)
     detect_goal_gaps(conn, job_id)
     return job_id
+
+
+def create_runtime_job_from_objective(
+    conn: sqlite3.Connection,
+    objective: str,
+    *,
+    board: Optional[str] = None,
+    workspace_kind: str = "scratch",
+    workspace_path: Optional[str] = None,
+    assignee: Optional[str] = None,
+    created_by: str = "runtime",
+    goal_items: Optional[list[dict[str, Any]]] = None,
+    idempotency_key: Optional[str] = None,
+) -> str:
+    """Create a root Kanban task and promote it into a runtime job."""
+
+    ensure_runtime_schema(conn)
+    root_task_id = kb.create_task(
+        conn,
+        title=objective.strip(),
+        body=objective.strip(),
+        assignee=None,
+        created_by=created_by,
+        workspace_kind=workspace_kind,
+        workspace_path=workspace_path,
+        tenant="runtime",
+        idempotency_key=idempotency_key,
+        initial_status="running",
+        board=board,
+    )
+    return create_runtime_job(
+        conn,
+        root_task_id,
+        objective,
+        board=board,
+        workspace_path=workspace_path,
+        goal_items=goal_items,
+        initial_assignee=assignee,
+    )
+
+
+def promote_runtime_job(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    objective: Optional[str] = None,
+    board: Optional[str] = None,
+    workspace_path: Optional[str] = None,
+    goal_items: Optional[list[dict[str, Any]]] = None,
+    initial_assignee: Optional[str] = None,
+) -> str:
+    """Create a runtime job rooted at an existing Kanban task."""
+
+    ensure_runtime_schema(conn)
+    task = kb.get_task(conn, task_id)
+    if task is None:
+        raise ValueError(f"unknown root task {task_id}")
+    resolved_objective = (objective or task.body or task.title or "").strip()
+    if not resolved_objective:
+        raise ValueError("objective is required")
+    return create_runtime_job(
+        conn,
+        task_id,
+        resolved_objective,
+        board=board,
+        workspace_path=workspace_path or task.workspace_path,
+        goal_items=goal_items,
+        initial_assignee=initial_assignee,
+    )
+
+
+def list_runtime_jobs(
+    conn: sqlite3.Connection,
+    *,
+    state: Optional[str] = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Return recent runtime jobs for control-plane list views."""
+
+    ensure_runtime_schema(conn)
+    sql = "SELECT * FROM runtime_jobs"
+    params: list[Any] = []
+    if state:
+        sql += " WHERE state = ?"
+        params.append(state)
+    sql += " ORDER BY updated_at DESC, created_at DESC LIMIT ?"
+    params.append(max(1, int(limit)))
+    return [_row_to_dict(row) or {} for row in conn.execute(sql, params).fetchall()]
 
 
 def status_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
@@ -1202,6 +1292,72 @@ def advance_runtime_job(
     )
 
 
+def advance_runtime_job_until_idle(
+    conn: sqlite3.Connection,
+    job_id: str,
+    *,
+    board: Optional[str] = None,
+    create_tasks: bool = True,
+    decision_provider: Optional[Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]] = None,
+    max_steps: int = 8,
+) -> dict[str, Any]:
+    """Run a bounded runtime supervisor loop and stop at a recoverable edge."""
+
+    steps: list[dict[str, Any]] = []
+    reason = "max_steps"
+    last_signature: Optional[tuple[Any, ...]] = None
+    for _ in range(max(1, int(max_steps))):
+        before_revision = int(_job(conn, job_id)["graph_revision"])
+        result = advance_runtime_job(
+            conn,
+            job_id,
+            board=board,
+            create_tasks=create_tasks,
+            decision_provider=decision_provider,
+        )
+        after = _job(conn, job_id)
+        signature = (
+            after["state"],
+            int(after["graph_revision"]),
+            tuple(result.materialized_nodes),
+            tuple(result.ingested_nodes),
+            result.patch_status,
+        )
+        steps.append(
+            {
+                "job_state": result.job_state,
+                "materialized_nodes": result.materialized_nodes,
+                "ingested_nodes": result.ingested_nodes,
+                "decision_requested": result.decision_requested,
+                "patch_status": result.patch_status,
+                "graph_revision_before": before_revision,
+                "graph_revision_after": int(after["graph_revision"]),
+            }
+        )
+        if after["state"] == "done":
+            reason = "done"
+            break
+        if after["state"] in {"waiting_worker", "waiting_human", "blocked"}:
+            reason = after["state"]
+            break
+        if (
+            after["state"] == "waiting_decision"
+            and not decision_provider
+        ):
+            reason = "waiting_decision"
+            break
+        if signature == last_signature:
+            reason = "no_progress"
+            break
+        last_signature = signature
+    return {
+        "job_id": job_id,
+        "state": _job(conn, job_id)["state"],
+        "reason": reason,
+        "steps": steps,
+    }
+
+
 def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], board: Optional[str] = None) -> Optional[str]:
     if node["state"] != "ready":
         return None
@@ -1303,6 +1459,7 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
     if snapshot is None or snapshot.task.status not in {"done", "blocked"}:
         return False
     metadata = dict(snapshot.evidence or {})
+    snapshot_run_id = snapshot.run.id if snapshot.run else node["latest_run_id"]
     verdict = _normalize_verdict(metadata.get("verdict") or snapshot.task.status)
     if node["state"] in TERMINAL_NODE_STATES:
         return False
@@ -1338,18 +1495,35 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
         """
         UPDATE execution_nodes
            SET state = ?, output_summary = ?, assumptions_json = ?,
+               latest_run_id = COALESCE(?, latest_run_id),
                updated_at = ?, completed_at = ?
          WHERE id = ?
         """,
-        (state, metadata.get("summary") or snapshot.task.result or "", _json(assumptions), now, now, node_id),
+        (
+            state,
+            metadata.get("summary") or snapshot.task.result or "",
+            _json(assumptions),
+            snapshot_run_id,
+            now,
+            now,
+            node_id,
+        ),
     )
     conn.execute(
         """
         UPDATE node_materializations
-           SET status = ?, completed_at = ?, terminal_event_id = COALESCE(terminal_event_id, ?)
+           SET status = ?, run_id = COALESCE(?, run_id), completed_at = ?,
+               terminal_event_id = COALESCE(terminal_event_id, ?)
          WHERE node_id = ? AND task_id = ?
         """,
-        (state, now, snapshot.last_event.id if snapshot.last_event else None, node_id, node["latest_task_id"]),
+        (
+            state,
+            snapshot_run_id,
+            now,
+            snapshot.last_event.id if snapshot.last_event else None,
+            node_id,
+            node["latest_task_id"],
+        ),
     )
     update_progress_ledger(conn, node_id, metadata)
     for artifact in metadata.get("artifacts") or []:
@@ -1372,7 +1546,7 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
                     now,
                 ),
             )
-    _event(conn, node["job_id"], event_type, {"node_key": node["node_key"], "verdict": verdict}, node_id=node_id, task_id=node["latest_task_id"], run_id=node["latest_run_id"], source="kanban_task")
+    _event(conn, node["job_id"], event_type, {"node_key": node["node_key"], "verdict": verdict}, node_id=node_id, task_id=node["latest_task_id"], run_id=snapshot_run_id, source="kanban_task")
     reduce_runtime_job(conn, node["job_id"])
     return True
 

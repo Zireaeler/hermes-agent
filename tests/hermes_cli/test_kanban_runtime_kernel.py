@@ -6,6 +6,7 @@ import pytest
 
 from hermes_cli import kanban_db as kb
 from hermes_cli import kanban_runtime_kernel as rk
+from hermes_cli.worker_lanes import WorkerLane, clear_worker_lanes, register_worker_lane
 
 
 @pytest.fixture
@@ -23,6 +24,13 @@ def conn(kanban_home):
     with kb.connect() as db:
         rk.ensure_runtime_schema(db)
         yield db
+
+
+@pytest.fixture(autouse=True)
+def clean_worker_lanes():
+    clear_worker_lanes()
+    yield
+    clear_worker_lanes()
 
 
 def _root_task(conn) -> str:
@@ -472,4 +480,91 @@ def test_fixture_provider_runs_phase1_implementation_verifier_closure(conn):
         },
     )
     assert rk.ingest_runtime_node_evidence(conn, verifier["id"])
+    assert rk.status_runtime_job(conn, job_id)["job"]["state"] == "done"
+
+
+def test_bounded_supervisor_records_decision_delta_and_session_context(conn):
+    job_id = _job(conn)
+    conn.execute(
+        "UPDATE execution_nodes SET state = 'failed' WHERE job_id = ? AND node_key = 'understand-scope'",
+        (job_id,),
+    )
+
+    result = rk.advance_runtime_job_until_idle(
+        conn,
+        job_id,
+        create_tasks=False,
+        decision_provider=rk.fixture_decision_provider,
+        max_steps=2,
+    )
+
+    assert result["steps"][0]["patch_status"] == "applied"
+    decision = conn.execute(
+        "SELECT * FROM kernel_decisions WHERE job_id = ? ORDER BY created_at DESC LIMIT 1",
+        (job_id,),
+    ).fetchone()
+    assert decision is not None
+    assert "goal_gaps" in decision["delta_json"]
+    session = conn.execute(
+        "SELECT * FROM decision_sessions WHERE job_id = ?",
+        (job_id,),
+    ).fetchone()
+    assert "deltas" in session["context_state_json"]
+
+
+def test_runtime_materialized_task_dispatch_and_ingest_fixture_lane(conn, monkeypatch):
+    from hermes_cli import profiles
+
+    calls = []
+
+    def spawn(task, workspace, *, board=None):
+        calls.append((task.id, task.assignee, workspace, board))
+        return 2468
+
+    register_worker_lane(
+        WorkerLane(
+            name="runtime-fixture",
+            kind="test",
+            description="runtime fixture lane",
+            spawn_fn=spawn,
+            max_concurrency=1,
+        )
+    )
+    monkeypatch.setattr(profiles, "profile_exists", lambda name: False)
+
+    root = kb.create_task(conn, title="runtime root", initial_status="running")
+    job_id = rk.create_runtime_job(
+        conn,
+        root,
+        "dispatch runtime node",
+        goal_items=[
+            {
+                "item_key": "initial-runtime-result",
+                "description": "runtime node can flow through dispatcher",
+                "required": True,
+                "verifier_required": True,
+            }
+        ],
+        initial_assignee="runtime-fixture",
+    )
+    assert rk.advance_runtime_job(conn, job_id, create_tasks=True).materialized_nodes == ["understand-scope"]
+    node = _node(conn, job_id, "understand-scope")
+
+    dispatch = kb.dispatch_once(conn, only_task_ids=[node["latest_task_id"]])
+    assert dispatch.spawned == [(node["latest_task_id"], "runtime-fixture", calls[0][2])]
+    assert kb.get_task(conn, node["latest_task_id"]).status == "running"
+
+    _complete_node(
+        conn,
+        node,
+        {
+            "verdict": "succeeded",
+            "summary": "dispatcher-backed runtime evidence",
+            "claimed_goal_items": ["initial-runtime-result"],
+            "verification": {"commands": ["fixture"], "passed": True, "summary": "passed"},
+        },
+    )
+    assert rk.ingest_runtime_node_evidence(conn, node["id"])
+    refreshed = _node(conn, job_id, "understand-scope")
+    assert refreshed["latest_run_id"] is not None
     assert rk.status_runtime_job(conn, job_id)["job"]["state"] == "done"
