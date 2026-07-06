@@ -7,7 +7,8 @@ Instructions for AI coding assistants and developers working on the hermes-agent
 When working on branch `feature-kanban-runtime-kernel`, treat
 `docs/kanban-runtime-kernel-design.md` and
 `docs/kanban-runtime-kernel-phase1.md` and
-`docs/kanban-runtime-kernel-phase2.md` as binding design constraints, not
+`docs/kanban-runtime-kernel-phase2.md` and
+`docs/kanban-runtime-kernel-phase2b.md` as binding design constraints, not
 background reading. If implementation details conflict with those documents,
 update the relevant design document first or stop and ask for direction.
 
@@ -43,6 +44,13 @@ materialized tasks can flow through existing Kanban dispatcher/worker-lane
 fixtures and back through `task_progress_snapshot()` ingest. Do not use this
 stage to introduce a real LLM provider, a persistent runtime daemon, dashboard
 UI migration, or concrete Codex/Claude Code smoke dependency.
+
+Phase 2B is a decision-provider/session foundation stage. Keep DB facts
+authoritative while adding cache-friendly provider input rendering,
+DB-derived decision checkpoints, strict provider-output parsing, and
+record/replay provider tests. Do not relax graph patch validation to
+accommodate model output, and do not make live LLM/network calls a test
+prerequisite.
 
 For this branch, do not routinely rebase `main`, and do not restore the old
 oversized session `019e497b-56e0-7bb0-a357-0db06954ae4d` as implementation
