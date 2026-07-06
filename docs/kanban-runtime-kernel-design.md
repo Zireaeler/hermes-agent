@@ -8,13 +8,23 @@
 
 系统的事实连续性只存在于数据库里的 goal contract、job、progress ledger、execution graph、event log、artifact 和 graph patch 记录中。LLM 不拥有事实状态，也不直接控制系统；每个 runtime job 可以维护一个长期 decision session 作为推理上下文和缓存友好的决策会话。kernel 基于 DB 事实生成增量 delta 并追加到 session；LLM 只能返回 graph patch proposal；patch 经 validator 校验后才能成为 DB 事实。系统的收敛条件不是“当前 execution graph 跑完”，而是“goal contract 的 required items 被足够 evidence 支持，且没有未解决 hard constraint”。
 
+## 核心不变量
+
+这个 runtime 的第一不变量是 DB authoritative state 和 decision session inference context 必须分离。DB 保存可恢复、可审计、可并发校验的事实；decision session 只保存非权威的长期推理上下文。session 可以帮助模型利用项目连续性、稳定前缀和前缀缓存，但不能让模型记忆覆盖 DB 事实，也不能让模型绕过 validator 写入状态。
+
+第二不变量是 goal contract 高于 execution graph。graph 是当前工作结构，不是完成定义；当前 graph 跑完不代表 job done，当前 graph 没有 runnable node 也不代表 job blocked。job 是否完成只由 goal contract、progress ledger、hard constraints、human gates 和本地 completion rule 判定。
+
+第三不变量是本地 reducer 拥有调度主权。节点 readiness、dependency satisfaction、job state、goal gaps、liveness violation、synthetic audit 和 completion rule 都由 kernel 根据 DB 推导。LLM 可以提出结构 patch，但不能 release node、不能直接 complete job、不能自由 mark blocked，也不能把 node_type 当成 phase 生成固定下一阶段。
+
+第四不变量是每个结构变更必须能解释它推进了哪个 goal item、gap 或 human gate。没有 `goal_item_keys`、`gap_keys` 或 `human_gate_reason` 的新节点不是目标推进，而是自由规划，validator 必须拒绝。worker receipt 也必须能被 ingest 到 progress ledger，否则 node succeeded 不能被当作 goal progress。
+
 ## Decision Context
 
 runtime state 和 inference context 必须分开。authoritative runtime state 落在数据库里，用于恢复、审计、并发、回滚和本地校验；decision session 是 job 级长期推理上下文，用于让 LLM 不必每次冷启动重新理解项目，同时支持长上下文、缓存友好的稳定前缀和增量追加。两者冲突时永远以 DB 为准。
 
 decision session 可以“记得”之前为什么选择某个方案、哪些路径被否定、哪些 patch 被 validator 拒绝、当前 milestone 为什么这样切分，但这些记忆只影响下一次模型如何提出 patch，不会直接改变系统状态。真正改变 execution graph、progress ledger 或 job state 的唯一方式仍然是模型输出 patch proposal，patch 经过 validator 校验，通过后写入 DB。
 
-请求形态应从 `decision_provider(snapshot) -> patch` 收敛为 `decision_provider(session, delta) -> patch`。`session` 是该 job 长期保留的决策上下文，`delta` 是本轮从 DB 推导出来的新变化。第一次创建 job 时，kernel 创建 decision session，把稳定前缀写进去：runtime 规则、patch schema、validator 硬约束、用户目标、goal contract、workspace、允许的 node type、允许的 patch op、禁止直接完成 job、禁止绕过 verifier、禁止修改 terminal fact 等。后续调用只追加短 delta，例如 node 完成或失败、ledger 更新了哪些 goal item、当前最大 gap 是什么、validator 拒绝了什么。
+目标请求形态是 `decision_provider(session, delta) -> patch`，不是每轮冷启动的 snapshot oracle。`session` 是该 job 长期保留的决策上下文，`delta` 是本轮从 DB 推导出来的新变化。第一次创建 job 时，kernel 创建 decision session，把稳定前缀写进去：runtime 规则、patch schema、validator 硬约束、用户目标、goal contract、workspace、允许的 node type、允许的 patch op、禁止直接完成 job、禁止绕过 verifier、禁止修改 terminal fact 等。后续调用只追加短 delta，例如 node 完成或失败、ledger 更新了哪些 goal item、当前最大 gap 是什么、validator 拒绝了什么。
 
 decision session 的存在不改变调用触发策略。普通 worker progress、heartbeat、日志增长只进入 Kanban 或 progress summary；kernel 先用本地 reducer 更新 DB。只有 reducer 发现当前结构需要决策，例如目标未完成但没有 ready/running node、verifier failed、join point 需要合并/验证、同一 gap 多轮无进展、或 anti-stuck policy 触发时，才向 decision session 追加 delta 并调用 provider。
 
@@ -108,9 +118,9 @@ kernel 是可重复调用的函数，不是长时间思考的 agent。第一阶�
 
 这个循环的关键是不让 LLM 直接改数据库，也不让 LLM 决定节点放行。LLM 或 fake provider 只能返回 patch JSON。所有 patch 都必须经过本地 validator。validator 负责检查引用的 node_key 是否存在、是否重复创建、调度依赖是否成环、状态迁移是否合法、node type 是否允许、assignee/lane 是否存在或可延后、patch 是否幂等、是否越权修改已完成节点、patch 的 `expected_revision` 是否仍匹配当前 graph revision。
 
-## Delta And Snapshot 构造
+## Decision Delta And Checkpoint
 
-decision provider 的输入不是随意拼接的完整数据库，也不是每次冷启动的完整 prompt。稳定项目上下文保存在 decision session 中，本轮输入是由 kernel 从 DB 推导出的 state delta。为了审计和 fallback，kernel 仍然可以构造一个规范化 snapshot，但它的主要职责是生成 delta、校验 session 是否落后、以及在 checkpoint 时重建稳定上下文。
+decision provider 的输入不是随意拼接的完整数据库，也不是每次冷启动的完整 prompt。稳定项目上下文保存在 decision session 中，本轮输入是由 kernel 从 DB 推导出的 state delta。为了审计、调试和 provider fallback，kernel 可以构造一个规范化 snapshot，但 snapshot 不是主路径输入；主路径是 delta append、session continuation 和 checkpoint compaction。
 
 初始 session 前缀应包含这些稳定内容。
 
@@ -118,7 +128,7 @@ decision provider 的输入不是随意拼接的完整数据库，也不是每�
 
 `goal_contract` 包括 required/optional goal items、acceptance criteria、evidence requirements、hard constraints、default policy、human-required conditions 和 completion policy。
 
-`graph` 包括节点列表、节点状态、关键依赖边、每个节点的一句话输入输出摘要、最近 verdict、是否有 artifact。
+`graph` 包括节点列表、节点状态、关键调度依赖、关键语义关系、每个节点的一句话输入输出摘要、最近 verdict、是否有 artifact。
 
 `progress_ledger` 包括每个 goal item 当前由哪些 node/artifact/verifier 支持，满足程度是什么，验证状态是什么，证据是否足够。
 
@@ -142,7 +152,7 @@ decision provider 的输入不是随意拼接的完整数据库，也不是每�
 
 本轮 delta 应只包含新变化和待决策问题，例如新增 terminal node、artifact_ready、progress_ledger_updated、goal_gap_detected、validator rejection、当前没有 ready/running node、或 active milestone 停滞。delta 必须说明这些变化影响了哪些 goal item、哪些 gap 仍未解决、为什么需要结构决策。
 
-snapshot/delta 要足够小，可以进入一次 LLM 调用；但必须包含 graph frontier、goal gaps 和未解决约束，否则决策函数会退化成自由规划。这里的 snapshot 是审计和 fallback 用的规范化视图，不是每次调用的主要输入；主要输入仍然是追加到 decision session 的 delta。动态字段不要放到稳定前缀中，例如当前时间、随机 id、最近事件列表、节点运行状态变化都应靠后追加。graph、goal item 和 ledger 的渲染顺序必须 canonicalize，例如按 `node_key`、`goal_item_key` 排序，并使用固定字段顺序，避免同样内容因为排序变化破坏缓存命中。
+delta、checkpoint 和审计 snapshot 都要足够小，可以进入一次 LLM 调用；但必须包含 graph frontier、goal gaps 和未解决约束，否则决策函数会退化成自由规划。这里的 snapshot 是审计和 fallback 用的规范化视图，不是每次调用的主要输入；主要输入仍然是追加到 decision session 的 delta。动态字段不要放到稳定前缀中，例如当前时间、随机 id、最近事件列表、节点运行状态变化都应靠后追加。graph、goal item 和 ledger 的渲染顺序必须 canonicalize，例如按 `node_key`、`goal_item_key` 排序，并使用固定字段顺序，避免同样内容因为排序变化破坏缓存命中。
 
 ## Graph Patch schema
 
@@ -272,7 +282,7 @@ DB 是唯一事实源。Markdown 只能作为 artifact、人读 handoff、eviden
 
 第一个循环是现有 Kanban dispatcher daemon。它只看 Kanban `tasks` 表中可 dispatch 的 task，负责 claim 和 spawn worker。它不理解 execution graph，也不直接调用 decision provider。
 
-第二个循环是 runtime supervisor。它可以先不是 daemon，而是一个 bounded loop：每次调用 `advance_runtime_job()`，遇到等待 worker、等待人工、完成、阻塞或达到 max_steps 就停。后续可以做成 dashboard/API 触发的后台线程，但第一阶段不需要。
+第二个循环是 runtime supervisor。它可以先不是 daemon，而是一个 bounded loop：每次调用 `advance_runtime_job()`，遇到等待 worker、等待人工、完成、合法 blocked 或达到 max_steps 就停。若只是当前 graph 没有 runnable node，但 goal contract 仍有 unmet item，则不能按阻塞退出，必须记录 liveness violation 并触发 gap resolution。后续可以做成 dashboard/API 触发的后台线程，但第一阶段不需要。
 
 第三个循环是 worker 自己的执行过程。worker 接收一个 Kanban task，只知道本节点的局部上下文、依赖输出摘要、约束和 expected receipt shape。worker 不知道全局 graph，也不和其他 worker 直接通信。
 
@@ -362,7 +372,7 @@ runtime kernel 需要防止两个 supervisor 同时 advance 同一个 job。第�
 
 锁解决同时执行问题，graph revision 解决过期决策问题。每次结构变更，包括 patch apply、node 创建、dependency 创建、relation 创建、node supersede、human gate 结构更新，都应递增 job graph revision。decision provider 基于某个 DB/graph revision 返回 patch，apply 时必须校验 revision。若 revision 已变化，应重新构造 delta 或把 patch 判定为严格 noop；不能把旧 revision 上的 patch 合并进新 graph。
 
-Kanban dispatcher 的并发控制仍归 dispatcher。runtime kernel 不直接限制全局 worker 数，只决定 node 是否 ready 和是否物化。节点并行度可以通过 graph 依赖和 node/job metadata 限制，例如 `max_active_nodes`，但最终进程并发仍由 Kanban lane/max_spawn 控制。
+Kanban dispatcher 的并发控制仍归 dispatcher。runtime kernel 不直接限制全局 worker 数，只决定 node 是否 ready 和是否物化。节点并行度可以通过 `execution_dependencies` 和 node/job metadata 限制，例如 `max_active_nodes`，但最终进程并发仍由 Kanban lane/max_spawn 控制。
 
 ## 失败处理
 
