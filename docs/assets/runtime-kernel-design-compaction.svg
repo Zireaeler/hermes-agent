@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">Decision session compaction lifecycle</title>
+  <desc id="desc">Active decision segment grows, compaction policy triggers, old segment archives, checkpoint validates, new active segment starts.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2 2 L10 6 L2 10 Z" fill="#334155"/>
+    </marker>
+    <style>
+      .title{font:700 25px Arial,sans-serif;fill:#111827}
+      .label{font:700 15px Arial,sans-serif;fill:#111827}
+      .small{font:13px Arial,sans-serif;fill:#334155}
+      .tiny{font:12px Arial,sans-serif;fill:#475569}
+      .active{fill:#ecfeff;stroke:#0891b2;stroke-width:1.8;rx:8}
+      .policy{fill:#fffbeb;stroke:#d97706;stroke-width:1.8;rx:8}
+      .archive{fill:#f8fafc;stroke:#64748b;stroke-width:1.8;rx:8}
+      .checkpoint{fill:#eef2ff;stroke:#4f46e5;stroke-width:1.8;rx:8}
+      .guard{fill:#fef2f2;stroke:#dc2626;stroke-width:1.8;rx:8}
+      .new{fill:#f0fdf4;stroke:#16a34a;stroke-width:1.8;rx:8}
+      .flow{stroke:#334155;stroke-width:2;fill:none;marker-end:url(#arrow)}
+      .soft{stroke:#94a3b8;stroke-width:1.6;fill:none;stroke-dasharray:6 5;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1200" height="720" fill="#fff"/>
+  <text x="44" y="46" class="title">Decision Session Compaction Runtime</text>
+
+  <rect x="65" y="100" width="270" height="138" class="active"/>
+  <text x="92" y="135" class="label">Active Segment</text>
+  <text x="92" y="163" class="small">delta append</text>
+  <text x="92" y="185" class="small">patch proposal</text>
+  <text x="92" y="207" class="small">validator result</text>
+  <text x="92" y="229" class="small">gap/frontier/revision changes</text>
+
+  <rect x="460" y="100" width="270" height="138" class="policy"/>
+  <text x="487" y="135" class="label">Compaction Policy</text>
+  <text x="487" y="163" class="small">token pressure</text>
+  <text x="487" y="185" class="small">milestone switch</text>
+  <text x="487" y="207" class="small">validator rejection streak</text>
+  <text x="487" y="229" class="small">anti-stuck or human decision</text>
+
+  <rect x="865" y="100" width="270" height="138" class="archive"/>
+  <text x="892" y="135" class="label">Close And Archive</text>
+  <text x="892" y="163" class="small">segment state archived</text>
+  <text x="892" y="185" class="small">archive_ref kept for audit</text>
+  <text x="892" y="207" class="small">old transcript stops entering</text>
+  <text x="892" y="229" class="small">active model context</text>
+
+  <rect x="65" y="360" width="270" height="138" class="checkpoint"/>
+  <text x="92" y="395" class="label">Compaction Provider</text>
+  <text x="92" y="423" class="small">segment + DB state</text>
+  <text x="92" y="445" class="small">markdown profile</text>
+  <text x="92" y="467" class="small">budget and telemetry</text>
+  <text x="92" y="489" class="small">checkpoint candidate</text>
+
+  <rect x="460" y="360" width="270" height="138" class="guard"/>
+  <text x="487" y="395" class="label">Checkpoint Validator</text>
+  <text x="487" y="423" class="small">node/goal/artifact refs exist</text>
+  <text x="487" y="445" class="small">no unverified -> confirmed</text>
+  <text x="487" y="467" class="small">hard blockers preserved</text>
+  <text x="487" y="489" class="small">revision consistency</text>
+
+  <rect x="865" y="360" width="270" height="138" class="new"/>
+  <text x="892" y="395" class="label">New Active Segment</text>
+  <text x="892" y="423" class="small">stable runtime contract</text>
+  <text x="892" y="445" class="small">current goal contract</text>
+  <text x="892" y="467" class="small">validated checkpoint</text>
+  <text x="892" y="489" class="small">short tail + new delta</text>
+
+  <rect x="250" y="585" width="700" height="64" fill="#f8fafc" stroke="#cbd5e1" rx="8"/>
+  <text x="278" y="614" class="small">Worker receipt is not compaction. Runtime compacts only job-level decision transcript.</text>
+  <text x="278" y="636" class="small">Old segment remains auditable but is removed from active LLM context.</text>
+
+  <path d="M335 169 L460 169" class="flow"/>
+  <path d="M730 169 L865 169" class="flow"/>
+  <path d="M1000 238 C940 310 445 320 335 400" class="flow"/>
+  <path d="M335 429 L460 429" class="flow"/>
+  <path d="M730 429 L865 429" class="flow"/>
+  <path d="M1000 360 C1035 285 1030 245 1000 238" class="soft"/>
+  <path d="M595 498 C590 550 605 565 600 585" class="soft"/>
+
+  <text x="365" y="156" class="tiny">threshold or semantic trigger</text>
+  <text x="765" y="156" class="tiny">freeze transcript</text>
+  <text x="370" y="386" class="tiny">checkpoint candidate</text>
+  <text x="760" y="416" class="tiny">validated checkpoint</text>
+</svg>

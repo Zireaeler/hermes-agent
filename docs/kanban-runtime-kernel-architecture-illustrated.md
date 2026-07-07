@@ -1,6 +1,6 @@
 # Hermes Kanban Runtime Kernel 图解完整设计
 
-本文档是 `docs/kanban-runtime-kernel-design.md` 的图文版说明，描述目标架构本身，而不是某个阶段已经落地的实现清单。它把 runtime kernel 设计压成几个工程对象和几条闭环：目标合同、证据账本、执行图、事件流、决策上下文、patch validator、Kanban 执行层，以及 liveness/anti-stuck/human gate policy。
+本文档是 `docs/kanban-runtime-kernel-design.md` 的图文版说明，描述目标架构本身，而不是某个阶段已经落地的实现清单。它把 runtime kernel 设计压成几个工程对象和几条闭环：目标合同、证据账本、执行图、事件流、决策上下文、decision session compaction、patch validator、Kanban 执行层，以及 liveness/anti-stuck/human gate policy。
 
 如果只看一句话：这个系统是一个 **goal-driven event-sourced execution runtime**。系统连续性存在于 DB 事实中；execution graph 是为满足 goal contract 临时长出来的工作结构；decision session 只负责推理连续性，不拥有事实；worker backend 只执行单个 node，不参与全局调度。
 
@@ -20,7 +20,7 @@
 
 `Runtime Kernel` 是本地调度逻辑。它负责 ingest worker evidence、运行 reducer、检测 goal gaps、判断 liveness、物化 ready node、调用 decision provider，以及应用或拒绝 graph patch。
 
-`Decision Session` 是非权威推理上下文。它可以保留稳定前缀、checkpoint、已排除路径、validator 拒绝历史和最近 delta，以便真实 LLM 后续能利用长上下文和前缀缓存。但 session 里的记忆不能覆盖 DB 事实。
+`Decision Session` 是非权威推理上下文。它可以保留稳定前缀、checkpoint、已排除路径、validator 拒绝历史和最近 delta，以便真实 LLM 后续能利用长上下文和前缀缓存。但 session 里的记忆不能覆盖 DB 事实。它还必须被切成 segment 并周期性 compaction，避免无限增长。
 
 `Graph Patch Validator` 是安全边界。provider 只能提出 patch proposal；validator 检查 revision、schema、引用、DAG、goal linkage 和禁止 op。只有通过 validator 的 patch 才能成为 DB fact。
 
@@ -54,7 +54,7 @@
 
 `execution_events` 是结构性事件流。它不是 worker 全量日志，而是 kernel 关心的事实演化，例如 node_completed、progress_ledger_updated、goal_gap_detected、decision_requested、patch_rejected、liveness_violation。
 
-`decision_sessions`、`kernel_decisions`、`graph_patches` 和 `decision_checkpoints` 记录模型决策路径。即使 patch 被拒绝，也要保留 delta、provider output、validator result 和 rejection reason，用于审计和纠正后续 decision context。
+`decision_sessions`、`decision_session_segments`、`kernel_decisions`、`graph_patches` 和 `decision_checkpoints` 记录模型决策路径。即使 patch 被拒绝，也要保留 delta、provider output、validator result 和 rejection reason，用于审计和纠正后续 decision context。长期运行时，旧 segment 原文会归档，validated checkpoint 会成为新 segment 的上下文前缀组成部分。
 
 这个数据模型的核心关系是：**goal contract 定义目标，progress ledger 证明目标，goal gaps 暴露差距，execution graph 承载当前工作，events 记录演化，patches 记录结构变更。**
 
@@ -227,7 +227,36 @@ validator 必须拒绝：
 
 如果 patch 被拒绝，DB graph 不变。拒绝原因进入 `graph_patches`、`kernel_decisions` 和 `execution_events`，并追加回 decision session，纠正后续模型上下文。
 
-## 8. Liveness、Anti-Stuck 和 Human Gate
+## 8. Decision Session Compaction
+
+![Decision session compaction lifecycle](assets/runtime-kernel-design-compaction.svg)
+
+Decision Session Compaction 是完整设计里的一等 runtime 子系统。它不是 worker receipt，也不是 dashboard summary。它只处理 job 级 decision session transcript：每次 DB delta、provider patch、validator result、patch applied/rejected、goal gap 变化和 graph revision 变化组成的系统级调度对话。
+
+为什么需要它：长期任务的 decision session 会不断增长。如果只是不停追加 delta 和 patch，最终会出现上下文膨胀、旧错误路径污染、validator 边界被淹没、cacheable prefix 失效和 provider 调用成本上升。长上下文模型不能替代上下文生命周期管理。
+
+完整生命周期是：
+
+1. job 创建时开启第一个 active segment。
+2. 每轮结构决策把 delta、patch proposal、validator result 和 patch 落库结果追加到 active segment。
+3. compaction policy 判断是否触发压缩，例如 token pressure、milestone 切换、human decision 修改目标、validator 连续拒绝、anti-stuck 或 graph 大规模 supersede。
+4. kernel 关闭旧 segment，归档原始 transcript。
+5. compaction provider 或 deterministic fallback 生成 checkpoint candidate。
+6. checkpoint validator 校验引用和事实一致性。
+7. 新 active segment 启动，只使用 stable runtime contract、当前 goal contract、validated checkpoint、极短 tail 和新 delta。
+
+checkpoint 不是普通 summary，而是下一阶段调度决策所需的结构化认知状态。它应该保留当前目标解释、goal contract revision、active milestone、已满足 goal items、未满足 goal gaps、open blockers、关键架构决策、已排除方案、已知失败边界、validator rejection lessons、human decisions、重要 artifact index、当前 graph frontier、不应重复的无效动作和下一阶段策略约束。
+
+旧 segment 原文仍然保留，用于审计、debug 和回放，但不会继续进入活跃 LLM 上下文。这样系统才能同时获得三件事：长任务连续理解、上下文负载可控、前缀缓存仍然可用。
+
+compaction provider 和 decision provider 必须分离：
+
+- `decision_provider(session_segment, delta) -> graph_patch_proposal`
+- `compaction_provider(segment, db_state, profile, budget) -> checkpoint_candidate`
+
+前者推进 execution graph，后者重写下一段上下文。compaction provider 不能改 graph；decision provider 不能替代 checkpoint lifecycle。
+
+## 9. Liveness、Anti-Stuck 和 Human Gate
 
 ![Liveness, anti-stuck and human gate policy](assets/runtime-kernel-design-liveness-policy.svg)
 
@@ -277,7 +306,7 @@ human gate 是受控阻塞，只能用于真正需要用户授权或偏好的场
 
 普通工程选择不应该频繁问用户。目录结构、函数命名、先 mock 后真实接入、局部 debug 路线，都应按 defaults policy 推进并记录 rationale。
 
-## 9. Execution Graph 不是 Phase Machine
+## 10. Execution Graph 不是 Phase Machine
 
 设计里允许 node type，例如：
 
@@ -303,7 +332,7 @@ human gate 是受控阻塞，只能用于真正需要用户授权或偏好的场
 
 一个任务可以先 research，再 human gate，再 implementation；也可以直接 implementation，再 verification；也可以多个 implementation 并行，然后 join 到 verifier。系统不预设角色协作关系，只维护图结构和证据。
 
-## 10. Worker Receipt Contract
+## 11. Worker Receipt Contract
 
 worker 不需要知道完整全局目标，但必须知道自己服务哪个 goal gap。worker context 应包含：
 
@@ -336,7 +365,9 @@ worker receipt 应尽量返回：
 
 这些不是推理链保存，而是把不可丢的执行事实压缩成结构化状态，供 progress ledger、gap detector 和 decision session 使用。
 
-## 11. 示例：股票回测系统
+worker receipt 不属于 runtime compaction。它是节点交付契约。Codex/Claude Code 等 worker backend 内部可以自己压缩内部对话，但 runtime kernel 不管理 worker 内部上下文。runtime kernel 只压缩 job 级 decision session transcript。
+
+## 12. 示例：股票回测系统
 
 用户目标：“实现一个股票回测系统，可以用数据 provider 输入行情，运行策略，输出回测结果，并有验证命令。”
 
@@ -384,7 +415,9 @@ gap detector 生成：
 
 decision provider 这时不需要重新规划整个股票系统。它可以基于 decision session 中的连续上下文提出 `align-provider-backtest-interface` debug node，再插入 verifier。DB 仍然是事实源；如果 provider 基于旧上下文引用了 superseded node，validator 会拒绝 stale patch。
 
-## 12. 完成语义
+如果这个 job 长时间运行，decision session 会累计多个 gap resolution、patch rejection、human decision 和 verifier failure。达到 compaction policy 后，kernel 会归档旧 segment，并生成 checkpoint，例如“mock provider 已实现但真实 provider 需要 API key”“直接让 backtest engine 适配 price 字段的路径已失败”“当前应先统一 provider schema，再做端到端 verifier”。新 segment 不再带旧 transcript 原文，只带这个 checkpoint、短 tail 和新 delta。
+
+## 13. 完成语义
 
 job done 只能由本地 completion rule 判定。完整设计的完成条件是：
 
@@ -399,7 +432,7 @@ job done 只能由本地 completion rule 判定。完整设计的完成条件是
 
 LLM 可以建议 complete，但 validator 必须基于同一套本地规则接受或拒绝。worker 说“完成了”也不够，必须有 ledger evidence。
 
-## 13. 设计分界线
+## 14. 设计分界线
 
 这个 runtime 和普通多 agent 系统的区别不是“用了更多 agent”，而是：
 
@@ -408,6 +441,8 @@ LLM 可以建议 complete，但 validator 必须基于同一套本地规则接�
 - 调度主权在 reducer，不在 LLM。
 - LLM 只提 patch，不能直接改事实。
 - worker 不互相通信，它们通过 graph dependency 和 artifacts 间接协作。
+- worker receipt 是节点交付契约，不是 runtime compaction。
+- decision session compaction 只压缩 job 级调度 transcript，旧 segment 归档审计，新 segment 使用 validated checkpoint 继续。
 - human gate 是受控阻塞，不是“不确定就问用户”。
 - anti-stuck 是本地可检测 policy，不是让 agent 无限 retry。
 

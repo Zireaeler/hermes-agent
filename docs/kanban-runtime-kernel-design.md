@@ -28,6 +28,12 @@ decision session 可以“记得”之前为什么选择某个方案、哪些路
 
 decision session 的存在不改变调用触发策略。普通 worker progress、heartbeat、日志增长只进入 Kanban 或 progress summary；kernel 先用本地 reducer 更新 DB。只有 reducer 发现当前结构需要决策，例如目标未完成但没有 ready/running node、verifier failed、join point 需要合并/验证、同一 gap 多轮无进展、或 anti-stuck policy 触发时，才向 decision session 追加 delta 并调用 provider。
 
+decision session 还必须有一等的 compaction lifecycle。它不是无限追加的长对话，也不是普通摘要字段。每个 job 的 decision session 应被切成多个 segment：当前 active segment 接收 delta、provider patch、validator result、patch_applied/patch_rejected、goal gap 变化和 graph revision 变化；当 compaction policy 触发时，kernel 关闭当前 segment，归档原始 transcript，生成经过 validator 校验的 checkpoint，然后开启新的 active segment。新 segment 的活跃上下文只由稳定 runtime contract、当前 goal contract、最新 checkpoint、极短 tail 和新 delta 组成；旧 segment 原文只用于审计、debug 和回放，不再继续进入活跃 LLM 上下文。
+
+这里的边界必须明确：worker receipt 不是 decision session compaction。节点启动时定义的 artifact、verdict、验证命令、风险、失败原因、未完成项和 human gate 请求，是 worker 的交付契约。Codex/Claude Code 等 worker backend 内部也可以有自己的 `/compact` 或上下文压缩机制，但 runtime kernel 不接管。runtime kernel 的 compaction 对象只有 job 级 decision session transcript，也就是系统调度层的连续决策记录。
+
+checkpoint 不是普通 summary，而是调度认知状态的结构化重写。它服务下一段结构决策，必须保留当前目标解释、goal contract revision、active milestone、已满足 goal items、未满足 goal gaps、open blockers、关键架构决策、已排除方案、已知失败边界、validator rejection lessons、human decisions、重要 artifact index、当前 graph frontier、当前不应重复的无效动作和下一阶段策略约束。它不应该复制每轮 patch JSON 原文或重复 delta 字段，因为这些已经落在 `graph_patches`、`kernel_decisions`、`execution_events` 和 artifact 表里。
+
 ## Goal Contract
 
 系统最高层抽象是 goal，不是 task，也不是 execution graph。用户的自然语言目标会被规范化成一个 `runtime_job`，但 job 只是容器；真正定义系统是否应该继续推进的是 goal contract。goal contract 是系统对用户目标的结构化承诺，描述完成时必须满足哪些可验证条件、哪些约束必须保持、哪些选择可以由系统默认决定、哪些选择必须请求用户确认。
@@ -104,9 +110,11 @@ runtime kernel 不应该绕开这些能力直接管理子进程。kernel 只决�
 
 `kernel_decisions` 保存每次决策函数调用。字段包括 `id`、`job_id`、`trigger_event_id`、`db_revision`、`decision_session_id`、`delta_json`、`decision_json`、`model`、`status`、`validator_result_json`、`error`、`created_at`、`completed_at`。`delta_json` 是本次追加到 decision session 的 DB-derived state delta，不是完整事实快照。第一阶段可以用 deterministic fake decision provider，后续再接真实 LLM。
 
-`decision_sessions` 保存受外部事实约束的长期决策上下文。字段包括 `id`、`job_id`、`profile`、`provider`、`model`、`state`、`stable_prefix_hash`、`session_ref`、`transcript_ref`、`last_appended_event_id`、`last_checkpoint_revision`、`context_state_json`、`metadata`、`created_at`、`updated_at`。`session_ref` 可以是 provider 侧会话 id，也可以为空；`transcript_ref` 可以指向本地归档的 session transcript。架构只要求它是 job 级长期决策上下文，不要求绑定某个模型 API。
+`decision_sessions` 保存受外部事实约束的 job 级长期决策上下文容器。字段包括 `id`、`job_id`、`profile`、`provider`、`model`、`state`、`stable_prefix_hash`、`session_ref`、`transcript_ref`、`active_segment_id`、`last_appended_event_id`、`last_checkpoint_revision`、`context_state_json`、`metadata`、`created_at`、`updated_at`。`session_ref` 可以是 provider 侧会话 id，也可以为空；`transcript_ref` 可以指向本地归档的 session transcript。架构只要求它是 job 级长期决策上下文容器，不要求绑定某个模型 API。
 
-`decision_checkpoints` 保存 decision session 的压缩检查点。字段包括 `id`、`job_id`、`decision_session_id`、`revision`、`checkpoint_json`、`transcript_ref`、`created_at`。checkpoint 应保留 goal contract、当前 progress ledger、active milestone、已满足 goal items、未满足 goal gaps、已排除方案、关键架构决策、关键 artifact 索引、最近失败边界和 validator 拒绝历史。旧 transcript 可以归档，新的 decision session 以前一个 checkpoint 作为稳定前缀继续增长。
+`decision_session_segments` 保存 decision session 的分段生命周期。字段包括 `id`、`job_id`、`decision_session_id`、`segment_index`、`state`、`started_at`、`closed_at`、`start_decision_id`、`end_decision_id`、`covered_event_start`、`covered_event_end`、`covered_graph_revision_start`、`covered_graph_revision_end`、`estimated_input_tokens`、`estimated_output_tokens`、`compacted_checkpoint_id`、`archive_ref`、`metadata`。`state` 初期限制为 `active`、`closed`、`archived`、`compacting`、`compacted`、`failed_compaction`。同一个 job 同时只能有一个 active segment。
+
+`decision_checkpoints` 保存 decision session compaction 生成的结构化检查点。字段包括 `id`、`job_id`、`decision_session_id`、`source_segment_id`、`profile_name`、`checkpoint_revision`、`db_revision`、`graph_revision`、`ledger_revision`、`covered_event_start`、`covered_event_end`、`covered_decision_start`、`covered_decision_end`、`payload_json`、`payload_text`、`validator_status`、`reject_reason`、`supersedes_checkpoint_id`、`transcript_ref`、`created_at`。`payload_json` 是机器可读的结构化状态，`payload_text` 是给 provider 阅读的紧凑文本版本。checkpoint 必须绑定 DB/graph/ledger revision，避免压缩上下文和事实源脱节。
 
 `node_artifacts` 保存节点产物引用。字段包括 `id`、`job_id`、`node_id`、`artifact_type`、`path_or_ref`、`summary`、`metadata`、`created_at`。这里可以引用 worker 产生的文件、evidence markdown、测试结果、diff 摘要、外部工具结果，但事实状态仍以 DB 行为准。
 
@@ -153,6 +161,26 @@ decision provider 的输入不是随意拼接的完整数据库，也不是每�
 本轮 delta 应只包含新变化和待决策问题，例如新增 terminal node、artifact_ready、progress_ledger_updated、goal_gap_detected、validator rejection、当前没有 ready/running node、或 active milestone 停滞。delta 必须说明这些变化影响了哪些 goal item、哪些 gap 仍未解决、为什么需要结构决策。
 
 delta、checkpoint 和审计 snapshot 都要足够小，可以进入一次 LLM 调用；但必须包含 graph frontier、goal gaps 和未解决约束，否则决策函数会退化成自由规划。这里的 snapshot 是审计和 fallback 用的规范化视图，不是每次调用的主要输入；主要输入仍然是追加到 decision session 的 delta。动态字段不要放到稳定前缀中，例如当前时间、随机 id、最近事件列表、节点运行状态变化都应靠后追加。graph、goal item 和 ledger 的渲染顺序必须 canonicalize，例如按 `node_key`、`goal_item_key` 排序，并使用固定字段顺序，避免同样内容因为排序变化破坏缓存命中。
+
+## Decision Session Compaction Runtime
+
+Decision Session Compaction Runtime 是 runtime kernel 的一等子系统，位置在真实 LLM provider 接入之前。它的职责不是总结 worker 日志，也不是生成 dashboard summary，而是管理 job 级 decision session transcript 的分段、压缩、checkpoint 生成、旧上下文归档和新上下文启动。
+
+一个 job 创建时，kernel 创建 decision session 和第一个 active segment。active segment 的前缀包含稳定 runtime contract、patch schema、validator 规则、goal contract、workspace 和必要初始目标信息。每次结构决策时，kernel 把 DB-derived delta 追加到 active segment；provider 返回 patch 后，validator result、patch_applied 或 patch_rejected、graph revision 变化和 goal gap 变化也追加进去。
+
+当 compaction policy 触发时，kernel 执行真正的上下文替换，而不是在旧上下文后面追加摘要。流程是：第一，关闭 active segment 并把它标记为 compacting/archived；第二，调用 compaction provider 或 deterministic fallback 生成 checkpoint candidate；第三，用 checkpoint validator 校验引用和事实一致性；第四，checkpoint 通过后写入 `decision_checkpoints`；第五，开启新的 active segment。新 segment 的上下文由稳定 runtime contract、当前 goal contract、最新 checkpoint、极短 tail 和本轮新 delta 组成，旧 segment 原文不再进入活跃 LLM 上下文。
+
+compaction provider 和 decision provider 是两条不同接口。普通结构决策接口是 `decision_provider(session_segment, delta) -> graph_patch_proposal`，目标是推进 execution graph。压缩接口是 `compaction_provider(segment, db_state, profile, budget) -> checkpoint_candidate`，目标是重写下一阶段需要保留的调度认知状态。两者不能混用；compaction provider 不能提出 graph patch，decision provider 不能替代 checkpoint lifecycle。
+
+compaction policy 不应该写死在内核里。kernel 可以提供默认 policy，但触发因素应该来自可配置策略函数。输入信号包括 active segment 估算 token 超过模型窗口比例、最近 N 次 decision token 增长过快、cacheable prefix ratio 下降、milestone 切换、human decision 修改 goal contract、validator 连续拒绝、同一个 gap 多轮 strategy update、graph 大规模 supersede、active frontier 从 implementation 转向 verification。系统还应记录 telemetry：`stable_prefix_tokens`、`checkpoint_tokens`、`tail_tokens`、`delta_tokens`、`model_output_tokens`、`active_segment_tokens`、`cacheable_prefix_tokens`、`context_window_ratio`、`accepted_patch_count`、`rejected_patch_count`、`noop_count`。
+
+compaction prompt 必须 profile 化，而不是写死在代码里。建议新增 `docs/kanban-runtime-kernel-compaction-profiles/` 或运行时配置目录，每个 profile 是 markdown 文件。初期 profile 可以包括 `token_budget_compaction.md`、`validator_boundary_compaction.md`、`human_decision_compaction.md`、`milestone_transition_compaction.md`、`anti_stuck_compaction.md`。profile 应声明用途、输入选择规则、压缩目标、禁止事项、输出 schema、校验要求和示例。kernel 不解释 profile 的自然语言内容，只负责选择 profile、组装输入、调用 provider、验证 checkpoint。
+
+checkpoint validator 不判断压缩是否聪明，而判断它是否安全且不违背 DB 事实。validator 必须检查 checkpoint 中引用的 `node_key`、`goal_item_key`、`artifact_ref`、`patch_id`、`human_decision_id` 是否存在；检查它是否把未验证事项写成 confirmed；检查它是否遗漏当前 hard blocker；检查它是否和 DB 当前 graph/ledger revision 冲突；检查它是否把 failed verifier 写成 passed。校验失败的 checkpoint 不能成为新 active segment 的前缀，可以重试、换 profile，或降级为 deterministic DB-derived checkpoint。
+
+`kernel_decisions.snapshot_json` 或等价字段的语义应统一成“本次追加到 active decision session 的 delta”，而不是“本次完整压缩快照”。delta 应包含 trigger_reason、db_revision、graph_revision、goal_gap_delta、recent_structural_events、frontier_change、available_actions 和 request_boundary。长期上下文来自 active segment 与最新 checkpoint；审计来自 segment archive、kernel_decisions、graph_patches 和 execution_events。
+
+compaction 可观测性至少要能回答：当前 active segment id 是什么；最新 checkpoint revision 是什么；active segment token 估算是多少；最近一次 compaction profile 是什么；最近一次 compaction validator 是否通过；旧 segment archive_ref 在哪里；当前 provider 输入由 stable prefix、goal contract、checkpoint、tail 和 delta 哪几部分组成。dashboard 可以后做，但 CLI/API JSON 必须预留这些字段。
 
 ## Graph Patch schema
 
@@ -348,7 +376,7 @@ decision session 不是负责人 agent，但也不是完全无上下文的冷启
 
 前缀缓存是 decision session 的实现目标之一，但不是 correctness 依赖。cache-friendly layout 应把长期不变的 runtime contract 放在最前面，包括 patch schema、validator 硬约束、禁止直接完成 job、禁止绕过 verifier、禁止修改 terminal fact；然后是稳定 goal contract；再后面是 checkpoint；最后才是本次 delta 和待决策问题。只要前面的 token 序列稳定，provider 可以复用前缀计算；即使 provider 不支持缓存，系统 correctness 仍然由 DB、delta、validator 和 event log 保证。
 
-decision session 需要 checkpoint/compaction。session 不能无限增长；当上下文接近窗口、噪声过多或 milestone 切换时，kernel 应生成新的 checkpoint，保留 goal contract、progress ledger、active milestone、已满足 goal items、未满足 goal gaps、已排除方案、关键架构决策、关键 artifact 索引、最近失败边界和 validator 拒绝历史。旧 transcript 可以归档，新 session 以前一个 checkpoint 作为稳定上下文继续增长。
+decision session 需要前文定义的 Decision Session Compaction Runtime。session 不能无限增长；当 compaction policy 触发时，kernel 应关闭旧 segment、归档 transcript、生成并校验 checkpoint，再开启新的 active segment。provider 输入只应包含 stable runtime contract、当前 goal contract、latest checkpoint、短 tail 和本轮 delta，不应继续携带旧 segment 原文。
 
 ## Patch validator 细节
 
@@ -358,9 +386,9 @@ validator 是新架构最重要的安全边界。它应该在 apply 前基于当
 
 validator 还要处理部分幂等。例如同一个 `add_dependency` 如果边已存在，可以视为 noop；同一个 `create_node` 如果 node_key 已存在且字段完全一致，可以视为 noop，但如果字段不同必须拒绝。这样 supervisor 重试不会轻易造成重复结构。
 
-## Decision Context 压缩策略
+## Decision Delta And Checkpoint 内容选择细节
 
-decision delta 和 checkpoint 构造不是简单截断。它应该优先保留会影响结构决策的信息。节点层面保留 node_key、type、state、title、output_summary、verdict、artifact summaries、assumptions summary 和依赖状态；去掉长日志、完整 diff、完整 markdown。事件层面保留最近结构事件和未解决事件；老事件只进入 checkpoint 的 `history_summary`。artifact 层面保留 path/ref、type、summary、size/hash，不直接塞大内容。约束层面必须完整保留，因为丢约束会导致错误 patch。认知状态层面必须显式保留 active assumptions、rejected approaches、known failure boundaries、open questions 和 risk notes，避免 decision session 重复探索已否定路径。
+decision delta、short tail 和 checkpoint payload 的构造不是简单截断。它应该优先保留会影响结构决策的信息。节点层面保留 node_key、type、state、title、output_summary、verdict、artifact summaries、assumptions summary 和依赖状态；去掉长日志、完整 diff、完整 markdown。事件层面保留最近结构事件和未解决事件；老事件只进入 checkpoint 的结构化历史字段。artifact 层面保留 path/ref、type、summary、size/hash，不直接塞大内容。约束层面必须完整保留，因为丢约束会导致错误 patch。认知状态层面必须显式保留 active assumptions、rejected approaches、known failure boundaries、open questions 和 risk notes，避免 decision session 重复探索已否定路径。
 
 后续可以实现 context budget，例如 `max_nodes`、`max_events`、`max_chars_per_summary`、`max_total_chars`。如果 graph 太大，需要按 active frontier、blocked frontier、recently changed nodes 和 terminal summaries 分层压缩。第一阶段 graph 小，可以先实现简单版本，但接口要为 budget 留参数。
 
