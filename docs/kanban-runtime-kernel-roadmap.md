@@ -86,7 +86,7 @@ Phase 3  Long Running Autonomous Task Runtime
 Phase 4  Production Hardening
 ```
 
-当前代码实现已经推进到 Phase 2C 之后；Phase 2D 已完成设计文档，尚未完成代码实现。
+当前代码实现已经推进到 Phase 2D 第一批：active segment、append-only entries、deterministic checkpoint、checkpoint validator、manual compaction、strict short tail provider input 和 CLI 可观测性已经具备。Phase 2D 剩余工作是 token-threshold policy、profile markdown loader 完整化、更多语义触发和真实 LLM compaction provider。
 
 ## 4. Phase 0: Architecture Contract
 
@@ -385,7 +385,7 @@ profiles/
 如果现在继续开发，推荐顺序：
 
 ```text
-Phase 2D implementation
+Finish Phase 2D policy/profile work
       |
       v
 real decision provider integration
@@ -408,4 +408,4 @@ Phase 4 production hardening
 
 没有 compaction，长期任务无法稳定运行。
 
-这三者是 Hermes Runtime Kernel 从“任务调度器”成为“长期任务执行系统”的关键路径。当前前两者已经有基础实现，下一步应优先补齐 Phase 2D。
+这三者是 Hermes Runtime Kernel 从“任务调度器”成为“长期任务执行系统”的关键路径。当前三者已经有第一批基础实现，下一步应补齐 Phase 2D 的 policy/profile 剩余项，然后进入真实 provider。

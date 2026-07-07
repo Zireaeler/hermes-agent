@@ -1524,6 +1524,16 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     rt_prompt.add_argument("job_id")
     rt_prompt.add_argument("--json", action="store_true")
 
+    rt_context = runtime_sub.add_parser("context", help="Show decision session segment/checkpoint context")
+    rt_context.add_argument("job_id")
+    rt_context.add_argument("--json", action="store_true")
+
+    rt_compact = runtime_sub.add_parser("compact", help="Compact a runtime decision session")
+    rt_compact.add_argument("job_id")
+    rt_compact.add_argument("--profile", default="token_budget_compaction")
+    rt_compact.add_argument("--reason", default="manual")
+    rt_compact.add_argument("--json", action="store_true")
+
     # --- gc ---
     p_gc = sub.add_parser(
         "gc", help="Garbage-collect archived-task workspaces, old events, and old logs",
@@ -1995,6 +2005,10 @@ def _dispatch_runtime(args: argparse.Namespace) -> int:
         return _cmd_runtime_checkpoint(args)
     if sub == "prompt":
         return _cmd_runtime_prompt(args)
+    if sub == "context":
+        return _cmd_runtime_context(args)
+    if sub == "compact":
+        return _cmd_runtime_compact(args)
     print(f"kanban runtime: unknown action {sub!r}", file=sys.stderr)
     return 2
 
@@ -2232,6 +2246,49 @@ def _cmd_runtime_prompt(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
     else:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
+    return 0
+
+
+def _cmd_runtime_context(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_decision as rd
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    with kb.connect() as conn:
+        rk.ensure_runtime_schema(conn)
+        payload = rd.decision_context_status(conn, args.job_id)
+    if getattr(args, "json", False):
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    else:
+        active = payload["active_segment"]
+        checkpoint = payload.get("latest_checkpoint")
+        print(f"Decision context job={args.job_id} active_segment={active['id']} tokens={payload['active_segment_tokens']}")
+        if checkpoint:
+            print(f"  checkpoint={checkpoint['id']} revision={checkpoint.get('revision')}")
+    return 0
+
+
+def _cmd_runtime_compact(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_decision as rd
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    with kb.connect() as conn:
+        rk.ensure_runtime_schema(conn)
+        payload = rd.compact_decision_session(
+            conn,
+            args.job_id,
+            profile_name=args.profile,
+            reason=args.reason,
+        )
+    if getattr(args, "json", False):
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    else:
+        if payload["status"] == "compacted":
+            print(
+                f"Compacted runtime job {args.job_id}: "
+                f"checkpoint={payload['checkpoint_id']} new_segment={payload['new_segment_id']}"
+            )
+        else:
+            print(f"Compaction rejected for {args.job_id}: {payload.get('reason')}")
     return 0
 
 

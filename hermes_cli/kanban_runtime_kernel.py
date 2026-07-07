@@ -343,6 +343,48 @@ def ensure_runtime_schema(conn: sqlite3.Connection) -> None:
             updated_at INTEGER NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS decision_session_segments (
+            id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL,
+            decision_session_id TEXT NOT NULL,
+            segment_index INTEGER NOT NULL,
+            state TEXT NOT NULL,
+            started_at INTEGER NOT NULL,
+            closed_at INTEGER,
+            start_decision_id TEXT,
+            end_decision_id TEXT,
+            covered_event_start INTEGER,
+            covered_event_end INTEGER,
+            covered_graph_revision_start INTEGER,
+            covered_graph_revision_end INTEGER,
+            estimated_input_tokens INTEGER NOT NULL DEFAULT 0,
+            estimated_output_tokens INTEGER NOT NULL DEFAULT 0,
+            active_segment_tokens INTEGER NOT NULL DEFAULT 0,
+            compacted_checkpoint_id TEXT,
+            archive_ref TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            UNIQUE(decision_session_id, segment_index)
+        );
+
+        CREATE TABLE IF NOT EXISTS decision_segment_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            segment_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            entry_index INTEGER NOT NULL,
+            entry_type TEXT NOT NULL,
+            ref_type TEXT,
+            ref_id TEXT,
+            decision_id TEXT,
+            event_id INTEGER,
+            patch_id TEXT,
+            graph_revision INTEGER,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            payload_text TEXT,
+            estimated_tokens INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            UNIQUE(segment_id, entry_index)
+        );
+
         CREATE TABLE IF NOT EXISTS decision_checkpoints (
             id TEXT PRIMARY KEY,
             job_id TEXT NOT NULL,
@@ -370,8 +412,43 @@ def ensure_runtime_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_runtime_events_job ON execution_events(job_id, id);
         CREATE INDEX IF NOT EXISTS idx_runtime_gaps_job_state ON goal_gaps(job_id, state);
         CREATE INDEX IF NOT EXISTS idx_decision_checkpoints_job_revision ON decision_checkpoints(job_id, revision);
+        CREATE INDEX IF NOT EXISTS idx_decision_segments_job_state ON decision_session_segments(job_id, state);
+        CREATE INDEX IF NOT EXISTS idx_decision_entries_segment_order ON decision_segment_entries(segment_id, entry_index);
+        CREATE INDEX IF NOT EXISTS idx_decision_entries_job_order ON decision_segment_entries(job_id, id);
         """
     )
+    _ensure_column(conn, "decision_sessions", "active_segment_id", "TEXT")
+    _ensure_column(conn, "decision_sessions", "latest_checkpoint_id", "TEXT")
+    _ensure_column(conn, "decision_sessions", "last_compaction_at", "INTEGER")
+    _ensure_column(conn, "decision_sessions", "last_compaction_status", "TEXT")
+    _ensure_column(conn, "decision_sessions", "last_compaction_profile", "TEXT")
+    _ensure_column(conn, "decision_checkpoints", "source_segment_id", "TEXT")
+    _ensure_column(conn, "decision_checkpoints", "profile_name", "TEXT")
+    _ensure_column(conn, "decision_checkpoints", "profile_version", "TEXT")
+    _ensure_column(conn, "decision_checkpoints", "profile_hash", "TEXT")
+    _ensure_column(conn, "decision_checkpoints", "profile_path", "TEXT")
+    _ensure_column(conn, "decision_checkpoints", "checkpoint_revision", "INTEGER")
+    _ensure_column(conn, "decision_checkpoints", "db_revision", "INTEGER")
+    _ensure_column(conn, "decision_checkpoints", "graph_revision", "INTEGER")
+    _ensure_column(conn, "decision_checkpoints", "ledger_revision", "INTEGER")
+    _ensure_column(conn, "decision_checkpoints", "covered_event_start", "INTEGER")
+    _ensure_column(conn, "decision_checkpoints", "covered_event_end", "INTEGER")
+    _ensure_column(conn, "decision_checkpoints", "covered_decision_start", "TEXT")
+    _ensure_column(conn, "decision_checkpoints", "covered_decision_end", "TEXT")
+    _ensure_column(conn, "decision_checkpoints", "covered_entry_start", "INTEGER")
+    _ensure_column(conn, "decision_checkpoints", "covered_entry_end", "INTEGER")
+    _ensure_column(conn, "decision_checkpoints", "payload_json", "TEXT")
+    _ensure_column(conn, "decision_checkpoints", "payload_text", "TEXT")
+    _ensure_column(conn, "decision_checkpoints", "validator_status", "TEXT")
+    _ensure_column(conn, "decision_checkpoints", "reject_reason", "TEXT")
+    _ensure_column(conn, "decision_checkpoints", "supersedes_checkpoint_id", "TEXT")
+    _ensure_column(conn, "decision_checkpoints", "metadata_json", "TEXT NOT NULL DEFAULT '{}'")
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def _event(
@@ -533,6 +610,7 @@ def create_runtime_job(
     job_id = _id("rjob")
     contract_id = _id("gcon")
     session_id = _id("dses")
+    segment_id = _id("dseg")
     node_id = _id("rnode")
     initial_goal_items = goal_items or [
         {
@@ -604,17 +682,32 @@ def create_runtime_job(
         """
         INSERT INTO decision_sessions (
             id, job_id, profile, provider, model, state, stable_prefix_hash,
-            context_state_json, metadata_json, created_at, updated_at
-        ) VALUES (?, ?, 'fixture', 'local', 'deterministic', 'active', ?, ?, '{}', ?, ?)
+            active_segment_id, context_state_json, metadata_json, created_at, updated_at
+        ) VALUES (?, ?, 'fixture', 'local', 'deterministic', 'active', ?, ?, ?, '{}', ?, ?)
         """,
         (
             session_id,
             job_id,
             prefix_hash,
-            _json({"stable_prefix": {"schema": PATCH_SCHEMA, "objective": objective.strip()}}),
+            segment_id,
+            _json(
+                {
+                    "stable_prefix": {"schema": PATCH_SCHEMA, "objective": objective.strip()},
+                    "active_segment_id": segment_id,
+                }
+            ),
             now,
             now,
         ),
+    )
+    conn.execute(
+        """
+        INSERT INTO decision_session_segments (
+            id, job_id, decision_session_id, segment_index, state,
+            started_at, covered_graph_revision_start, metadata_json
+        ) VALUES (?, ?, ?, 0, 'active', ?, 0, '{}')
+        """,
+        (segment_id, job_id, session_id, now),
     )
     conn.execute(
         """
@@ -759,8 +852,9 @@ def status_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
     }
 
 
-def _patch_reject(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any], reason: str, decision_id: Optional[str]) -> None:
+def _patch_reject(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any], reason: str, decision_id: Optional[str]) -> str:
     now = _now()
+    patch_id = _id("gpatch")
     conn.execute(
         """
         INSERT INTO graph_patches (
@@ -768,9 +862,10 @@ def _patch_reject(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any], 
             reject_reason, created_at
         ) VALUES (?, ?, ?, ?, ?, 'rejected', ?, ?)
         """,
-        (_id("gpatch"), job_id, decision_id, int(patch.get("expected_revision") or -1), _json(patch), reason, now),
+        (patch_id, job_id, decision_id, int(patch.get("expected_revision") or -1), _json(patch), reason, now),
     )
     _event(conn, job_id, "patch_rejected", {"reason": reason})
+    return patch_id
 
 
 def _validate_goal_linkage(op: dict[str, Any]) -> None:
@@ -883,8 +978,8 @@ def apply_graph_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, An
     try:
         _validate_patch(conn, job_id, patch)
     except PatchValidationError as exc:
-        _patch_reject(conn, job_id, patch if isinstance(patch, dict) else {}, str(exc), decision_id)
-        return {"status": "rejected", "reason": str(exc)}
+        patch_id = _patch_reject(conn, job_id, patch if isinstance(patch, dict) else {}, str(exc), decision_id)
+        return {"status": "rejected", "reason": str(exc), "patch_id": patch_id}
 
     base_revision = int(patch["expected_revision"])
     patch_id = _id("gpatch")
@@ -1458,7 +1553,7 @@ def build_decision_delta(conn: sqlite3.Connection, job_id: str, trigger_event_id
 
 def append_decision_delta(conn: sqlite3.Connection, decision_session_id: str, delta: dict[str, Any], event_id: Optional[int] = None) -> None:
     row = conn.execute(
-        "SELECT context_state_json FROM decision_sessions WHERE id = ?",
+        "SELECT job_id, context_state_json FROM decision_sessions WHERE id = ?",
         (decision_session_id,),
     ).fetchone()
     if row is None:
@@ -1475,6 +1570,14 @@ def append_decision_delta(conn: sqlite3.Connection, decision_session_id: str, de
         """,
         (_json(state), event_id, _now(), decision_session_id),
     )
+    append_decision_segment_entry(
+        conn,
+        str(row["job_id"]),
+        "delta_appended",
+        delta,
+        event_id=event_id,
+        ref_type="kernel_decision_delta",
+    )
 
 
 def _current_session(conn: sqlite3.Connection, job_id: str) -> Optional[dict[str, Any]]:
@@ -1483,6 +1586,129 @@ def _current_session(conn: sqlite3.Connection, job_id: str) -> Optional[dict[str
         (job_id,),
     ).fetchone()
     return dict(row) if row else None
+
+
+def _estimate_tokens(payload: Any, payload_text: Optional[str] = None) -> int:
+    if payload_text is not None:
+        text = payload_text
+    else:
+        text = _json(payload)
+    return max(1, (len(text) + 3) // 4)
+
+
+def ensure_decision_segment(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
+    """Ensure the job has exactly one active decision-session segment."""
+
+    ensure_runtime_schema(conn)
+    session = _current_session(conn, job_id)
+    if session is None:
+        raise ValueError(f"job {job_id} has no active decision session")
+    active_id = session.get("active_segment_id")
+    if active_id:
+        row = conn.execute(
+            "SELECT * FROM decision_session_segments WHERE id = ? AND state = 'active'",
+            (active_id,),
+        ).fetchone()
+        if row is not None:
+            return dict(row)
+    row = conn.execute(
+        """
+        SELECT * FROM decision_session_segments
+         WHERE job_id = ? AND decision_session_id = ? AND state = 'active'
+         ORDER BY segment_index DESC LIMIT 1
+        """,
+        (job_id, session["id"]),
+    ).fetchone()
+    if row is not None:
+        segment = dict(row)
+        conn.execute(
+            "UPDATE decision_sessions SET active_segment_id = ?, updated_at = ? WHERE id = ?",
+            (segment["id"], _now(), session["id"]),
+        )
+        return segment
+    next_index = conn.execute(
+        "SELECT COALESCE(MAX(segment_index), -1) + 1 FROM decision_session_segments WHERE decision_session_id = ?",
+        (session["id"],),
+    ).fetchone()[0]
+    segment_id = _id("dseg")
+    now = _now()
+    conn.execute(
+        """
+        INSERT INTO decision_session_segments (
+            id, job_id, decision_session_id, segment_index, state,
+            started_at, covered_graph_revision_start, metadata_json
+        ) VALUES (?, ?, ?, ?, 'active', ?, ?, '{}')
+        """,
+        (segment_id, job_id, session["id"], int(next_index), now, int(_job(conn, job_id)["graph_revision"])),
+    )
+    conn.execute(
+        "UPDATE decision_sessions SET active_segment_id = ?, updated_at = ? WHERE id = ?",
+        (segment_id, now, session["id"]),
+    )
+    return dict(
+        conn.execute("SELECT * FROM decision_session_segments WHERE id = ?", (segment_id,)).fetchone()
+    )
+
+
+def append_decision_segment_entry(
+    conn: sqlite3.Connection,
+    job_id: str,
+    entry_type: str,
+    payload: Any,
+    *,
+    decision_id: Optional[str] = None,
+    event_id: Optional[int] = None,
+    patch_id: Optional[str] = None,
+    ref_type: Optional[str] = None,
+    ref_id: Optional[str] = None,
+    payload_text: Optional[str] = None,
+    graph_revision: Optional[int] = None,
+) -> dict[str, Any]:
+    """Append an ordered transcript entry to the active decision segment."""
+
+    segment = ensure_decision_segment(conn, job_id)
+    next_index = conn.execute(
+        "SELECT COALESCE(MAX(entry_index), -1) + 1 FROM decision_segment_entries WHERE segment_id = ?",
+        (segment["id"],),
+    ).fetchone()[0]
+    estimated = _estimate_tokens(payload, payload_text)
+    now = _now()
+    conn.execute(
+        """
+        INSERT INTO decision_segment_entries (
+            segment_id, job_id, entry_index, entry_type, ref_type, ref_id,
+            decision_id, event_id, patch_id, graph_revision, payload_json,
+            payload_text, estimated_tokens, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            segment["id"],
+            job_id,
+            int(next_index),
+            entry_type,
+            ref_type,
+            ref_id,
+            decision_id,
+            event_id,
+            patch_id,
+            int(graph_revision if graph_revision is not None else _job(conn, job_id)["graph_revision"]),
+            _json(payload),
+            payload_text,
+            estimated,
+            now,
+        ),
+    )
+    entry_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+    conn.execute(
+        """
+        UPDATE decision_session_segments
+           SET active_segment_tokens = COALESCE(active_segment_tokens, 0) + ?,
+               estimated_input_tokens = COALESCE(estimated_input_tokens, 0) + ?
+         WHERE id = ?
+        """,
+        (estimated, estimated, segment["id"]),
+    )
+    return dict(conn.execute("SELECT * FROM decision_segment_entries WHERE id = ?", (entry_id,)).fetchone())
 
 
 def advance_runtime_job(
@@ -1536,7 +1762,25 @@ def advance_runtime_job(
         )
         try:
             raw_output = decision_provider(session, delta)
+            append_decision_segment_entry(
+                conn,
+                job_id,
+                "provider_output",
+                {"raw_output": raw_output},
+                decision_id=decision_id,
+                ref_type="kernel_decision",
+                ref_id=decision_id,
+            )
             patch = rd.parse_provider_patch(raw_output, db_revision)
+            append_decision_segment_entry(
+                conn,
+                job_id,
+                "patch_parsed",
+                patch,
+                decision_id=decision_id,
+                ref_type="kernel_decision",
+                ref_id=decision_id,
+            )
             conn.execute(
                 "UPDATE kernel_decisions SET decision_json = ?, status = 'completed', completed_at = ? WHERE id = ?",
                 (_json({"raw_output": raw_output, "patch": patch, "parse_status": "parsed"}), _now(), decision_id),
@@ -1559,6 +1803,24 @@ def advance_runtime_job(
                 ),
             )
             _event(conn, job_id, "decision_parse_failed", {"reason": str(exc)})
+            append_decision_segment_entry(
+                conn,
+                job_id,
+                "validator_result",
+                result,
+                decision_id=decision_id,
+                ref_type="kernel_decision",
+                ref_id=decision_id,
+            )
+            append_decision_segment_entry(
+                conn,
+                job_id,
+                "patch_rejected",
+                {"reason": str(exc), "stage": "parse"},
+                decision_id=decision_id,
+                ref_type="kernel_decision",
+                ref_id=decision_id,
+            )
             patch_status = "parse_failed"
         except Exception as exc:  # pragma: no cover - defensive path covered by status assertions later.
             conn.execute(
@@ -1566,6 +1828,15 @@ def advance_runtime_job(
                 (str(exc), _now(), decision_id),
             )
             _event(conn, job_id, "decision_failed", {"error": str(exc)})
+            append_decision_segment_entry(
+                conn,
+                job_id,
+                "validator_result",
+                {"status": "failed", "error": str(exc)},
+                decision_id=decision_id,
+                ref_type="kernel_decision",
+                ref_id=decision_id,
+            )
             raise
         else:
             result = apply_graph_patch(conn, job_id, patch, decision_id=decision_id)
@@ -1573,6 +1844,26 @@ def advance_runtime_job(
             conn.execute(
                 "UPDATE kernel_decisions SET validator_result_json = ? WHERE id = ?",
                 (_json(result), decision_id),
+            )
+            append_decision_segment_entry(
+                conn,
+                job_id,
+                "validator_result",
+                result,
+                decision_id=decision_id,
+                patch_id=result.get("patch_id"),
+                ref_type="kernel_decision",
+                ref_id=decision_id,
+            )
+            append_decision_segment_entry(
+                conn,
+                job_id,
+                "patch_applied" if result["status"] == "applied" else "patch_rejected",
+                result,
+                decision_id=decision_id,
+                patch_id=result.get("patch_id"),
+                ref_type="graph_patch",
+                ref_id=result.get("patch_id"),
             )
     final_state = _job(conn, job_id)["state"]
     events = [row["event_type"] for row in conn.execute("SELECT event_type FROM execution_events WHERE job_id = ? ORDER BY id", (job_id,))]

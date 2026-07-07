@@ -8,7 +8,9 @@ go through ``kanban_runtime_kernel.apply_graph_patch`` and its validator.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
+from pathlib import Path
 import re
 import sqlite3
 import time
@@ -38,6 +40,7 @@ class DecisionProviderRequest:
     stable_prefix: dict[str, Any]
     goal_contract: dict[str, Any]
     checkpoint: Optional[dict[str, Any]]
+    short_tail: list[dict[str, Any]]
     delta: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
@@ -48,6 +51,7 @@ class DecisionProviderRequest:
             "stable_prefix": self.stable_prefix,
             "goal_contract": self.goal_contract,
             "checkpoint": self.checkpoint,
+            "short_tail": self.short_tail,
             "delta": self.delta,
         }
 
@@ -106,6 +110,9 @@ def _row(row: sqlite3.Row | None) -> Optional[dict[str, Any]]:
 
 
 def ensure_decision_schema(conn: sqlite3.Connection) -> None:
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    rk.ensure_runtime_schema(conn)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS decision_checkpoints (
@@ -145,8 +152,223 @@ def latest_decision_checkpoint(conn: sqlite3.Connection, job_id: str) -> Optiona
     ).fetchone()
     data = _row(row)
     if data is not None:
-        data["checkpoint"] = _loads(data.get("checkpoint_json") or data.get("checkpoint"))
+        data["checkpoint"] = _loads(data.get("payload_json") or data.get("checkpoint_json") or data.get("checkpoint"))
     return data
+
+
+def _profile_metadata(profile_name: str) -> dict[str, Any]:
+    profile_dir = Path(__file__).resolve().parents[1] / "docs" / "kanban-runtime-kernel-compaction-profiles"
+    profile_path = profile_dir / f"{profile_name}.md"
+    if profile_path.exists():
+        content = profile_path.read_text(encoding="utf-8")
+        version = "file"
+        path_text = str(profile_path.relative_to(Path(__file__).resolve().parents[1]))
+    else:
+        content = profile_name
+        version = "builtin"
+        path_text = ""
+    return {
+        "profile_name": profile_name,
+        "profile_version": version,
+        "profile_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        "profile_path": path_text,
+    }
+
+
+def _source_refs(**refs: Any) -> list[dict[str, Any]]:
+    return [{key: value} for key, value in refs.items() if value is not None]
+
+
+def build_deterministic_checkpoint(
+    conn: sqlite3.Connection,
+    job_id: str,
+    source_segment_id: str,
+    profile_name: str = "token_budget_compaction",
+) -> dict[str, Any]:
+    """Build a DB-derived checkpoint candidate without reading old transcript text."""
+
+    base = build_checkpoint_payload(conn, job_id)
+    goal_items = []
+    for item in base["goal_items"]:
+        entries = [
+            row
+            for row in base["progress_ledger"]
+            if row["item_key"] == item["item_key"]
+        ]
+        verified = [
+            entry for entry in entries
+            if entry["satisfaction"] == "full" and entry["verification_state"] in {"verified", "waived"}
+        ]
+        if verified:
+            goal_items.append(
+                {
+                    "goal_item_key": item["item_key"],
+                    "state": "satisfied",
+                    "summary": verified[0]["summary"],
+                    "verification_state": verified[0]["verification_state"],
+                    "source_refs": _source_refs(goal_item_key=item["item_key"], evidence_ref=verified[0].get("evidence_ref")),
+                }
+            )
+    open_gaps = [
+        {
+            "gap_key": gap["gap_key"],
+            "gap_type": gap["gap_type"],
+            "summary": gap["summary"],
+            "source_refs": _source_refs(gap_key=gap["gap_key"]),
+        }
+        for gap in base["open_gaps"]
+    ]
+    frontier = [
+        {
+            "node_key": node["node_key"],
+            "node_type": node["node_type"],
+            "state": node["state"],
+            "summary": node["summary"],
+            "source_refs": _source_refs(node_key=node["node_key"]),
+        }
+        for node in base["frontier_nodes"]
+    ]
+    rejections = [
+        {
+            "summary": item["reject_reason"],
+            "base_revision": item["base_revision"],
+            "source_refs": _source_refs(patch_base_revision=item["base_revision"]),
+        }
+        for item in base["recent_validator_rejections"]
+    ]
+    artifacts = [
+        {
+            "artifact_type": item["artifact_type"],
+            "path_or_ref": item["path_or_ref"],
+            "summary": item["summary"],
+            "source_refs": _source_refs(artifact_ref=item["path_or_ref"]),
+        }
+        for item in base["artifact_index"]
+    ]
+    return {
+        "objective_summary": base["job"]["objective"],
+        "goal_contract": base["goal_contract"],
+        "goal_items": base["goal_items"],
+        "goal_contract_revision": base["goal_contract"]["version"],
+        "active_milestone": None,
+        "satisfied_goal_items": goal_items,
+        "open_goal_gaps": open_gaps,
+        "open_blockers": [
+            gap for gap in open_gaps
+            if gap["gap_type"] in {"human_required", "blocked_constraint"}
+        ],
+        "key_decisions": [],
+        "rejected_approaches": [],
+        "known_failure_boundaries": [],
+        "validator_rejection_lessons": rejections,
+        "human_decisions": [],
+        "artifact_index": artifacts,
+        "graph_frontier": frontier,
+        "do_not_repeat": [
+            {
+                "summary": item["reject_reason"],
+                "source_refs": _source_refs(patch_base_revision=item["base_revision"]),
+            }
+            for item in base["recent_validator_rejections"]
+        ],
+        "next_strategy_constraints": [],
+        "metadata": {
+            "source_segment_id": source_segment_id,
+            "profile_name": profile_name,
+            "deterministic": True,
+            "db_revision": base["job"]["graph_revision"],
+            "graph_revision": base["job"]["graph_revision"],
+            "ledger_revision": base["job"]["graph_revision"],
+        },
+    }
+
+
+def _checkpoint_fact_lists(payload: dict[str, Any]) -> list[tuple[str, list[dict[str, Any]]]]:
+    keys = [
+        "satisfied_goal_items",
+        "open_goal_gaps",
+        "open_blockers",
+        "key_decisions",
+        "rejected_approaches",
+        "known_failure_boundaries",
+        "validator_rejection_lessons",
+        "human_decisions",
+        "artifact_index",
+        "graph_frontier",
+        "do_not_repeat",
+        "next_strategy_constraints",
+    ]
+    return [(key, payload.get(key) or []) for key in keys]
+
+
+def validate_decision_checkpoint(conn: sqlite3.Connection, job_id: str, checkpoint_payload: dict[str, Any]) -> dict[str, Any]:
+    required = {
+        "objective_summary",
+        "goal_contract_revision",
+        "satisfied_goal_items",
+        "open_goal_gaps",
+        "open_blockers",
+        "graph_frontier",
+        "metadata",
+    }
+    missing = sorted(key for key in required if key not in checkpoint_payload)
+    if missing:
+        return {"status": "rejected", "reason": f"checkpoint missing required fields: {', '.join(missing)}"}
+
+    current_revision = int(
+        conn.execute("SELECT graph_revision FROM runtime_jobs WHERE id = ?", (job_id,)).fetchone()["graph_revision"]
+    )
+    metadata = checkpoint_payload.get("metadata") or {}
+    for rev_key in ("db_revision", "graph_revision", "ledger_revision"):
+        if int(metadata.get(rev_key, current_revision)) != current_revision:
+            return {"status": "rejected", "reason": f"checkpoint {rev_key} conflicts with current revision"}
+
+    goal_keys = {
+        row["item_key"]
+        for row in conn.execute(
+            """
+            SELECT gi.item_key
+              FROM goal_items gi
+              JOIN goal_contracts gc ON gc.id = gi.contract_id
+             WHERE gc.job_id = ? AND gc.state = 'active'
+            """,
+            (job_id,),
+        ).fetchall()
+    }
+    node_keys = {
+        row["node_key"]
+        for row in conn.execute("SELECT node_key FROM execution_nodes WHERE job_id = ?", (job_id,)).fetchall()
+    }
+    artifacts = {
+        row["path_or_ref"]
+        for row in conn.execute("SELECT path_or_ref FROM node_artifacts WHERE job_id = ?", (job_id,)).fetchall()
+    }
+    if not artifacts:
+        artifacts = set()
+
+    for key, items in _checkpoint_fact_lists(checkpoint_payload):
+        for item in items:
+            refs = item.get("source_refs") or []
+            if not refs:
+                return {"status": "rejected", "reason": f"{key} item lacks provenance"}
+            for ref in refs:
+                if "node_key" in ref and ref["node_key"] not in node_keys:
+                    return {"status": "rejected", "reason": f"unknown node_key {ref['node_key']!r}"}
+                if "goal_item_key" in ref and ref["goal_item_key"] not in goal_keys:
+                    return {"status": "rejected", "reason": f"unknown goal_item_key {ref['goal_item_key']!r}"}
+                if "artifact_ref" in ref and artifacts and ref["artifact_ref"] not in artifacts:
+                    return {"status": "rejected", "reason": f"unknown artifact_ref {ref['artifact_ref']!r}"}
+            if key == "satisfied_goal_items":
+                if item.get("verification_state") not in {"verified", "waived"}:
+                    return {"status": "rejected", "reason": "satisfied goal item must be verified or waived"}
+
+    current_open_human = conn.execute(
+        "SELECT COUNT(*) FROM execution_nodes WHERE job_id = ? AND state = 'waiting_human'",
+        (job_id,),
+    ).fetchone()[0]
+    if current_open_human and not checkpoint_payload.get("open_blockers"):
+        return {"status": "rejected", "reason": "checkpoint omits active human gate blocker"}
+    return {"status": "accepted"}
 
 
 def build_checkpoint_payload(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
@@ -350,17 +572,281 @@ def create_decision_checkpoint(
     }
 
 
+def _segment_range(conn: sqlite3.Connection, segment_id: str) -> dict[str, Any]:
+    rows = conn.execute(
+        "SELECT MIN(id) AS first_entry, MAX(id) AS last_entry FROM decision_segment_entries WHERE segment_id = ?",
+        (segment_id,),
+    ).fetchone()
+    events = conn.execute(
+        "SELECT MIN(event_id) AS first_event, MAX(event_id) AS last_event FROM decision_segment_entries WHERE segment_id = ? AND event_id IS NOT NULL",
+        (segment_id,),
+    ).fetchone()
+    decisions = conn.execute(
+        "SELECT MIN(decision_id) AS first_decision, MAX(decision_id) AS last_decision FROM decision_segment_entries WHERE segment_id = ? AND decision_id IS NOT NULL",
+        (segment_id,),
+    ).fetchone()
+    return {
+        "covered_entry_start": rows["first_entry"],
+        "covered_entry_end": rows["last_entry"],
+        "covered_event_start": events["first_event"],
+        "covered_event_end": events["last_event"],
+        "covered_decision_start": decisions["first_decision"],
+        "covered_decision_end": decisions["last_decision"],
+    }
+
+
+def _render_checkpoint_text(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2)
+
+
+def compact_decision_session(
+    conn: sqlite3.Connection,
+    job_id: str,
+    profile_name: str = "token_budget_compaction",
+    reason: str = "manual",
+) -> dict[str, Any]:
+    """Close the active segment, create a validated deterministic checkpoint, and open a new segment."""
+
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    rk.ensure_runtime_schema(conn)
+    source_segment = rk.ensure_decision_segment(conn, job_id)
+    session = latest_decision_session(conn, job_id)
+    request_entry = rk.append_decision_segment_entry(
+        conn,
+        job_id,
+        "compaction_requested",
+        {"profile_name": profile_name, "reason": reason, "source_segment_id": source_segment["id"]},
+        ref_type="decision_session_segment",
+        ref_id=source_segment["id"],
+    )
+    payload = build_deterministic_checkpoint(conn, job_id, source_segment["id"], profile_name=profile_name)
+    validation = validate_decision_checkpoint(conn, job_id, payload)
+    if validation["status"] != "accepted":
+        rk.append_decision_segment_entry(
+            conn,
+            job_id,
+            "checkpoint_rejected",
+            {"validation": validation, "profile_name": profile_name},
+            ref_type="decision_session_segment",
+            ref_id=source_segment["id"],
+        )
+        conn.execute(
+            """
+            UPDATE decision_session_segments
+               SET state = 'failed_compaction', closed_at = ?, covered_graph_revision_end = ?
+             WHERE id = ?
+            """,
+            (_now(), int(payload["metadata"]["graph_revision"]), source_segment["id"]),
+        )
+        conn.execute(
+            """
+            UPDATE decision_sessions
+               SET last_compaction_status = 'rejected', last_compaction_profile = ?,
+                   last_compaction_at = ?, updated_at = ?
+             WHERE id = ?
+            """,
+            (profile_name, _now(), _now(), session["id"]),
+        )
+        return {"status": "rejected", "reason": validation["reason"], "source_segment_id": source_segment["id"]}
+
+    profile = _profile_metadata(profile_name)
+    ranges = _segment_range(conn, source_segment["id"])
+    checkpoint_id = _id("dchk")
+    now = _now()
+    revision = int(payload["metadata"]["graph_revision"])
+    supersedes = session.get("latest_checkpoint_id")
+    conn.execute(
+        """
+        INSERT INTO decision_checkpoints (
+            id, job_id, decision_session_id, revision, checkpoint_json, reason,
+            transcript_ref, created_at, source_segment_id, profile_name,
+            profile_version, profile_hash, profile_path, checkpoint_revision,
+            db_revision, graph_revision, ledger_revision, covered_event_start,
+            covered_event_end, covered_decision_start, covered_decision_end,
+            covered_entry_start, covered_entry_end, payload_json, payload_text,
+            validator_status, reject_reason, supersedes_checkpoint_id, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+        """,
+        (
+            checkpoint_id,
+            job_id,
+            session["id"],
+            revision,
+            _json(payload),
+            reason,
+            f"decision_segment:{source_segment['id']}",
+            now,
+            source_segment["id"],
+            profile["profile_name"],
+            profile["profile_version"],
+            profile["profile_hash"],
+            profile["profile_path"],
+            revision,
+            revision,
+            revision,
+            revision,
+            ranges["covered_event_start"],
+            ranges["covered_event_end"],
+            ranges["covered_decision_start"],
+            ranges["covered_decision_end"],
+            ranges["covered_entry_start"],
+            ranges["covered_entry_end"],
+            _json(payload),
+            _render_checkpoint_text(payload),
+            "accepted",
+            supersedes,
+            _json({"reason": reason, "request_entry_id": request_entry["id"]}),
+        ),
+    )
+    rk.append_decision_segment_entry(
+        conn,
+        job_id,
+        "checkpoint_created",
+        {"checkpoint_id": checkpoint_id, "validation": validation, **profile},
+        ref_type="decision_checkpoint",
+        ref_id=checkpoint_id,
+    )
+    conn.execute(
+        """
+        UPDATE decision_session_segments
+           SET state = 'compacted', closed_at = ?, covered_graph_revision_end = ?,
+               compacted_checkpoint_id = ?, archive_ref = ?
+         WHERE id = ?
+        """,
+        (now, revision, checkpoint_id, f"decision_segment:{source_segment['id']}", source_segment["id"]),
+    )
+    next_index = int(source_segment["segment_index"]) + 1
+    new_segment_id = _id("dseg")
+    conn.execute(
+        """
+        INSERT INTO decision_session_segments (
+            id, job_id, decision_session_id, segment_index, state,
+            started_at, covered_graph_revision_start, metadata_json
+        ) VALUES (?, ?, ?, ?, 'active', ?, ?, '{}')
+        """,
+        (new_segment_id, job_id, session["id"], next_index, now, revision),
+    )
+    context_state = _loads(session.get("context_state_json"))
+    context_state.update(
+        {
+            "active_segment_id": new_segment_id,
+            "latest_checkpoint_id": checkpoint_id,
+            "last_compaction_status": "accepted",
+            "last_compaction_profile": profile_name,
+        }
+    )
+    conn.execute(
+        """
+        UPDATE decision_sessions
+           SET active_segment_id = ?, latest_checkpoint_id = ?,
+               last_checkpoint_revision = ?, last_compaction_at = ?,
+               last_compaction_status = 'accepted', last_compaction_profile = ?,
+               context_state_json = ?, updated_at = ?
+         WHERE id = ?
+        """,
+        (new_segment_id, checkpoint_id, revision, now, profile_name, _json(context_state), now, session["id"]),
+    )
+    rk.append_decision_segment_entry(
+        conn,
+        job_id,
+        "compaction_event",
+        {"status": "new_segment_started", "checkpoint_id": checkpoint_id, "source_segment_id": source_segment["id"]},
+        ref_type="decision_checkpoint",
+        ref_id=checkpoint_id,
+    )
+    return {
+        "status": "compacted",
+        "job_id": job_id,
+        "source_segment_id": source_segment["id"],
+        "new_segment_id": new_segment_id,
+        "checkpoint_id": checkpoint_id,
+        "checkpoint_revision": revision,
+        "profile_name": profile["profile_name"],
+        "profile_hash": profile["profile_hash"],
+        "covered_entry_end": ranges["covered_entry_end"],
+    }
+
+
+def _short_tail_entries(
+    conn: sqlite3.Connection,
+    job_id: str,
+    checkpoint_row: Optional[dict[str, Any]],
+    *,
+    max_tail_entries: int = 8,
+    max_tail_tokens: int = 2000,
+) -> list[dict[str, Any]]:
+    if checkpoint_row is None:
+        return []
+    covered_end = checkpoint_row.get("covered_entry_end")
+    if covered_end is None:
+        return []
+    rows = conn.execute(
+        """
+        SELECT id, segment_id, entry_index, entry_type, ref_type, ref_id,
+               decision_id, event_id, patch_id, graph_revision, payload_json,
+               payload_text, estimated_tokens, created_at
+          FROM decision_segment_entries
+         WHERE job_id = ? AND id > ?
+         ORDER BY id ASC
+        """,
+        (job_id, int(covered_end)),
+    ).fetchall()
+    tail: list[dict[str, Any]] = []
+    tokens = 0
+    for row in rows:
+        if len(tail) >= max_tail_entries:
+            break
+        estimated = int(row["estimated_tokens"] or 0)
+        if tokens + estimated > max_tail_tokens:
+            break
+        data = _row(row) or {}
+        data["payload"] = _loads(data.get("payload_json"))
+        tail.append(data)
+        tokens += estimated
+    return tail
+
+
+def decision_context_status(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    rk.ensure_runtime_schema(conn)
+    active = rk.ensure_decision_segment(conn, job_id)
+    checkpoint = latest_decision_checkpoint(conn, job_id)
+    return {
+        "job_id": job_id,
+        "active_segment": _row(
+            conn.execute("SELECT * FROM decision_session_segments WHERE id = ?", (active["id"],)).fetchone()
+        ),
+        "latest_checkpoint": checkpoint,
+        "active_segment_tokens": int(active.get("active_segment_tokens") or 0),
+        "provider_input_composition": [
+            "stable_runtime_contract",
+            "current_goal_contract",
+            "latest_validated_checkpoint",
+            "strict_short_tail",
+            "current_delta",
+        ],
+        "short_tail": _short_tail_entries(conn, job_id, checkpoint),
+    }
+
+
 def build_decision_provider_request(
     conn: sqlite3.Connection,
     job_id: str,
     delta: dict[str, Any],
 ) -> DecisionProviderRequest:
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    rk.ensure_decision_segment(conn, job_id)
     session = latest_decision_session(conn, job_id)
     checkpoint_row = latest_decision_checkpoint(conn, job_id)
     if checkpoint_row is None:
         checkpoint = build_checkpoint_payload(conn, job_id)
+        short_tail: list[dict[str, Any]] = []
     else:
         checkpoint = checkpoint_row["checkpoint"]
+        short_tail = _short_tail_entries(conn, job_id, checkpoint_row)
     job = _row(conn.execute("SELECT * FROM runtime_jobs WHERE id = ?", (job_id,)).fetchone())
     if job is None:
         raise ValueError(f"unknown runtime job {job_id}")
@@ -387,6 +873,7 @@ def build_decision_provider_request(
         stable_prefix=stable_prefix,
         goal_contract=checkpoint["goal_contract"],
         checkpoint=checkpoint,
+        short_tail=short_tail,
         delta=delta,
     )
 
@@ -398,6 +885,7 @@ def render_decision_prompt(request: DecisionProviderRequest) -> dict[str, Any]:
         "stable_prefix": request.stable_prefix,
         "stable_goal_contract": request.goal_contract,
         "checkpoint": request.checkpoint,
+        "short_tail": request.short_tail,
         "delta": request.delta,
         "provider_instruction": {
             "output": "return exactly one JSON object matching runtime_graph_patch_v1",
