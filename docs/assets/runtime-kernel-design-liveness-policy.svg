@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">Liveness, anti-stuck and human gate policy</title>
+  <desc id="desc">Runtime legal exits, liveness violation, anti-stuck policy and human gate policy.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2 2 L10 6 L2 10 Z" fill="#334155"/>
+    </marker>
+    <style>
+      .title{font:700 25px Arial,sans-serif;fill:#111827}
+      .label{font:700 15px Arial,sans-serif;fill:#111827}
+      .small{font:13px Arial,sans-serif;fill:#334155}
+      .ok{fill:#f0fdf4;stroke:#16a34a;stroke-width:1.8;rx:8}
+      .warn{fill:#fffbeb;stroke:#d97706;stroke-width:1.8;rx:8}
+      .bad{fill:#fef2f2;stroke:#dc2626;stroke-width:1.8;rx:8}
+      .core{fill:#ecfeff;stroke:#0891b2;stroke-width:1.8;rx:8}
+      .flow{stroke:#334155;stroke-width:2;fill:none;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1200" height="720" fill="#fff"/>
+  <text x="44" y="46" class="title">Supervisor Policy: Legal Stop, Illegal Idle, and Strategy Update</text>
+
+  <rect x="455" y="90" width="290" height="105" class="core"/>
+  <text x="485" y="125" class="label">Job Has Unmet Required Goals</text>
+  <text x="485" y="153" class="small">completion rule is false</text>
+  <text x="485" y="175" class="small">open gaps remain</text>
+
+  <rect x="70" y="285" width="235" height="105" class="ok"/>
+  <text x="96" y="320" class="label">Legal Progress</text>
+  <text x="96" y="348" class="small">ready node exists</text>
+  <text x="96" y="370" class="small">materialize and run it</text>
+
+  <rect x="350" y="285" width="235" height="105" class="ok"/>
+  <text x="376" y="320" class="label">Legal Wait</text>
+  <text x="376" y="348" class="small">running worker</text>
+  <text x="376" y="370" class="small">pending decision</text>
+
+  <rect x="630" y="285" width="235" height="105" class="warn"/>
+  <text x="656" y="320" class="label">Human Gate</text>
+  <text x="656" y="348" class="small">credential, cost, permission</text>
+  <text x="656" y="370" class="small">destructive or preference</text>
+
+  <rect x="910" y="285" width="235" height="105" class="bad"/>
+  <text x="936" y="320" class="label">Illegal Idle</text>
+  <text x="936" y="348" class="small">no ready/running/human</text>
+  <text x="936" y="370" class="small">but goal gaps remain</text>
+
+  <rect x="70" y="520" width="315" height="115" class="bad"/>
+  <text x="98" y="555" class="label">liveness_violation</text>
+  <text x="98" y="583" class="small">not failure; structural signal</text>
+  <text x="98" y="605" class="small">must enter gap resolution</text>
+
+  <rect x="455" y="520" width="315" height="115" class="warn"/>
+  <text x="483" y="555" class="label">anti-stuck policy</text>
+  <text x="483" y="583" class="small">same gap no progress</text>
+  <text x="483" y="605" class="small">repeated noop/rejected patches</text>
+
+  <rect x="840" y="520" width="315" height="115" class="core"/>
+  <text x="868" y="555" class="label">strategy_update_requested</text>
+  <text x="868" y="583" class="small">split smaller, debug, research</text>
+  <text x="868" y="605" class="small">or valid human gate</text>
+
+  <path d="M600 195 C455 225 265 260 188 285" class="flow"/>
+  <path d="M600 195 C530 235 485 260 468 285" class="flow"/>
+  <path d="M600 195 C675 235 720 260 748 285" class="flow"/>
+  <path d="M600 195 C760 225 960 260 1028 285" class="flow"/>
+  <path d="M1028 390 C880 465 415 495 228 520" class="flow"/>
+  <path d="M228 635 C350 675 505 675 612 635" class="flow"/>
+  <path d="M612 635 C745 675 900 670 998 635" class="flow"/>
+  <path d="M998 520 C980 460 910 420 865 390" class="flow"/>
+</svg>

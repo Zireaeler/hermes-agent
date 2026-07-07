@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">Complete runtime kernel layered design</title>
+  <desc id="desc">Layered architecture from user goal to authoritative state, runtime kernel, decision session, validator, Kanban execution and workers.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2 2 L10 6 L2 10 Z" fill="#334155"/>
+    </marker>
+    <style>
+      .title{font:700 25px Arial,sans-serif;fill:#111827}
+      .label{font:700 16px Arial,sans-serif;fill:#111827}
+      .small{font:13px Arial,sans-serif;fill:#334155}
+      .tiny{font:12px Arial,sans-serif;fill:#475569}
+      .goal{fill:#fefce8;stroke:#ca8a04;stroke-width:1.8;rx:8}
+      .state{fill:#eef2ff;stroke:#4f46e5;stroke-width:1.8;rx:8}
+      .kernel{fill:#ecfeff;stroke:#0891b2;stroke-width:1.8;rx:8}
+      .decision{fill:#fff7ed;stroke:#ea580c;stroke-width:1.8;rx:8}
+      .exec{fill:#f0fdf4;stroke:#16a34a;stroke-width:1.8;rx:8}
+      .guard{fill:#fef2f2;stroke:#dc2626;stroke-width:1.8;rx:8}
+      .flow{stroke:#334155;stroke-width:2;fill:none;marker-end:url(#arrow)}
+      .soft{stroke:#94a3b8;stroke-width:1.6;fill:none;stroke-dasharray:7 5;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1200" height="720" fill="#fff"/>
+  <text x="44" y="46" class="title">Complete Design: Goal-Driven Event-Sourced Execution Runtime</text>
+
+  <rect x="50" y="90" width="245" height="95" class="goal"/>
+  <text x="75" y="124" class="label">User Goal</text>
+  <text x="75" y="151" class="small">Natural language objective</text>
+  <text x="75" y="173" class="small">Human choices when required</text>
+
+  <rect x="380" y="80" width="330" height="120" class="goal"/>
+  <text x="407" y="114" class="label">Goal Contract</text>
+  <text x="407" y="142" class="small">Goal items, acceptance criteria</text>
+  <text x="407" y="164" class="small">Hard constraints, defaults policy</text>
+  <text x="407" y="186" class="small">Human-required conditions, waivers</text>
+
+  <rect x="815" y="80" width="315" height="120" class="state"/>
+  <text x="842" y="114" class="label">Authoritative Runtime State</text>
+  <text x="842" y="142" class="small">Jobs, graph, events, ledger</text>
+  <text x="842" y="164" class="small">Artifacts, patches, decisions</text>
+  <text x="842" y="186" class="small">Only DB facts define recovery</text>
+
+  <rect x="50" y="285" width="300" height="142" class="kernel"/>
+  <text x="76" y="320" class="label">Runtime Kernel</text>
+  <text x="76" y="348" class="small">Ingest evidence</text>
+  <text x="76" y="370" class="small">Run reducer and gap detector</text>
+  <text x="76" y="392" class="small">Materialize ready nodes</text>
+  <text x="76" y="414" class="small">Request structure decisions</text>
+
+  <rect x="450" y="285" width="300" height="142" class="decision"/>
+  <text x="476" y="320" class="label">Decision Session</text>
+  <text x="476" y="348" class="small">Non-authoritative inference context</text>
+  <text x="476" y="370" class="small">Stable prefix, checkpoint, delta</text>
+  <text x="476" y="392" class="small">May use long context/cache</text>
+  <text x="476" y="414" class="small">Returns patch proposal only</text>
+
+  <rect x="830" y="285" width="300" height="142" class="guard"/>
+  <text x="856" y="320" class="label">Graph Patch Validator</text>
+  <text x="856" y="348" class="small">Revision, schema, references</text>
+  <text x="856" y="370" class="small">No release_node / direct done</text>
+  <text x="856" y="392" class="small">No unlinked nodes</text>
+  <text x="856" y="414" class="small">Valid patch becomes DB fact</text>
+
+  <rect x="185" y="535" width="335" height="115" class="exec"/>
+  <text x="214" y="570" class="label">Kanban Execution Layer</text>
+  <text x="214" y="598" class="small">Tasks, runs, dispatch, lanes</text>
+  <text x="214" y="620" class="small">Heartbeat, timeout, crash/retry</text>
+  <text x="214" y="642" class="small">Evidence snapshots</text>
+
+  <rect x="650" y="535" width="335" height="115" class="exec"/>
+  <text x="679" y="570" class="label">Worker Backends</text>
+  <text x="679" y="598" class="small">Codex, Claude Code, scripts</text>
+  <text x="679" y="620" class="small">Human task, future lanes</text>
+  <text x="679" y="642" class="small">Execute one node; no global control</text>
+
+  <path d="M295 138 L380 138" class="flow"/>
+  <path d="M710 140 L815 140" class="flow"/>
+  <path d="M972 200 C910 235 780 270 350 324" class="soft"/>
+  <path d="M350 356 L450 356" class="flow"/>
+  <path d="M750 356 L830 356" class="flow"/>
+  <path d="M980 427 C975 480 1000 505 985 535" class="flow"/>
+  <path d="M185 356 C105 455 170 520 250 535" class="flow"/>
+  <path d="M520 595 L650 595" class="flow"/>
+  <path d="M817 535 C780 490 700 460 350 405" class="flow"/>
+  <path d="M830 405 C760 470 565 520 520 565" class="soft"/>
+  <path d="M815 165 C710 230 500 255 350 315" class="soft"/>
+
+  <text x="318" y="125" class="tiny">normalize</text>
+  <text x="735" y="127" class="tiny">persist</text>
+  <text x="370" y="342" class="tiny">delta if needed</text>
+  <text x="765" y="342" class="tiny">patch proposal</text>
+  <text x="1010" y="510" class="tiny">graph update</text>
+  <text x="90" y="476" class="tiny">ready node</text>
+  <text x="552" y="582" class="tiny">task run</text>
+  <text x="720" y="500" class="tiny">receipt/evidence</text>
+  <text x="556" y="512" class="tiny">checkpoint/delta append</text>
+
+  <rect x="50" y="675" width="1080" height="30" fill="#f8fafc" stroke="#cbd5e1" rx="6"/>
+  <text x="70" y="696" class="small">Design invariant: goal contract defines completion; execution graph is only the current work structure.</text>
+</svg>

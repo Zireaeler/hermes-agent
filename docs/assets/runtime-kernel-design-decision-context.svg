@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">Decision context and validator boundary</title>
+  <desc id="desc">Authoritative DB produces delta, decision session proposes patch, validator applies or rejects patch.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2 2 L10 6 L2 10 Z" fill="#334155"/>
+    </marker>
+    <style>
+      .title{font:700 25px Arial,sans-serif;fill:#111827}
+      .label{font:700 15px Arial,sans-serif;fill:#111827}
+      .small{font:13px Arial,sans-serif;fill:#334155}
+      .tiny{font:12px Arial,sans-serif;fill:#475569}
+      .db{fill:#eef2ff;stroke:#4f46e5;stroke-width:1.8;rx:8}
+      .session{fill:#fff7ed;stroke:#ea580c;stroke-width:1.8;rx:8}
+      .guard{fill:#fef2f2;stroke:#dc2626;stroke-width:1.8;rx:8}
+      .ok{fill:#f0fdf4;stroke:#16a34a;stroke-width:1.8;rx:8}
+      .flow{stroke:#334155;stroke-width:2;fill:none;marker-end:url(#arrow)}
+      .reject{stroke:#dc2626;stroke-width:2;fill:none;stroke-dasharray:6 5;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1200" height="720" fill="#fff"/>
+  <text x="44" y="46" class="title">Decision Context: Long Context Without Letting the Model Own Facts</text>
+
+  <rect x="70" y="95" width="300" height="150" class="db"/>
+  <text x="98" y="130" class="label">Authoritative DB Snapshot</text>
+  <text x="98" y="158" class="small">goal contract</text>
+  <text x="98" y="180" class="small">ledger + gaps</text>
+  <text x="98" y="202" class="small">frontier + events</text>
+  <text x="98" y="224" class="small">graph_revision</text>
+
+  <rect x="455" y="95" width="300" height="150" class="session"/>
+  <text x="483" y="130" class="label">Decision Session</text>
+  <text x="483" y="158" class="small">stable runtime contract</text>
+  <text x="483" y="180" class="small">goal contract context</text>
+  <text x="483" y="202" class="small">checkpoint + compressed history</text>
+  <text x="483" y="224" class="small">latest DB-derived delta</text>
+
+  <rect x="840" y="95" width="300" height="150" class="session"/>
+  <text x="868" y="130" class="label">Provider Output</text>
+  <text x="868" y="158" class="small">runtime_graph_patch_v1</text>
+  <text x="868" y="180" class="small">expected_revision</text>
+  <text x="868" y="202" class="small">rationale_summary</text>
+  <text x="868" y="224" class="small">ops list only</text>
+
+  <rect x="455" y="345" width="300" height="150" class="guard"/>
+  <text x="483" y="380" class="label">Patch Validator</text>
+  <text x="483" y="408" class="small">schema and op whitelist</text>
+  <text x="483" y="430" class="small">revision match</text>
+  <text x="483" y="452" class="small">DAG and node references</text>
+  <text x="483" y="474" class="small">goal/gap linkage required</text>
+
+  <rect x="70" y="545" width="300" height="115" class="ok"/>
+  <text x="98" y="580" class="label">Applied Patch</text>
+  <text x="98" y="608" class="small">graph changes become DB fact</text>
+  <text x="98" y="630" class="small">graph_revision increments</text>
+
+  <rect x="840" y="545" width="300" height="115" class="guard"/>
+  <text x="868" y="580" class="label">Rejected Patch</text>
+  <text x="868" y="608" class="small">graph unchanged</text>
+  <text x="868" y="630" class="small">rejection appended as event/delta</text>
+
+  <path d="M370 170 L455 170" class="flow"/>
+  <path d="M755 170 L840 170" class="flow"/>
+  <path d="M990 245 C930 310 815 370 755 410" class="flow"/>
+  <path d="M455 420 C350 470 270 520 220 545" class="flow"/>
+  <path d="M755 420 C850 470 930 520 990 545" class="reject"/>
+  <path d="M990 660 C850 700 350 700 220 660" class="reject"/>
+  <path d="M220 545 C175 455 150 325 220 245" class="flow"/>
+
+  <text x="390" y="157" class="tiny">delta append</text>
+  <text x="780" y="157" class="tiny">patch proposal</text>
+  <text x="770" y="398" class="tiny">validate</text>
+  <text x="315" y="508" class="tiny">accept</text>
+  <text x="860" y="508" class="tiny">reject</text>
+  <text x="555" y="694" class="tiny">rejection corrects future context; DB still wins</text>
+</svg>

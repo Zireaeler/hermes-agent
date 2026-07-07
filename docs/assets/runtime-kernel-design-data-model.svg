@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+  <title id="title">Runtime kernel data model</title>
+  <desc id="desc">Conceptual data model connecting runtime jobs, goal contracts, execution graph, progress ledger, events, decisions and Kanban tasks.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2 2 L10 6 L2 10 Z" fill="#334155"/>
+    </marker>
+    <style>
+      .title{font:700 25px Arial,sans-serif;fill:#111827}
+      .label{font:700 15px Arial,sans-serif;fill:#111827}
+      .small{font:12.5px Arial,sans-serif;fill:#334155}
+      .job{fill:#fefce8;stroke:#ca8a04;stroke-width:1.6;rx:8}
+      .goal{fill:#eef2ff;stroke:#4f46e5;stroke-width:1.6;rx:8}
+      .graph{fill:#ecfeff;stroke:#0891b2;stroke-width:1.6;rx:8}
+      .event{fill:#fff7ed;stroke:#ea580c;stroke-width:1.6;rx:8}
+      .exec{fill:#f0fdf4;stroke:#16a34a;stroke-width:1.6;rx:8}
+      .flow{stroke:#334155;stroke-width:1.8;fill:none;marker-end:url(#arrow)}
+      .rel{stroke:#94a3b8;stroke-width:1.5;fill:none;stroke-dasharray:6 5;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1200" height="760" fill="#fff"/>
+  <text x="44" y="46" class="title">Conceptual Data Model: What Becomes Durable Fact</text>
+
+  <rect x="470" y="85" width="260" height="86" class="job"/>
+  <text x="498" y="118" class="label">runtime_jobs</text>
+  <text x="498" y="145" class="small">objective, state, graph_revision</text>
+  <text x="498" y="164" class="small">root_task_id, workspace, policy</text>
+
+  <rect x="85" y="235" width="260" height="96" class="goal"/>
+  <text x="113" y="268" class="label">goal_contracts</text>
+  <text x="113" y="295" class="small">objective, constraints</text>
+  <text x="113" y="314" class="small">defaults, human-required policy</text>
+
+  <rect x="85" y="385" width="260" height="96" class="goal"/>
+  <text x="113" y="418" class="label">goal_items</text>
+  <text x="113" y="445" class="small">item_key, required</text>
+  <text x="113" y="464" class="small">acceptance, evidence rules</text>
+
+  <rect x="470" y="235" width="260" height="96" class="graph"/>
+  <text x="498" y="268" class="label">execution_nodes</text>
+  <text x="498" y="295" class="small">node_key, type, state</text>
+  <text x="498" y="314" class="small">latest_task_id, summaries</text>
+
+  <rect x="470" y="385" width="260" height="96" class="graph"/>
+  <text x="498" y="418" class="label">execution_dependencies</text>
+  <text x="498" y="445" class="small">readiness DAG</text>
+  <text x="498" y="464" class="small">depends_on, artifact_input</text>
+
+  <rect x="470" y="535" width="260" height="96" class="graph"/>
+  <text x="498" y="568" class="label">node_relations</text>
+  <text x="498" y="595" class="small">verifies, supersedes</text>
+  <text x="498" y="614" class="small">blocks, explains, replaces</text>
+
+  <rect x="840" y="235" width="260" height="96" class="goal"/>
+  <text x="868" y="268" class="label">progress_ledger</text>
+  <text x="868" y="295" class="small">goal item -> evidence</text>
+  <text x="868" y="314" class="small">satisfaction, verification</text>
+
+  <rect x="840" y="385" width="260" height="96" class="goal"/>
+  <text x="868" y="418" class="label">goal_gaps</text>
+  <text x="868" y="445" class="small">missing, partial, failed</text>
+  <text x="868" y="464" class="small">stale, human, no runnable</text>
+
+  <rect x="840" y="535" width="260" height="96" class="event"/>
+  <text x="868" y="568" class="label">execution_events</text>
+  <text x="868" y="595" class="small">structural event log</text>
+  <text x="868" y="614" class="small">graph_revision, source</text>
+
+  <rect x="85" y="565" width="260" height="96" class="event"/>
+  <text x="113" y="598" class="label">decision_sessions</text>
+  <text x="113" y="625" class="small">stable prefix, checkpoint</text>
+  <text x="113" y="644" class="small">non-authoritative context</text>
+
+  <rect x="85" y="670" width="260" height="66" class="event"/>
+  <text x="113" y="704" class="label">kernel_decisions / patches</text>
+  <text x="113" y="728" class="small">delta, patch, validator result</text>
+
+  <rect x="470" y="670" width="260" height="66" class="exec"/>
+  <text x="498" y="704" class="label">node_materializations</text>
+  <text x="498" y="728" class="small">node -> task/run attempts</text>
+
+  <rect x="840" y="670" width="260" height="66" class="exec"/>
+  <text x="868" y="704" class="label">Kanban tasks / runs</text>
+  <text x="868" y="728" class="small">execution substrate</text>
+
+  <path d="M600 171 L600 235" class="flow"/>
+  <path d="M470 128 C340 135 255 190 215 235" class="flow"/>
+  <path d="M215 331 L215 385" class="flow"/>
+  <path d="M345 433 C405 410 430 390 470 385" class="rel"/>
+  <path d="M730 283 L840 283" class="flow"/>
+  <path d="M970 331 L970 385" class="flow"/>
+  <path d="M970 481 L970 535" class="flow"/>
+  <path d="M600 331 L600 385" class="flow"/>
+  <path d="M600 481 L600 535" class="rel"/>
+  <path d="M600 631 L600 670" class="flow"/>
+  <path d="M730 704 L840 704" class="flow"/>
+  <path d="M345 613 C420 655 430 685 470 704" class="rel"/>
+  <path d="M215 661 L215 670" class="flow"/>
+  <path d="M840 583 C760 595 730 604 730 604" class="rel"/>
+  <path d="M840 433 C790 410 760 390 730 385" class="rel"/>
+
+  <text x="365" y="372" class="small">nodes link to goal items via metadata</text>
+  <text x="745" y="266" class="small">evidence maps back</text>
+  <text x="730" y="688" class="small">task/run evidence</text>
+</svg>

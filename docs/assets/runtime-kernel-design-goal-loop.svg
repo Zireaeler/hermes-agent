@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">Goal progression loop</title>
+  <desc id="desc">Goal contract, progress ledger, gap detector, reducer, graph patch and Kanban execution loop.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2 2 L10 6 L2 10 Z" fill="#334155"/>
+    </marker>
+    <style>
+      .title{font:700 25px Arial,sans-serif;fill:#111827}
+      .label{font:700 15px Arial,sans-serif;fill:#111827}
+      .small{font:13px Arial,sans-serif;fill:#334155}
+      .goal{fill:#fefce8;stroke:#ca8a04;stroke-width:1.8;rx:8}
+      .ledger{fill:#eef2ff;stroke:#4f46e5;stroke-width:1.8;rx:8}
+      .kernel{fill:#ecfeff;stroke:#0891b2;stroke-width:1.8;rx:8}
+      .event{fill:#fff7ed;stroke:#ea580c;stroke-width:1.8;rx:8}
+      .exec{fill:#f0fdf4;stroke:#16a34a;stroke-width:1.8;rx:8}
+      .flow{stroke:#334155;stroke-width:2;fill:none;marker-end:url(#arrow)}
+      .loop{stroke:#475569;stroke-width:2.2;fill:none;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1200" height="720" fill="#fff"/>
+  <text x="44" y="46" class="title">Goal Progression Loop: The Graph Grows From Evidence Gaps</text>
+
+  <rect x="80" y="92" width="260" height="108" class="goal"/>
+  <text x="108" y="127" class="label">Goal Contract</text>
+  <text x="108" y="155" class="small">Required goal items</text>
+  <text x="108" y="177" class="small">Acceptance and evidence rules</text>
+
+  <rect x="470" y="92" width="260" height="108" class="ledger"/>
+  <text x="498" y="127" class="label">Progress Ledger</text>
+  <text x="498" y="155" class="small">satisfaction: full/partial/none</text>
+  <text x="498" y="177" class="small">verification: verified/failed</text>
+
+  <rect x="860" y="92" width="260" height="108" class="kernel"/>
+  <text x="888" y="127" class="label">Gap Detector</text>
+  <text x="888" y="155" class="small">missing, partial, failed</text>
+  <text x="888" y="177" class="small">no runnable, stale, human</text>
+
+  <rect x="860" y="300" width="260" height="108" class="kernel"/>
+  <text x="888" y="335" class="label">Local Reducer</text>
+  <text x="888" y="363" class="small">readiness, completion</text>
+  <text x="888" y="385" class="small">liveness, decision trigger</text>
+
+  <rect x="470" y="300" width="260" height="108" class="event"/>
+  <text x="498" y="335" class="label">Decision Patch</text>
+  <text x="498" y="363" class="small">create node, verifier</text>
+  <text x="498" y="385" class="small">add dependency, human gate</text>
+
+  <rect x="80" y="300" width="260" height="108" class="exec"/>
+  <text x="108" y="335" class="label">Execution Graph</text>
+  <text x="108" y="363" class="small">nodes and dependencies</text>
+  <text x="108" y="385" class="small">current work structure</text>
+
+  <rect x="80" y="530" width="260" height="108" class="exec"/>
+  <text x="108" y="565" class="label">Kanban Worker Task</text>
+  <text x="108" y="593" class="small">executes one node</text>
+  <text x="108" y="615" class="small">returns structured evidence</text>
+
+  <rect x="470" y="530" width="260" height="108" class="ledger"/>
+  <text x="498" y="565" class="label">Evidence Ingest</text>
+  <text x="498" y="593" class="small">node state + artifacts</text>
+  <text x="498" y="615" class="small">ledger entries</text>
+
+  <rect x="860" y="530" width="260" height="108" class="goal"/>
+  <text x="888" y="565" class="label">Completion Rule</text>
+  <text x="888" y="593" class="small">all required items satisfied</text>
+  <text x="888" y="615" class="small">no hard blocker or contradiction</text>
+
+  <path d="M340 146 L470 146" class="flow"/>
+  <path d="M730 146 L860 146" class="flow"/>
+  <path d="M990 200 L990 300" class="flow"/>
+  <path d="M860 354 L730 354" class="flow"/>
+  <path d="M470 354 L340 354" class="flow"/>
+  <path d="M210 408 L210 530" class="flow"/>
+  <path d="M340 584 L470 584" class="flow"/>
+  <path d="M730 584 L860 584" class="flow"/>
+  <path d="M600 530 C560 470 520 440 470 408" class="loop"/>
+  <path d="M600 530 C610 455 710 240 860 165" class="loop"/>
+
+  <text x="378" y="134" class="small">evidence target</text>
+  <text x="762" y="134" class="small">derive gaps</text>
+  <text x="760" y="342" class="small">if decision needed</text>
+  <text x="370" y="342" class="small">validated patch</text>
+  <text x="235" y="474" class="small">ready node</text>
+  <text x="370" y="572" class="small">receipt</text>
+  <text x="760" y="572" class="small">goal status</text>
+</svg>
