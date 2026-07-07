@@ -53,22 +53,30 @@ PATCH_OPS = {
 }
 BLOCKER_TYPES = {
     "missing_secret",
+    "external_cost",
     "external_permission",
+    "permission_required",
     "destructive_change_needs_approval",
+    "destructive_change",
     "unavailable_dependency",
     "system_error",
     "policy_violation",
+    "legal_or_policy",
 }
 HUMAN_DECISION_TYPES = {
     "external_cost",
     "credential",
+    "missing_secret",
     "permission",
+    "permission_required",
     "destructive_change",
     "product_preference",
     "architecture_choice",
     "policy_exception",
+    "legal_or_policy",
 }
 TERMINAL_NODE_STATES = {"succeeded", "failed", "blocked", "cancelled", "superseded"}
+OPEN_NODE_STATES = {"planned", "waiting_dependency", "ready", "running", "waiting_human"}
 
 
 @dataclass
@@ -403,6 +411,35 @@ def _event(
     return int(cur.lastrowid)
 
 
+def _event_once(
+    conn: sqlite3.Connection,
+    job_id: str,
+    event_type: str,
+    key: str,
+    payload: Optional[dict[str, Any]] = None,
+    *,
+    node_id: Optional[str] = None,
+    source: str = "runtime_kernel",
+) -> Optional[int]:
+    """Record a synthetic event once per graph revision and stable key."""
+
+    job = _job(conn, job_id)
+    payload_data = dict(payload or {})
+    payload_data.setdefault("key", key)
+    rows = conn.execute(
+        """
+        SELECT id, payload_json FROM execution_events
+         WHERE job_id = ? AND event_type = ? AND graph_revision = ?
+         ORDER BY id DESC
+        """,
+        (job_id, event_type, int(job["graph_revision"])),
+    ).fetchall()
+    for row in rows:
+        if _loads(row["payload_json"]).get("key") == key:
+            return None
+    return _event(conn, job_id, event_type, payload_data, node_id=node_id, source=source)
+
+
 def _job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
     row = conn.execute("SELECT * FROM runtime_jobs WHERE id = ?", (job_id,)).fetchone()
     if row is None:
@@ -699,6 +736,8 @@ def status_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
     job = _row_to_dict(conn.execute("SELECT * FROM runtime_jobs WHERE id = ?", (job_id,)).fetchone())
     if job is None:
         raise ValueError(f"unknown runtime job {job_id}")
+    frontier = summarize_active_frontier(conn, job_id)
+    liveness = summarize_liveness(conn, job_id, frontier)
     return {
         "job": job,
         "goal_contract": _row_to_dict(
@@ -714,6 +753,9 @@ def status_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
         "recent_events": _rows(conn, "SELECT * FROM execution_events WHERE job_id = ? ORDER BY id DESC LIMIT 50", (job_id,)),
         "decisions": _rows(conn, "SELECT * FROM kernel_decisions WHERE job_id = ? ORDER BY created_at, id", (job_id,)),
         "patches": _rows(conn, "SELECT * FROM graph_patches WHERE job_id = ? ORDER BY created_at, id", (job_id,)),
+        "ledger_summary": summarize_progress_ledger(conn, job_id),
+        "frontier_summary": frontier,
+        "liveness": liveness,
     }
 
 
@@ -980,6 +1022,162 @@ def _insert_relation(conn: sqlite3.Connection, job_id: str, from_node_id: str, t
     )
 
 
+def _nodes_linked_to_goal_item(conn: sqlite3.Connection, job_id: str, item_key: str) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM execution_nodes WHERE job_id = ? ORDER BY created_at, node_key",
+        (job_id,),
+    ).fetchall()
+    linked: list[dict[str, Any]] = []
+    for row in rows:
+        node = dict(row)
+        metadata = _loads(node.get("metadata_json"))
+        if item_key in (metadata.get("goal_item_keys") or []):
+            linked.append(node)
+    return linked
+
+
+def _has_pending_decision(conn: sqlite3.Connection, job_id: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM kernel_decisions WHERE job_id = ? AND status = 'started' LIMIT 1",
+        (job_id,),
+    ).fetchone()
+    return row is not None
+
+
+def summarize_active_frontier(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
+    rows = conn.execute(
+        "SELECT node_key, node_type, state, latest_task_id, metadata_json FROM execution_nodes WHERE job_id = ?",
+        (job_id,),
+    ).fetchall()
+    buckets: dict[str, list[dict[str, Any]]] = {
+        "ready": [],
+        "running": [],
+        "waiting_human": [],
+        "waiting_dependency": [],
+        "planned": [],
+        "failed": [],
+        "succeeded": [],
+    }
+    for row in rows:
+        state = str(row["state"])
+        if state in buckets:
+            buckets[state].append(
+                {
+                    "node_key": row["node_key"],
+                    "node_type": row["node_type"],
+                    "task_id": row["latest_task_id"],
+                    "goal_item_keys": _loads(row["metadata_json"]).get("goal_item_keys") or [],
+                }
+            )
+    for items in buckets.values():
+        items.sort(key=lambda item: item["node_key"])
+    return {
+        **buckets,
+        "has_runnable": bool(buckets["ready"] or buckets["running"]),
+        "has_legal_wait": bool(buckets["running"] or buckets["waiting_human"] or _has_pending_decision(conn, job_id)),
+    }
+
+
+def summarize_progress_ledger(conn: sqlite3.Connection, job_id: str) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT gi.item_key, pl.satisfaction, pl.verification_state, COUNT(*) AS count
+          FROM progress_ledger pl
+          JOIN goal_items gi ON gi.id = pl.goal_item_id
+         WHERE pl.job_id = ?
+         GROUP BY gi.item_key, pl.satisfaction, pl.verification_state
+         ORDER BY gi.item_key, pl.satisfaction, pl.verification_state
+        """,
+        (job_id,),
+    ).fetchall()
+    return [
+        {
+            "goal_item_key": row["item_key"],
+            "satisfaction": row["satisfaction"],
+            "verification_state": row["verification_state"],
+            "count": int(row["count"]),
+        }
+        for row in rows
+    ]
+
+
+def summarize_liveness(conn: sqlite3.Connection, job_id: str, frontier: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    frontier = frontier or summarize_active_frontier(conn, job_id)
+    open_gaps = conn.execute(
+        "SELECT gap_key, gap_type FROM goal_gaps WHERE job_id = ? AND state = 'open' ORDER BY gap_key",
+        (job_id,),
+    ).fetchall()
+    job = _job(conn, job_id)
+    legal_wait = bool(frontier["running"] or frontier["waiting_human"] or _has_pending_decision(conn, job_id))
+    illegal_idle = (
+        job["state"] != "done"
+        and bool(open_gaps)
+        and not frontier["ready"]
+        and not legal_wait
+        and job["state"] != "blocked"
+    )
+    return {
+        "legal_wait": legal_wait,
+        "illegal_idle": illegal_idle,
+        "open_gap_count": len(open_gaps),
+        "ready_count": len(frontier["ready"]),
+        "running_count": len(frontier["running"]),
+        "waiting_human_count": len(frontier["waiting_human"]),
+        "pending_decision": _has_pending_decision(conn, job_id),
+    }
+
+
+def _stale_gap_candidates(conn: sqlite3.Connection, job_id: str) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT * FROM goal_gaps
+         WHERE job_id = ? AND state = 'open' AND gap_type != 'stale_or_no_progress'
+           AND attempt_count >= 3
+         ORDER BY gap_key
+        """,
+        (job_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def detect_stagnation(conn: sqlite3.Connection, job_id: str, gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    stale = [gap for gap in gaps if gap.get("gap_type") == "stale_or_no_progress"]
+    for gap in stale:
+        events.append(
+            {
+                "event_type": "structure_audit_requested",
+                "key": f"stale:{gap['gap_key']}",
+                "payload": {
+                    "gap_key": gap["gap_key"],
+                    "gap_type": gap["gap_type"],
+                    "reason": "open gap repeated without new progress",
+                },
+            }
+        )
+    rejected_count = conn.execute(
+        """
+        SELECT COUNT(*) AS count
+          FROM graph_patches
+         WHERE job_id = ? AND status = 'rejected'
+           AND created_at >= COALESCE((SELECT MAX(applied_at) FROM graph_patches WHERE job_id = ? AND status = 'applied'), 0)
+        """,
+        (job_id, job_id),
+    ).fetchone()
+    if int(rejected_count["count"] or 0) >= 2:
+        events.append(
+            {
+                "event_type": "structure_audit_requested",
+                "key": "repeated_patch_rejections",
+                "payload": {
+                    "reason": "multiple rejected patches without an applied graph change",
+                    "rejected_count": int(rejected_count["count"] or 0),
+                },
+            }
+        )
+    return events
+
+
 def reduce_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
     ensure_runtime_schema(conn)
     now = _now()
@@ -1003,9 +1201,11 @@ def reduce_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
                 (now, node["id"]),
             )
             changed_ready.append(node["node_key"])
-            _event(conn, job_id, "dependency_satisfied", {"node_key": node["node_key"]}, node_id=node["id"])
+            _event_once(conn, job_id, "dependency_satisfied", f"ready:{node['id']}", {"node_key": node["node_key"]}, node_id=node["id"])
 
     gaps = detect_goal_gaps(conn, job_id)
+    frontier = summarize_active_frontier(conn, job_id)
+    stagnation_events = detect_stagnation(conn, job_id, gaps)
     active_nodes = conn.execute(
         """
         SELECT state, COUNT(*) AS count FROM execution_nodes
@@ -1017,6 +1217,7 @@ def reduce_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
     has_human = counts.get("waiting_human", 0) > 0
     has_running = counts.get("running", 0) > 0
     has_ready = counts.get("ready", 0) > 0
+    has_pending_decision = _has_pending_decision(conn, job_id)
     complete = _completion_satisfied(conn, job_id)
     if complete:
         state = "done"
@@ -1028,13 +1229,27 @@ def reduce_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
         state = "active"
     elif gaps:
         state = "waiting_decision"
-        _event(conn, job_id, "decision_requested", {"gap_count": len(gaps)})
-        if any(gap["gap_type"] == "no_runnable_graph" for gap in gaps):
-            _event(conn, job_id, "liveness_violation", {"reason": "no runnable node while goal gaps remain"})
+        _event_once(
+            conn,
+            job_id,
+            "decision_requested",
+            "open_goal_gaps",
+            {"gap_count": len(gaps), "gap_keys": [gap["gap_key"] for gap in gaps]},
+        )
+        if not has_pending_decision and any(gap["gap_type"] == "no_runnable_for_open_goal" for gap in gaps):
+            _event_once(
+                conn,
+                job_id,
+                "liveness_violation",
+                "no_runnable_for_open_goal",
+                {"reason": "no runnable node while goal gaps remain", "frontier": frontier},
+            )
     else:
         state = "active"
+    for event in stagnation_events:
+        _event_once(conn, job_id, event["event_type"], event["key"], event["payload"])
     _touch_job(conn, job_id, state=state)
-    return {"state": state, "ready": changed_ready, "gaps": gaps, "complete": complete}
+    return {"state": state, "ready": changed_ready, "gaps": gaps, "complete": complete, "frontier": frontier}
 
 
 def _completion_satisfied(conn: sqlite3.Connection, job_id: str) -> bool:
@@ -1056,7 +1271,19 @@ def _completion_satisfied(conn: sqlite3.Connection, job_id: str) -> bool:
         "SELECT 1 FROM progress_ledger WHERE job_id = ? AND satisfaction = 'contradicted' LIMIT 1",
         (job_id,),
     ).fetchone()
-    return running is None and contradicted is None
+    failed_required_verifier = conn.execute(
+        """
+        SELECT 1
+          FROM execution_nodes n
+         WHERE n.job_id = ?
+           AND n.node_type = 'verification'
+           AND n.state = 'failed'
+           AND n.metadata_json LIKE '%goal_item_keys%'
+         LIMIT 1
+        """,
+        (job_id,),
+    ).fetchone()
+    return running is None and contradicted is None and failed_required_verifier is None
 
 
 def detect_goal_gaps(conn: sqlite3.Connection, job_id: str) -> list[dict[str, Any]]:
@@ -1077,17 +1304,27 @@ def detect_goal_gaps(conn: sqlite3.Connection, job_id: str) -> list[dict[str, An
         gap_type: Optional[str] = None
         if item["state"] == "satisfied":
             continue
-        if not ledger:
+        linked_nodes = _nodes_linked_to_goal_item(conn, job_id, item["item_key"])
+        has_human_gate = any(node["state"] == "waiting_human" for node in linked_nodes)
+        has_open_path = any(node["state"] in OPEN_NODE_STATES for node in linked_nodes)
+        failed_required = any(node["state"] in {"failed", "blocked"} for node in linked_nodes)
+        if has_human_gate:
+            gap_type = "blocked_by_human_gate"
+        elif any(row["satisfaction"] == "contradicted" for row in ledger):
+            gap_type = "contradicted_evidence"
+        elif any(row["verification_state"] in {"failed", "failed_verification"} for row in ledger):
+            gap_type = "verification_failed"
+        elif failed_required and not has_open_path:
+            gap_type = "failed_required_node"
+        elif not ledger:
             gap_type = "missing_evidence"
-        elif any(row["verification_state"] == "failed_verification" for row in ledger):
-            gap_type = "failed_verifier"
         elif any(row["satisfaction"] == "partial" for row in ledger):
-            gap_type = "partial_satisfaction"
+            gap_type = "partial_evidence"
         elif any(
             row["satisfaction"] == "full" and row["verification_state"] in {"unverified", "self_reported"}
             for row in ledger
         ):
-            gap_type = "unverified_evidence"
+            gap_type = "needs_verification" if item["verifier_required"] else "partial_evidence"
         else:
             gap_type = "missing_evidence"
         gap_key = f"{item['item_key']}:{gap_type}"
@@ -1103,9 +1340,21 @@ def detect_goal_gaps(conn: sqlite3.Connection, job_id: str) -> list[dict[str, An
         (job_id,),
     ).fetchone()
     if runnable is None and not _completion_satisfied(conn, job_id):
-        gap_key = "runtime:no_runnable_graph"
+        gap_key = "runtime:no_runnable_for_open_goal"
         active_gap_keys.add(gap_key)
-        _upsert_gap(conn, job_id, None, gap_key, "no_runnable_graph", "goal remains unmet but graph has no runnable node", now)
+        _upsert_gap(conn, job_id, None, gap_key, "no_runnable_for_open_goal", "goal remains unmet but graph has no runnable node", now)
+    for stale in _stale_gap_candidates(conn, job_id):
+        stale_key = f"runtime:stale:{stale['gap_key']}"
+        active_gap_keys.add(stale_key)
+        _upsert_gap(
+            conn,
+            job_id,
+            stale.get("goal_item_id"),
+            stale_key,
+            "stale_or_no_progress",
+            f"{stale['gap_key']} has not produced new progress",
+            now,
+        )
     conn.execute(
         "UPDATE goal_gaps SET state = 'resolved', updated_at = ? WHERE job_id = ? AND state = 'open' AND gap_key NOT IN (%s)"
         % ",".join("?" for _ in active_gap_keys) if active_gap_keys else
@@ -1119,34 +1368,44 @@ def detect_goal_gaps(conn: sqlite3.Connection, job_id: str) -> list[dict[str, An
         gap = _row_to_dict(row) or {}
         gaps.append(gap)
     for gap in gaps:
-        _event(conn, job_id, "goal_gap_detected", {"gap_key": gap["gap_key"], "gap_type": gap["gap_type"]})
+        _event_once(
+            conn,
+            job_id,
+            "goal_gap_detected",
+            str(gap["gap_key"]),
+            {"gap_key": gap["gap_key"], "gap_type": gap["gap_type"]},
+        )
     return gaps
 
 
 def _upsert_gap(conn: sqlite3.Connection, job_id: str, goal_item_id: Optional[str], gap_key: str, gap_type: str, summary: str, now: int) -> None:
     existing = conn.execute(
-        "SELECT id, attempt_count FROM goal_gaps WHERE job_id = ? AND gap_key = ?",
+        "SELECT id, attempt_count, metadata_json FROM goal_gaps WHERE job_id = ? AND gap_key = ?",
         (job_id, gap_key),
     ).fetchone()
     if existing:
+        metadata = _loads(existing["metadata_json"])
+        metadata["last_detected_at"] = now
+        metadata["last_gap_type"] = gap_type
         conn.execute(
             """
             UPDATE goal_gaps
                SET goal_item_id = ?, gap_type = ?, state = 'open', summary = ?,
-                   updated_at = ?
+                   attempt_count = attempt_count + 1, metadata_json = ?, updated_at = ?
              WHERE id = ?
             """,
-            (goal_item_id, gap_type, summary, now, existing["id"]),
+            (goal_item_id, gap_type, summary, _json(metadata), now, existing["id"]),
         )
     else:
+        metadata = {"first_detected_at": now, "last_detected_at": now, "last_gap_type": gap_type}
         conn.execute(
             """
             INSERT INTO goal_gaps (
                 id, job_id, goal_item_id, gap_key, gap_type, state, summary,
-                metadata_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, 'open', ?, '{}', ?, ?)
+                attempt_count, metadata_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'open', ?, 1, ?, ?, ?)
             """,
-            (_id("gap"), job_id, goal_item_id, gap_key, gap_type, summary, now, now),
+            (_id("gap"), job_id, goal_item_id, gap_key, gap_type, summary, _json(metadata), now, now),
         )
 
 
@@ -1609,19 +1868,77 @@ def update_progress_ledger(conn: sqlite3.Connection, node_id: str, evidence: dic
     summary = str(evidence.get("summary") or "")
     verification = evidence.get("verification") or {}
     verification_passed = bool(verification.get("passed")) if isinstance(verification, dict) else False
-    for key in evidence.get("claimed_goal_items") or []:
+    explicit_verification_state = str(evidence.get("verification_state") or "").strip()
+    default_verification_state = _default_verification_state(dict(node), evidence, verification_passed)
+    metadata = _ledger_metadata(evidence)
+    claimed_items = evidence.get("claimed_goal_item_keys") or evidence.get("claimed_goal_items") or []
+    partial_items = evidence.get("partial_goal_item_keys") or evidence.get("partial_goal_items") or []
+    unmet_items = evidence.get("unmet_goal_item_keys") or evidence.get("unmet_goal_items") or []
+    contradicted_items = evidence.get("contradicted_goal_item_keys") or evidence.get("contradicted_goal_items") or []
+    for key in claimed_items:
         item = _goal_item_optional(conn, job_id, str(key))
         if item:
-            _insert_ledger(conn, job_id, contract["id"], item["id"], node_id, "full", "verified" if verification_passed else "self_reported", summary)
-    for key in evidence.get("partial_goal_items") or []:
+            _insert_ledger(
+                conn,
+                job_id,
+                contract["id"],
+                item["id"],
+                node_id,
+                str(evidence.get("satisfaction") or "full"),
+                explicit_verification_state or default_verification_state,
+                summary,
+                metadata,
+            )
+    for key in partial_items:
         item = _goal_item_optional(conn, job_id, str(key))
         if item:
-            _insert_ledger(conn, job_id, contract["id"], item["id"], node_id, "partial", "unverified", summary)
-    for key in evidence.get("unmet_goal_items") or []:
+            _insert_ledger(conn, job_id, contract["id"], item["id"], node_id, "partial", "unverified", summary, metadata)
+    for key in unmet_items:
         item = _goal_item_optional(conn, job_id, str(key))
         if item:
-            _insert_ledger(conn, job_id, contract["id"], item["id"], node_id, "none", "unverified", summary)
+            _insert_ledger(conn, job_id, contract["id"], item["id"], node_id, "none", "unverified", summary, metadata)
+    for key in contradicted_items:
+        item = _goal_item_optional(conn, job_id, str(key))
+        if item:
+            _insert_ledger(conn, job_id, contract["id"], item["id"], node_id, "contradicted", "failed", summary, metadata)
     _refresh_goal_item_states(conn, contract["id"])
+
+
+def _default_verification_state(node: dict[str, Any], evidence: dict[str, Any], verification_passed: bool) -> str:
+    verification = evidence.get("verification")
+    verdict = _normalize_verdict(evidence.get("verdict") or "")
+    if verification_passed:
+        return "verified"
+    if node.get("node_type") == "verification" and (verification or verdict == "failed"):
+        return "failed"
+    if isinstance(verification, dict) and verification.get("passed") is False and node.get("node_type") == "verification":
+        return "failed"
+    return "self_reported"
+
+
+def _ledger_metadata(evidence: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "claimed_goal_item_keys",
+        "claimed_goal_items",
+        "partial_goal_item_keys",
+        "partial_goal_items",
+        "unmet_goal_item_keys",
+        "unmet_goal_items",
+        "contradicted_goal_item_keys",
+        "contradicted_goal_items",
+        "artifacts",
+        "artifact_refs",
+        "verification",
+        "verification_refs",
+        "remaining_gaps",
+        "new_constraints",
+        "active_assumptions",
+        "rejected_approaches",
+        "known_failure_boundaries",
+        "open_questions",
+        "risk_notes",
+    )
+    return {key: evidence.get(key) for key in keys if evidence.get(key)}
 
 
 def _insert_ledger(
@@ -1633,6 +1950,7 @@ def _insert_ledger(
     satisfaction: str,
     verification_state: str,
     summary: str,
+    metadata: Optional[dict[str, Any]] = None,
 ) -> None:
     conn.execute(
         """
@@ -1640,7 +1958,7 @@ def _insert_ledger(
             id, job_id, contract_id, goal_item_id, node_id, evidence_ref,
             satisfaction, verification_state, confidence, summary,
             metadata_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             _id("pledger"),
@@ -1653,6 +1971,7 @@ def _insert_ledger(
             verification_state,
             1.0 if satisfaction == "full" else 0.5,
             summary,
+            _json(metadata or {}),
             _now(),
         ),
     )
@@ -1668,7 +1987,14 @@ def _refresh_goal_item_states(conn: sqlite3.Connection, contract_id: str) -> Non
         state = "open"
         if any(row["satisfaction"] == "contradicted" for row in ledgers):
             state = "contradicted"
-        elif any(row["satisfaction"] == "full" and row["verification_state"] == "verified" for row in ledgers):
+        elif any(
+            row["satisfaction"] == "full"
+            and (
+                row["verification_state"] == "verified"
+                or (not item["verifier_required"] and row["verification_state"] not in {"failed", "failed_verification"})
+            )
+            for row in ledgers
+        ):
             state = "satisfied"
         elif any(row["satisfaction"] in {"full", "partial"} for row in ledgers):
             state = "partial"
@@ -1685,12 +2011,12 @@ def fixture_decision_provider(session: dict[str, Any], delta: dict[str, Any]) ->
     gaps = delta.get("goal_gaps") or []
     if not gaps:
         return {"schema": PATCH_SCHEMA, "expected_revision": revision, "rationale_summary": "no structural gap", "ops": []}
-    goal_gap = next((item for item in gaps if item.get("gap_type") != "no_runnable_graph"), None)
+    goal_gap = next((item for item in gaps if item.get("gap_type") not in {"no_runnable_graph", "no_runnable_for_open_goal"}), None)
     gap = goal_gap or gaps[0]
     goal_items = [item["item_key"] for item in delta.get("goal_items") or [] if item["state"] != "satisfied"]
     goal_key = goal_items[0] if goal_items else "initial-runtime-result"
     gap_key = gap["gap_key"]
-    if gap["gap_type"] in {"missing_evidence", "no_runnable_graph"}:
+    if gap["gap_type"] in {"missing_evidence", "no_runnable_graph", "no_runnable_for_open_goal", "failed_required_node"}:
         node_key = f"implement-{goal_key}".replace(":", "-")
         return {
             "schema": PATCH_SCHEMA,
@@ -1708,7 +2034,7 @@ def fixture_decision_provider(session: dict[str, Any], delta: dict[str, Any]) ->
                 }
             ],
         }
-    if gap["gap_type"] in {"unverified_evidence", "partial_satisfaction"}:
+    if gap["gap_type"] in {"unverified_evidence", "partial_satisfaction", "needs_verification", "partial_evidence"}:
         target = None
         for node in delta.get("frontier") or []:
             if node["state"] == "succeeded" and node["node_type"] == "implementation":

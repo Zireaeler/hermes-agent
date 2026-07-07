@@ -1971,6 +1971,9 @@ def _runtime_summary(status: dict[str, Any]) -> dict[str, Any]:
             for node in status.get("nodes", [])
             if node.get("state") in {"ready", "running", "waiting_human", "failed", "succeeded"}
         ],
+        "ledger_summary": status.get("ledger_summary", []),
+        "frontier_summary": status.get("frontier_summary", {}),
+        "liveness": status.get("liveness", {}),
     }
 
 
@@ -2074,6 +2077,14 @@ def _cmd_runtime_status(args: argparse.Namespace) -> int:
                 f"  - {node['node_key']} "
                 f"[{node['node_type']}/{node['state']}] task={node['task_id'] or '-'}"
             )
+    if summary["liveness"]:
+        print(
+            "Liveness: "
+            f"ready={summary['liveness'].get('ready_count', 0)} "
+            f"running={summary['liveness'].get('running_count', 0)} "
+            f"waiting_human={summary['liveness'].get('waiting_human_count', 0)} "
+            f"illegal_idle={summary['liveness'].get('illegal_idle', False)}"
+        )
     return 0
 
 

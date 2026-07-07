@@ -290,11 +290,93 @@ def test_node_completed_does_not_directly_call_provider(conn):
     assert conn.execute("SELECT COUNT(*) FROM kernel_decisions WHERE job_id = ?", (job_id,)).fetchone()[0] == 0
 
 
+def test_partial_ledger_creates_partial_evidence_gap(conn):
+    job_id = _job(conn)
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = _node(conn, job_id, "understand-scope")
+    _complete_node(
+        conn,
+        node,
+        {
+            "verdict": "succeeded",
+            "summary": "only part of the goal is covered",
+            "partial_goal_items": ["initial-runtime-result"],
+            "remaining_gaps": ["missing end-to-end verification"],
+            "verification": {"passed": False},
+        },
+    )
+    assert rk.ingest_runtime_node_evidence(conn, node["id"])
+    status = rk.status_runtime_job(conn, job_id)
+    assert status["goal_items"][0]["state"] == "partial"
+    assert any(gap["gap_type"] == "partial_evidence" for gap in status["goal_gaps"] if gap["state"] == "open")
+    assert status["progress_ledger"][0]["metadata"]["remaining_gaps"] == ["missing end-to-end verification"]
+
+
+def test_failed_verifier_creates_verification_failed_gap(conn):
+    job_id = _job(conn)
+    assert rk.apply_graph_patch(
+        conn,
+        job_id,
+        _patch(
+            job_id,
+            _revision(conn, job_id),
+            {
+                "op": "insert_verifier",
+                "target_goal_item_key": "initial-runtime-result",
+                "verifier_node_key": "verify-runtime",
+                "title": "Verify runtime",
+                "goal_item_keys": ["initial-runtime-result"],
+                "gap_keys": ["initial-runtime-result:needs_verification"],
+            },
+        ),
+    )["status"] == "applied"
+    verifier = _node(conn, job_id, "verify-runtime")
+    rk.materialize_runtime_node(conn, dict(verifier))
+    verifier = _node(conn, job_id, "verify-runtime")
+    _complete_node(
+        conn,
+        verifier,
+        {
+            "verdict": "failed",
+            "summary": "verification failed",
+            "claimed_goal_items": ["initial-runtime-result"],
+            "verification": {"passed": False, "summary": "pytest failed"},
+        },
+    )
+    assert rk.ingest_runtime_node_evidence(conn, verifier["id"])
+    status = rk.status_runtime_job(conn, job_id)
+    assert status["job"]["state"] != "done"
+    assert any(gap["gap_type"] == "verification_failed" for gap in status["goal_gaps"] if gap["state"] == "open")
+
+
+def test_contradicted_ledger_blocks_completion(conn):
+    job_id = _job(conn)
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = _node(conn, job_id, "understand-scope")
+    _complete_node(
+        conn,
+        node,
+        {
+            "verdict": "succeeded",
+            "summary": "evidence contradicts the goal",
+            "contradicted_goal_items": ["initial-runtime-result"],
+            "known_failure_boundaries": ["current artifact violates expected interface"],
+            "verification": {"passed": False},
+        },
+    )
+    assert rk.ingest_runtime_node_evidence(conn, node["id"])
+    status = rk.status_runtime_job(conn, job_id)
+    assert status["goal_items"][0]["state"] == "contradicted"
+    assert status["job"]["state"] != "done"
+    assert any(gap["gap_type"] == "contradicted_evidence" for gap in status["goal_gaps"] if gap["state"] == "open")
+
+
 def test_no_runnable_unmet_goal_records_liveness_violation(conn):
     job_id = _job(conn)
     conn.execute("UPDATE execution_nodes SET state = 'failed' WHERE job_id = ? AND node_key = 'understand-scope'", (job_id,))
     reduction = rk.reduce_runtime_job(conn, job_id)
     assert reduction["state"] == "waiting_decision"
+    assert any(gap["gap_type"] == "no_runnable_for_open_goal" for gap in reduction["gaps"])
     events = [row["event_type"] for row in conn.execute("SELECT event_type FROM execution_events WHERE job_id = ?", (job_id,))]
     assert "liveness_violation" in events
 
@@ -401,7 +483,62 @@ def test_request_human_requires_policy_reason(conn):
         ),
     )
     assert result["status"] == "applied"
-    assert rk.status_runtime_job(conn, job_id)["job"]["state"] == "waiting_human"
+    status = rk.status_runtime_job(conn, job_id)
+    assert status["job"]["state"] == "waiting_human"
+    assert status["liveness"]["illegal_idle"] is False
+
+
+def test_stale_gap_generates_structure_audit(conn):
+    job_id = _job(conn)
+    conn.execute("UPDATE execution_nodes SET state = 'failed' WHERE job_id = ? AND node_key = 'understand-scope'", (job_id,))
+    for _ in range(4):
+        rk.reduce_runtime_job(conn, job_id)
+    status = rk.status_runtime_job(conn, job_id)
+    assert any(gap["gap_type"] == "stale_or_no_progress" for gap in status["goal_gaps"] if gap["state"] == "open")
+    events = [
+        (row["event_type"], row["payload_json"])
+        for row in conn.execute("SELECT event_type, payload_json FROM execution_events WHERE job_id = ?", (job_id,))
+    ]
+    assert any(event_type == "structure_audit_requested" and "stale" in payload for event_type, payload in events)
+
+
+def test_rejected_patch_counts_toward_anti_stuck(conn):
+    job_id = _job(conn)
+    for node_key in ("bad-a", "bad-b"):
+        assert rk.apply_graph_patch(
+            conn,
+            job_id,
+            _patch(
+                job_id,
+                _revision(conn, job_id),
+                {
+                    "op": "create_node",
+                    "node_key": node_key,
+                    "node_type": "implementation",
+                    "title": node_key,
+                    "description": "missing linkage",
+                },
+            ),
+        )["status"] == "rejected"
+    rk.reduce_runtime_job(conn, job_id)
+    events = [
+        (row["event_type"], row["payload_json"])
+        for row in conn.execute("SELECT event_type, payload_json FROM execution_events WHERE job_id = ?", (job_id,))
+    ]
+    assert any(
+        event_type == "structure_audit_requested" and "repeated_patch_rejections" in payload
+        for event_type, payload in events
+    )
+
+
+def test_status_json_has_phase2c_observability(conn):
+    job_id = _job(conn)
+    status = rk.status_runtime_job(conn, job_id)
+    assert "ledger_summary" in status
+    assert "frontier_summary" in status
+    assert "liveness" in status
+    assert status["frontier_summary"]["ready"][0]["node_key"] == "understand-scope"
+    assert status["liveness"]["ready_count"] == 1
 
 
 def test_fixture_provider_runs_phase1_implementation_verifier_closure(conn):

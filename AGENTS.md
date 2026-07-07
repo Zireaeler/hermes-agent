@@ -8,7 +8,8 @@ When working on branch `feature-kanban-runtime-kernel`, treat
 `docs/kanban-runtime-kernel-design.md` and
 `docs/kanban-runtime-kernel-phase1.md` and
 `docs/kanban-runtime-kernel-phase2.md` and
-`docs/kanban-runtime-kernel-phase2b.md` as binding design constraints, not
+`docs/kanban-runtime-kernel-phase2b.md` and
+`docs/kanban-runtime-kernel-phase2c.md` as binding design constraints, not
 background reading. If implementation details conflict with those documents,
 update the relevant design document first or stop and ask for direction.
 
@@ -51,6 +52,12 @@ DB-derived decision checkpoints, strict provider-output parsing, and
 record/replay provider tests. Do not relax graph patch validation to
 accommodate model output, and do not make live LLM/network calls a test
 prerequisite.
+
+Phase 2C is a goal-progression hardening stage. Strengthen local reducer,
+progress ledger, goal gap detection, liveness, anti-stuck synthetic events, and
+human-gate policy before adding a live LLM provider. Do not use model behavior
+to compensate for missing local completion, readiness, gap, liveness, or
+blocked-state rules.
 
 For this branch, do not routinely rebase `main`, and do not restore the old
 oversized session `019e497b-56e0-7bb0-a357-0db06954ae4d` as implementation
