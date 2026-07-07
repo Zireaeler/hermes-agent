@@ -6,6 +6,7 @@ Instructions for AI coding assistants and developers working on the hermes-agent
 
 When working on branch `feature-kanban-runtime-kernel`, treat
 `docs/kanban-runtime-kernel-design.md` and
+`docs/kanban-runtime-kernel-roadmap.md` and
 `docs/kanban-runtime-kernel-phase1.md` and
 `docs/kanban-runtime-kernel-phase2.md` and
 `docs/kanban-runtime-kernel-phase2b.md` and
