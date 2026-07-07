@@ -54,7 +54,7 @@
 
 `execution_events` 是结构性事件流。它不是 worker 全量日志，而是 kernel 关心的事实演化，例如 node_completed、progress_ledger_updated、goal_gap_detected、decision_requested、patch_rejected、liveness_violation。
 
-`decision_sessions`、`decision_session_segments`、`kernel_decisions`、`graph_patches` 和 `decision_checkpoints` 记录模型决策路径。即使 patch 被拒绝，也要保留 delta、provider output、validator result 和 rejection reason，用于审计和纠正后续 decision context。长期运行时，旧 segment 原文会归档，validated checkpoint 会成为新 segment 的上下文前缀组成部分。
+`decision_sessions`、`decision_session_segments`、`decision_segment_entries`、`kernel_decisions`、`graph_patches` 和 `decision_checkpoints` 记录模型决策路径。`decision_segment_entries` 是一等 append-only transcript：delta、provider output、parsed patch、validator result、patch applied/rejected 和 compaction event 都按真实顺序追加到 active segment。即使 patch 被拒绝，也要保留 delta、provider output、validator result 和 rejection reason，用于审计和纠正后续 decision context。长期运行时，旧 segment 原文会归档，validated checkpoint 会成为新 segment 的上下文前缀组成部分。
 
 这个数据模型的核心关系是：**goal contract 定义目标，progress ledger 证明目标，goal gaps 暴露差距，execution graph 承载当前工作，events 记录演化，patches 记录结构变更。**
 
