@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="620" viewBox="0 0 1120 620" role="img" aria-labelledby="title desc">
+  <title id="title">decision_requested trigger</title>
+  <desc id="desc">Reducer decides whether a provider call is needed.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2 2 L10 6 L2 10 Z" fill="#334155"/>
+    </marker>
+    <style>
+      .title{font:700 24px Arial,sans-serif;fill:#111827}
+      .label{font:700 15px Arial,sans-serif;fill:#111827}
+      .small{font:13px Arial,sans-serif;fill:#334155}
+      .box{fill:#f8fafc;stroke:#334155;stroke-width:1.5;rx:8}
+      .local{fill:#f0fdf4;stroke:#16a34a;stroke-width:1.8;rx:8}
+      .ask{fill:#fffbeb;stroke:#d97706;stroke-width:1.8;rx:8}
+      .guard{fill:#fef2f2;stroke:#dc2626;stroke-width:1.8;rx:8}
+      .flow{stroke:#334155;stroke-width:2;fill:none;marker-end:url(#arrow)}
+      .no{stroke:#dc2626;stroke-width:2;fill:none;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1120" height="620" fill="#ffffff"/>
+  <text x="40" y="44" class="title">decision_requested: Only When Local Rules Cannot Continue</text>
+
+  <rect x="55" y="120" width="235" height="110" class="box"/>
+  <text x="82" y="154" class="label">Structural Event</text>
+  <text x="82" y="182" class="small">node_completed</text>
+  <text x="82" y="204" class="small">node_failed</text>
+  <text x="82" y="226" class="small">patch_rejected</text>
+
+  <rect x="390" y="105" width="270" height="140" class="local"/>
+  <text x="420" y="140" class="label">Local Reducer First</text>
+  <text x="420" y="168" class="small">update ledger</text>
+  <text x="420" y="190" class="small">release existing ready nodes</text>
+  <text x="420" y="212" class="small">check completion</text>
+  <text x="420" y="234" class="small">check legal waiting state</text>
+
+  <rect x="790" y="70" width="250" height="92" class="local"/>
+  <text x="815" y="104" class="label">No Provider Call</text>
+  <text x="815" y="132" class="small">ready verifier exists</text>
+  <text x="815" y="154" class="small">or waiting worker/user</text>
+
+  <rect x="790" y="245" width="250" height="128" class="ask"/>
+  <text x="815" y="279" class="label">decision_requested</text>
+  <text x="815" y="307" class="small">open gap remains</text>
+  <text x="815" y="329" class="small">no local runnable path</text>
+  <text x="815" y="351" class="small">or strategy update needed</text>
+
+  <rect x="390" y="390" width="270" height="110" class="guard"/>
+  <text x="420" y="424" class="label">Provider Boundary</text>
+  <text x="420" y="452" class="small">decision_provider(session, delta)</text>
+  <text x="420" y="474" class="small">returns graph patch only</text>
+  <text x="420" y="496" class="small">validator still owns apply</text>
+
+  <path d="M290 175 L390 175" class="flow"/>
+  <path d="M660 155 C710 120 740 116 790 116" class="flow"/>
+  <path d="M660 215 C725 260 745 300 790 309" class="flow"/>
+  <path d="M915 373 C855 440 735 450 660 450" class="flow"/>
+  <path d="M915 245 C875 210 825 190 790 162" class="no"/>
+
+  <text x="705" y="188" class="small">local path exists</text>
+  <text x="690" y="282" class="small">gap resolution needed</text>
+  <text x="670" y="488" class="small">patch proposal</text>
+
+  <rect x="55" y="535" width="985" height="48" fill="#f8fafc" stroke="#cbd5e1" rx="8"/>
+  <text x="80" y="565" class="small">Example: implementation succeeded but verifier node already exists. Reducer makes verifier ready; no decision_requested is needed.</text>
+</svg>
