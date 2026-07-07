@@ -247,6 +247,8 @@ Decision Session Compaction 是完整设计里的一等 runtime 子系统。它�
 
 checkpoint 不是普通 summary，而是下一阶段调度决策所需的结构化认知状态。它应该保留当前目标解释、goal contract revision、active milestone、已满足 goal items、未满足 goal gaps、open blockers、关键架构决策、已排除方案、已知失败边界、validator rejection lessons、human decisions、重要 artifact index、当前 graph frontier、不应重复的无效动作和下一阶段策略约束。
 
+每个 checkpoint 结论项都必须带 provenance，例如 event、decision、patch、ledger entry、artifact、node 或 human decision 的引用。profile 也必须记录 name、version/hash/path，否则后续无法审计“这个 checkpoint 是按哪个压缩契约生成的”。short tail 只能包含 checkpoint 覆盖范围之后尚未被吸收的 segment entries，并同时受 entry count 和 token budget 限制。
+
 旧 segment 原文仍然保留，用于审计、debug 和回放，但不会继续进入活跃 LLM 上下文。这样系统才能同时获得三件事：长任务连续理解、上下文负载可控、前缀缓存仍然可用。
 
 compaction provider 和 decision provider 必须分离：
@@ -363,7 +365,7 @@ worker receipt 应尽量返回：
 - `open_questions`。
 - `risk_notes`。
 
-这些不是推理链保存，而是把不可丢的执行事实压缩成结构化状态，供 progress ledger、gap detector 和 decision session 使用。
+这些不是推理链保存，也不是 runtime compaction。它们是 worker 必须提交的结构化 evidence / 结构化交付物，供 progress ledger、gap detector 和 decision session delta 使用。
 
 worker receipt 不属于 runtime compaction。它是节点交付契约。Codex/Claude Code 等 worker backend 内部可以自己压缩内部对话，但 runtime kernel 不管理 worker 内部上下文。runtime kernel 只压缩 job 级 decision session transcript。
 

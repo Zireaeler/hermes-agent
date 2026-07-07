@@ -114,7 +114,9 @@ runtime kernel 不应该绕开这些能力直接管理子进程。kernel 只决�
 
 `decision_session_segments` 保存 decision session 的分段生命周期。字段包括 `id`、`job_id`、`decision_session_id`、`segment_index`、`state`、`started_at`、`closed_at`、`start_decision_id`、`end_decision_id`、`covered_event_start`、`covered_event_end`、`covered_graph_revision_start`、`covered_graph_revision_end`、`estimated_input_tokens`、`estimated_output_tokens`、`compacted_checkpoint_id`、`archive_ref`、`metadata`。`state` 初期限制为 `active`、`closed`、`archived`、`compacting`、`compacted`、`failed_compaction`。同一个 job 同时只能有一个 active segment。
 
-`decision_checkpoints` 保存 decision session compaction 生成的结构化检查点。字段包括 `id`、`job_id`、`decision_session_id`、`source_segment_id`、`profile_name`、`checkpoint_revision`、`db_revision`、`graph_revision`、`ledger_revision`、`covered_event_start`、`covered_event_end`、`covered_decision_start`、`covered_decision_end`、`payload_json`、`payload_text`、`validator_status`、`reject_reason`、`supersedes_checkpoint_id`、`transcript_ref`、`created_at`。`payload_json` 是机器可读的结构化状态，`payload_text` 是给 provider 阅读的紧凑文本版本。checkpoint 必须绑定 DB/graph/ledger revision，避免压缩上下文和事实源脱节。
+`decision_segment_entries` 保存 active segment 的 append-only transcript 条目。字段包括 `id`、`segment_id`、`job_id`、`entry_type`、`decision_id`、`event_id`、`patch_id`、`graph_revision`、`payload_json`、`estimated_tokens`、`created_at`。这是 compaction 的直接输入，不应只依赖从 `kernel_decisions`、`graph_patches` 和 `execution_events` 事后拼接 transcript。`entry_type` 初期可以包括 `delta_appended`、`provider_output`、`patch_parsed`、`validator_result`、`patch_applied`、`patch_rejected`、`compaction_requested`、`checkpoint_created`。
+
+`decision_checkpoints` 保存 decision session compaction 生成的结构化检查点。字段包括 `id`、`job_id`、`decision_session_id`、`source_segment_id`、`profile_name`、`profile_version`、`profile_hash`、`profile_path`、`checkpoint_revision`、`db_revision`、`graph_revision`、`ledger_revision`、`covered_event_start`、`covered_event_end`、`covered_decision_start`、`covered_decision_end`、`covered_entry_start`、`covered_entry_end`、`payload_json`、`payload_text`、`validator_status`、`reject_reason`、`supersedes_checkpoint_id`、`transcript_ref`、`created_at`。`payload_json` 是机器可读的结构化状态，`payload_text` 是给 provider 阅读的紧凑文本版本。checkpoint 必须绑定 DB/graph/ledger revision，避免压缩上下文和事实源脱节。profile 是热插拔 markdown，因此 checkpoint 必须记录 profile version/hash/path，保证后续审计和回放能知道它由哪个压缩契约生成。
 
 `node_artifacts` 保存节点产物引用。字段包括 `id`、`job_id`、`node_id`、`artifact_type`、`path_or_ref`、`summary`、`metadata`、`created_at`。这里可以引用 worker 产生的文件、evidence markdown、测试结果、diff 摘要、外部工具结果，但事实状态仍以 DB 行为准。
 
@@ -174,13 +176,19 @@ compaction provider 和 decision provider 是两条不同接口。普通结构�
 
 compaction policy 不应该写死在内核里。kernel 可以提供默认 policy，但触发因素应该来自可配置策略函数。输入信号包括 active segment 估算 token 超过模型窗口比例、最近 N 次 decision token 增长过快、cacheable prefix ratio 下降、milestone 切换、human decision 修改 goal contract、validator 连续拒绝、同一个 gap 多轮 strategy update、graph 大规模 supersede、active frontier 从 implementation 转向 verification。系统还应记录 telemetry：`stable_prefix_tokens`、`checkpoint_tokens`、`tail_tokens`、`delta_tokens`、`model_output_tokens`、`active_segment_tokens`、`cacheable_prefix_tokens`、`context_window_ratio`、`accepted_patch_count`、`rejected_patch_count`、`noop_count`。
 
+这些 telemetry 不是单纯展示字段，而是 `should_compact_decision_session()` 这类 policy 函数的正式输入。实现上可以先用简单阈值，但接口必须把 telemetry 作为 policy evaluation 的参数，避免后续 compaction policy 只能靠硬编码常量扩展。
+
 compaction prompt 必须 profile 化，而不是写死在代码里。建议新增 `docs/kanban-runtime-kernel-compaction-profiles/` 或运行时配置目录，每个 profile 是 markdown 文件。初期 profile 可以包括 `token_budget_compaction.md`、`validator_boundary_compaction.md`、`human_decision_compaction.md`、`milestone_transition_compaction.md`、`anti_stuck_compaction.md`。profile 应声明用途、输入选择规则、压缩目标、禁止事项、输出 schema、校验要求和示例。kernel 不解释 profile 的自然语言内容，只负责选择 profile、组装输入、调用 provider、验证 checkpoint。
 
 checkpoint validator 不判断压缩是否聪明，而判断它是否安全且不违背 DB 事实。validator 必须检查 checkpoint 中引用的 `node_key`、`goal_item_key`、`artifact_ref`、`patch_id`、`human_decision_id` 是否存在；检查它是否把未验证事项写成 confirmed；检查它是否遗漏当前 hard blocker；检查它是否和 DB 当前 graph/ledger revision 冲突；检查它是否把 failed verifier 写成 passed。校验失败的 checkpoint 不能成为新 active segment 的前缀，可以重试、换 profile，或降级为 deterministic DB-derived checkpoint。
 
+checkpoint payload 中每个结论项都必须带 provenance。`satisfied_goal_items`、`open_goal_gaps`、`open_blockers`、`key_decisions`、`rejected_approaches`、`known_failure_boundaries`、`validator_rejection_lessons`、`human_decisions`、`artifact_index`、`do_not_repeat` 等条目都应包含 source refs，例如 `event_id`、`decision_id`、`patch_id`、`goal_item_id`、`ledger_entry_id`、`artifact_ref`、`node_key` 或 `human_decision_id`。没有 provenance 的 checkpoint 结论只能作为非权威 note，不能被 validator 当作事实，也不能用于覆盖 DB-derived state。
+
 `kernel_decisions.snapshot_json` 或等价字段的语义应统一成“本次追加到 active decision session 的 delta”，而不是“本次完整压缩快照”。delta 应包含 trigger_reason、db_revision、graph_revision、goal_gap_delta、recent_structural_events、frontier_change、available_actions 和 request_boundary。长期上下文来自 active segment 与最新 checkpoint；审计来自 segment archive、kernel_decisions、graph_patches 和 execution_events。
 
 compaction 可观测性至少要能回答：当前 active segment id 是什么；最新 checkpoint revision 是什么；active segment token 估算是多少；最近一次 compaction profile 是什么；最近一次 compaction validator 是否通过；旧 segment archive_ref 在哪里；当前 provider 输入由 stable prefix、goal contract、checkpoint、tail 和 delta 哪几部分组成。dashboard 可以后做，但 CLI/API JSON 必须预留这些字段。
+
+short tail 必须被严格限制。它只能包含最新 checkpoint 覆盖范围之后尚未被 checkpoint 吸收的 `decision_segment_entries`，并同时受 `max_tail_entries` 和 `max_tail_tokens` 约束。compaction 成功后，旧 segment 原文不能以“最近有用”为理由重新进入 provider input；否则 compaction 会退化成追加摘要而不是上下文替换。
 
 ## Graph Patch schema
 

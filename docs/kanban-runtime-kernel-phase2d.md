@@ -12,7 +12,7 @@ Phase 2D 的正式名称是 **Decision Session Compaction Runtime**。它不是 
 
 第二，升级 checkpoint 语义。checkpoint 不是普通 summary，而是下一阶段结构决策所需的结构化调度认知状态。它必须保留当前目标解释、goal contract revision、active milestone、已满足 goal items、未满足 goal gaps、open blockers、关键架构决策、已排除方案、已知失败边界、validator rejection lessons、human decisions、重要 artifact index、当前 graph frontier、禁止重复的无效动作和下一阶段策略约束。
 
-第三，实现 deterministic compaction fallback。Phase 2D 不接真实 LLM compaction provider。第一版 checkpoint 由 DB-derived deterministic builder 生成，保证在没有模型、网络或 API key 的情况下也能完成 segment close、checkpoint validate 和 new segment start。
+第三，实现 deterministic compaction fallback。Phase 2D 不接真实 LLM compaction provider。第一版 checkpoint 由 DB-derived deterministic builder 生成，保证在没有模型、网络或 API key 的情况下也能完成 segment close、checkpoint validate 和 new segment start。这个 fallback 的目标是验证结构生命周期，不代表真实语义压缩质量；它只能抽取 DB 事实，不能假装提炼 transcript 里的隐性决策理由。
 
 第四，实现 checkpoint validator。checkpoint candidate 必须经过本地校验后才能成为新 segment 的前缀。validator 检查 checkpoint 引用的 node_key、goal_item_key、artifact_ref、patch_id、human_decision_id 是否存在，检查它是否把未验证事项写成 confirmed，检查它是否遗漏当前 hard blocker，检查它是否和当前 DB/graph/ledger revision 冲突。
 
@@ -52,15 +52,15 @@ Phase 2D 的正式名称是 **Decision Session Compaction Runtime**。它不是 
 
 升级 `decision_checkpoints`：
 
-现有表如果已存在，可以通过新增 nullable 字段或 metadata 扩展。目标字段包括 `source_segment_id`、`profile_name`、`checkpoint_revision`、`db_revision`、`graph_revision`、`ledger_revision`、`covered_event_start`、`covered_event_end`、`covered_decision_start`、`covered_decision_end`、`payload_json`、`payload_text`、`validator_status`、`reject_reason`、`supersedes_checkpoint_id`。
+现有表如果已存在，可以通过新增 nullable 字段或 metadata 扩展。目标字段包括 `source_segment_id`、`profile_name`、`profile_version`、`profile_hash`、`profile_path`、`checkpoint_revision`、`db_revision`、`graph_revision`、`ledger_revision`、`covered_event_start`、`covered_event_end`、`covered_decision_start`、`covered_decision_end`、`covered_entry_start`、`covered_entry_end`、`payload_json`、`payload_text`、`validator_status`、`reject_reason`、`supersedes_checkpoint_id`。
 
 `payload_json` 是机器可读结构化状态，`payload_text` 是给 provider 阅读的紧凑文本版本。两者都必须绑定 DB/graph/ledger revision。
 
-可选新增 `decision_segment_entries` 表。如果不想把 segment transcript 存在 `decision_session_segments.metadata_json` 或 archive file，可单独记录 append-only 条目：
+新增 `decision_segment_entries` 表。既然 decision session transcript 是 compaction 的唯一对象，第一版就应有 append-only entries 表来表达真实顺序和语义，避免后续从多张表拼接 transcript 时出现顺序、缺项、重复、provider raw output 与 validator result 对齐问题。
 
-`id INTEGER PRIMARY KEY AUTOINCREMENT`、`segment_id TEXT NOT NULL`、`job_id TEXT NOT NULL`、`entry_type TEXT NOT NULL`、`decision_id TEXT`、`event_id INTEGER`、`graph_revision INTEGER`、`payload_json TEXT NOT NULL`、`estimated_tokens INTEGER NOT NULL DEFAULT 0`、`created_at INTEGER NOT NULL`。
+`id INTEGER PRIMARY KEY AUTOINCREMENT`、`segment_id TEXT NOT NULL`、`job_id TEXT NOT NULL`、`entry_type TEXT NOT NULL`、`decision_id TEXT`、`event_id INTEGER`、`patch_id TEXT`、`graph_revision INTEGER`、`payload_json TEXT NOT NULL`、`estimated_tokens INTEGER NOT NULL DEFAULT 0`、`created_at INTEGER NOT NULL`。
 
-第一版可以不建这张表，先通过 `kernel_decisions`、`graph_patches`、`execution_events` 和 segment metadata 重建 transcript；但设计上要允许后续扩展。
+`entry_type` 初期建议限制为 `delta_appended`、`provider_output`、`patch_parsed`、`validator_result`、`patch_applied`、`patch_rejected`、`compaction_requested`、`checkpoint_created`、`checkpoint_rejected`。`kernel_decisions`、`graph_patches` 和 `execution_events` 仍是事实表；`decision_segment_entries` 是 decision session transcript 的顺序索引和 compaction 输入。
 
 ## Compaction Profiles
 
@@ -76,7 +76,7 @@ Phase 2D 的正式名称是 **Decision Session Compaction Runtime**。它不是 
 
 `anti_stuck_compaction.md`：长期无 progress 或 strategy update 后使用。目标是总结失败模式和禁止重复动作。
 
-每个 profile 应包含：用途、输入选择规则、压缩目标、禁止事项、输出 schema、validator 要求和示例。kernel 不理解 profile 自然语言内容，只负责选择 profile、组装输入、调用 provider、校验 checkpoint。
+每个 profile 应包含：用途、输入选择规则、压缩目标、禁止事项、输出 schema、validator 要求、profile version 和示例。kernel 不理解 profile 自然语言内容，只负责选择 profile、计算 profile hash、组装输入、调用 provider、校验 checkpoint。checkpoint row 必须保存 `profile_name`、`profile_version` 或 `profile_hash`，并建议把 profile path/hash 写入 metadata，保证审计和回放可复现。
 
 ## Compaction Policy
 
@@ -92,9 +92,9 @@ Phase 2D 默认 policy 可以很小：
 
 `anti_stuck`：reducer 生成 stale/no-progress/strategy-update synthetic event。
 
-policy 输入应预留 telemetry：`stable_prefix_tokens`、`checkpoint_tokens`、`tail_tokens`、`delta_tokens`、`model_output_tokens`、`active_segment_tokens`、`cacheable_prefix_tokens`、`context_window_ratio`、`accepted_patch_count`、`rejected_patch_count`、`noop_count`。
+policy 输入必须包含 telemetry：`stable_prefix_tokens`、`checkpoint_tokens`、`tail_tokens`、`delta_tokens`、`model_output_tokens`、`active_segment_tokens`、`cacheable_prefix_tokens`、`context_window_ratio`、`accepted_patch_count`、`rejected_patch_count`、`noop_count`。
 
-阈值必须可配置，不能写成不可改常量。第一版可以用 runtime_jobs metadata 或 decision_profile metadata 保存默认阈值。
+阈值必须可配置，不能写成不可改常量。第一版可以用 runtime_jobs metadata 或 decision_profile metadata 保存默认阈值。实现时不要只把 telemetry 做成 status 展示；`should_compact_decision_session()` 必须直接消费这些指标。
 
 ## Checkpoint Payload Contract
 
@@ -132,6 +132,8 @@ checkpoint payload 至少包含：
 
 checkpoint 不应复制完整 patch JSON、完整 worker logs、完整 diff、完整 markdown 或每轮 delta 的重复字段。
 
+checkpoint payload 的每个结论项都必须带 provenance。条目应包含 `source_refs` 或等价字段，引用 `event_id`、`decision_id`、`patch_id`、`goal_item_id`、`ledger_entry_id`、`artifact_ref`、`node_key` 或 `human_decision_id`。没有 provenance 的内容只能作为非权威 note，不能被 checkpoint validator 当作事实依据。
+
 ## Provider Input Composition
 
 Phase 2D 后，decision provider input 应由这些部分组成：
@@ -142,11 +144,11 @@ Phase 2D 后，decision provider input 应由这些部分组成：
 
 第三，latest validated checkpoint：来自上一轮 compaction 的结构化认知状态。
 
-第四，short tail：压缩边界附近少量尚未沉淀的 recent events 或 decision entries，长度可配置。
+第四，short tail：只能包含 latest checkpoint 覆盖范围之后尚未被 checkpoint 吸收的 `decision_segment_entries`，并同时受 `max_tail_entries` 和 `max_tail_tokens` 限制。
 
 第五，current delta：本轮 DB-derived state delta 和待决策问题。
 
-旧 segment 原文不能继续进入 provider input。否则 compaction 只是追加摘要，不是真正替换上下文。
+旧 segment 原文不能继续进入 provider input。不能因为“最近有用”就把 checkpoint 覆盖前的旧 transcript 放进 tail。否则 compaction 只是追加摘要，不是真正替换上下文。
 
 ## Checkpoint Validator
 
@@ -165,6 +167,8 @@ checkpoint 是否遗漏当前 open hard blocker 或 active human gate。
 checkpoint 的 db_revision、graph_revision、ledger_revision 是否和当前 DB 兼容。
 
 checkpoint 是否包含 required top-level fields。
+
+checkpoint 每个事实性结论项是否包含 source refs。缺少 provenance 的事实性结论必须被拒绝或降级为 non_authoritative_note。
 
 validator 失败时，checkpoint 不能成为新 active segment 前缀。系统可以重试同 profile、换 fallback profile，或者保留旧 active segment 并进入 recoverable waiting_decision/manual intervention。
 
@@ -188,6 +192,28 @@ validator 失败时，checkpoint 不能成为新 active segment 前缀。系统�
 
 `build_decision_provider_request(conn, job_id, delta)`：改为读取 active segment、latest checkpoint、short tail 和 current delta。
 
+## Phase 2D 实施顺序
+
+Phase 2D 应保守推进，避免一次性实现所有 profile 和触发策略。
+
+第一步，新增 `decision_session_segments` 和 `decision_segment_entries`，并保证 job 创建时有 active segment。
+
+第二步，把现有 decision delta、provider output、parsed patch、validator result、patch outcome 追加到 active segment entries。
+
+第三步，实现 manual compaction CLI/API，只支持 deterministic DB-derived checkpoint。
+
+第四步，实现 checkpoint validator，包括 provenance、引用存在性、revision 绑定、failed verifier/partial evidence 不得写成 confirmed。
+
+第五步，实现旧 segment archived、新 active segment started，并保证 provider input 不包含旧 segment 原文。
+
+第六步，把 provider input composition 改成 stable runtime contract + current goal contract + latest checkpoint + strict tail + current delta。
+
+第七步，加入 token telemetry，并让 `should_compact_decision_session()` 消费 telemetry。
+
+第八步，再接入 compaction profiles、profile hash/version 记录和更多 policy trigger。
+
+真实 LLM compaction provider、复杂语义 profile 和 dashboard UI 都不进入 Phase 2D 第一批实现。
+
 ## CLI/API 可观测性
 
 Phase 2D 可以扩展 `hermes kanban runtime`：
@@ -206,17 +232,27 @@ Phase 2D 可以扩展 `hermes kanban runtime`：
 
 `test_decision_delta_appends_to_active_segment`：每次 decision delta、patch 和 validator result 都能归属 active segment。
 
+`test_decision_segment_entries_preserve_order`：delta、provider output、validator result、patch outcome 的 entry 顺序可追溯。
+
 `test_manual_compaction_archives_old_segment_and_creates_new_active_segment`：手动 compaction 后旧 segment 不再 active，新 segment 开启。
 
 `test_new_provider_input_uses_checkpoint_not_old_transcript`：新 provider request 包含 latest checkpoint 和 short tail，不包含旧 segment 原文。
 
 `test_checkpoint_binds_db_graph_ledger_revision`：checkpoint payload 和 row 绑定当前 revision。
 
+`test_checkpoint_items_require_provenance`：事实性 checkpoint 条目缺少 source refs 时被拒绝或降级。
+
 `test_checkpoint_validator_rejects_unknown_node_reference`：引用不存在 node_key 的 checkpoint 被拒绝。
 
 `test_checkpoint_validator_rejects_failed_verifier_as_confirmed`：把 failed verifier 写成 satisfied 的 checkpoint 被拒绝。
 
 `test_compaction_profile_can_be_selected_by_policy`：policy 能选择不同 profile。
+
+`test_checkpoint_records_profile_hash`：checkpoint row 保存 profile name/version/hash/path。
+
+`test_short_tail_only_uses_entries_after_checkpoint`：provider input tail 不能包含 checkpoint 覆盖前的旧 segment entries。
+
+`test_deterministic_checkpoint_only_uses_db_facts`：fallback checkpoint 只从 DB-derived state 构造，不从 worker logs 或旧 transcript 原文提炼隐性结论。
 
 `test_compaction_failure_is_recoverable`：checkpoint validate 失败不导致 job failed，旧 segment 可保留或进入 waiting_decision。
 
@@ -230,18 +266,22 @@ Phase 2D 完成必须满足：
 
 第一，decision session 有 active segment 生命周期，且每个 job 同时只有一个 active segment。
 
-第二，每次结构决策的 delta、provider output、validator result 和 patch outcome 都能归属 active segment 或从现有 DB 表重建到 segment。
+第二，每次结构决策的 delta、provider output、validator result 和 patch outcome 都必须写入 active segment entries，并能通过 entry 顺序追溯。
 
-第三，manual 或 token-threshold compaction 能关闭旧 segment、生成 checkpoint、校验 checkpoint、开启新 segment。
+第三，`decision_segment_entries` 是第一版 schema 的必需表，能按顺序记录 active transcript entries。
 
-第四，新 provider input 使用 latest checkpoint 替代旧 segment 原文。
+第四，manual 或 token-threshold compaction 能关闭旧 segment、生成 checkpoint、校验 checkpoint、开启新 segment。
 
-第五，checkpoint validator 能拒绝不存在引用、事实冲突和把未验证事项写成 confirmed 的 checkpoint。
+第五，新 provider input 使用 latest checkpoint 和 strict tail 替代旧 segment 原文。
 
-第六，compaction policy 和 profile 是可配置/可替换的，不是硬编码在 provider prompt 里。
+第六，checkpoint validator 能拒绝不存在引用、事实冲突、缺少 provenance 和把未验证事项写成 confirmed 的 checkpoint。
 
-第七，CLI/API 能观测 active segment、checkpoint、token estimate、archive_ref 和最近 compaction 结果。
+第七，checkpoint row 记录 profile version/hash/path，保证 compaction profile 可审计和可回放。
 
-第八，所有测试使用 deterministic compaction fallback、本地 SQLite 和 fake/replay provider，不依赖真实 LLM、网络、dashboard、daemon 或真实 Codex/Claude Code。
+第八，compaction policy 和 profile 是可配置/可替换的，不是硬编码在 provider prompt 里；telemetry 是 policy 输入而不只是展示字段。
+
+第九，CLI/API 能观测 active segment、checkpoint、token estimate、archive_ref 和最近 compaction 结果。
+
+第十，所有测试使用 deterministic compaction fallback、本地 SQLite 和 fake/replay provider，不依赖真实 LLM、网络、dashboard、daemon 或真实 Codex/Claude Code。
 
 Phase 2D 结束后，runtime 才适合进入真实 LLM provider 和真实 LLM compaction provider 阶段。否则真实模型会被迫承担无限上下文管理，这会破坏 DB authoritative state、checkpoint 审计和前缀缓存收益。
