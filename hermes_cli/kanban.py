@@ -1523,6 +1523,21 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
                             help="Provider request timeout in seconds for --provider real")
     rt_advance.add_argument("--json", action="store_true")
 
+    rt_complete_node = runtime_sub.add_parser(
+        "complete-node",
+        help="Complete the latest materialized Kanban task for a runtime node with structured evidence",
+    )
+    rt_complete_node.add_argument("job_id")
+    rt_complete_node.add_argument("node_key")
+    rt_complete_node.add_argument("--result", default=None, help="Task result text")
+    rt_complete_node.add_argument("--summary", default=None, help="Worker receipt summary")
+    rt_complete_node.add_argument(
+        "--metadata",
+        required=True,
+        help="JSON object evidence receipt stored on the closing Kanban run",
+    )
+    rt_complete_node.add_argument("--json", action="store_true")
+
     rt_decision = runtime_sub.add_parser("decision", help="Show recent runtime decision records")
     rt_decision.add_argument("job_id")
     rt_decision.add_argument("--limit", type=int, default=10)
@@ -2029,6 +2044,8 @@ def _dispatch_runtime(args: argparse.Namespace) -> int:
         return _cmd_runtime_status(args)
     if sub == "advance":
         return _cmd_runtime_advance(args)
+    if sub == "complete-node":
+        return _cmd_runtime_complete_node(args)
     if sub == "decision":
         return _cmd_runtime_decision(args)
     if sub == "checkpoint":
@@ -2292,6 +2309,85 @@ def _cmd_runtime_advance(args: argparse.Namespace) -> int:
                 print(f"  Patch:        {step['patch_status']}")
         else:
             print(f"  Steps: {len(result['steps'])}")
+    return 0
+
+
+def _cmd_runtime_complete_node(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    try:
+        metadata = json.loads(args.metadata)
+        if not isinstance(metadata, dict):
+            raise ValueError("must be a JSON object")
+    except (ValueError, json.JSONDecodeError) as exc:
+        print(f"kanban runtime complete-node: --metadata: {exc}", file=sys.stderr)
+        return 2
+    with kb.connect() as conn:
+        rk.ensure_runtime_schema(conn)
+        node = conn.execute(
+            """
+            SELECT id, job_id, node_key, state, latest_task_id, latest_run_id
+              FROM execution_nodes
+             WHERE job_id = ? AND node_key = ?
+            """,
+            (args.job_id, args.node_key),
+        ).fetchone()
+        if node is None:
+            print(
+                f"kanban runtime complete-node: unknown node {args.node_key!r} for job {args.job_id}",
+                file=sys.stderr,
+            )
+            return 1
+        if not node["latest_task_id"]:
+            print(
+                f"kanban runtime complete-node: node {args.node_key!r} has no materialized task",
+                file=sys.stderr,
+            )
+            return 1
+        graph_revision_before = int(
+            conn.execute("SELECT graph_revision FROM runtime_jobs WHERE id = ?", (args.job_id,)).fetchone()[0]
+        )
+        ledger_count_before = int(
+            conn.execute("SELECT COUNT(*) FROM progress_ledger WHERE job_id = ?", (args.job_id,)).fetchone()[0]
+        )
+        completed = kb.complete_task(
+            conn,
+            node["latest_task_id"],
+            result=args.result,
+            summary=args.summary or args.result,
+            metadata=metadata,
+            expected_run_id=node["latest_run_id"],
+        )
+        if not completed:
+            print(
+                f"kanban runtime complete-node: cannot complete task {node['latest_task_id']}",
+                file=sys.stderr,
+            )
+            return 1
+        graph_revision_after = int(
+            conn.execute("SELECT graph_revision FROM runtime_jobs WHERE id = ?", (args.job_id,)).fetchone()[0]
+        )
+        ledger_count_after = int(
+            conn.execute("SELECT COUNT(*) FROM progress_ledger WHERE job_id = ?", (args.job_id,)).fetchone()[0]
+        )
+        payload = {
+            "job_id": args.job_id,
+            "node_key": args.node_key,
+            "node_state_before_ingest": node["state"],
+            "task_id": node["latest_task_id"],
+            "run_id": node["latest_run_id"],
+            "metadata_keys": sorted(metadata.keys()),
+            "graph_revision_before": graph_revision_before,
+            "graph_revision_after": graph_revision_after,
+            "ledger_count_before": ledger_count_before,
+            "ledger_count_after": ledger_count_after,
+            "ingest_required": True,
+        }
+    if getattr(args, "json", False):
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    else:
+        print(f"Completed runtime node {args.node_key} task {payload['task_id']}")
+        print("  Ingest required: run `hermes kanban runtime advance ...`")
     return 0
 
 

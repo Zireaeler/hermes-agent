@@ -868,6 +868,115 @@ base_url = "http://127.0.0.1:9999/v1"
     assert payload["validation"]["status"] == "accepted"
 
 
+def _runtime_metadata_arg(payload: dict) -> str:
+    return json.dumps(payload, separators=(",", ":"))
+
+
+def test_runtime_complete_node_records_kanban_evidence_without_ingest(kanban_home):
+    created = json.loads(kc.run_slash("runtime create 'phase3c complete-node bridge' --json"))
+    job_id = created["id"]
+    first = json.loads(kc.run_slash(f"runtime advance {job_id} --loop --fake-provider --json"))
+    assert first["state"] == "waiting_worker"
+    assert first["steps"][0]["materialized_nodes"] == ["understand-scope"]
+
+    evidence = {
+        "verdict": "succeeded",
+        "summary": "analysis found remaining implementation work",
+        "unmet_goal_items": ["initial-runtime-result"],
+        "verification": {"passed": False},
+    }
+    payload = json.loads(
+        kc.run_slash(
+            f"runtime complete-node {job_id} understand-scope "
+            "--summary 'analysis found remaining implementation work' "
+            f"--metadata '{_runtime_metadata_arg(evidence)}' --json"
+        )
+    )
+    assert payload["ingest_required"] is True
+    assert payload["graph_revision_before"] == payload["graph_revision_after"]
+    assert payload["ledger_count_before"] == 0
+    assert payload["ledger_count_after"] == 0
+
+    status = json.loads(kc.run_slash(f"runtime status {job_id} --json"))
+    node = next(item for item in status["nodes"] if item["node_key"] == "understand-scope")
+    assert node["state"] == "running"
+    assert status["progress_ledger"] == []
+
+
+def test_runtime_cli_drives_multiround_goal_loop_with_evidence_bridge(kanban_home):
+    created = json.loads(kc.run_slash("runtime create 'phase3c multiround runtime loop' --json"))
+    job_id = created["id"]
+
+    first = json.loads(kc.run_slash(f"runtime advance {job_id} --loop --fake-provider --json"))
+    assert first["state"] == "waiting_worker"
+    assert first["steps"][0]["materialized_nodes"] == ["understand-scope"]
+
+    analysis_evidence = {
+        "verdict": "succeeded",
+        "summary": "analysis found the goal still needs implementation",
+        "unmet_goal_items": ["initial-runtime-result"],
+        "verification": {"passed": False},
+    }
+    json.loads(
+        kc.run_slash(
+            f"runtime complete-node {job_id} understand-scope "
+            "--summary 'analysis found the goal still needs implementation' "
+            f"--metadata '{_runtime_metadata_arg(analysis_evidence)}' --json"
+        )
+    )
+    second = json.loads(kc.run_slash(f"runtime advance {job_id} --loop --fake-provider --json"))
+    assert second["state"] == "waiting_worker"
+    assert any("understand-scope" in step["ingested_nodes"] for step in second["steps"])
+    assert any(step["patch_status"] == "applied" for step in second["steps"])
+    assert any("implement-initial-runtime-result" in step["materialized_nodes"] for step in second["steps"])
+
+    implementation_evidence = {
+        "verdict": "succeeded",
+        "summary": "implementation produced self-reported goal evidence",
+        "claimed_goal_items": ["initial-runtime-result"],
+        "verification": {"passed": False, "summary": "not independently verified"},
+    }
+    json.loads(
+        kc.run_slash(
+            f"runtime complete-node {job_id} implement-initial-runtime-result "
+            "--summary 'implementation produced self-reported goal evidence' "
+            f"--metadata '{_runtime_metadata_arg(implementation_evidence)}' --json"
+        )
+    )
+    third = json.loads(kc.run_slash(f"runtime advance {job_id} --loop --fake-provider --json"))
+    assert third["state"] == "waiting_worker"
+    assert any("implement-initial-runtime-result" in step["ingested_nodes"] for step in third["steps"])
+    assert any(step["patch_status"] == "applied" for step in third["steps"])
+    assert any("verify-initial-runtime-result" in step["materialized_nodes"] for step in third["steps"])
+
+    verifier_evidence = {
+        "verdict": "succeeded",
+        "summary": "verification passed for the runtime goal",
+        "claimed_goal_items": ["initial-runtime-result"],
+        "verification": {"commands": ["pytest"], "passed": True, "summary": "passed"},
+    }
+    json.loads(
+        kc.run_slash(
+            f"runtime complete-node {job_id} verify-initial-runtime-result "
+            "--summary 'verification passed for the runtime goal' "
+            f"--metadata '{_runtime_metadata_arg(verifier_evidence)}' --json"
+        )
+    )
+    final = json.loads(kc.run_slash(f"runtime advance {job_id} --loop --fake-provider --json"))
+    assert final["state"] == "done"
+    assert any("verify-initial-runtime-result" in step["ingested_nodes"] for step in final["steps"])
+
+    status = json.loads(kc.run_slash(f"runtime status {job_id} --json"))
+    assert status["job"]["state"] == "done"
+    assert status["goal_items"][0]["state"] == "satisfied"
+    assert any(row["verification_state"] == "verified" for row in status["progress_ledger"])
+    assert len(status["materializations"]) == 3
+
+    decisions = json.loads(kc.run_slash(f"runtime decision {job_id} --json"))
+    assert len(decisions) >= 2
+    assert any(row["validator_result"]["status"] == "applied" for row in decisions)
+
+
 def test_runtime_checkpoint_cli_outputs_db_derived_checkpoint(kanban_home):
     created = json.loads(kc.run_slash("runtime create 'phase2b checkpoint' --json"))
     payload = json.loads(kc.run_slash(f"runtime checkpoint {created['id']} --create --json"))

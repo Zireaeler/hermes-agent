@@ -82,11 +82,14 @@ Phase 2A Execution Graph Control Plane
 Phase 2B Decision Provider / Decision Session Foundation
 Phase 2C Goal Progress Hardening
 Phase 2D Decision Session Compaction
-Phase 3  Long Running Autonomous Task Runtime
+Phase 3A Real Decision Provider Integration
+Phase 3B Real Provider Patch Quality / Validator Feedback
+Phase 3C Real Provider End-to-End Runtime Loop
+Phase 3D Long Running Autonomous Task Runtime
 Phase 4  Production Hardening
 ```
 
-当前代码实现已经推进到 Phase 2D 本地闭环：active segment、append-only entries、deterministic checkpoint、checkpoint validator、manual compaction、token-threshold policy、rejection/noop policy、markdown profile loader/hash、strict short tail provider input 和 CLI 可观测性已经具备。Phase 2D 剩余工作是更丰富语义触发和真实 LLM compaction provider。
+当前代码实现已经推进到 Phase 3C：Phase 2D 本地 compaction 闭环已经具备，Phase 3A 已接入 no-tools real decision provider，Phase 3B 已强化 validator feedback/recovery smoke，Phase 3C 正在把真实 provider patch、Kanban evidence ingest 和多轮 runtime advance 串成可验证闭环。真实 LLM compaction provider 仍属于后续阶段。
 
 ## 4. Phase 0: Architecture Contract
 
@@ -329,7 +332,86 @@ profiles/
 
 必须证明长任务可以跨多个 context segment；压缩后旧 transcript 不进入 active context；checkpoint 可以恢复 decision session；checkpoint 错误不会污染 runtime state。
 
-## 10. Phase 3: Long Running Autonomous Task Runtime
+## 10. Phase 3A: Real Decision Provider Integration
+
+### 目标
+
+在不破坏 runtime kernel 边界的前提下接入真实 decision provider。
+
+真实 provider 只替代 patch proposal 生成能力。DB authoritative state、goal gap detector、readiness reducer、progress ledger、completion、validator 和 compaction lifecycle 仍由本地 runtime 控制。
+
+### 实现内容
+
+新增 no-tools single-shot `RuntimeDecisionProvider`，复用 Hermes provider substrate，但不复用完整 `AIAgent` conversation/tool loop。
+
+Provider input 必须来自 Phase 2D request composition：
+
+```text
+stable runtime contract
+current goal contract
+latest checkpoint
+strict short tail
+current delta
+```
+
+CLI 必须显式启用真实 provider，例如 `--provider real --model-provider ... --model ...` 或 `--provider real --codex-config`。
+
+### 验收标准
+
+真实 provider 调用可审计 provider/model/profile/request_ref/response_ref/parse_status/retry/validator result；默认单测不触网。
+
+## 11. Phase 3B: Real Provider Patch Quality / Validator Feedback
+
+### 目标
+
+让真实 provider 不只是能调用，而是能更稳定地产生 validator 可接受的 graph patch。
+
+### 实现内容
+
+强化 decision profiles，新增 validator recovery profile，并在 `provider-smoke --execute` 中支持 validate-but-no-apply recovery retry。
+
+Recovery 只能反馈 rejected patch 和 validator reason，不能放宽 validator，不能自动 apply rejected patch，也不能成为默认 `advance` 行为。
+
+### 验收标准
+
+真实 `.codex` 隔离 smoke 能 parsed + accepted；真实 isolated `runtime advance --provider real --codex-config` 能完成一次 patch applied；默认测试继续离线。
+
+## 12. Phase 3C: Real Provider End-to-End Runtime Loop
+
+### 目标
+
+证明真实 provider patch 可以进入多轮 runtime 闭环，而不是停在单次 patch apply。
+
+### 实现内容
+
+补齐手动/测试 evidence bridge：按 `job_id + node_key` 完成最新 materialized Kanban task，写入结构化 receipt metadata。该桥只完成 Kanban task，不直接改 execution graph、progress ledger、goal item、graph revision 或 decision records。
+
+多轮闭环必须经过：
+
+```text
+provider patch applied
+  |
+  v
+node materialized to Kanban task
+  |
+  v
+worker/manual evidence completed
+  |
+  v
+runtime advance ingests evidence
+  |
+  v
+ledger/gaps update
+  |
+  v
+next provider decision or local completion
+```
+
+### 验收标准
+
+离线测试能通过 fake provider 跑完 implementation + verification 的多轮 goal loop；真实 `.codex` smoke 能在隔离 job 中完成 evidence ingest 后的 real provider patch apply 和下一 node materialization。
+
+## 13. Phase 3D: Long Running Autonomous Task Runtime
 
 ### 目标
 
@@ -364,7 +446,7 @@ profiles/
 
 支持数小时级任务、多轮 worker 执行、多次策略调整、用户中途修改目标和任务恢复。
 
-## 11. Phase 4: Production Hardening
+## 14. Phase 4: Production Hardening
 
 ### 目标
 
@@ -380,18 +462,18 @@ profiles/
 
 安全：validator hardening、permission policy、audit trail。
 
-## 12. 当前实现优先级
+## 15. 当前实现优先级
 
 如果现在继续开发，推荐顺序：
 
 ```text
-Real decision provider integration
+Phase 3C real provider runtime loop
+      |
+      v
+Phase 3D long-running task runtime
       |
       v
 real compaction provider integration
-      |
-      v
-Phase 3 long-running task runtime
       |
       v
 Phase 4 production hardening
@@ -405,4 +487,4 @@ Phase 4 production hardening
 
 没有 compaction，长期任务无法稳定运行。
 
-这三者是 Hermes Runtime Kernel 从“任务调度器”成为“长期任务执行系统”的关键路径。当前三者已经有本地基础实现，下一步应进入真实 decision provider，并保留真实 compaction provider 作为随后阶段。
+这三者是 Hermes Runtime Kernel 从“任务调度器”成为“长期任务执行系统”的关键路径。当前三者已经有本地基础实现，真实 decision provider 也已接入；下一步应继续强化多轮 runtime loop、长任务恢复和真实 compaction provider。

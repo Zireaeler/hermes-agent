@@ -13,7 +13,8 @@ When working on branch `feature-kanban-runtime-kernel`, treat
 `docs/kanban-runtime-kernel-phase2c.md` and
 `docs/kanban-runtime-kernel-phase2d.md` and
 `docs/kanban-runtime-kernel-phase3.md` and
-`docs/kanban-runtime-kernel-phase3b.md` as binding design constraints, not
+`docs/kanban-runtime-kernel-phase3b.md` and
+`docs/kanban-runtime-kernel-phase3c.md` as binding design constraints, not
 background reading. If implementation details conflict with those documents,
 update the relevant design document first or stop and ask for direction.
 
@@ -93,6 +94,14 @@ may feed rejected patch details and validator reasons back to the no-tools
 provider during smoke/integration runs, but it must not relax validator rules,
 auto-apply rejected patches, or become default behavior for normal runtime
 advance unless a later design document explicitly allows that.
+
+Phase 3C is a real-provider end-to-end runtime-loop hardening stage. Manual or
+test evidence bridges may complete the latest materialized Kanban task for a
+runtime node, but they must not directly mutate execution graph state, progress
+ledger rows, goal item completion, graph revision, or decision records. Runtime
+state changes still flow through `runtime advance` evidence ingest and the
+local reducer. Default tests must remain offline; live `.codex` provider runs
+are explicit integration smoke only.
 
 For this branch, do not routinely rebase `main`, and do not restore the old
 oversized session `019e497b-56e0-7bb0-a357-0db06954ae4d` as implementation
