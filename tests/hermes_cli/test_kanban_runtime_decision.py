@@ -722,6 +722,91 @@ def test_runtime_provider_smoke_execute_validates_without_apply(kanban_home, mon
     assert after_decisions == before_decisions
 
 
+def test_runtime_provider_smoke_validator_recovery_retries_without_apply(kanban_home, monkeypatch):
+    created = json.loads(kc.run_slash("runtime create 'phase3b provider recovery' --json"))
+
+    class RecoveryProvider:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def decide(self, request):
+            patch = {
+                "schema": rk.PATCH_SCHEMA,
+                "expected_revision": request.db_revision,
+                "rationale_summary": "invalid verifier without target",
+                "ops": [
+                    {
+                        "op": "insert_verifier",
+                        "verifier_node_key": "verify-without-target",
+                        "title": "Verify without target",
+                        "goal_item_keys": ["initial-runtime-result"],
+                    }
+                ],
+            }
+            return rd.DecisionProviderResult(
+                patch=patch,
+                raw_output=json.dumps(patch),
+                provider_name=self.kwargs["provider_name"],
+                model=self.kwargs["model"],
+                profile_name=self.kwargs["profile_name"],
+                parse_status="parsed",
+            )
+
+        def decide_with_validator_feedback(self, request, *, rejected_patch, validation):
+            assert validation["status"] == "rejected"
+            assert "insert_verifier" in json.dumps(rejected_patch)
+            patch = {
+                "schema": rk.PATCH_SCHEMA,
+                "expected_revision": request.db_revision,
+                "rationale_summary": "recover by creating a goal-linked implementation node",
+                "ops": [
+                    {
+                        "op": "create_node",
+                        "node_key": "implement-recovered-runtime-result",
+                        "node_type": "implementation",
+                        "title": "Implement recovered runtime result",
+                        "description": "Create evidence for the initial runtime result.",
+                        "goal_item_keys": ["initial-runtime-result"],
+                    }
+                ],
+            }
+            return rd.DecisionProviderResult(
+                patch=patch,
+                raw_output=json.dumps(patch),
+                provider_name=self.kwargs["provider_name"],
+                model=self.kwargs["model"],
+                profile_name="validator_recovery_decision",
+                parse_status="parsed",
+            )
+
+    monkeypatch.setattr(rd, "RuntimeDecisionProvider", RecoveryProvider)
+    with kb.connect() as conn:
+        before_revision = _revision(conn, created["id"])
+        before_patches = conn.execute("SELECT COUNT(*) FROM graph_patches WHERE job_id = ?", (created["id"],)).fetchone()[0]
+        before_decisions = conn.execute("SELECT COUNT(*) FROM kernel_decisions WHERE job_id = ?", (created["id"],)).fetchone()[0]
+
+    payload = json.loads(
+        kc.run_slash(
+            f"runtime provider-smoke {created['id']} --execute "
+            "--model-provider fake --model fake-model --validator-retries 1 --json"
+        )
+    )
+
+    assert payload["validation"]["status"] == "accepted"
+    assert payload["validation"]["would_apply"] is True
+    assert payload["provider_result"]["profile_name"] == "validator_recovery_decision"
+    assert len(payload["recovery_attempts"]) == 2
+    assert payload["recovery_attempts"][0]["validation"]["status"] == "rejected"
+    assert payload["recovery_attempts"][1]["validation"]["status"] == "accepted"
+    assert payload["applied"] is False
+    with kb.connect() as conn:
+        assert _revision(conn, created["id"]) == before_revision
+        after_patches = conn.execute("SELECT COUNT(*) FROM graph_patches WHERE job_id = ?", (created["id"],)).fetchone()[0]
+        after_decisions = conn.execute("SELECT COUNT(*) FROM kernel_decisions WHERE job_id = ?", (created["id"],)).fetchone()[0]
+    assert after_patches == before_patches
+    assert after_decisions == before_decisions
+
+
 def test_runtime_provider_smoke_execute_can_use_codex_config(kanban_home, monkeypatch, tmp_path):
     codex_dir = tmp_path / ".codex"
     codex_dir.mkdir()

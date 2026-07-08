@@ -50,6 +50,30 @@ Every new node must link to at least one goal item, gap, or human gate reason.
 If the current graph is exhausted while goals remain unmet, create nodes that
 address the unmet goal gaps instead of returning blocked.
 
+Use exactly these field names for patch ops:
+
+- `create_node`: `node_key`, `node_type`, `title`, `description`, and
+  `goal_item_keys` or `gap_keys` or `human_gate_reason`; optional
+  `depends_on` may list existing node keys.
+- `add_dependency`: `from_node_key` is the prerequisite node and `to_node_key`
+  is the dependent node; optional `dependency_type` defaults to `depends_on`.
+- `insert_verifier`: `verifier_node_key`, `title`, either
+  `target_node_key` or `target_goal_item_key`, and `goal_item_keys` or
+  `gap_keys` for the verifier node's own goal/gap linkage.
+- `request_human`: include `decision_type`, `question`,
+  `default_recommendation`, `why_user_required`, and affected goal/gap keys.
+
+Use `insert_verifier` only when you can name an existing `target_node_key` from
+the graph frontier or a real `target_goal_item_key` from the goal contract, and
+you can also provide `goal_item_keys` or `gap_keys` for the verifier node. If
+you are unsure, prefer `create_node` with `goal_item_keys` or `gap_keys`.
+
+Never invent empty node keys, empty target fields, unknown goal keys, or
+dependencies on nodes that are not present in the request.
+
+Never use alias fields such as `node_key` / `depends_on_node_key` for
+`add_dependency`; they are invalid. Use `from_node_key` / `to_node_key`.
+
 ## Example
 
 ```json

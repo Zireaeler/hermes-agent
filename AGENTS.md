@@ -12,7 +12,8 @@ When working on branch `feature-kanban-runtime-kernel`, treat
 `docs/kanban-runtime-kernel-phase2b.md` and
 `docs/kanban-runtime-kernel-phase2c.md` and
 `docs/kanban-runtime-kernel-phase2d.md` and
-`docs/kanban-runtime-kernel-phase3.md` as binding design constraints, not
+`docs/kanban-runtime-kernel-phase3.md` and
+`docs/kanban-runtime-kernel-phase3b.md` as binding design constraints, not
 background reading. If implementation details conflict with those documents,
 update the relevant design document first or stop and ask for direction.
 
@@ -86,6 +87,12 @@ another model without runtime audit. Real provider calls must be explicit
 not call a live model. `--codex-config` is allowed only as an explicit bridge
 for manual smoke/integration runs: it may read `~/.codex/config.toml` and
 `~/.codex/auth.json`, but must not modify Codex files or print/write API keys.
+
+Phase 3B is a real-provider patch-quality hardening stage. Validator recovery
+may feed rejected patch details and validator reasons back to the no-tools
+provider during smoke/integration runs, but it must not relax validator rules,
+auto-apply rejected patches, or become default behavior for normal runtime
+advance unless a later design document explicitly allows that.
 
 For this branch, do not routinely rebase `main`, and do not restore the old
 oversized session `019e497b-56e0-7bb0-a357-0db06954ae4d` as implementation

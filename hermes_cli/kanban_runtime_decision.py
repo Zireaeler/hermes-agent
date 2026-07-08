@@ -1115,11 +1115,15 @@ def render_decision_messages(
     request: DecisionProviderRequest,
     *,
     profile_name: str = "graph_patch_decision",
+    validator_feedback: Optional[dict[str, Any]] = None,
 ) -> tuple[list[dict[str, str]], dict[str, Any], dict[str, Any]]:
     """Render no-tools, single-shot messages for a runtime decision provider."""
 
     profile = load_decision_profile(profile_name)
     rendered = render_decision_prompt(request)
+    if validator_feedback:
+        rendered = dict(rendered)
+        rendered["validator_feedback"] = validator_feedback
     system = (
         "You are the Hermes RuntimeDecisionProvider. "
         "You are not an execution agent. You may not call tools, web_search, "
@@ -1238,6 +1242,38 @@ class RuntimeDecisionProvider:
 
     def decide(self, request: DecisionProviderRequest) -> DecisionProviderResult:
         messages, rendered, profile = render_decision_messages(request, profile_name=self.profile_name)
+        return self._decide_from_messages(request, messages, rendered, profile)
+
+    def decide_with_validator_feedback(
+        self,
+        request: DecisionProviderRequest,
+        *,
+        rejected_patch: dict[str, Any],
+        validation: dict[str, Any],
+        profile_name: str = "validator_recovery_decision",
+    ) -> DecisionProviderResult:
+        feedback = {
+            "rejected_patch": rejected_patch,
+            "validation": validation,
+            "instruction": (
+                "Return a corrected runtime_graph_patch_v1 JSON object that satisfies the validator. "
+                "Do not explain. Do not repeat the same invalid structure."
+            ),
+        }
+        messages, rendered, profile = render_decision_messages(
+            request,
+            profile_name=profile_name,
+            validator_feedback=feedback,
+        )
+        return self._decide_from_messages(request, messages, rendered, profile)
+
+    def _decide_from_messages(
+        self,
+        request: DecisionProviderRequest,
+        messages: list[dict[str, str]],
+        rendered: dict[str, Any],
+        profile: dict[str, Any],
+    ) -> DecisionProviderResult:
         request_ref = hashlib.sha256(json.dumps(rendered, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
         input_tokens = estimate_decision_input_tokens(rendered, profile["content"])
         client, model = self._client_and_model()

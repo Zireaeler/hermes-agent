@@ -907,8 +907,12 @@ def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]
             for dep_key in op.get("depends_on") or []:
                 _node_by_key(conn, job_id, dep_key)
         elif name == "add_dependency":
-            from_node = _node_by_key(conn, job_id, str(op.get("from_node_key") or ""))
-            to_node = _node_by_key(conn, job_id, str(op.get("to_node_key") or ""))
+            from_key = str(op.get("from_node_key") or "").strip()
+            to_key = str(op.get("to_node_key") or "").strip()
+            if not from_key or not to_key:
+                raise PatchValidationError("add_dependency requires from_node_key and to_node_key")
+            from_node = _node_by_key(conn, job_id, from_key)
+            to_node = _node_by_key(conn, job_id, to_key)
             dep_type = str(op.get("dependency_type") or "depends_on")
             if dep_type not in DEPENDENCY_TYPES:
                 raise PatchValidationError(f"unknown dependency_type {dep_type!r}")

@@ -1547,6 +1547,8 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
                                    help="Use ~/.codex config.toml/auth.json model source")
     rt_provider_smoke.add_argument("--profile", default="graph_patch_decision")
     rt_provider_smoke.add_argument("--max-retries", type=int, default=1)
+    rt_provider_smoke.add_argument("--validator-retries", type=int, default=0,
+                                   help="Retry provider with validator feedback when dry-run validation rejects")
     rt_provider_smoke.add_argument("--timeout", type=float, default=None)
     rt_provider_smoke.add_argument("--execute", action="store_true",
                                    help="Call the real provider but do not apply the returned patch")
@@ -2437,6 +2439,7 @@ def _cmd_runtime_provider_smoke(args: argparse.Namespace) -> int:
             "message_count": len(messages),
             "input_token_estimate": rd.estimate_decision_input_tokens(rendered, profile["content"]),
             "max_retries": int(getattr(args, "max_retries", 1)),
+            "validator_retries": int(getattr(args, "validator_retries", 0)),
             "timeout_seconds": getattr(args, "timeout", None),
         },
     }
@@ -2452,6 +2455,12 @@ def _cmd_runtime_provider_smoke(args: argparse.Namespace) -> int:
         )
         result = provider.decide(request)
         payload["provider_result"] = result.to_dict()
+        attempts = [
+            {
+                "attempt": 0,
+                "provider_result": result.to_dict(),
+            }
+        ]
         if result.patch is not None:
             with kb.connect() as conn:
                 rk.ensure_runtime_schema(conn)
@@ -2462,6 +2471,40 @@ def _cmd_runtime_provider_smoke(args: argparse.Namespace) -> int:
                 "would_apply": False,
                 "reason": result.error or result.parse_status,
             }
+        attempts[0]["validation"] = payload["validation"]
+        validator_retries = max(0, int(getattr(args, "validator_retries", 0)))
+        for attempt in range(1, validator_retries + 1):
+            if payload["validation"].get("status") == "accepted":
+                break
+            if result.patch is None:
+                break
+            if not hasattr(provider, "decide_with_validator_feedback"):
+                break
+            result = provider.decide_with_validator_feedback(
+                request,
+                rejected_patch=result.patch,
+                validation=payload["validation"],
+            )
+            if result.patch is not None:
+                with kb.connect() as conn:
+                    rk.ensure_runtime_schema(conn)
+                    validation = rk.validate_graph_patch(conn, args.job_id, result.patch)
+            else:
+                validation = {
+                    "status": "skipped",
+                    "would_apply": False,
+                    "reason": result.error or result.parse_status,
+                }
+            attempts.append(
+                {
+                    "attempt": attempt,
+                    "provider_result": result.to_dict(),
+                    "validation": validation,
+                }
+            )
+            payload["provider_result"] = result.to_dict()
+            payload["validation"] = validation
+        payload["recovery_attempts"] = attempts
         payload["applied"] = False
 
     print(json.dumps(payload, indent=2, ensure_ascii=False))
