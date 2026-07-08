@@ -83,7 +83,9 @@ remain no-tools and single-shot: it must not pass `tools`, call web/search,
 dispatch workers, use agent-level context compression, or silently fall back to
 another model without runtime audit. Real provider calls must be explicit
 (`--provider real` with model provider and model); default runtime advance must
-not call a live model.
+not call a live model. `--codex-config` is allowed only as an explicit bridge
+for manual smoke/integration runs: it may read `~/.codex/config.toml` and
+`~/.codex/auth.json`, but must not modify Codex files or print/write API keys.
 
 For this branch, do not routinely rebase `main`, and do not restore the old
 oversized session `019e497b-56e0-7bb0-a357-0db06954ae4d` as implementation

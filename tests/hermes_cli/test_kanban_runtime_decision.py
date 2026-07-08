@@ -722,6 +722,67 @@ def test_runtime_provider_smoke_execute_validates_without_apply(kanban_home, mon
     assert after_decisions == before_decisions
 
 
+def test_runtime_provider_smoke_execute_can_use_codex_config(kanban_home, monkeypatch, tmp_path):
+    codex_dir = tmp_path / ".codex"
+    codex_dir.mkdir()
+    (codex_dir / "config.toml").write_text(
+        """
+model = "codex-test-model"
+model_provider = "LocalCodexProvider"
+
+[model_providers.LocalCodexProvider]
+name = "LocalCodexProvider"
+base_url = "http://127.0.0.1:9999/v1"
+""".strip(),
+        encoding="utf-8",
+    )
+    (codex_dir / "auth.json").write_text(
+        json.dumps({"OPENAI_API_KEY": "test-codex-key"}),
+        encoding="utf-8",
+    )
+    created = json.loads(kc.run_slash("runtime create 'phase3 codex config smoke' --json"))
+    seen = {}
+
+    class SmokeProvider:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+
+        def decide(self, request):
+            patch = {
+                "schema": rk.PATCH_SCHEMA,
+                "expected_revision": request.db_revision,
+                "rationale_summary": "codex config smoke noop",
+                "ops": [],
+            }
+            return rd.DecisionProviderResult(
+                patch=patch,
+                raw_output=json.dumps(patch),
+                provider_name=seen["provider_name"],
+                model=seen["model"],
+                profile_name=seen["profile_name"],
+                parse_status="parsed",
+            )
+
+    monkeypatch.setattr(rd, "RuntimeDecisionProvider", SmokeProvider)
+
+    payload = json.loads(
+        kc.run_slash(
+            f"runtime provider-smoke {created['id']} --execute "
+            "--codex-config --profile graph_patch_decision --json"
+        )
+    )
+
+    assert seen["provider_name"] == "custom"
+    assert seen["model"] == "codex-test-model"
+    assert seen["explicit_base_url"] == "http://127.0.0.1:9999/v1"
+    assert seen["explicit_api_key"] == "test-codex-key"
+    assert payload["provider_call"]["source"] == "codex_config"
+    assert payload["provider_call"]["model_provider"] == "codex:LocalCodexProvider"
+    assert payload["provider_call"]["explicit_base_url"] is True
+    assert payload["provider_call"]["explicit_api_key"] is True
+    assert payload["validation"]["status"] == "accepted"
+
+
 def test_runtime_checkpoint_cli_outputs_db_derived_checkpoint(kanban_home):
     created = json.loads(kc.run_slash("runtime create 'phase2b checkpoint' --json"))
     payload = json.loads(kc.run_slash(f"runtime checkpoint {created['id']} --create --json"))

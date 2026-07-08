@@ -1513,6 +1513,8 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
                             help="Hermes model source provider used when --provider real")
     rt_advance.add_argument("--model", default=None,
                             help="Model used when --provider real")
+    rt_advance.add_argument("--codex-config", action="store_true",
+                            help="Use ~/.codex config.toml/auth.json model source for --provider real")
     rt_advance.add_argument("--profile", default="graph_patch_decision",
                             help="Decision profile used when --provider real")
     rt_advance.add_argument("--max-retries", type=int, default=1,
@@ -1541,6 +1543,8 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     rt_provider_smoke.add_argument("job_id")
     rt_provider_smoke.add_argument("--model-provider", default=None)
     rt_provider_smoke.add_argument("--model", default=None)
+    rt_provider_smoke.add_argument("--codex-config", action="store_true",
+                                   help="Use ~/.codex config.toml/auth.json model source")
     rt_provider_smoke.add_argument("--profile", default="graph_patch_decision")
     rt_provider_smoke.add_argument("--max-retries", type=int, default=1)
     rt_provider_smoke.add_argument("--timeout", type=float, default=None)
@@ -2054,17 +2058,75 @@ def _runtime_decision_provider_from_args(args: argparse.Namespace):
     if mode != "real":
         raise ValueError(f"unknown runtime decision provider mode {mode!r}")
 
-    model_provider = (getattr(args, "model_provider", None) or "").strip()
-    model = (getattr(args, "model", None) or "").strip()
-    if not model_provider or not model:
-        raise ValueError("--provider real requires --model-provider and --model")
+    source = _runtime_model_source_from_args(args, require_for_real=True)
     return rd.RuntimeDecisionProvider(
-        provider_name=model_provider,
-        model=model,
+        provider_name=source["provider_name"],
+        model=source["model"],
         profile_name=getattr(args, "profile", None) or "graph_patch_decision",
         max_retries=getattr(args, "max_retries", 1),
         timeout_seconds=getattr(args, "timeout", None),
+        explicit_base_url=source.get("explicit_base_url"),
+        explicit_api_key=source.get("explicit_api_key"),
     )
+
+
+def _runtime_model_source_from_args(args: argparse.Namespace, *, require_for_real: bool = False) -> dict[str, Any]:
+    if getattr(args, "codex_config", False):
+        return _runtime_model_source_from_codex_config(args)
+
+    model_provider = (getattr(args, "model_provider", None) or "").strip()
+    model = (getattr(args, "model", None) or "").strip()
+    if require_for_real and (not model_provider or not model):
+        raise ValueError("--provider real requires --model-provider and --model, or --codex-config")
+    return {
+        "source": "explicit",
+        "provider_name": model_provider,
+        "model": model,
+        "display_provider": model_provider or None,
+        "explicit_base_url": None,
+        "explicit_api_key": None,
+    }
+
+
+def _runtime_model_source_from_codex_config(args: argparse.Namespace) -> dict[str, Any]:
+    import tomllib
+    from pathlib import Path
+
+    config_path = Path.home() / ".codex" / "config.toml"
+    auth_path = Path.home() / ".codex" / "auth.json"
+    if not config_path.exists():
+        raise ValueError("missing ~/.codex/config.toml")
+    if not auth_path.exists():
+        raise ValueError("missing ~/.codex/auth.json")
+    try:
+        config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        auth = json.loads(auth_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError(f"could not read .codex model source: {type(exc).__name__}") from exc
+
+    codex_provider = str(config.get("model_provider") or "").strip()
+    providers = config.get("model_providers") if isinstance(config.get("model_providers"), dict) else {}
+    provider_cfg = providers.get(codex_provider) if isinstance(providers, dict) else None
+    if not isinstance(provider_cfg, dict):
+        raise ValueError(f".codex model_provider {codex_provider!r} is not configured")
+    base_url = str(provider_cfg.get("base_url") or "").strip()
+    api_key = str(auth.get("OPENAI_API_KEY") or "").strip()
+    model = (getattr(args, "model", None) or config.get("model") or "").strip()
+    if not base_url:
+        raise ValueError(".codex provider base_url is missing")
+    if not api_key:
+        raise ValueError(".codex auth OPENAI_API_KEY is missing")
+    if not model:
+        raise ValueError(".codex model is missing; pass --model")
+    return {
+        "source": "codex_config",
+        "codex_provider": codex_provider,
+        "provider_name": "custom",
+        "display_provider": f"codex:{codex_provider}",
+        "model": model,
+        "explicit_base_url": base_url,
+        "explicit_api_key": api_key,
+    }
 
 
 def _cmd_runtime_create(args: argparse.Namespace) -> int:
@@ -2344,10 +2406,7 @@ def _cmd_runtime_provider_smoke(args: argparse.Namespace) -> int:
     from hermes_cli import kanban_runtime_kernel as rk
 
     execute = bool(getattr(args, "execute", False))
-    model_provider = (getattr(args, "model_provider", None) or "").strip()
-    model = (getattr(args, "model", None) or "").strip()
-    if execute and (not model_provider or not model):
-        raise ValueError("runtime provider-smoke --execute requires --model-provider and --model")
+    source = _runtime_model_source_from_args(args, require_for_real=execute)
 
     with kb.connect() as conn:
         rk.ensure_runtime_schema(conn)
@@ -2368,8 +2427,11 @@ def _cmd_runtime_provider_smoke(args: argparse.Namespace) -> int:
         },
         "provider_call": {
             "mode": "real" if execute else "dry_run",
-            "model_provider": model_provider or None,
-            "model": model or None,
+            "source": source["source"],
+            "model_provider": source["display_provider"],
+            "model": source["model"] or None,
+            "explicit_base_url": bool(source.get("explicit_base_url")),
+            "explicit_api_key": bool(source.get("explicit_api_key")),
             "no_tools": True,
             "single_shot": True,
             "message_count": len(messages),
@@ -2380,11 +2442,13 @@ def _cmd_runtime_provider_smoke(args: argparse.Namespace) -> int:
     }
     if execute:
         provider = rd.RuntimeDecisionProvider(
-            provider_name=model_provider,
-            model=model,
+            provider_name=source["provider_name"],
+            model=source["model"],
             profile_name=args.profile,
             max_retries=getattr(args, "max_retries", 1),
             timeout_seconds=getattr(args, "timeout", None),
+            explicit_base_url=source.get("explicit_base_url"),
+            explicit_api_key=source.get("explicit_api_key"),
         )
         result = provider.decide(request)
         payload["provider_result"] = result.to_dict()

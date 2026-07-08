@@ -213,11 +213,15 @@ Phase 3 可以扩展 `hermes kanban runtime`：
 
 `runtime advance <job_id> --provider none|fake|real --model-provider openai --model ... --profile graph_patch_decision --json`：显式选择 decision provider mode。`--provider real` 必须同时带 `--model-provider` 和 `--model`，否则不得隐式使用用户默认聊天模型。
 
+`runtime advance <job_id> --provider real --codex-config --profile graph_patch_decision --json`：显式使用当前 `~/.codex/config.toml` 和 `~/.codex/auth.json` 中的模型源。该路径只读取 Codex 配置，不修改 Codex 文件，不打印 API key，并把 Codex base_url/key 作为 explicit runtime provider credentials 传入。
+
 `runtime decision <job_id> --json`：显示 provider/model/profile/retry/parse/validator 信息。
 
 `runtime provider-smoke <job_id> --json`：默认 dry-run，只构造 request、profile、message envelope 和 token estimate，不调用模型、不应用 patch。
 
 `runtime provider-smoke <job_id> --execute --model-provider openai --model ... --profile graph_patch_decision --json`：调用真实 provider、解析结果，并执行 validator dry-run，但不 apply patch，不插入 graph_patches，不创建 kernel_decisions。输出应包含 provider_result 和 validation，其中 validation 使用 `accepted/rejected/stale/skipped` 表达 would_apply/would_reject。这个命令只用于手动 smoke 或集成验证，不属于默认单测路径。
+
+`runtime provider-smoke <job_id> --execute --codex-config --profile graph_patch_decision --json`：同上，但模型源来自 `~/.codex`。这是验证 Codex 当前模型源和 runtime decision provider 兼容性的推荐手动 smoke 路径。
 
 所有 CLI 命令都不能直接修改 graph，除非经过 `advance_runtime_job()` 的 provider -> parser -> validator -> apply 路径。
 
@@ -285,6 +289,16 @@ hermes kanban runtime provider-smoke <job_id> \
   --json
 ```
 
+如果要复用当前 Codex CLI 的模型源，使用：
+
+```bash
+hermes kanban runtime provider-smoke <job_id> \
+  --execute \
+  --codex-config \
+  --profile graph_patch_decision \
+  --json
+```
+
 检查输出中的：
 
 - `provider_result.parse_status`
@@ -303,6 +317,16 @@ hermes kanban runtime advance <job_id> \
   --provider real \
   --model-provider <provider> \
   --model <model> \
+  --profile graph_patch_decision \
+  --json
+```
+
+或使用当前 Codex CLI 模型源：
+
+```bash
+hermes kanban runtime advance <job_id> \
+  --provider real \
+  --codex-config \
   --profile graph_patch_decision \
   --json
 ```
@@ -380,6 +404,8 @@ Phase 3 第一批完成必须满足：
 
 第九，`runtime advance --provider real` 必须显式声明 model provider 和 model，不能默认使用用户聊天模型。
 
-第十，AGENTS.md 必须把 Phase 3 provider substrate 复用边界、no-tools/single-shot 和 no-live-network unit test 约束写成实现约束。
+第十，`--codex-config` 只能显式读取 `~/.codex/config.toml` 和 `~/.codex/auth.json` 作为 model source bridge；不得修改 Codex 配置，不得把 key 写入 runtime DB、logs 或 CLI output。
+
+第十一，AGENTS.md 必须把 Phase 3 provider substrate 复用边界、no-tools/single-shot 和 no-live-network unit test 约束写成实现约束。
 
 Phase 3 第一批结束后，runtime 才适合进入真实 long-running autonomous task loop。否则真实模型接入会放大隐式上下文、不可审计 prompt 和失败不可恢复的问题。
