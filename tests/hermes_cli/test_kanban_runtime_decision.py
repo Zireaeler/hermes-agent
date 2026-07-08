@@ -83,6 +83,50 @@ class _FakeClient:
         self.chat = SimpleNamespace(completions=self.completions)
 
 
+class _StaticCompactionProvider:
+    provider_name = "fake-compactor"
+    model = "fake-checkpoint-model"
+
+    def __init__(self, conn, *, checkpoint_factory=None, checkpoint=None, error=None):
+        self.conn = conn
+        self.checkpoint_factory = checkpoint_factory
+        self.checkpoint = checkpoint
+        self.error = error
+        self.calls = []
+
+    def compact(self, request):
+        self.calls.append(request)
+        if self.error:
+            return rd.CompactionProviderResult(
+                checkpoint=None,
+                raw_output="bad checkpoint",
+                provider_name=self.provider_name,
+                model=self.model,
+                profile_name=request.profile["profile_name"],
+                profile_version=request.profile["profile_version"],
+                profile_hash=request.profile["profile_hash"],
+                parse_status="parse_failed",
+                error=self.error,
+            )
+        checkpoint = self.checkpoint
+        if self.checkpoint_factory is not None:
+            checkpoint = self.checkpoint_factory(request)
+        return rd.CompactionProviderResult(
+            checkpoint=checkpoint,
+            raw_output=checkpoint,
+            provider_name=self.provider_name,
+            model=self.model,
+            profile_name=request.profile["profile_name"],
+            profile_version=request.profile["profile_version"],
+            profile_hash=request.profile["profile_hash"],
+            request_ref="fake-request-ref",
+            response_ref="fake-response-ref",
+            parse_status="parsed",
+            input_token_estimate=123,
+            output_token_estimate=45,
+        )
+
+
 def test_decision_checkpoint_schema_and_creation(conn):
     job_id = _job(conn)
     checkpoint = rd.create_decision_checkpoint(conn, job_id, reason="test")
@@ -402,6 +446,145 @@ def test_runtime_decision_provider_parse_retry_stays_schema_only(conn):
     assert "tools" not in fake.completions.calls[1]
     retry_messages = fake.completions.calls[1]["messages"]
     assert "corrected JSON object" in retry_messages[-1]["content"]
+
+
+def test_runtime_compaction_provider_is_no_tools_checkpoint_only(conn):
+    job_id = _job(conn)
+    segment = rk.ensure_decision_segment(conn, job_id)
+    request = rd.build_compaction_provider_request(conn, job_id, source_segment=segment)
+    checkpoint = rd.build_deterministic_checkpoint(conn, job_id, segment["id"])
+    fake = _FakeClient([json.dumps(checkpoint)])
+    provider = rd.RuntimeCompactionProvider(
+        provider_name="fake",
+        model="fake-model",
+        client=fake,
+        max_retries=0,
+    )
+
+    result = provider.compact(request)
+
+    assert result.checkpoint["metadata"]["provider_generated"] is True
+    assert result.provider_name == "fake"
+    assert result.model == "fake-model"
+    assert len(fake.completions.calls) == 1
+    call = fake.completions.calls[0]
+    assert "tools" not in call
+    assert "tool_choice" not in call
+    assert "web_search" not in call
+
+
+def test_compaction_provider_rejects_graph_patch_output(conn):
+    job_id = _job(conn)
+    request = rd.build_compaction_provider_request(conn, job_id)
+    patch = {
+        "schema": rk.PATCH_SCHEMA,
+        "expected_revision": _revision(conn, job_id),
+        "rationale_summary": "wrong output kind",
+        "ops": [],
+    }
+
+    with pytest.raises(rd.ProviderPatchParseError, match="not graph patch"):
+        rd.parse_compaction_checkpoint(patch, request)
+
+
+def test_provider_compaction_records_audit_and_replaces_segment(conn):
+    job_id = _job(conn)
+    old_segment = rk.ensure_decision_segment(conn, job_id)
+    rk.append_decision_segment_entry(conn, job_id, "delta_appended", {"old": "provider path"})
+    provider = _StaticCompactionProvider(
+        conn,
+        checkpoint_factory=lambda request: rd.build_deterministic_checkpoint(
+            conn,
+            request.job_id,
+            request.source_segment["id"],
+            profile_name=request.profile["profile_name"],
+        ),
+    )
+
+    result = rd.compact_decision_session(
+        conn,
+        job_id,
+        profile_name="token_budget_compaction",
+        reason="provider-test",
+        compaction_provider=provider,
+    )
+
+    assert result["status"] == "compacted"
+    assert result["provider_name"] == "fake-compactor"
+    assert result["request_ref"] == "fake-request-ref"
+    old_row = conn.execute("SELECT * FROM decision_session_segments WHERE id = ?", (old_segment["id"],)).fetchone()
+    assert old_row["state"] == "compacted"
+    checkpoint = conn.execute("SELECT * FROM decision_checkpoints WHERE id = ?", (result["checkpoint_id"],)).fetchone()
+    metadata = json.loads(checkpoint["metadata_json"])
+    assert metadata["provider_name"] == "fake-compactor"
+    assert metadata["request_ref"] == "fake-request-ref"
+    entries = [
+        row["entry_type"]
+        for row in conn.execute("SELECT entry_type FROM decision_segment_entries WHERE job_id = ? ORDER BY id", (job_id,))
+    ]
+    assert "compaction_provider_input" in entries
+    assert "compaction_provider_output" in entries
+
+
+def test_provider_compaction_rejection_preserves_active_segment_without_fallback(conn):
+    job_id = _job(conn)
+    old_segment = rk.ensure_decision_segment(conn, job_id)
+    bad_checkpoint = rd.build_deterministic_checkpoint(conn, job_id, old_segment["id"])
+    bad_checkpoint["satisfied_goal_items"].append(
+        {
+            "goal_item_key": "a-item",
+            "state": "satisfied",
+            "summary": "self reported only",
+            "verification_state": "self_reported",
+            "source_refs": [{"goal_item_key": "a-item"}],
+        }
+    )
+    provider = _StaticCompactionProvider(conn, checkpoint=bad_checkpoint)
+
+    result = rd.compact_decision_session(
+        conn,
+        job_id,
+        compaction_provider=provider,
+        fallback_to_deterministic=False,
+    )
+
+    assert result["status"] == "rejected"
+    assert result["active_segment_preserved"] is True
+    assert result["fallback_used"] is False
+    row = conn.execute("SELECT * FROM decision_session_segments WHERE id = ?", (old_segment["id"],)).fetchone()
+    assert row["state"] == "active"
+    session = conn.execute("SELECT * FROM decision_sessions WHERE job_id = ?", (job_id,)).fetchone()
+    assert session["active_segment_id"] == old_segment["id"]
+    assert conn.execute("SELECT COUNT(*) FROM decision_checkpoints WHERE job_id = ?", (job_id,)).fetchone()[0] == 0
+
+
+def test_provider_compaction_failure_falls_back_to_deterministic(conn):
+    job_id = _job(conn)
+    old_segment = rk.ensure_decision_segment(conn, job_id)
+    provider = _StaticCompactionProvider(conn, error="invalid checkpoint json")
+
+    result = rd.compact_decision_session(conn, job_id, compaction_provider=provider)
+
+    assert result["status"] == "compacted"
+    assert result["fallback_used"] is True
+    row = conn.execute("SELECT * FROM decision_session_segments WHERE id = ?", (old_segment["id"],)).fetchone()
+    assert row["state"] == "compacted"
+    checkpoint = conn.execute("SELECT * FROM decision_checkpoints WHERE id = ?", (result["checkpoint_id"],)).fetchone()
+    metadata = json.loads(checkpoint["metadata_json"])
+    assert metadata["fallback_used"] is True
+    assert metadata["provider_name"] == "deterministic"
+
+
+def test_checkpoint_validator_rejects_stale_revision(conn):
+    job_id = _job(conn)
+    segment = rk.ensure_decision_segment(conn, job_id)
+    payload = rd.build_deterministic_checkpoint(conn, job_id, segment["id"])
+    conn.execute("UPDATE runtime_jobs SET graph_revision = graph_revision + 1 WHERE id = ?", (job_id,))
+
+    result = rd.validate_decision_checkpoint(conn, job_id, payload)
+
+    assert result["status"] == "rejected"
+    assert "conflicts with current revision" in result["reason"]
 
 
 def test_advance_runtime_job_uses_runtime_decision_provider_interface(conn):
@@ -1044,6 +1227,20 @@ def test_runtime_compact_cli_outputs_segment_replacement(kanban_home):
     assert payload["source_segment_id"] != payload["new_segment_id"]
 
 
+def test_runtime_compact_cli_fake_provider_outputs_provider_audit(kanban_home):
+    created = json.loads(kc.run_slash("runtime create 'phase4 fake compact' --json"))
+    payload = json.loads(kc.run_slash(f"runtime compact {created['id']} --provider fake --json"))
+
+    assert payload["status"] == "compacted"
+    assert payload["provider_mode"] == "fake"
+    assert payload["provider_name"] == "deterministic"
+    assert payload["request_ref"]
+    assert payload["response_ref"]
+    context = json.loads(kc.run_slash(f"runtime context {created['id']} --json"))
+    assert context["latest_checkpoint"]["metadata"]["provider_name"] == "deterministic"
+    assert context["latest_checkpoint"]["metadata"]["fallback_used"] is False
+
+
 def test_runtime_context_cli_outputs_active_segment_and_checkpoint(kanban_home):
     created = json.loads(kc.run_slash("runtime create 'phase2d context' --json"))
     json.loads(kc.run_slash(f"runtime compact {created['id']} --json"))
@@ -1054,6 +1251,34 @@ def test_runtime_context_cli_outputs_active_segment_and_checkpoint(kanban_home):
     assert payload["latest_checkpoint"]["validator_status"] == "accepted"
     assert "strict_short_tail" in payload["provider_input_composition"]
     assert "compaction_policy" in payload
+
+
+def test_runtime_inspect_cli_outputs_observability_snapshot(kanban_home):
+    created = json.loads(kc.run_slash("runtime create 'phase4 inspect' --json"))
+    json.loads(kc.run_slash(f"runtime compact {created['id']} --provider fake --json"))
+
+    payload = json.loads(kc.run_slash(f"runtime inspect {created['id']} --json"))
+
+    assert payload["job"]["id"] == created["id"]
+    assert {"goals", "progress_ledger", "graph", "events", "patches", "decisions"}.issubset(payload)
+    assert {"decision_session", "checkpoints", "compactions", "human_gates", "liveness"}.issubset(payload)
+    assert payload["operator_actions"]["read_only"] is True
+    assert payload["compactions"]["checkpoints"][0]["profile_hash"]
+
+
+def test_runtime_supervise_cli_runs_leased_tick(kanban_home):
+    created = json.loads(kc.run_slash("runtime create 'phase4 supervise' --json"))
+    payload = json.loads(
+        kc.run_slash(
+            f"runtime supervise --job-id {created['id']} --owner test-supervisor --json"
+        )
+    )
+
+    assert payload["status"] == "advanced"
+    assert payload["lock"]["owner"] == "test-supervisor"
+    assert payload["result"]["materialized_nodes"] == ["understand-scope"]
+    status = json.loads(kc.run_slash(f"runtime status {created['id']} --json"))
+    assert status["job"]["advance_lock"] is None
 
 
 def test_runtime_decision_cli_outputs_parse_failure_record(kanban_home):

@@ -826,6 +826,116 @@ def list_runtime_jobs(
     return [_row_to_dict(row) or {} for row in conn.execute(sql, params).fetchall()]
 
 
+def acquire_runtime_advance_lock(
+    conn: sqlite3.Connection,
+    job_id: str,
+    *,
+    owner: Optional[str] = None,
+    ttl_seconds: int = 60,
+) -> dict[str, Any]:
+    """Acquire a DB lease for one supervisor advance tick."""
+
+    ensure_runtime_schema(conn)
+    owner_id = owner or f"runtime-supervisor-{uuid.uuid4().hex[:8]}"
+    ttl = max(1, int(ttl_seconds))
+    now = _now()
+    expires_at = now + ttl
+    row = conn.execute(
+        "SELECT id, state, advance_lock, claim_expires_at, metadata_json FROM runtime_jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"unknown runtime job {job_id}")
+    if row["state"] in {"done", "cancelled", "failed"}:
+        return {
+            "acquired": False,
+            "job_id": job_id,
+            "owner": owner_id,
+            "reason": f"terminal_state:{row['state']}",
+        }
+    metadata = _loads(row["metadata_json"])
+    if metadata.get("paused"):
+        return {"acquired": False, "job_id": job_id, "owner": owner_id, "reason": "paused"}
+    current_owner = row["advance_lock"]
+    current_expiry = int(row["claim_expires_at"] or 0)
+    if current_owner and current_expiry > now and current_owner != owner_id:
+        return {
+            "acquired": False,
+            "job_id": job_id,
+            "owner": owner_id,
+            "held_by": current_owner,
+            "claim_expires_at": current_expiry,
+            "reason": "locked",
+        }
+    cursor = conn.execute(
+        """
+        UPDATE runtime_jobs
+           SET advance_lock = ?, claim_expires_at = ?, updated_at = ?
+         WHERE id = ?
+           AND (
+                advance_lock IS NULL
+                OR claim_expires_at IS NULL
+                OR claim_expires_at <= ?
+                OR advance_lock = ?
+           )
+        """,
+        (owner_id, expires_at, now, job_id, now, owner_id),
+    )
+    if cursor.rowcount != 1:
+        row = conn.execute(
+            "SELECT advance_lock, claim_expires_at FROM runtime_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        return {
+            "acquired": False,
+            "job_id": job_id,
+            "owner": owner_id,
+            "held_by": row["advance_lock"] if row else None,
+            "claim_expires_at": row["claim_expires_at"] if row else None,
+            "reason": "locked",
+        }
+    _event(conn, job_id, "advance_lock_acquired", {"owner": owner_id, "claim_expires_at": expires_at})
+    return {
+        "acquired": True,
+        "job_id": job_id,
+        "owner": owner_id,
+        "claim_expires_at": expires_at,
+        "ttl_seconds": ttl,
+    }
+
+
+def release_runtime_advance_lock(
+    conn: sqlite3.Connection,
+    job_id: str,
+    *,
+    owner: str,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Release a supervisor lease if still held by this owner."""
+
+    ensure_runtime_schema(conn)
+    row = conn.execute(
+        "SELECT advance_lock, claim_expires_at FROM runtime_jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"unknown runtime job {job_id}")
+    if not force and row["advance_lock"] != owner:
+        return {
+            "released": False,
+            "job_id": job_id,
+            "owner": owner,
+            "held_by": row["advance_lock"],
+            "reason": "not_owner",
+        }
+    conn.execute(
+        "UPDATE runtime_jobs SET advance_lock = NULL, claim_expires_at = NULL, updated_at = ? WHERE id = ?",
+        (_now(), job_id),
+    )
+    _event(conn, job_id, "advance_lock_released", {"owner": owner, "force": bool(force)})
+    return {"released": True, "job_id": job_id, "owner": owner, "force": bool(force)}
+
+
 def status_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
     ensure_runtime_schema(conn)
     job = _row_to_dict(conn.execute("SELECT * FROM runtime_jobs WHERE id = ?", (job_id,)).fetchone())
@@ -2181,6 +2291,106 @@ def advance_runtime_job_until_idle(
         "state": _job(conn, job_id)["state"],
         "reason": reason,
         "steps": steps,
+    }
+
+
+def supervisor_runtime_tick(
+    conn: sqlite3.Connection,
+    job_id: str,
+    *,
+    owner: Optional[str] = None,
+    lock_ttl_seconds: int = 60,
+    board: Optional[str] = None,
+    create_tasks: bool = True,
+    decision_provider: Optional[Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]] = None,
+    max_patches: int = 1,
+    auto_compact: bool = True,
+    compaction_policy: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Run one production supervisor tick under a resumable DB lease."""
+
+    lock = acquire_runtime_advance_lock(
+        conn,
+        job_id,
+        owner=owner,
+        ttl_seconds=lock_ttl_seconds,
+    )
+    if not lock.get("acquired"):
+        return {
+            "job_id": job_id,
+            "status": "skipped",
+            "reason": lock.get("reason"),
+            "lock": lock,
+        }
+    owner_id = str(lock["owner"])
+    try:
+        result = advance_runtime_job(
+            conn,
+            job_id,
+            board=board,
+            create_tasks=create_tasks,
+            decision_provider=decision_provider,
+            max_patches=max_patches,
+            auto_compact=auto_compact,
+            compaction_policy=compaction_policy,
+        )
+        return {
+            "job_id": job_id,
+            "status": "advanced",
+            "lock": lock,
+            "result": {
+                "job_state": result.job_state,
+                "materialized_nodes": result.materialized_nodes,
+                "ingested_nodes": result.ingested_nodes,
+                "decision_requested": result.decision_requested,
+                "patch_status": result.patch_status,
+                "events": result.events,
+            },
+        }
+    finally:
+        release_runtime_advance_lock(conn, job_id, owner=owner_id)
+
+
+def supervise_runtime_jobs_once(
+    conn: sqlite3.Connection,
+    *,
+    owner: Optional[str] = None,
+    limit: int = 10,
+    board: Optional[str] = None,
+    create_tasks: bool = True,
+    decision_provider: Optional[Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]] = None,
+    lock_ttl_seconds: int = 60,
+) -> dict[str, Any]:
+    """Poll resumable runtime jobs and run at most one leased tick per job."""
+
+    ensure_runtime_schema(conn)
+    rows = conn.execute(
+        """
+        SELECT id
+          FROM runtime_jobs
+         WHERE state NOT IN ('done', 'cancelled', 'failed')
+         ORDER BY updated_at ASC, created_at ASC
+         LIMIT ?
+        """,
+        (max(1, int(limit)),),
+    ).fetchall()
+    ticks = [
+        supervisor_runtime_tick(
+            conn,
+            row["id"],
+            owner=owner,
+            lock_ttl_seconds=lock_ttl_seconds,
+            board=board,
+            create_tasks=create_tasks,
+            decision_provider=decision_provider,
+        )
+        for row in rows
+    ]
+    return {
+        "owner": owner,
+        "job_count": len(rows),
+        "advanced_count": len([tick for tick in ticks if tick.get("status") == "advanced"]),
+        "ticks": ticks,
     }
 
 

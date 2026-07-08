@@ -249,6 +249,57 @@ def test_materialization_is_idempotent(conn):
     assert conn.execute("SELECT COUNT(*) FROM node_materializations WHERE job_id = ?", (job_id,)).fetchone()[0] == 1
 
 
+def test_advance_lock_is_exclusive_and_expires(conn):
+    job_id = _job(conn)
+    first = rk.acquire_runtime_advance_lock(conn, job_id, owner="supervisor-a", ttl_seconds=60)
+    second = rk.acquire_runtime_advance_lock(conn, job_id, owner="supervisor-b", ttl_seconds=60)
+
+    assert first["acquired"] is True
+    assert second["acquired"] is False
+    assert second["reason"] == "locked"
+    assert second["held_by"] == "supervisor-a"
+
+    conn.execute(
+        "UPDATE runtime_jobs SET claim_expires_at = ? WHERE id = ?",
+        (0, job_id),
+    )
+    third = rk.acquire_runtime_advance_lock(conn, job_id, owner="supervisor-b", ttl_seconds=60)
+    assert third["acquired"] is True
+    assert third["owner"] == "supervisor-b"
+
+    released = rk.release_runtime_advance_lock(conn, job_id, owner="supervisor-b")
+    assert released["released"] is True
+    job = conn.execute("SELECT advance_lock, claim_expires_at FROM runtime_jobs WHERE id = ?", (job_id,)).fetchone()
+    assert job["advance_lock"] is None
+    assert job["claim_expires_at"] is None
+    events = [
+        row["event_type"]
+        for row in conn.execute("SELECT event_type FROM execution_events WHERE job_id = ?", (job_id,))
+    ]
+    assert "advance_lock_acquired" in events
+    assert "advance_lock_released" in events
+
+
+def test_supervisor_tick_uses_lock_and_does_not_duplicate_materialization(conn):
+    job_id = _job(conn)
+
+    first = rk.supervisor_runtime_tick(conn, job_id, owner="supervisor-a", create_tasks=True)
+    second = rk.supervisor_runtime_tick(conn, job_id, owner="supervisor-a", create_tasks=True)
+
+    assert first["status"] == "advanced"
+    assert first["result"]["materialized_nodes"] == ["understand-scope"]
+    assert second["status"] == "advanced"
+    assert second["result"]["materialized_nodes"] == []
+    assert conn.execute("SELECT COUNT(*) FROM node_materializations WHERE job_id = ?", (job_id,)).fetchone()[0] == 1
+
+    held = rk.acquire_runtime_advance_lock(conn, job_id, owner="supervisor-held", ttl_seconds=60)
+    assert held["acquired"] is True
+    skipped = rk.supervisor_runtime_tick(conn, job_id, owner="supervisor-other", create_tasks=True)
+    assert skipped["status"] == "skipped"
+    assert skipped["reason"] == "locked"
+    rk.release_runtime_advance_lock(conn, job_id, owner="supervisor-held")
+
+
 def test_fake_evidence_updates_progress_ledger(conn):
     job_id = _job(conn)
     rk.advance_runtime_job(conn, job_id, create_tasks=True)

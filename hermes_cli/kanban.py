@@ -1495,6 +1495,11 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     rt_status.add_argument("job_id")
     rt_status.add_argument("--json", action="store_true")
 
+    rt_inspect = runtime_sub.add_parser("inspect", help="Show full runtime observability snapshot")
+    rt_inspect.add_argument("job_id")
+    rt_inspect.add_argument("--limit", type=int, default=50)
+    rt_inspect.add_argument("--json", action="store_true")
+
     rt_list = runtime_sub.add_parser("list", aliases=["ls"], help="List runtime jobs")
     rt_list.add_argument("--state", default=None)
     rt_list.add_argument("--limit", type=int, default=50)
@@ -1522,6 +1527,22 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     rt_advance.add_argument("--timeout", type=float, default=None,
                             help="Provider request timeout in seconds for --provider real")
     rt_advance.add_argument("--json", action="store_true")
+
+    rt_supervise = runtime_sub.add_parser("supervise", help="Run one leased production supervisor poll")
+    rt_supervise.add_argument("--job-id", default=None, help="Run one leased tick for a single job")
+    rt_supervise.add_argument("--owner", default=None, help="Supervisor owner id recorded in advance_lock")
+    rt_supervise.add_argument("--limit", type=int, default=10)
+    rt_supervise.add_argument("--lock-ttl", type=int, default=60)
+    rt_supervise.add_argument("--no-create-tasks", action="store_true")
+    rt_supervise.add_argument("--provider", choices=["none", "fake", "real"], default="none",
+                              help="Decision provider mode used during supervisor ticks")
+    rt_supervise.add_argument("--model-provider", default=None)
+    rt_supervise.add_argument("--model", default=None)
+    rt_supervise.add_argument("--codex-config", action="store_true")
+    rt_supervise.add_argument("--profile", default="graph_patch_decision")
+    rt_supervise.add_argument("--max-retries", type=int, default=1)
+    rt_supervise.add_argument("--timeout", type=float, default=None)
+    rt_supervise.add_argument("--json", action="store_true")
 
     rt_complete_node = runtime_sub.add_parser(
         "complete-node",
@@ -1587,6 +1608,20 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     rt_compact.add_argument("job_id")
     rt_compact.add_argument("--profile", default="token_budget_compaction")
     rt_compact.add_argument("--reason", default="manual")
+    rt_compact.add_argument("--provider", choices=["deterministic", "fake", "real"], default="deterministic",
+                            help="Compaction provider mode. 'real' requires --model-provider and --model")
+    rt_compact.add_argument("--model-provider", default=None,
+                            help="Hermes model source provider used when --provider real")
+    rt_compact.add_argument("--model", default=None,
+                            help="Model used when --provider real")
+    rt_compact.add_argument("--codex-config", action="store_true",
+                            help="Use ~/.codex config.toml/auth.json model source for --provider real")
+    rt_compact.add_argument("--max-retries", type=int, default=1,
+                            help="Parse retry count for real compaction provider")
+    rt_compact.add_argument("--timeout", type=float, default=None,
+                            help="Provider request timeout in seconds for --provider real")
+    rt_compact.add_argument("--no-fallback", action="store_true",
+                            help="Do not fall back to deterministic checkpoint when provider output is rejected")
     rt_compact.add_argument("--json", action="store_true")
 
     # --- gc ---
@@ -2052,8 +2087,12 @@ def _dispatch_runtime(args: argparse.Namespace) -> int:
         return _cmd_runtime_promote(args)
     if sub == "status":
         return _cmd_runtime_status(args)
+    if sub == "inspect":
+        return _cmd_runtime_inspect(args)
     if sub == "advance":
         return _cmd_runtime_advance(args)
+    if sub == "supervise":
+        return _cmd_runtime_supervise(args)
     if sub == "complete-node":
         return _cmd_runtime_complete_node(args)
     if sub == "waive-goal":
@@ -2249,6 +2288,47 @@ def _cmd_runtime_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_runtime_inspect(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_decision as rd
+
+    with kb.connect() as conn:
+        payload = rd.runtime_observability_snapshot(conn, args.job_id, limit=args.limit)
+    if getattr(args, "json", False):
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+    job = payload["job"]
+    goals = payload["goals"]
+    decision_session = payload["decision_session"]
+    print(f"Runtime inspect {job['id']} [{job['state']}] rev={job['graph_revision']}")
+    print(
+        "Goals: "
+        f"{len([item for item in goals['items'] if item.get('state') == 'satisfied'])}/"
+        f"{len([item for item in goals['items'] if item.get('required')])} required satisfied, "
+        f"open_gaps={len([gap for gap in goals['gaps'] if gap.get('state') == 'open'])}"
+    )
+    print(
+        "Decision session: "
+        f"active_segment={decision_session['active_segment']['id']} "
+        f"checkpoint={(decision_session.get('latest_checkpoint') or {}).get('id') or '-'} "
+        f"tokens={decision_session['active_segment_tokens']}"
+    )
+    print(
+        "Liveness: "
+        f"illegal_idle={payload['liveness'].get('illegal_idle', False)} "
+        f"ready={payload['liveness'].get('ready_count', 0)} "
+        f"running={payload['liveness'].get('running_count', 0)} "
+        f"human={payload['liveness'].get('waiting_human_count', 0)}"
+    )
+    print(
+        "Recent: "
+        f"decisions={len(payload['decisions'])} "
+        f"patches={len(payload['patches'])} "
+        f"checkpoints={len(payload['checkpoints'])} "
+        f"human_gates={len(payload['human_gates'])}"
+    )
+    return 0
+
+
 def _cmd_runtime_list(args: argparse.Namespace) -> int:
     from hermes_cli import kanban_runtime_kernel as rk
 
@@ -2321,6 +2401,46 @@ def _cmd_runtime_advance(args: argparse.Namespace) -> int:
                 print(f"  Patch:        {step['patch_status']}")
         else:
             print(f"  Steps: {len(result['steps'])}")
+    return 0
+
+
+def _cmd_runtime_supervise(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    provider = _runtime_decision_provider_from_args(args)
+    create_tasks = not getattr(args, "no_create_tasks", False)
+    board = kb.get_current_board()
+    with kb.connect() as conn:
+        if getattr(args, "job_id", None):
+            result = rk.supervisor_runtime_tick(
+                conn,
+                args.job_id,
+                owner=getattr(args, "owner", None),
+                lock_ttl_seconds=getattr(args, "lock_ttl", 60),
+                board=board,
+                create_tasks=create_tasks,
+                decision_provider=provider,
+            )
+        else:
+            result = rk.supervise_runtime_jobs_once(
+                conn,
+                owner=getattr(args, "owner", None),
+                limit=getattr(args, "limit", 10),
+                board=board,
+                create_tasks=create_tasks,
+                decision_provider=provider,
+                lock_ttl_seconds=getattr(args, "lock_ttl", 60),
+            )
+    if getattr(args, "json", False):
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+    if "ticks" in result:
+        print(
+            f"Supervised {result['job_count']} runtime jobs: "
+            f"advanced={result['advanced_count']}"
+        )
+    else:
+        print(f"Supervisor tick {result['job_id']}: {result['status']} ({result.get('reason') or 'ok'})")
     return 0
 
 
@@ -2667,12 +2787,30 @@ def _cmd_runtime_compact(args: argparse.Namespace) -> int:
 
     with kb.connect() as conn:
         rk.ensure_runtime_schema(conn)
+        mode = getattr(args, "provider", "deterministic")
+        provider = None
+        if mode == "fake":
+            provider = rd.DeterministicCompactionProvider(conn)
+        elif mode == "real":
+            source = _runtime_model_source_from_args(args, require_for_real=True)
+            provider = rd.RuntimeCompactionProvider(
+                provider_name=source["provider_name"],
+                model=source["model"],
+                profile_name=args.profile,
+                max_retries=getattr(args, "max_retries", 1),
+                timeout_seconds=getattr(args, "timeout", None),
+                explicit_base_url=source.get("explicit_base_url"),
+                explicit_api_key=source.get("explicit_api_key"),
+            )
         payload = rd.compact_decision_session(
             conn,
             args.job_id,
             profile_name=args.profile,
             reason=args.reason,
+            compaction_provider=provider,
+            fallback_to_deterministic=not getattr(args, "no_fallback", False),
         )
+    payload["provider_mode"] = getattr(args, "provider", "deterministic")
     if getattr(args, "json", False):
         print(json.dumps(payload, indent=2, ensure_ascii=False))
     else:
@@ -2681,6 +2819,8 @@ def _cmd_runtime_compact(args: argparse.Namespace) -> int:
                 f"Compacted runtime job {args.job_id}: "
                 f"checkpoint={payload['checkpoint_id']} new_segment={payload['new_segment_id']}"
             )
+            if payload.get("fallback_used"):
+                print("  Fallback: deterministic")
         else:
             print(f"Compaction rejected for {args.job_id}: {payload.get('reason')}")
     return 0

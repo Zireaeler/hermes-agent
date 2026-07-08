@@ -772,6 +772,82 @@ async def get_action_status(name: str, lines: int = 200):
     }
 
 
+def _runtime_snapshot(job_id: str, *, limit: int = 50) -> Dict[str, Any]:
+    from hermes_cli import kanban_db as kb
+    from hermes_cli import kanban_runtime_decision as rd
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    with kb.connect() as conn:
+        rk.ensure_runtime_schema(conn)
+        return rd.runtime_observability_snapshot(conn, job_id, limit=limit)
+
+
+@app.get("/api/runtime/jobs")
+async def get_runtime_jobs(state: Optional[str] = None, limit: int = 50):
+    try:
+        from hermes_cli import kanban_db as kb
+        from hermes_cli import kanban_runtime_kernel as rk
+
+        with kb.connect() as conn:
+            rk.ensure_runtime_schema(conn)
+            jobs = rk.list_runtime_jobs(conn, state=state, limit=min(max(limit, 1), 200))
+        return {"jobs": jobs, "state": state, "limit": min(max(limit, 1), 200)}
+    except Exception:
+        _log.exception("GET /api/runtime/jobs failed")
+        raise HTTPException(status_code=500, detail="Runtime jobs failed")
+
+
+@app.get("/api/runtime/jobs/{job_id}")
+async def get_runtime_job(job_id: str, limit: int = 50):
+    try:
+        return _runtime_snapshot(job_id, limit=min(max(limit, 1), 200))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception:
+        _log.exception("GET /api/runtime/jobs/%s failed", job_id)
+        raise HTTPException(status_code=500, detail="Runtime job snapshot failed")
+
+
+@app.get("/api/runtime/jobs/{job_id}/{section}")
+async def get_runtime_job_section(job_id: str, section: str, limit: int = 50):
+    allowed = {
+        "goals",
+        "ledger",
+        "graph",
+        "events",
+        "patches",
+        "decisions",
+        "decision-session",
+        "checkpoints",
+        "compactions",
+        "human-gates",
+        "liveness",
+    }
+    if section not in allowed:
+        raise HTTPException(status_code=404, detail=f"Unknown runtime section: {section}")
+    try:
+        snapshot = _runtime_snapshot(job_id, limit=min(max(limit, 1), 200))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception:
+        _log.exception("GET /api/runtime/jobs/%s/%s failed", job_id, section)
+        raise HTTPException(status_code=500, detail="Runtime job section failed")
+    mapping = {
+        "goals": snapshot["goals"],
+        "ledger": snapshot["progress_ledger"],
+        "graph": snapshot["graph"],
+        "events": snapshot["events"],
+        "patches": snapshot["patches"],
+        "decisions": snapshot["decisions"],
+        "decision-session": snapshot["decision_session"],
+        "checkpoints": snapshot["checkpoints"],
+        "compactions": snapshot["compactions"],
+        "human-gates": snapshot["human_gates"],
+        "liveness": snapshot["liveness"],
+    }
+    return {"job_id": job_id, "section": section, "data": mapping[section]}
+
+
 @app.get("/api/sessions")
 async def get_sessions(limit: int = 20, offset: int = 0):
     try:

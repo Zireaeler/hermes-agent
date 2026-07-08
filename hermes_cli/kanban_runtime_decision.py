@@ -25,6 +25,7 @@ PATCH_OPS = {
     "insert_verifier",
     "request_human",
     "propose_blocked",
+    "strategy_update",
 }
 DEFAULT_COMPACTION_POLICY = {
     "mode": "auto",
@@ -102,6 +103,66 @@ class DecisionProviderResult:
             "input_token_estimate": self.input_token_estimate,
             "output_token_estimate": self.output_token_estimate,
             "error": self.error,
+        }
+
+
+@dataclass(frozen=True)
+class CompactionProviderRequest:
+    job_id: str
+    source_segment: dict[str, Any]
+    profile: dict[str, Any]
+    budget: dict[str, Any]
+    db_state: dict[str, Any]
+    segment_entries: list[dict[str, Any]]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "job_id": self.job_id,
+            "source_segment": self.source_segment,
+            "profile": {key: self.profile.get(key) for key in ("profile_name", "profile_version", "profile_hash", "profile_path")},
+            "budget": self.budget,
+            "db_state": self.db_state,
+            "segment_entries": self.segment_entries,
+        }
+
+
+@dataclass(frozen=True)
+class CompactionProviderResult:
+    checkpoint: Optional[dict[str, Any]]
+    raw_output: Any
+    provider_name: str
+    model: Optional[str] = None
+    profile_name: Optional[str] = None
+    profile_version: Optional[str] = None
+    profile_hash: Optional[str] = None
+    request_ref: Optional[str] = None
+    response_ref: Optional[str] = None
+    parse_status: str = "parsed"
+    retry_count: int = 0
+    provider_latency_ms: Optional[int] = None
+    input_token_estimate: Optional[int] = None
+    output_token_estimate: Optional[int] = None
+    error: Optional[str] = None
+    fallback_used: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "checkpoint": self.checkpoint,
+            "raw_output": self.raw_output,
+            "provider_name": self.provider_name,
+            "model": self.model,
+            "profile_name": self.profile_name,
+            "profile_version": self.profile_version,
+            "profile_hash": self.profile_hash,
+            "request_ref": self.request_ref,
+            "response_ref": self.response_ref,
+            "parse_status": self.parse_status,
+            "retry_count": self.retry_count,
+            "provider_latency_ms": self.provider_latency_ms,
+            "input_token_estimate": self.input_token_estimate,
+            "output_token_estimate": self.output_token_estimate,
+            "error": self.error,
+            "fallback_used": self.fallback_used,
         }
 
 
@@ -243,6 +304,10 @@ def load_decision_profile(profile_name: str) -> dict[str, Any]:
 def _profile_metadata(profile_name: str) -> dict[str, Any]:
     profile = load_compaction_profile(profile_name)
     return {key: profile[key] for key in ("profile_name", "profile_version", "profile_hash", "profile_path")}
+
+
+def _profile_public(profile: dict[str, Any]) -> dict[str, Any]:
+    return {key: profile.get(key) for key in ("profile_name", "profile_version", "profile_hash", "profile_path")}
 
 
 def _source_refs(**refs: Any) -> list[dict[str, Any]]:
@@ -665,6 +730,134 @@ def _segment_range(conn: sqlite3.Connection, segment_id: str) -> dict[str, Any]:
     }
 
 
+def _segment_entries_for_compaction(conn: sqlite3.Connection, segment_id: str, *, max_entries: int = 200) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT id, entry_index, entry_type, decision_id, event_id, patch_id,
+               graph_revision, ref_type, ref_id, payload_json, payload_text,
+               estimated_tokens, created_at
+          FROM decision_segment_entries
+         WHERE segment_id = ?
+         ORDER BY entry_index, id
+         LIMIT ?
+        """,
+        (segment_id, max(1, int(max_entries))),
+    ).fetchall()
+    entries: list[dict[str, Any]] = []
+    for row in rows:
+        item = _row(row) or {}
+        text = item.get("payload_text")
+        if isinstance(text, str) and len(text) > 4000:
+            item["payload_text"] = text[:4000] + "\n[truncated]"
+        entries.append(item)
+    return entries
+
+
+def estimate_segment_tokens(conn: sqlite3.Connection, segment_id: str) -> dict[str, int]:
+    """Estimate token usage for one decision session segment from entries."""
+
+    row = conn.execute(
+        """
+        SELECT COALESCE(SUM(estimated_tokens), 0) AS active_segment_tokens,
+               COALESCE(SUM(CASE WHEN entry_type IN ('provider_input', 'compaction_provider_input', 'delta_appended')
+                                 THEN estimated_tokens ELSE 0 END), 0) AS estimated_input_tokens,
+               COALESCE(SUM(CASE WHEN entry_type IN ('provider_output', 'compaction_provider_output')
+                                 THEN estimated_tokens ELSE 0 END), 0) AS estimated_output_tokens
+          FROM decision_segment_entries
+         WHERE segment_id = ?
+        """,
+        (segment_id,),
+    ).fetchone()
+    return {
+        "active_segment_tokens": int(row["active_segment_tokens"] or 0),
+        "estimated_input_tokens": int(row["estimated_input_tokens"] or 0),
+        "estimated_output_tokens": int(row["estimated_output_tokens"] or 0),
+    }
+
+
+def build_compaction_provider_request(
+    conn: sqlite3.Connection,
+    job_id: str,
+    source_segment: Optional[dict[str, Any]] = None,
+    *,
+    profile_name: str = "token_budget_compaction",
+    budget: Optional[dict[str, Any]] = None,
+) -> CompactionProviderRequest:
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    rk.ensure_runtime_schema(conn)
+    source_segment = source_segment or rk.ensure_decision_segment(conn, job_id)
+    profile = load_compaction_profile(profile_name)
+    metrics = estimate_segment_tokens(conn, source_segment["id"])
+    resolved_budget = {
+        "max_checkpoint_tokens": 3000,
+        "max_segment_entries": 200,
+        **(budget or {}),
+        "active_segment_tokens": metrics["active_segment_tokens"],
+    }
+    return CompactionProviderRequest(
+        job_id=job_id,
+        source_segment={
+            "id": source_segment["id"],
+            "segment_index": source_segment["segment_index"],
+            "state": source_segment["state"],
+            "covered_graph_revision_start": source_segment.get("covered_graph_revision_start"),
+        },
+        profile=profile,
+        budget=resolved_budget,
+        db_state=build_checkpoint_payload(conn, job_id),
+        segment_entries=_segment_entries_for_compaction(
+            conn,
+            source_segment["id"],
+            max_entries=int(resolved_budget["max_segment_entries"]),
+        ),
+    )
+
+
+def render_compaction_prompt(request: CompactionProviderRequest) -> dict[str, Any]:
+    return {
+        "stable_compaction_contract": {
+            "db_is_authoritative": True,
+            "checkpoint_is_non_authoritative_context": True,
+            "output": "return exactly one JSON checkpoint candidate object",
+            "must_include_provenance": True,
+            "must_not_output_graph_patch": True,
+            "must_not_mark_unverified_as_satisfied": True,
+            "old_segment_excluded_after_success": True,
+        },
+        "profile": _profile_public(request.profile),
+        "budget": request.budget,
+        "source_segment": request.source_segment,
+        "db_state": request.db_state,
+        "segment_entries": request.segment_entries,
+        "provider_instruction": {
+            "no_markdown": True,
+            "no_explanatory_text": True,
+            "checkpoint_required_fields": [
+                "objective_summary",
+                "goal_contract_revision",
+                "satisfied_goal_items",
+                "open_goal_gaps",
+                "open_blockers",
+                "graph_frontier",
+                "metadata",
+            ],
+        },
+    }
+
+
+def render_compaction_messages(request: CompactionProviderRequest) -> tuple[list[dict[str, str]], dict[str, Any], dict[str, Any]]:
+    rendered = render_compaction_prompt(request)
+    system = (
+        "You are the Hermes RuntimeCompactionProvider. You are not an execution agent. "
+        "You may not call tools, web_search, write files, create Kanban tasks, write the database, "
+        "or propose graph patches. Return exactly one JSON checkpoint candidate object.\n\n"
+        f"{request.profile['content']}"
+    )
+    user = json.dumps(rendered, ensure_ascii=False, sort_keys=True)
+    return ([{"role": "system", "content": system}, {"role": "user", "content": user}], rendered, request.profile)
+
+
 def _render_checkpoint_text(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2)
 
@@ -818,40 +1011,159 @@ def compact_decision_session(
     job_id: str,
     profile_name: str = "token_budget_compaction",
     reason: str = "manual",
+    *,
+    compaction_provider: Any = None,
+    fallback_to_deterministic: bool = True,
+    budget: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    """Close the active segment, create a validated deterministic checkpoint, and open a new segment."""
+    """Compact the active decision segment through a provider-shaped boundary.
+
+    Rejected provider output is recorded but does not close or poison the active
+    segment.  A successful checkpoint is the only path that replaces the active
+    segment and excludes the old transcript from future provider input.
+    """
 
     from hermes_cli import kanban_runtime_kernel as rk
 
     rk.ensure_runtime_schema(conn)
     source_segment = rk.ensure_decision_segment(conn, job_id)
     session = latest_decision_session(conn, job_id)
+    provider_mode = "deterministic" if compaction_provider is None else getattr(compaction_provider, "provider_name", "custom")
     request_entry = rk.append_decision_segment_entry(
         conn,
         job_id,
         "compaction_requested",
-        {"profile_name": profile_name, "reason": reason, "source_segment_id": source_segment["id"]},
+        {
+            "profile_name": profile_name,
+            "reason": reason,
+            "source_segment_id": source_segment["id"],
+            "provider_mode": provider_mode,
+            "fallback_to_deterministic": bool(fallback_to_deterministic),
+        },
         ref_type="decision_session_segment",
         ref_id=source_segment["id"],
     )
-    payload = build_deterministic_checkpoint(conn, job_id, source_segment["id"], profile_name=profile_name)
-    validation = validate_decision_checkpoint(conn, job_id, payload)
-    if validation["status"] != "accepted":
+    request = build_compaction_provider_request(
+        conn,
+        job_id,
+        source_segment=source_segment,
+        profile_name=profile_name,
+        budget=budget,
+    )
+    messages, rendered, request_profile = render_compaction_messages(request)
+    provider_input_entry = rk.append_decision_segment_entry(
+        conn,
+        job_id,
+        "compaction_provider_input",
+        {
+            "request": request.to_dict(),
+            "rendered": rendered,
+            "profile": _profile_public(request_profile),
+            "no_tools": True,
+            "single_shot": True,
+        },
+        payload_text=_json(messages),
+        ref_type="decision_session_segment",
+        ref_id=source_segment["id"],
+    )
+
+    provider = compaction_provider or DeterministicCompactionProvider(conn)
+    try:
+        provider_result = provider.compact(request)
+        if not isinstance(provider_result, CompactionProviderResult):
+            raise ProviderPatchParseError("compaction provider must return CompactionProviderResult")
+    except Exception as exc:
+        provider_result = CompactionProviderResult(
+            checkpoint=None,
+            raw_output=None,
+            provider_name=getattr(provider, "provider_name", "custom"),
+            model=getattr(provider, "model", None),
+            profile_name=request.profile["profile_name"],
+            profile_version=request.profile["profile_version"],
+            profile_hash=request.profile["profile_hash"],
+            request_ref=hashlib.sha256(json.dumps(rendered, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest(),
+            parse_status="provider_error",
+            input_token_estimate=estimate_decision_input_tokens(rendered, request_profile["content"]),
+            error=str(exc),
+        )
+
+    rk.append_decision_segment_entry(
+        conn,
+        job_id,
+        "compaction_provider_output",
+        provider_result.to_dict(),
+        ref_type="decision_session_segment",
+        ref_id=source_segment["id"],
+    )
+
+    payload = provider_result.checkpoint
+    validation = (
+        validate_decision_checkpoint(conn, job_id, payload)
+        if payload is not None
+        else {"status": "rejected", "reason": provider_result.error or provider_result.parse_status}
+    )
+    fallback_used = False
+    provider_validation = dict(validation)
+    if validation["status"] != "accepted" and fallback_to_deterministic:
+        rk.append_decision_segment_entry(
+            conn,
+            job_id,
+            "compaction_fallback",
+            {
+                "reason": validation["reason"],
+                "provider_result": provider_result.to_dict(),
+                "fallback_provider": "deterministic",
+            },
+            ref_type="decision_session_segment",
+            ref_id=source_segment["id"],
+        )
+        fallback_result = DeterministicCompactionProvider(conn).compact(request)
+        payload = fallback_result.checkpoint
+        validation = validate_decision_checkpoint(conn, job_id, payload) if payload is not None else {
+            "status": "rejected",
+            "reason": fallback_result.error or fallback_result.parse_status,
+        }
+        provider_result = CompactionProviderResult(
+            checkpoint=payload,
+            raw_output=fallback_result.raw_output,
+            provider_name=fallback_result.provider_name,
+            model=fallback_result.model,
+            profile_name=fallback_result.profile_name,
+            profile_version=fallback_result.profile_version,
+            profile_hash=fallback_result.profile_hash,
+            request_ref=fallback_result.request_ref,
+            response_ref=fallback_result.response_ref,
+            parse_status=fallback_result.parse_status,
+            retry_count=fallback_result.retry_count,
+            provider_latency_ms=fallback_result.provider_latency_ms,
+            input_token_estimate=fallback_result.input_token_estimate,
+            output_token_estimate=fallback_result.output_token_estimate,
+            error=fallback_result.error,
+            fallback_used=True,
+        )
+        fallback_used = True
+        rk.append_decision_segment_entry(
+            conn,
+            job_id,
+            "compaction_provider_output",
+            provider_result.to_dict(),
+            ref_type="decision_session_segment",
+            ref_id=source_segment["id"],
+        )
+
+    if payload is None or validation["status"] != "accepted":
         rk.append_decision_segment_entry(
             conn,
             job_id,
             "checkpoint_rejected",
-            {"validation": validation, "profile_name": profile_name},
+            {
+                "validation": validation,
+                "provider_validation": provider_validation,
+                "provider_result": provider_result.to_dict(),
+                "profile_name": profile_name,
+            },
             ref_type="decision_session_segment",
             ref_id=source_segment["id"],
-        )
-        conn.execute(
-            """
-            UPDATE decision_session_segments
-               SET state = 'failed_compaction', closed_at = ?, covered_graph_revision_end = ?
-             WHERE id = ?
-            """,
-            (_now(), int(payload["metadata"]["graph_revision"]), source_segment["id"]),
         )
         conn.execute(
             """
@@ -862,7 +1174,15 @@ def compact_decision_session(
             """,
             (profile_name, _now(), _now(), session["id"]),
         )
-        return {"status": "rejected", "reason": validation["reason"], "source_segment_id": source_segment["id"]}
+        return {
+            "status": "rejected",
+            "reason": validation["reason"],
+            "source_segment_id": source_segment["id"],
+            "active_segment_preserved": True,
+            "provider_result": provider_result.to_dict(),
+            "provider_validation": provider_validation,
+            "fallback_used": fallback_used,
+        }
 
     profile = _profile_metadata(profile_name)
     ranges = _segment_range(conn, source_segment["id"])
@@ -870,6 +1190,32 @@ def compact_decision_session(
     now = _now()
     revision = int(payload["metadata"]["graph_revision"])
     supersedes = session.get("latest_checkpoint_id")
+    provider_audit = {
+        "reason": reason,
+        "request_entry_id": request_entry["id"],
+        "provider_input_entry_id": provider_input_entry["id"],
+        "provider_name": provider_result.provider_name,
+        "provider_model": provider_result.model,
+        "request_ref": provider_result.request_ref,
+        "response_ref": provider_result.response_ref,
+        "parse_status": provider_result.parse_status,
+        "retry_count": provider_result.retry_count,
+        "provider_latency_ms": provider_result.provider_latency_ms,
+        "input_token_estimate": provider_result.input_token_estimate,
+        "output_token_estimate": provider_result.output_token_estimate,
+        "fallback_used": fallback_used or provider_result.fallback_used,
+        "provider_validation": provider_validation,
+    }
+    payload.setdefault("metadata", {})
+    payload["metadata"].update(
+        {
+            "provider_audit": provider_audit,
+            "profile_name": profile["profile_name"],
+            "profile_version": profile["profile_version"],
+            "profile_hash": profile["profile_hash"],
+            "profile_path": profile["profile_path"],
+        }
+    )
     conn.execute(
         """
         INSERT INTO decision_checkpoints (
@@ -910,14 +1256,19 @@ def compact_decision_session(
             _render_checkpoint_text(payload),
             "accepted",
             supersedes,
-            _json({"reason": reason, "request_entry_id": request_entry["id"]}),
+            _json(provider_audit),
         ),
     )
     rk.append_decision_segment_entry(
         conn,
         job_id,
         "checkpoint_created",
-        {"checkpoint_id": checkpoint_id, "validation": validation, **profile},
+        {
+            "checkpoint_id": checkpoint_id,
+            "validation": validation,
+            "provider_audit": provider_audit,
+            **profile,
+        },
         ref_type="decision_checkpoint",
         ref_id=checkpoint_id,
     )
@@ -979,6 +1330,11 @@ def compact_decision_session(
         "profile_name": profile["profile_name"],
         "profile_hash": profile["profile_hash"],
         "covered_entry_end": ranges["covered_entry_end"],
+        "provider_name": provider_result.provider_name,
+        "provider_model": provider_result.model,
+        "request_ref": provider_result.request_ref,
+        "response_ref": provider_result.response_ref,
+        "fallback_used": fallback_used or provider_result.fallback_used,
     }
 
 
@@ -1044,6 +1400,157 @@ def decision_context_status(conn: sqlite3.Connection, job_id: str) -> dict[str, 
             "current_delta",
         ],
         "short_tail": _short_tail_entries(conn, job_id, checkpoint),
+    }
+
+
+def _query_rows(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
+    return [_row(row) or {} for row in conn.execute(sql, params).fetchall()]
+
+
+def runtime_observability_snapshot(
+    conn: sqlite3.Connection,
+    job_id: str,
+    *,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Return a bounded JSON surface for dashboard/operator inspection."""
+
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    rk.ensure_runtime_schema(conn)
+    bounded = max(1, min(int(limit), 200))
+    status = rk.status_runtime_job(conn, job_id)
+    context = decision_context_status(conn, job_id)
+    decisions = _query_rows(
+        conn,
+        """
+        SELECT id, job_id, db_revision, decision_session_id, delta_json,
+               decision_json, model, status, validator_result_json, error,
+               created_at, completed_at
+          FROM kernel_decisions
+         WHERE job_id = ?
+         ORDER BY created_at DESC, id DESC
+         LIMIT ?
+        """,
+        (job_id, bounded),
+    )
+    for decision in decisions:
+        decision["delta"] = _loads(decision.get("delta_json"))
+        decision["decision"] = _loads(decision.get("decision_json"))
+        decision["validator_result"] = _loads(decision.get("validator_result_json"))
+        if isinstance(decision["decision"], dict):
+            provider_fields = {
+                key: decision["decision"].get(key)
+                for key in (
+                    "provider_name",
+                    "model",
+                    "profile_name",
+                    "profile_hash",
+                    "request_ref",
+                    "response_ref",
+                    "parse_status",
+                    "retry_count",
+                    "provider_latency_ms",
+                )
+                if decision["decision"].get(key) is not None
+            }
+            decision["provider_audit"] = provider_fields
+    patches = _query_rows(
+        conn,
+        """
+        SELECT id, job_id, decision_id, base_revision, patch_json,
+               status, reject_reason, created_at, applied_at
+          FROM graph_patches
+         WHERE job_id = ?
+         ORDER BY created_at DESC, id DESC
+         LIMIT ?
+        """,
+        (job_id, bounded),
+    )
+    for patch in patches:
+        patch["patch"] = _loads(patch.get("patch_json"))
+        patch["normalized_patch"] = patch["patch"]
+    checkpoints = _query_rows(
+        conn,
+        """
+        SELECT id, job_id, source_segment_id, profile_name, profile_version,
+               profile_hash, profile_path, checkpoint_revision, db_revision,
+               graph_revision, ledger_revision, validator_status, reject_reason,
+               covered_entry_start, covered_entry_end, metadata_json, created_at,
+               supersedes_checkpoint_id
+          FROM decision_checkpoints
+         WHERE job_id = ?
+         ORDER BY created_at DESC, id DESC
+         LIMIT ?
+        """,
+        (job_id, bounded),
+    )
+    for checkpoint in checkpoints:
+        checkpoint["metadata"] = _loads(checkpoint.get("metadata_json"))
+    entries = _query_rows(
+        conn,
+        """
+        SELECT id, segment_id, entry_index, entry_type, ref_type, ref_id,
+               decision_id, event_id, patch_id, graph_revision,
+               estimated_tokens, created_at
+          FROM decision_segment_entries
+         WHERE job_id = ?
+         ORDER BY id DESC
+         LIMIT ?
+        """,
+        (job_id, bounded),
+    )
+    human_gates = [
+        node
+        for node in status["nodes"]
+        if node.get("node_type") == "human_gate" or node.get("state") == "waiting_human"
+    ]
+    compaction_entries = [
+        entry
+        for entry in entries
+        if str(entry.get("entry_type") or "").startswith("compaction")
+        or entry.get("entry_type") in {"checkpoint_created", "checkpoint_rejected"}
+    ]
+    return {
+        "job": status["job"],
+        "legal_waiting_reason": status["job"].get("state"),
+        "goals": {
+            "contract": status["goal_contract"],
+            "items": status["goal_items"],
+            "gaps": status["goal_gaps"],
+            "ledger_summary": status["ledger_summary"],
+        },
+        "progress_ledger": status["progress_ledger"],
+        "graph": {
+            "nodes": status["nodes"],
+            "dependencies": status["dependencies"],
+            "relations": status["relations"],
+            "materializations": status["materializations"],
+            "frontier": status["frontier_summary"],
+        },
+        "events": status["recent_events"][:bounded],
+        "patches": patches,
+        "decisions": decisions,
+        "decision_session": context,
+        "decision_segment_entries": entries,
+        "checkpoints": checkpoints,
+        "compactions": {
+            "latest_status": context["active_segment"].get("state"),
+            "policy": context["compaction_policy"],
+            "entries": compaction_entries,
+            "checkpoints": checkpoints,
+        },
+        "human_gates": human_gates,
+        "liveness": status["liveness"],
+        "operator_actions": {
+            "read_only": True,
+            "allowed_commands": [
+                "runtime advance",
+                "runtime compact",
+                "runtime waive-goal",
+                "runtime complete-node",
+            ],
+        },
     }
 
 
@@ -1360,6 +1867,132 @@ class RuntimeDecisionProvider:
         )
 
 
+class RuntimeCompactionProvider(RuntimeDecisionProvider):
+    """No-tools, single-shot compaction provider adapter over Hermes model substrate."""
+
+    def __init__(self, *, profile_name: str = "token_budget_compaction", max_tokens: int = 4096, **kwargs: Any) -> None:
+        super().__init__(profile_name=profile_name, max_tokens=max_tokens, **kwargs)
+
+    def compact(self, request: CompactionProviderRequest) -> CompactionProviderResult:
+        messages, rendered, profile = render_compaction_messages(request)
+        request_ref = hashlib.sha256(json.dumps(rendered, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+        input_tokens = estimate_decision_input_tokens(rendered, profile["content"])
+        client, model = self._client_and_model()
+        started = time.monotonic()
+        last_raw: Any = None
+        last_error: Optional[str] = None
+        retry_count = 0
+
+        for attempt in range(self.max_retries + 1):
+            active_messages = messages
+            if attempt:
+                retry_count = attempt
+                active_messages = messages + [
+                    {
+                        "role": "user",
+                        "content": (
+                            "The previous response did not parse as a checkpoint JSON object. "
+                            f"Parse error: {last_error}. Return only the corrected checkpoint JSON object."
+                        ),
+                    }
+                ]
+            try:
+                response = self._call_model(client, model, active_messages)
+            except Exception as exc:
+                latency_ms = int((time.monotonic() - started) * 1000)
+                return CompactionProviderResult(
+                    checkpoint=None,
+                    raw_output=last_raw,
+                    provider_name=self.provider_name,
+                    model=model,
+                    profile_name=profile["profile_name"],
+                    profile_version=profile["profile_version"],
+                    profile_hash=profile["profile_hash"],
+                    request_ref=request_ref,
+                    parse_status="provider_error",
+                    retry_count=retry_count,
+                    provider_latency_ms=latency_ms,
+                    input_token_estimate=input_tokens,
+                    output_token_estimate=_estimate_tokens(last_raw),
+                    error=str(exc),
+                )
+            last_raw = _extract_response_text(response)
+            try:
+                checkpoint = parse_compaction_checkpoint(last_raw, request)
+                latency_ms = int((time.monotonic() - started) * 1000)
+                response_ref = hashlib.sha256(str(last_raw).encode("utf-8")).hexdigest()
+                return CompactionProviderResult(
+                    checkpoint=checkpoint,
+                    raw_output=last_raw,
+                    provider_name=self.provider_name,
+                    model=model,
+                    profile_name=profile["profile_name"],
+                    profile_version=profile["profile_version"],
+                    profile_hash=profile["profile_hash"],
+                    request_ref=request_ref,
+                    response_ref=response_ref,
+                    parse_status="parsed",
+                    retry_count=retry_count,
+                    provider_latency_ms=latency_ms,
+                    input_token_estimate=input_tokens,
+                    output_token_estimate=_estimate_tokens(last_raw),
+                )
+            except ProviderPatchParseError as exc:
+                last_error = str(exc)
+
+        latency_ms = int((time.monotonic() - started) * 1000)
+        response_ref = hashlib.sha256(str(last_raw).encode("utf-8")).hexdigest() if last_raw is not None else None
+        return CompactionProviderResult(
+            checkpoint=None,
+            raw_output=last_raw,
+            provider_name=self.provider_name,
+            model=model,
+            profile_name=profile["profile_name"],
+            profile_version=profile["profile_version"],
+            profile_hash=profile["profile_hash"],
+            request_ref=request_ref,
+            response_ref=response_ref,
+            parse_status="parse_failed",
+            retry_count=retry_count,
+            provider_latency_ms=latency_ms,
+            input_token_estimate=input_tokens,
+            output_token_estimate=_estimate_tokens(last_raw),
+            error=last_error,
+        )
+
+
+class DeterministicCompactionProvider:
+    """Provider-shaped deterministic fallback used by tests and default compaction."""
+
+    provider_name = "deterministic"
+    model = "db-derived"
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.conn = conn
+
+    def compact(self, request: CompactionProviderRequest) -> CompactionProviderResult:
+        checkpoint = build_deterministic_checkpoint(
+            self.conn,
+            request.job_id,
+            request.source_segment["id"],
+            profile_name=request.profile["profile_name"],
+        )
+        return CompactionProviderResult(
+            checkpoint=checkpoint,
+            raw_output=checkpoint,
+            provider_name=self.provider_name,
+            model=self.model,
+            profile_name=request.profile["profile_name"],
+            profile_version=request.profile["profile_version"],
+            profile_hash=request.profile["profile_hash"],
+            request_ref=hashlib.sha256(json.dumps(request.to_dict(), ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest(),
+            response_ref=hashlib.sha256(json.dumps(checkpoint, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest(),
+            parse_status="parsed",
+            input_token_estimate=_estimate_tokens(request.to_dict()) + _estimate_tokens(request.profile.get("content", "")),
+            output_token_estimate=_estimate_tokens(checkpoint),
+        )
+
+
 def _extract_raw_json(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
         return raw
@@ -1376,8 +2009,25 @@ def _extract_raw_json(raw: Any) -> dict[str, Any]:
     except json.JSONDecodeError as exc:
         raise ProviderPatchParseError(f"provider output is not valid JSON: {exc.msg}") from exc
     if not isinstance(parsed, dict):
-        raise ProviderPatchParseError("provider patch must be a JSON object")
+        raise ProviderPatchParseError("provider output must be a JSON object")
     return parsed
+
+
+def parse_compaction_checkpoint(raw: Any, request: CompactionProviderRequest) -> dict[str, Any]:
+    checkpoint = _extract_raw_json(raw)
+    if checkpoint.get("schema") == PATCH_SCHEMA or "ops" in checkpoint:
+        raise ProviderPatchParseError("compaction provider must return checkpoint JSON, not graph patch JSON")
+    metadata = checkpoint.setdefault("metadata", {})
+    if not isinstance(metadata, dict):
+        raise ProviderPatchParseError("checkpoint metadata must be a JSON object")
+    current_revision = int(request.db_state["job"]["graph_revision"])
+    metadata.setdefault("source_segment_id", request.source_segment["id"])
+    metadata.setdefault("profile_name", request.profile["profile_name"])
+    metadata.setdefault("provider_generated", True)
+    metadata.setdefault("db_revision", current_revision)
+    metadata.setdefault("graph_revision", current_revision)
+    metadata.setdefault("ledger_revision", current_revision)
+    return checkpoint
 
 
 def parse_provider_patch(raw: Any, expected_revision: int) -> dict[str, Any]:

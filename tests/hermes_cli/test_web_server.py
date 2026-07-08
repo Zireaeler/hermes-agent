@@ -191,6 +191,30 @@ class TestWebServerEndpoints:
         assert resp.json()["gateway_state"] == "startup_failed"
         assert resp.json()["gateway_platforms"] == {}
 
+    def test_runtime_observability_api(self):
+        from hermes_cli import kanban_db as kb
+        from hermes_cli import kanban_runtime_kernel as rk
+
+        kb.init_db()
+        with kb.connect() as conn:
+            root = kb.create_task(conn, title="runtime api root", initial_status="running")
+            job_id = rk.create_runtime_job(conn, root, "runtime api observability")
+
+        listing = self.client.get("/api/runtime/jobs")
+        assert listing.status_code == 200
+        assert any(job["id"] == job_id for job in listing.json()["jobs"])
+
+        snapshot = self.client.get(f"/api/runtime/jobs/{job_id}")
+        assert snapshot.status_code == 200
+        payload = snapshot.json()
+        assert payload["job"]["id"] == job_id
+        assert {"goals", "graph", "decision_session", "liveness"}.issubset(payload)
+
+        goals = self.client.get(f"/api/runtime/jobs/{job_id}/goals")
+        assert goals.status_code == 200
+        assert goals.json()["section"] == "goals"
+        assert goals.json()["data"]["items"][0]["item_key"] == "initial-runtime-result"
+
     def test_get_config_schema(self):
         resp = self.client.get("/api/config/schema")
         assert resp.status_code == 200
