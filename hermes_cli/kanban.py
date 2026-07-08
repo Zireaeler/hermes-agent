@@ -1507,6 +1507,18 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     rt_advance.add_argument("--no-create-tasks", action="store_true")
     rt_advance.add_argument("--fake-provider", action="store_true",
                             help="Use deterministic fixture provider; not a real LLM")
+    rt_advance.add_argument("--provider", choices=["none", "fake", "real"], default=None,
+                            help="Decision provider mode. 'real' requires --model-provider and --model")
+    rt_advance.add_argument("--model-provider", default=None,
+                            help="Hermes model source provider used when --provider real")
+    rt_advance.add_argument("--model", default=None,
+                            help="Model used when --provider real")
+    rt_advance.add_argument("--profile", default="graph_patch_decision",
+                            help="Decision profile used when --provider real")
+    rt_advance.add_argument("--max-retries", type=int, default=1,
+                            help="Parse retry count for real decision provider")
+    rt_advance.add_argument("--timeout", type=float, default=None,
+                            help="Provider request timeout in seconds for --provider real")
     rt_advance.add_argument("--json", action="store_true")
 
     rt_decision = runtime_sub.add_parser("decision", help="Show recent runtime decision records")
@@ -1522,7 +1534,19 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
 
     rt_prompt = runtime_sub.add_parser("prompt", help="Render provider request/prompt input")
     rt_prompt.add_argument("job_id")
+    rt_prompt.add_argument("--profile", default="graph_patch_decision")
     rt_prompt.add_argument("--json", action="store_true")
+
+    rt_provider_smoke = runtime_sub.add_parser("provider-smoke", help="Dry-run or execute a runtime provider request without applying a patch")
+    rt_provider_smoke.add_argument("job_id")
+    rt_provider_smoke.add_argument("--model-provider", default=None)
+    rt_provider_smoke.add_argument("--model", default=None)
+    rt_provider_smoke.add_argument("--profile", default="graph_patch_decision")
+    rt_provider_smoke.add_argument("--max-retries", type=int, default=1)
+    rt_provider_smoke.add_argument("--timeout", type=float, default=None)
+    rt_provider_smoke.add_argument("--execute", action="store_true",
+                                   help="Call the real provider but do not apply the returned patch")
+    rt_provider_smoke.add_argument("--json", action="store_true")
 
     rt_context = runtime_sub.add_parser("context", help="Show decision session segment/checkpoint context")
     rt_context.add_argument("job_id")
@@ -2005,12 +2029,42 @@ def _dispatch_runtime(args: argparse.Namespace) -> int:
         return _cmd_runtime_checkpoint(args)
     if sub == "prompt":
         return _cmd_runtime_prompt(args)
+    if sub == "provider-smoke":
+        return _cmd_runtime_provider_smoke(args)
     if sub == "context":
         return _cmd_runtime_context(args)
     if sub == "compact":
         return _cmd_runtime_compact(args)
     print(f"kanban runtime: unknown action {sub!r}", file=sys.stderr)
     return 2
+
+
+def _runtime_decision_provider_from_args(args: argparse.Namespace):
+    from hermes_cli import kanban_runtime_decision as rd
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    mode = getattr(args, "provider", None)
+    fake_flag = bool(getattr(args, "fake_provider", False))
+    if fake_flag and mode == "real":
+        raise ValueError("--fake-provider cannot be combined with --provider real")
+    if fake_flag or mode == "fake":
+        return rk.fixture_decision_provider
+    if mode in {None, "none"}:
+        return None
+    if mode != "real":
+        raise ValueError(f"unknown runtime decision provider mode {mode!r}")
+
+    model_provider = (getattr(args, "model_provider", None) or "").strip()
+    model = (getattr(args, "model", None) or "").strip()
+    if not model_provider or not model:
+        raise ValueError("--provider real requires --model-provider and --model")
+    return rd.RuntimeDecisionProvider(
+        provider_name=model_provider,
+        model=model,
+        profile_name=getattr(args, "profile", None) or "graph_patch_decision",
+        max_retries=getattr(args, "max_retries", 1),
+        timeout_seconds=getattr(args, "timeout", None),
+    )
 
 
 def _cmd_runtime_create(args: argparse.Namespace) -> int:
@@ -2128,7 +2182,7 @@ def _cmd_runtime_list(args: argparse.Namespace) -> int:
 def _cmd_runtime_advance(args: argparse.Namespace) -> int:
     from hermes_cli import kanban_runtime_kernel as rk
 
-    provider = rk.fixture_decision_provider if getattr(args, "fake_provider", False) else None
+    provider = _runtime_decision_provider_from_args(args)
     create_tasks = not getattr(args, "no_create_tasks", False)
     board = kb.get_current_board()
     with kb.connect() as conn:
@@ -2198,6 +2252,17 @@ def _cmd_runtime_decision(args: argparse.Namespace) -> int:
         for key in ("delta_json", "decision_json", "validator_result_json"):
             if row.get(key):
                 row[key[:-5]] = json.loads(row[key])
+        decision = row.get("decision")
+        if isinstance(decision, dict):
+            row["provider"] = decision.get("provider_name")
+            row["model"] = decision.get("model")
+            row["profile_name"] = decision.get("profile_name")
+            row["profile_hash"] = decision.get("profile_hash")
+            row["request_ref"] = decision.get("request_ref")
+            row["response_ref"] = decision.get("response_ref")
+            row["parse_status"] = decision.get("parse_status")
+            row["retry_count"] = decision.get("retry_count")
+            row["provider_latency_ms"] = decision.get("provider_latency_ms")
     if getattr(args, "json", False):
         print(json.dumps(rows, indent=2, ensure_ascii=False))
         return 0
@@ -2206,7 +2271,15 @@ def _cmd_runtime_decision(args: argparse.Namespace) -> int:
         return 0
     for row in rows:
         err = f" error={row['error']}" if row.get("error") else ""
-        print(f"{row['id']} rev={row['db_revision']} status={row['status']}{err}")
+        provider_bits = []
+        if row.get("provider"):
+            provider_bits.append(f"provider={row['provider']}")
+        if row.get("model"):
+            provider_bits.append(f"model={row['model']}")
+        if row.get("profile_name"):
+            provider_bits.append(f"profile={row['profile_name']}")
+        provider_text = f" {' '.join(provider_bits)}" if provider_bits else ""
+        print(f"{row['id']} rev={row['db_revision']} status={row['status']}{provider_text}{err}")
     return 0
 
 
@@ -2241,11 +2314,93 @@ def _cmd_runtime_prompt(args: argparse.Namespace) -> int:
         delta = rk.build_decision_delta(conn, args.job_id)
         request = rd.build_decision_provider_request(conn, args.job_id, delta)
         rendered = rd.render_decision_prompt(request)
-    payload = {"request": request.to_dict(), "rendered": rendered}
+        messages, _, profile = rd.render_decision_messages(request, profile_name=args.profile)
+    payload = {
+        "request": request.to_dict(),
+        "rendered": rendered,
+        "profile": {
+            "profile_name": profile["profile_name"],
+            "profile_version": profile["profile_version"],
+            "profile_hash": profile["profile_hash"],
+            "profile_path": profile["profile_path"],
+        },
+        "messages": messages,
+        "provider_call": {
+            "no_tools": True,
+            "single_shot": True,
+            "message_count": len(messages),
+            "input_token_estimate": rd.estimate_decision_input_tokens(rendered, profile["content"]),
+        },
+    }
     if getattr(args, "json", False):
         print(json.dumps(payload, indent=2, ensure_ascii=False))
     else:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
+    return 0
+
+
+def _cmd_runtime_provider_smoke(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_decision as rd
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    execute = bool(getattr(args, "execute", False))
+    model_provider = (getattr(args, "model_provider", None) or "").strip()
+    model = (getattr(args, "model", None) or "").strip()
+    if execute and (not model_provider or not model):
+        raise ValueError("runtime provider-smoke --execute requires --model-provider and --model")
+
+    with kb.connect() as conn:
+        rk.ensure_runtime_schema(conn)
+        delta = rk.build_decision_delta(conn, args.job_id)
+        request = rd.build_decision_provider_request(conn, args.job_id, delta)
+        messages, rendered, profile = rd.render_decision_messages(request, profile_name=args.profile)
+
+    payload = {
+        "job_id": args.job_id,
+        "dry_run": not execute,
+        "request": request.to_dict(),
+        "rendered": rendered,
+        "profile": {
+            "profile_name": profile["profile_name"],
+            "profile_version": profile["profile_version"],
+            "profile_hash": profile["profile_hash"],
+            "profile_path": profile["profile_path"],
+        },
+        "provider_call": {
+            "mode": "real" if execute else "dry_run",
+            "model_provider": model_provider or None,
+            "model": model or None,
+            "no_tools": True,
+            "single_shot": True,
+            "message_count": len(messages),
+            "input_token_estimate": rd.estimate_decision_input_tokens(rendered, profile["content"]),
+            "max_retries": int(getattr(args, "max_retries", 1)),
+            "timeout_seconds": getattr(args, "timeout", None),
+        },
+    }
+    if execute:
+        provider = rd.RuntimeDecisionProvider(
+            provider_name=model_provider,
+            model=model,
+            profile_name=args.profile,
+            max_retries=getattr(args, "max_retries", 1),
+            timeout_seconds=getattr(args, "timeout", None),
+        )
+        result = provider.decide(request)
+        payload["provider_result"] = result.to_dict()
+        if result.patch is not None:
+            with kb.connect() as conn:
+                rk.ensure_runtime_schema(conn)
+                payload["validation"] = rk.validate_graph_patch(conn, args.job_id, result.patch)
+        else:
+            payload["validation"] = {
+                "status": "skipped",
+                "would_apply": False,
+                "reason": result.error or result.parse_status,
+            }
+        payload["applied"] = False
+
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0
 
 

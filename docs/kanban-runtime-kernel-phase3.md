@@ -20,6 +20,8 @@ Phase 3 的正式名称是 **Real Decision Provider Integration**。它不是引
 
 第六，真实 provider 失败不等于 job failed。网络错误、rate limit、parse failure、schema mismatch 和 patch rejected 都应进入 `kernel_decisions` / `decision_segment_entries` / `execution_events`，job 停在可恢复的 `waiting_decision` 或合法 blocked/human gate，而不是直接 failed。
 
+第七，真实 provider 错误必须分类记录。Provider transport/network/auth/rate-limit 失败记录为 `decision_provider_error`；模型输出无法解析为 patch 记录为 `decision_parse_failed`；patch 通过 parser 但被 validator 拒绝记录为 `decision_patch_rejected`；revision 过期记录为 `decision_stale_revision`。这些事件都不应直接使 job failed。
+
 ## 明确非目标
 
 不接真实 compaction provider。Phase 3 第一批只接真实 decision provider；真实 LLM compaction provider 属于后续阶段。Phase 2D 的 deterministic checkpoint 继续作为 compaction fallback。
@@ -33,6 +35,44 @@ Phase 3 的正式名称是 **Real Decision Provider Integration**。它不是引
 不把 provider prompt 当事实源。provider request 是从 DB/checkpoint/delta 渲染出的推理输入；和 DB 冲突时永远以 DB 为准。
 
 不把 Codex/Claude Code worker backend 和 decision provider 混成同一层。worker backend 执行 node；decision provider 提出 graph patch。两者可以使用同类模型服务，但职责和权限不同。
+
+不让 decision provider 拥有 web/search/tool 能力。需要外部信息时，decision provider 应创建 `research`、`verification` 或 `human_gate` node，由具备对应工具权限的 worker 执行，并把搜索结果、引用、artifact 和 receipt 写回 DB。Decision provider 只能消费这些已入库 evidence 继续提出 patch，不能基于隐藏的即时搜索结果决策。
+
+## Provider Substrate 复用边界
+
+Phase 3 不应重写一套独立模型源系统。Hermes 已经有 provider/model/base_url/api_mode/credential resolution、credential pool、OAuth/API key 处理、timeout、retry/backoff、token/usage normalization，以及 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages、自定义 endpoint 等 transport 兼容代码。这些属于 provider substrate，应被 RuntimeDecisionProvider 复用。
+
+Phase 3 也不应直接复用完整 `AIAgent` 行为层。`AIAgent` 是通用会话 agent，包含工具循环、交互回调、agent 级上下文压缩、fallback 行为、memory/context engine 和会话状态。Decision provider 需要的是受限模型调用，不是一个可执行 agent。
+
+推荐分层是：
+
+```text
+RuntimeDecisionProvider
+  runtime request/result/schema/retry audit; no DB write; no tools
+
+RuntimeModelClient
+  no-tools single-shot model call facade
+
+Hermes provider substrate
+  resolve_runtime_provider + auxiliary_client/transports + timeout/retry/usage
+```
+
+允许复用：
+
+- `resolve_runtime_provider()` 的 provider/model/base_url/api_mode/credential resolution；
+- `agent.auxiliary_client.resolve_provider_client()` 或等价 client/transport builder；
+- provider timeout、jittered backoff、usage normalization、context length/token estimate；
+- provider-specific transport conversion and response extraction helpers。
+
+禁止复用：
+
+- `AIAgent.run_conversation()` 或完整 conversation loop；
+- tool schema/tool dispatch/tool repair loop；
+- agent-level ContextCompressor 或 memory/context engine；
+- 会隐式切换 provider/model 且没有 runtime audit 的 fallback 行为；
+- 任何能直接写 DB、写文件、创建 Kanban task 或调用外部工具的行为层。
+
+如果现有 helper 依赖 `AIAgent` 实例、工具状态或会话状态，应先抽取成纯 helper，再由 RuntimeDecisionProvider 调用。
 
 ## Provider Interface
 
@@ -64,6 +104,8 @@ decision_provider(session: dict, delta: dict) -> Any
 - `parse_status`
 - `retry_count`
 - `error`
+
+RuntimeDecisionProvider 的实现必须是 no-tools single-shot。它可以内部使用 Hermes provider substrate 创建 client，但每次 `decide()` 只能发送由 runtime renderer 生成的 messages/input，不能传 `tools`、不能调用 web/search、不能调用 worker backend、不能在 provider 内部循环推进 graph。
 
 ## Provider Profiles
 
@@ -167,13 +209,15 @@ Phase 3 应补强 `kernel_decisions` 或相关 metadata，至少记录：
 
 Phase 3 可以扩展 `hermes kanban runtime`：
 
-`runtime prompt <job_id> --profile graph_patch_decision --json`：渲染真实 provider 将看到的 request，不调用模型。
+`runtime prompt <job_id> --profile graph_patch_decision --json`：渲染真实 provider 将看到的 request、profile hash 和 no-tools message envelope，不调用模型。
 
-`runtime advance <job_id> --provider replay|fixture|real --model ... --profile graph_patch_decision --json`：显式选择 provider。第一批可只实现 fake/injected provider profile，真实网络 provider 可以放到第二步。
+`runtime advance <job_id> --provider none|fake|real --model-provider openai --model ... --profile graph_patch_decision --json`：显式选择 decision provider mode。`--provider real` 必须同时带 `--model-provider` 和 `--model`，否则不得隐式使用用户默认聊天模型。
 
 `runtime decision <job_id> --json`：显示 provider/model/profile/retry/parse/validator 信息。
 
-`runtime provider-smoke <job_id> --dry-run --json`：构造 request 并运行 parser dry-run，不应用 patch。若实现成本高，可后置。
+`runtime provider-smoke <job_id> --json`：默认 dry-run，只构造 request、profile、message envelope 和 token estimate，不调用模型、不应用 patch。
+
+`runtime provider-smoke <job_id> --execute --model-provider openai --model ... --profile graph_patch_decision --json`：调用真实 provider、解析结果，并执行 validator dry-run，但不 apply patch，不插入 graph_patches，不创建 kernel_decisions。输出应包含 provider_result 和 validation，其中 validation 使用 `accepted/rejected/stale/skipped` 表达 would_apply/would_reject。这个命令只用于手动 smoke 或集成验证，不属于默认单测路径。
 
 所有 CLI 命令都不能直接修改 graph，除非经过 `advance_runtime_job()` 的 provider -> parser -> validator -> apply 路径。
 
@@ -197,6 +241,80 @@ Phase 3 provider 配置建议来自 job metadata、decision session metadata 或
 ```
 
 如果没有显式 provider，runtime 应继续使用 deterministic/replay provider 或停在 `waiting_decision`，不能偷偷调用用户默认聊天模型。
+
+## 手动 Smoke Runbook
+
+默认测试和普通 `runtime advance` 不调用真实模型。需要手动验证真实 provider 时，应按以下顺序执行，且先在临时 board 或一次性 job 上操作。
+
+第一步，创建一个 runtime job：
+
+```bash
+hermes kanban runtime create "phase3 provider smoke" --json
+```
+
+记录返回的 `id`。
+
+第二步，渲染 provider 将看到的上下文，不调用模型：
+
+```bash
+hermes kanban runtime prompt <job_id> --profile graph_patch_decision --json
+```
+
+检查输出中的：
+
+- `profile.profile_hash`
+- `provider_call.no_tools == true`
+- `provider_call.single_shot == true`
+- `provider_call.input_token_estimate`
+- `messages` 中没有工具 schema
+
+第三步，运行 provider smoke dry-run，不调用模型、不落库：
+
+```bash
+hermes kanban runtime provider-smoke <job_id> --json
+```
+
+第四步，只调用真实 provider 并做 validator dry-run，不 apply patch：
+
+```bash
+hermes kanban runtime provider-smoke <job_id> \
+  --execute \
+  --model-provider <provider> \
+  --model <model> \
+  --profile graph_patch_decision \
+  --json
+```
+
+检查输出中的：
+
+- `provider_result.parse_status`
+- `provider_result.request_ref`
+- `provider_result.response_ref`
+- `validation.status`
+- `validation.would_apply`
+- `applied == false`
+
+此命令不得插入 `graph_patches`，不得创建 `kernel_decisions`，不得改变 graph revision。
+
+第五步，只有确认 smoke 输出可接受后，才允许真实 advance：
+
+```bash
+hermes kanban runtime advance <job_id> \
+  --provider real \
+  --model-provider <provider> \
+  --model <model> \
+  --profile graph_patch_decision \
+  --json
+```
+
+第六步，检查审计记录：
+
+```bash
+hermes kanban runtime decision <job_id> --json
+hermes kanban runtime context <job_id> --json
+```
+
+必须能看到 provider、model、profile hash、request_ref、response_ref、parse_status、retry_count、validator_result 和 segment entries。若出现 provider/network/auth/rate-limit 错误，应该记录为 `decision_provider_error` 且 job 可恢复；若模型输出无法解析，应该记录为 `decision_parse_failed`；若 patch 被 validator 拒绝，应该记录为 `decision_patch_rejected` 或 `decision_stale_revision`。
 
 ## Phase 3 实施顺序
 
@@ -257,5 +375,11 @@ Phase 3 第一批完成必须满足：
 第六，单元测试不依赖真实网络或 API key。
 
 第七，真实 provider smoke 如果存在，只作为手动或集成测试，不作为默认 pytest 前提。
+
+第八，`runtime provider-smoke --execute` 必须 validate-but-no-apply，不能插入 `graph_patches`、不能创建 `kernel_decisions`、不能改变 graph revision。
+
+第九，`runtime advance --provider real` 必须显式声明 model provider 和 model，不能默认使用用户聊天模型。
+
+第十，AGENTS.md 必须把 Phase 3 provider substrate 复用边界、no-tools/single-shot 和 no-live-network unit test 约束写成实现约束。
 
 Phase 3 第一批结束后，runtime 才适合进入真实 long-running autonomous task loop。否则真实模型接入会放大隐式上下文、不可审计 prompt 和失败不可恢复的问题。

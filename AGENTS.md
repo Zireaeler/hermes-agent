@@ -75,6 +75,16 @@ complete jobs, mark jobs blocked, or bypass parser/validator boundaries. Unit
 tests for this stage must use fake/replay providers and must not require live
 network calls or API keys.
 
+For Phase 3 provider work, reuse Hermes provider substrate
+(`resolve_runtime_provider`, auxiliary client/transport builders, timeout,
+retry/backoff, usage/token helpers) but do not reuse the full `AIAgent`
+conversation loop as the runtime decision provider. RuntimeDecisionProvider must
+remain no-tools and single-shot: it must not pass `tools`, call web/search,
+dispatch workers, use agent-level context compression, or silently fall back to
+another model without runtime audit. Real provider calls must be explicit
+(`--provider real` with model provider and model); default runtime advance must
+not call a live model.
+
 For this branch, do not routinely rebase `main`, and do not restore the old
 oversized session `019e497b-56e0-7bb0-a357-0db06954ae4d` as implementation
 context.

@@ -73,7 +73,16 @@ class DecisionProviderResult:
     raw_output: Any
     provider_name: str
     model: Optional[str] = None
+    profile_name: Optional[str] = None
+    profile_version: Optional[str] = None
+    profile_hash: Optional[str] = None
+    request_ref: Optional[str] = None
+    response_ref: Optional[str] = None
     parse_status: str = "parsed"
+    retry_count: int = 0
+    provider_latency_ms: Optional[int] = None
+    input_token_estimate: Optional[int] = None
+    output_token_estimate: Optional[int] = None
     error: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -82,7 +91,16 @@ class DecisionProviderResult:
             "raw_output": self.raw_output,
             "provider_name": self.provider_name,
             "model": self.model,
+            "profile_name": self.profile_name,
+            "profile_version": self.profile_version,
+            "profile_hash": self.profile_hash,
+            "request_ref": self.request_ref,
+            "response_ref": self.response_ref,
             "parse_status": self.parse_status,
+            "retry_count": self.retry_count,
+            "provider_latency_ms": self.provider_latency_ms,
+            "input_token_estimate": self.input_token_estimate,
+            "output_token_estimate": self.output_token_estimate,
             "error": self.error,
         }
 
@@ -102,6 +120,12 @@ def _json(data: Any) -> str:
 def _estimate_tokens(payload: Any) -> int:
     text = payload if isinstance(payload, str) else _json(payload)
     return max(1, (len(text) + 3) // 4)
+
+
+def estimate_decision_input_tokens(rendered: dict[str, Any], profile_content: str = "") -> int:
+    """Rough token estimate for rendered decision input plus profile text."""
+
+    return _estimate_tokens(rendered) + _estimate_tokens(profile_content or "")
 
 
 def _loads(raw: Any, default: Any = None) -> Any:
@@ -174,6 +198,29 @@ def latest_decision_checkpoint(conn: sqlite3.Connection, job_id: str) -> Optiona
 
 def load_compaction_profile(profile_name: str) -> dict[str, Any]:
     profile_dir = Path(__file__).resolve().parents[1] / "docs" / "kanban-runtime-kernel-compaction-profiles"
+    profile_path = profile_dir / f"{profile_name}.md"
+    if profile_path.exists():
+        content = profile_path.read_text(encoding="utf-8")
+        match = re.search(r"^Profile-Version:\s*(.+?)\s*$", content, flags=re.MULTILINE)
+        version = match.group(1).strip() if match else "file"
+        path_text = str(profile_path.relative_to(Path(__file__).resolve().parents[1]))
+    else:
+        content = profile_name
+        version = "builtin"
+        path_text = ""
+    return {
+        "profile_name": profile_name,
+        "profile_version": version,
+        "profile_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        "profile_path": path_text,
+        "content": content,
+    }
+
+
+def load_decision_profile(profile_name: str) -> dict[str, Any]:
+    """Load a runtime decision-provider profile and record its audit identity."""
+
+    profile_dir = Path(__file__).resolve().parents[1] / "docs" / "kanban-runtime-kernel-decision-profiles"
     profile_path = profile_dir / f"{profile_name}.md"
     if profile_path.exists():
         content = profile_path.read_text(encoding="utf-8")
@@ -1062,6 +1109,219 @@ def render_decision_prompt(request: DecisionProviderRequest) -> dict[str, Any]:
             "no_explanatory_text": True,
         },
     }
+
+
+def render_decision_messages(
+    request: DecisionProviderRequest,
+    *,
+    profile_name: str = "graph_patch_decision",
+) -> tuple[list[dict[str, str]], dict[str, Any], dict[str, Any]]:
+    """Render no-tools, single-shot messages for a runtime decision provider."""
+
+    profile = load_decision_profile(profile_name)
+    rendered = render_decision_prompt(request)
+    system = (
+        "You are the Hermes RuntimeDecisionProvider. "
+        "You are not an execution agent. You may not call tools, web_search, "
+        "write files, create Kanban tasks, write the database, or mark work done. "
+        "Return exactly one JSON object matching the runtime graph patch schema.\n\n"
+        f"{profile['content']}"
+    )
+    user = json.dumps(rendered, ensure_ascii=False, sort_keys=True)
+    return (
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        rendered,
+        profile,
+    )
+
+
+def _extract_response_text(response: Any) -> str:
+    if isinstance(response, str):
+        return response
+    if isinstance(response, dict):
+        choices = response.get("choices")
+        if isinstance(choices, list) and choices:
+            message = choices[0].get("message") if isinstance(choices[0], dict) else None
+            if isinstance(message, dict):
+                return str(message.get("content") or "")
+        return str(response.get("content") or response.get("text") or "")
+    try:
+        from agent.auxiliary_client import extract_content_or_reasoning
+
+        text = extract_content_or_reasoning(response)
+        if text:
+            return text
+    except Exception:
+        pass
+    try:
+        return str(response.choices[0].message.content or "")
+    except Exception:
+        return ""
+
+
+class RuntimeDecisionProvider:
+    """No-tools, single-shot decision provider adapter over Hermes model substrate."""
+
+    def __init__(
+        self,
+        *,
+        provider_name: str,
+        model: str,
+        profile_name: str = "graph_patch_decision",
+        client: Any = None,
+        client_factory: Optional[Callable[[], tuple[Any, str]]] = None,
+        max_retries: int = 1,
+        temperature: float = 0.0,
+        max_tokens: int = 2048,
+        timeout_seconds: Optional[float] = None,
+        explicit_api_key: Optional[str] = None,
+        explicit_base_url: Optional[str] = None,
+    ) -> None:
+        if not provider_name:
+            raise ValueError("provider_name is required")
+        if not model:
+            raise ValueError("model is required")
+        self.provider_name = provider_name
+        self.model = model
+        self.profile_name = profile_name
+        self.client = client
+        self.client_factory = client_factory
+        self.max_retries = max(0, int(max_retries))
+        self.temperature = float(temperature)
+        self.max_tokens = int(max_tokens)
+        self.timeout_seconds = timeout_seconds
+        self.explicit_api_key = explicit_api_key
+        self.explicit_base_url = explicit_base_url
+
+    def _client_and_model(self) -> tuple[Any, str]:
+        if self.client is not None:
+            return self.client, self.model
+        if self.client_factory is not None:
+            client, resolved_model = self.client_factory()
+            return client, resolved_model or self.model
+
+        from agent.auxiliary_client import resolve_provider_client
+        from hermes_cli.runtime_provider import resolve_runtime_provider
+
+        runtime = resolve_runtime_provider(
+            requested=self.provider_name,
+            explicit_api_key=self.explicit_api_key,
+            explicit_base_url=self.explicit_base_url,
+            target_model=self.model,
+        )
+        client, resolved_model = resolve_provider_client(
+            runtime.get("provider") or self.provider_name,
+            self.model,
+            explicit_base_url=runtime.get("base_url"),
+            explicit_api_key=runtime.get("api_key"),
+            api_mode=runtime.get("api_mode"),
+            main_runtime=runtime,
+        )
+        if client is None:
+            raise RuntimeError(f"could not resolve model client for provider {self.provider_name!r}")
+        return client, resolved_model or self.model
+
+    def _call_model(self, client: Any, model: str, messages: list[dict[str, str]]) -> Any:
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+        }
+        if self.timeout_seconds is not None:
+            kwargs["timeout"] = self.timeout_seconds
+        # Intentionally no tools/tool_choice/web_search arguments here.
+        return client.chat.completions.create(**kwargs)
+
+    def decide(self, request: DecisionProviderRequest) -> DecisionProviderResult:
+        messages, rendered, profile = render_decision_messages(request, profile_name=self.profile_name)
+        request_ref = hashlib.sha256(json.dumps(rendered, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+        input_tokens = estimate_decision_input_tokens(rendered, profile["content"])
+        client, model = self._client_and_model()
+        started = time.monotonic()
+        last_raw: Any = None
+        last_error: Optional[str] = None
+        retry_count = 0
+
+        for attempt in range(self.max_retries + 1):
+            active_messages = messages
+            if attempt:
+                retry_count = attempt
+                active_messages = messages + [
+                    {
+                        "role": "user",
+                        "content": (
+                            "The previous response did not parse as runtime_graph_patch_v1. "
+                            f"Parse error: {last_error}. Return only the corrected JSON object."
+                        ),
+                    }
+                ]
+            try:
+                response = self._call_model(client, model, active_messages)
+            except Exception as exc:
+                latency_ms = int((time.monotonic() - started) * 1000)
+                return DecisionProviderResult(
+                    patch=None,
+                    raw_output=last_raw,
+                    provider_name=self.provider_name,
+                    model=model,
+                    profile_name=profile["profile_name"],
+                    profile_version=profile["profile_version"],
+                    profile_hash=profile["profile_hash"],
+                    request_ref=request_ref,
+                    parse_status="provider_error",
+                    retry_count=retry_count,
+                    provider_latency_ms=latency_ms,
+                    input_token_estimate=input_tokens,
+                    output_token_estimate=_estimate_tokens(last_raw),
+                    error=str(exc),
+                )
+            last_raw = _extract_response_text(response)
+            try:
+                patch = parse_provider_patch(last_raw, request.db_revision)
+                latency_ms = int((time.monotonic() - started) * 1000)
+                response_ref = hashlib.sha256(str(last_raw).encode("utf-8")).hexdigest()
+                return DecisionProviderResult(
+                    patch=patch,
+                    raw_output=last_raw,
+                    provider_name=self.provider_name,
+                    model=model,
+                    profile_name=profile["profile_name"],
+                    profile_version=profile["profile_version"],
+                    profile_hash=profile["profile_hash"],
+                    request_ref=request_ref,
+                    response_ref=response_ref,
+                    parse_status="parsed",
+                    retry_count=retry_count,
+                    provider_latency_ms=latency_ms,
+                    input_token_estimate=input_tokens,
+                    output_token_estimate=_estimate_tokens(last_raw),
+                )
+            except ProviderPatchParseError as exc:
+                last_error = str(exc)
+
+        latency_ms = int((time.monotonic() - started) * 1000)
+        response_ref = hashlib.sha256(str(last_raw).encode("utf-8")).hexdigest() if last_raw is not None else None
+        return DecisionProviderResult(
+            patch=None,
+            raw_output=last_raw,
+            provider_name=self.provider_name,
+            model=model,
+            profile_name=profile["profile_name"],
+            profile_version=profile["profile_version"],
+            profile_hash=profile["profile_hash"],
+            request_ref=request_ref,
+            response_ref=response_ref,
+            parse_status="parse_failed",
+            retry_count=retry_count,
+            provider_latency_ms=latency_ms,
+            input_token_estimate=input_tokens,
+            output_token_estimate=_estimate_tokens(last_raw),
+            error=last_error,
+        )
 
 
 def _extract_raw_json(raw: Any) -> dict[str, Any]:

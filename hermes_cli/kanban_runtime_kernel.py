@@ -1004,6 +1004,32 @@ def apply_graph_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, An
     return {"status": "applied", "patch_id": patch_id, "applied_revision": applied_revision}
 
 
+def validate_graph_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+    """Validate a graph patch without inserting graph_patches or applying ops."""
+
+    ensure_runtime_schema(conn)
+    current_revision = int(_job(conn, job_id)["graph_revision"])
+    try:
+        _validate_patch(conn, job_id, patch)
+    except PatchValidationError as exc:
+        reason = str(exc)
+        status = "stale" if "expected_revision" in reason else "rejected"
+        return {
+            "status": status,
+            "would_apply": False,
+            "reason": reason,
+            "current_revision": current_revision,
+            "expected_revision": int(patch.get("expected_revision") or -1) if isinstance(patch, dict) else None,
+        }
+    return {
+        "status": "accepted",
+        "would_apply": True,
+        "current_revision": current_revision,
+        "expected_revision": int(patch.get("expected_revision") or current_revision),
+        "ops": len(patch.get("ops") or []),
+    }
+
+
 def _apply_op(conn: sqlite3.Connection, job_id: str, op: dict[str, Any]) -> None:
     name = op["op"]
     now = _now()
@@ -1763,30 +1789,139 @@ def advance_runtime_job(
             (decision_id, job_id, db_revision, session["id"], _json(delta), now),
         )
         try:
-            raw_output = decision_provider(session, delta)
-            append_decision_segment_entry(
-                conn,
-                job_id,
-                "provider_output",
-                {"raw_output": raw_output},
-                decision_id=decision_id,
-                ref_type="kernel_decision",
-                ref_id=decision_id,
-            )
-            patch = rd.parse_provider_patch(raw_output, db_revision)
-            append_decision_segment_entry(
-                conn,
-                job_id,
-                "patch_parsed",
-                patch,
-                decision_id=decision_id,
-                ref_type="kernel_decision",
-                ref_id=decision_id,
-            )
-            conn.execute(
-                "UPDATE kernel_decisions SET decision_json = ?, status = 'completed', completed_at = ? WHERE id = ?",
-                (_json({"raw_output": raw_output, "patch": patch, "parse_status": "parsed"}), _now(), decision_id),
-            )
+            if hasattr(decision_provider, "decide"):
+                request = rd.build_decision_provider_request(conn, job_id, delta)
+                profile_name = getattr(decision_provider, "profile_name", "graph_patch_decision")
+                messages, rendered, profile = rd.render_decision_messages(request, profile_name=profile_name)
+                append_decision_segment_entry(
+                    conn,
+                    job_id,
+                    "provider_input",
+                    {
+                        "request": request.to_dict(),
+                        "rendered": rendered,
+                        "profile": {
+                            "profile_name": profile["profile_name"],
+                            "profile_version": profile["profile_version"],
+                            "profile_hash": profile["profile_hash"],
+                            "profile_path": profile["profile_path"],
+                        },
+                        "no_tools": True,
+                    },
+                    payload_text=_json(messages),
+                    decision_id=decision_id,
+                    ref_type="kernel_decision",
+                    ref_id=decision_id,
+                )
+                provider_result = decision_provider.decide(request)
+                if not isinstance(provider_result, rd.DecisionProviderResult):
+                    raise rd.ProviderPatchParseError("RuntimeDecisionProvider.decide() must return DecisionProviderResult")
+                raw_output = provider_result.raw_output
+                append_decision_segment_entry(
+                    conn,
+                    job_id,
+                    "provider_output",
+                    provider_result.to_dict(),
+                    decision_id=decision_id,
+                    ref_type="kernel_decision",
+                    ref_id=decision_id,
+                )
+                if provider_result.retry_count:
+                    append_decision_segment_entry(
+                        conn,
+                        job_id,
+                        "parse_retry",
+                        {
+                            "retry_count": provider_result.retry_count,
+                            "parse_status": provider_result.parse_status,
+                            "error": provider_result.error,
+                            "request_ref": provider_result.request_ref,
+                            "response_ref": provider_result.response_ref,
+                        },
+                        decision_id=decision_id,
+                        ref_type="kernel_decision",
+                        ref_id=decision_id,
+                    )
+                if provider_result.patch is None:
+                    event_type = (
+                        "decision_provider_error"
+                        if provider_result.parse_status == "provider_error"
+                        else "decision_parse_failed"
+                    )
+                    result = {
+                        "status": provider_result.parse_status,
+                        "reason": provider_result.error or provider_result.parse_status,
+                    }
+                    conn.execute(
+                        """
+                        UPDATE kernel_decisions
+                           SET decision_json = ?, status = ?,
+                               validator_result_json = ?, error = ?, completed_at = ?, model = ?
+                         WHERE id = ?
+                        """,
+                        (
+                            _json(provider_result.to_dict()),
+                            provider_result.parse_status,
+                            _json(result),
+                            provider_result.error,
+                            _now(),
+                            provider_result.model,
+                            decision_id,
+                        ),
+                    )
+                    _event(conn, job_id, event_type, {"reason": result["reason"], "status": provider_result.parse_status})
+                    append_decision_segment_entry(
+                        conn,
+                        job_id,
+                        "provider_error" if provider_result.parse_status == "provider_error" else "validator_result",
+                        result,
+                        decision_id=decision_id,
+                        ref_type="kernel_decision",
+                        ref_id=decision_id,
+                    )
+                    append_decision_segment_entry(
+                        conn,
+                        job_id,
+                        "patch_rejected",
+                        {"reason": result["reason"], "stage": provider_result.parse_status},
+                        decision_id=decision_id,
+                        ref_type="kernel_decision",
+                        ref_id=decision_id,
+                    )
+                    patch_status = provider_result.parse_status
+                    patch = None
+                else:
+                    patch = provider_result.patch
+                    conn.execute(
+                        "UPDATE kernel_decisions SET model = ? WHERE id = ?",
+                        (provider_result.model, decision_id),
+                    )
+            else:
+                raw_output = decision_provider(session, delta)
+                append_decision_segment_entry(
+                    conn,
+                    job_id,
+                    "provider_output",
+                    {"raw_output": raw_output},
+                    decision_id=decision_id,
+                    ref_type="kernel_decision",
+                    ref_id=decision_id,
+                )
+                patch = rd.parse_provider_patch(raw_output, db_revision)
+            if patch is not None:
+                append_decision_segment_entry(
+                    conn,
+                    job_id,
+                    "patch_parsed",
+                    patch,
+                    decision_id=decision_id,
+                    ref_type="kernel_decision",
+                    ref_id=decision_id,
+                )
+                conn.execute(
+                    "UPDATE kernel_decisions SET decision_json = ?, status = 'completed', completed_at = ? WHERE id = ?",
+                    (_json(provider_result.to_dict() if "provider_result" in locals() else {"raw_output": raw_output, "patch": patch, "parse_status": "parsed"}), _now(), decision_id),
+                )
         except rd.ProviderPatchParseError as exc:
             result = {"status": "parse_failed", "reason": str(exc)}
             conn.execute(
@@ -1804,7 +1939,8 @@ def advance_runtime_job(
                     decision_id,
                 ),
             )
-            _event(conn, job_id, "decision_parse_failed", {"reason": str(exc)})
+            parse_event = "decision_stale_revision" if "expected_revision" in str(exc) else "decision_parse_failed"
+            _event(conn, job_id, parse_event, {"reason": str(exc), "stage": "parse"})
             append_decision_segment_entry(
                 conn,
                 job_id,
@@ -1841,8 +1977,41 @@ def advance_runtime_job(
             )
             raise
         else:
+            if patch is None:
+                reduction = reduce_runtime_job(conn, job_id)
+                if auto_compact:
+                    policy_result = rd.should_compact_decision_session(conn, job_id, compaction_policy)
+                    if policy_result["should_compact"]:
+                        rd.compact_decision_session(
+                            conn,
+                            job_id,
+                            profile_name=policy_result["profile_name"],
+                            reason=policy_result["reason"],
+                        )
+                final = status_runtime_job(conn, job_id)["job"]["state"]
+                return AdvanceResult(
+                    job_id=job_id,
+                    job_state=final,
+                    materialized_nodes=materialized,
+                    ingested_nodes=ingested,
+                    decision_requested=decision_requested,
+                    patch_status=patch_status,
+                )
             result = apply_graph_patch(conn, job_id, patch, decision_id=decision_id)
             patch_status = result["status"]
+            if result["status"] != "applied":
+                reason = str(result.get("reason") or "")
+                event_type = "decision_stale_revision" if "expected_revision" in reason else "decision_patch_rejected"
+                _event(
+                    conn,
+                    job_id,
+                    event_type,
+                    {
+                        "decision_id": decision_id,
+                        "patch_id": result.get("patch_id"),
+                        "reason": reason,
+                    },
+                )
             conn.execute(
                 "UPDATE kernel_decisions SET validator_result_json = ? WHERE id = ?",
                 (_json(result), decision_id),

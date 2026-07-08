@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -53,6 +54,33 @@ def _job(conn) -> str:
 
 def _revision(conn, job_id: str) -> int:
     return int(conn.execute("SELECT graph_revision FROM runtime_jobs WHERE id = ?", (job_id,)).fetchone()[0])
+
+
+class _FakeCompletions:
+    def __init__(self, outputs):
+        self.outputs = list(outputs)
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if not self.outputs:
+            raise AssertionError("fake client exhausted")
+        output = self.outputs.pop(0)
+        if isinstance(output, Exception):
+            raise output
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content=output),
+                )
+            ]
+        )
+
+
+class _FakeClient:
+    def __init__(self, outputs):
+        self.completions = _FakeCompletions(outputs)
+        self.chat = SimpleNamespace(completions=self.completions)
 
 
 def test_decision_checkpoint_schema_and_creation(conn):
@@ -159,6 +187,16 @@ def test_compaction_profile_loader_reads_markdown_profile():
     assert profile["profile_hash"]
     assert profile["profile_path"].endswith("validator_boundary_compaction.md")
     assert "Validator Boundary Compaction" in profile["content"]
+
+
+def test_decision_profile_loader_reads_markdown_profile():
+    profile = rd.load_decision_profile("graph_patch_decision")
+
+    assert profile["profile_name"] == "graph_patch_decision"
+    assert profile["profile_version"] == "1"
+    assert profile["profile_hash"]
+    assert profile["profile_path"].endswith("graph_patch_decision.md")
+    assert "Graph Patch Decision Profile" in profile["content"]
 
 
 def test_should_compact_uses_token_telemetry(conn):
@@ -306,6 +344,210 @@ def test_provider_patch_parser_rejects_free_text_and_unknown_ops(raw, reason):
         rd.parse_provider_patch(raw, 0)
 
 
+def test_runtime_decision_provider_is_no_tools_single_shot(conn):
+    job_id = _job(conn)
+    delta = rk.build_decision_delta(conn, job_id)
+    request = rd.build_decision_provider_request(conn, job_id, delta)
+    patch = {
+        "schema": rk.PATCH_SCHEMA,
+        "expected_revision": _revision(conn, job_id),
+        "rationale_summary": "noop",
+        "ops": [],
+    }
+    fake = _FakeClient([json.dumps(patch)])
+    provider = rd.RuntimeDecisionProvider(
+        provider_name="fake",
+        model="fake-model",
+        client=fake,
+        max_retries=0,
+    )
+
+    result = provider.decide(request)
+
+    assert result.patch == patch
+    assert result.provider_name == "fake"
+    assert result.model == "fake-model"
+    assert result.profile_name == "graph_patch_decision"
+    assert result.parse_status == "parsed"
+    assert len(fake.completions.calls) == 1
+    call = fake.completions.calls[0]
+    assert "tools" not in call
+    assert "tool_choice" not in call
+    assert "web_search" not in call
+
+
+def test_runtime_decision_provider_parse_retry_stays_schema_only(conn):
+    job_id = _job(conn)
+    delta = rk.build_decision_delta(conn, job_id)
+    request = rd.build_decision_provider_request(conn, job_id, delta)
+    patch = {
+        "schema": rk.PATCH_SCHEMA,
+        "expected_revision": _revision(conn, job_id),
+        "rationale_summary": "retry fixes json",
+        "ops": [],
+    }
+    fake = _FakeClient(["not json", json.dumps(patch)])
+    provider = rd.RuntimeDecisionProvider(
+        provider_name="fake",
+        model="fake-model",
+        client=fake,
+        max_retries=1,
+    )
+
+    result = provider.decide(request)
+
+    assert result.patch == patch
+    assert result.retry_count == 1
+    assert len(fake.completions.calls) == 2
+    assert "tools" not in fake.completions.calls[1]
+    retry_messages = fake.completions.calls[1]["messages"]
+    assert "corrected JSON object" in retry_messages[-1]["content"]
+
+
+def test_advance_runtime_job_uses_runtime_decision_provider_interface(conn):
+    job_id = _job(conn)
+    conn.execute("UPDATE execution_nodes SET state = 'failed' WHERE job_id = ? AND node_key = 'understand-scope'", (job_id,))
+    patch = {
+        "schema": rk.PATCH_SCHEMA,
+        "expected_revision": _revision(conn, job_id),
+        "rationale_summary": "create implementation through runtime provider",
+        "ops": [
+            {
+                "op": "create_node",
+                "node_key": "implement-through-runtime-provider",
+                "node_type": "implementation",
+                "title": "Implement through runtime provider",
+                "description": "Produce evidence through the new provider interface.",
+                "goal_item_keys": ["a-item"],
+            }
+        ],
+    }
+    fake = _FakeClient([json.dumps(patch)])
+    provider = rd.RuntimeDecisionProvider(
+        provider_name="fake",
+        model="fake-model",
+        client=fake,
+        max_retries=0,
+    )
+
+    result = rk.advance_runtime_job(conn, job_id, create_tasks=False, decision_provider=provider)
+
+    assert result.patch_status == "applied"
+    entries = [
+        row["entry_type"]
+        for row in conn.execute(
+            "SELECT entry_type FROM decision_segment_entries WHERE job_id = ? ORDER BY id",
+            (job_id,),
+        ).fetchall()
+    ]
+    assert entries == [
+        "delta_appended",
+        "provider_input",
+        "provider_output",
+        "patch_parsed",
+        "validator_result",
+        "patch_applied",
+    ]
+    decision = conn.execute("SELECT * FROM kernel_decisions WHERE job_id = ?", (job_id,)).fetchone()
+    decision_json = json.loads(decision["decision_json"])
+    assert decision_json["profile_name"] == "graph_patch_decision"
+    assert decision_json["model"] == "fake-model"
+
+
+def test_advance_runtime_job_records_parse_retry_entry(conn):
+    job_id = _job(conn)
+    conn.execute("UPDATE execution_nodes SET state = 'failed' WHERE job_id = ? AND node_key = 'understand-scope'", (job_id,))
+    patch = {
+        "schema": rk.PATCH_SCHEMA,
+        "expected_revision": _revision(conn, job_id),
+        "rationale_summary": "retry then create implementation",
+        "ops": [
+            {
+                "op": "create_node",
+                "node_key": "implement-after-retry",
+                "node_type": "implementation",
+                "title": "Implement after retry",
+                "description": "Produce evidence after parser retry.",
+                "goal_item_keys": ["a-item"],
+            }
+        ],
+    }
+    fake = _FakeClient(["not json", json.dumps(patch)])
+    provider = rd.RuntimeDecisionProvider(
+        provider_name="fake",
+        model="fake-model",
+        client=fake,
+        max_retries=1,
+    )
+
+    result = rk.advance_runtime_job(conn, job_id, create_tasks=False, decision_provider=provider)
+
+    assert result.patch_status == "applied"
+    entries = [
+        row["entry_type"]
+        for row in conn.execute(
+            "SELECT entry_type FROM decision_segment_entries WHERE job_id = ? ORDER BY id",
+            (job_id,),
+        ).fetchall()
+    ]
+    assert "parse_retry" in entries
+    decision = conn.execute("SELECT * FROM kernel_decisions WHERE job_id = ?", (job_id,)).fetchone()
+    assert json.loads(decision["decision_json"])["retry_count"] == 1
+
+
+def test_runtime_decision_provider_error_records_recoverable_event(conn):
+    job_id = _job(conn)
+    conn.execute("UPDATE execution_nodes SET state = 'failed' WHERE job_id = ? AND node_key = 'understand-scope'", (job_id,))
+    before = _revision(conn, job_id)
+    provider = rd.RuntimeDecisionProvider(
+        provider_name="fake",
+        model="fake-model",
+        client=_FakeClient([RuntimeError("network down")]),
+        max_retries=0,
+    )
+
+    result = rk.advance_runtime_job(conn, job_id, create_tasks=False, decision_provider=provider)
+
+    assert result.patch_status == "provider_error"
+    assert _revision(conn, job_id) == before
+    decision = conn.execute("SELECT * FROM kernel_decisions WHERE job_id = ?", (job_id,)).fetchone()
+    assert decision["status"] == "provider_error"
+    assert "network down" in decision["error"]
+    events = [row["event_type"] for row in conn.execute("SELECT event_type FROM execution_events WHERE job_id = ?", (job_id,))]
+    assert "decision_provider_error" in events
+    entries = [
+        row["entry_type"]
+        for row in conn.execute(
+            "SELECT entry_type FROM decision_segment_entries WHERE job_id = ? ORDER BY id",
+            (job_id,),
+        ).fetchall()
+    ]
+    assert "provider_error" in entries
+
+
+def test_runtime_decision_provider_parse_failure_after_retry_is_classified(conn):
+    job_id = _job(conn)
+    conn.execute("UPDATE execution_nodes SET state = 'failed' WHERE job_id = ? AND node_key = 'understand-scope'", (job_id,))
+    before = _revision(conn, job_id)
+    provider = rd.RuntimeDecisionProvider(
+        provider_name="fake",
+        model="fake-model",
+        client=_FakeClient(["not json", "still not json"]),
+        max_retries=1,
+    )
+
+    result = rk.advance_runtime_job(conn, job_id, create_tasks=False, decision_provider=provider)
+
+    assert result.patch_status == "parse_failed"
+    assert _revision(conn, job_id) == before
+    decision = conn.execute("SELECT * FROM kernel_decisions WHERE job_id = ?", (job_id,)).fetchone()
+    decision_json = json.loads(decision["decision_json"])
+    assert decision["status"] == "parse_failed"
+    assert decision_json["retry_count"] == 1
+    events = [row["event_type"] for row in conn.execute("SELECT event_type FROM execution_events WHERE job_id = ?", (job_id,))]
+    assert "decision_parse_failed" in events
+
+
 def test_provider_parse_failure_records_decision_without_graph_change(conn):
     job_id = _job(conn)
     conn.execute("UPDATE execution_nodes SET state = 'failed' WHERE job_id = ? AND node_key = 'understand-scope'", (job_id,))
@@ -384,15 +626,100 @@ def test_provider_patch_rejected_records_decision_without_graph_change(conn):
     validator = json.loads(decision["validator_result_json"])
     assert validator["status"] == "rejected"
     assert "goal_item_keys" in validator["reason"]
+    events = [row["event_type"] for row in conn.execute("SELECT event_type FROM execution_events WHERE job_id = ?", (job_id,))]
+    assert "decision_patch_rejected" in events
 
 
 def test_runtime_prompt_cli_outputs_provider_request_json(kanban_home):
     created = json.loads(kc.run_slash("runtime create 'phase2b prompt' --json"))
-    payload = json.loads(kc.run_slash(f"runtime prompt {created['id']} --json"))
+    payload = json.loads(kc.run_slash(f"runtime prompt {created['id']} --profile graph_patch_decision --json"))
 
     assert payload["request"]["job_id"] == created["id"]
     assert payload["rendered"]["stable_prefix"]["runtime_contract"]["db_is_authoritative"] is True
+    assert payload["profile"]["profile_name"] == "graph_patch_decision"
+    assert payload["profile"]["profile_hash"]
+    assert payload["provider_call"]["no_tools"] is True
+    assert payload["provider_call"]["single_shot"] is True
+    assert payload["provider_call"]["input_token_estimate"] > 0
     assert "worker_log_tail" not in json.dumps(payload)
+
+
+def test_runtime_provider_smoke_cli_dry_run_does_not_require_model_source(kanban_home):
+    created = json.loads(kc.run_slash("runtime create 'phase3 provider smoke' --json"))
+    payload = json.loads(kc.run_slash(f"runtime provider-smoke {created['id']} --json"))
+
+    assert payload["job_id"] == created["id"]
+    assert payload["dry_run"] is True
+    assert payload["profile"]["profile_name"] == "graph_patch_decision"
+    assert payload["provider_call"]["mode"] == "dry_run"
+    assert payload["provider_call"]["model_provider"] is None
+    assert payload["provider_call"]["no_tools"] is True
+    assert payload["provider_call"]["input_token_estimate"] > 0
+    assert "provider_result" not in payload
+
+
+def test_runtime_advance_real_provider_requires_explicit_model_source(kanban_home):
+    created = json.loads(kc.run_slash("runtime create 'phase3 real provider args' --json"))
+
+    out = kc.run_slash(f"runtime advance {created['id']} --provider real --json")
+
+    assert "--provider real requires --model-provider and --model" in out
+
+
+def test_runtime_provider_smoke_execute_validates_without_apply(kanban_home, monkeypatch):
+    created = json.loads(kc.run_slash("runtime create 'phase3 provider smoke execute' --json"))
+
+    class SmokeProvider:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def decide(self, request):
+            patch = {
+                "schema": rk.PATCH_SCHEMA,
+                "expected_revision": request.db_revision,
+                "rationale_summary": "invalid unlinked node from smoke",
+                "ops": [
+                    {
+                        "op": "create_node",
+                        "node_key": "smoke-unlinked-node",
+                        "node_type": "implementation",
+                        "title": "Smoke unlinked node",
+                        "description": "Missing goal/gap linkage.",
+                    }
+                ],
+            }
+            return rd.DecisionProviderResult(
+                patch=patch,
+                raw_output=json.dumps(patch),
+                provider_name=self.kwargs["provider_name"],
+                model=self.kwargs["model"],
+                profile_name=self.kwargs["profile_name"],
+                parse_status="parsed",
+            )
+
+    monkeypatch.setattr(rd, "RuntimeDecisionProvider", SmokeProvider)
+    with kb.connect() as conn:
+        before_patches = conn.execute("SELECT COUNT(*) FROM graph_patches WHERE job_id = ?", (created["id"],)).fetchone()[0]
+        before_decisions = conn.execute("SELECT COUNT(*) FROM kernel_decisions WHERE job_id = ?", (created["id"],)).fetchone()[0]
+
+    payload = json.loads(
+        kc.run_slash(
+            f"runtime provider-smoke {created['id']} --execute "
+            "--model-provider fake --model fake-model --json"
+        )
+    )
+
+    assert payload["dry_run"] is False
+    assert payload["provider_result"]["parse_status"] == "parsed"
+    assert payload["validation"]["status"] == "rejected"
+    assert payload["validation"]["would_apply"] is False
+    assert "goal_item_keys" in payload["validation"]["reason"]
+    assert payload["applied"] is False
+    with kb.connect() as conn:
+        after_patches = conn.execute("SELECT COUNT(*) FROM graph_patches WHERE job_id = ?", (created["id"],)).fetchone()[0]
+        after_decisions = conn.execute("SELECT COUNT(*) FROM kernel_decisions WHERE job_id = ?", (created["id"],)).fetchone()[0]
+    assert after_patches == before_patches
+    assert after_decisions == before_decisions
 
 
 def test_runtime_checkpoint_cli_outputs_db_derived_checkpoint(kanban_home):
@@ -442,3 +769,46 @@ def test_runtime_decision_cli_outputs_parse_failure_record(kanban_home):
     rows = json.loads(kc.run_slash(f"runtime decision {created['id']} --json"))
     assert rows[0]["status"] == "parse_failed"
     assert rows[0]["validator_result"]["status"] == "parse_failed"
+
+
+def test_runtime_decision_cli_outputs_provider_audit_fields(kanban_home):
+    created = json.loads(kc.run_slash("runtime create 'phase3 decision audit' --json"))
+    with kb.connect() as conn:
+        conn.execute(
+            "UPDATE execution_nodes SET state = 'failed' WHERE job_id = ? AND node_key = 'understand-scope'",
+            (created["id"],),
+        )
+        revision = _revision(conn, created["id"])
+        patch = {
+            "schema": rk.PATCH_SCHEMA,
+            "expected_revision": revision,
+            "rationale_summary": "audit noop",
+            "ops": [],
+        }
+        provider = rd.RuntimeDecisionProvider(
+            provider_name="fake",
+            model="fake-model",
+            client=_FakeClient([json.dumps(patch)]),
+            max_retries=0,
+        )
+        rk.advance_runtime_job(
+            conn,
+            created["id"],
+            create_tasks=False,
+            decision_provider=provider,
+        )
+
+    rows = json.loads(kc.run_slash(f"runtime decision {created['id']} --json"))
+    assert rows[0]["provider"] == "fake"
+    assert rows[0]["model"] == "fake-model"
+    assert rows[0]["profile_name"] == "graph_patch_decision"
+    assert rows[0]["profile_hash"]
+    assert rows[0]["request_ref"]
+    assert rows[0]["response_ref"]
+    assert rows[0]["parse_status"] == "parsed"
+    assert rows[0]["retry_count"] == 0
+
+    text = kc.run_slash(f"runtime decision {created['id']}")
+    assert "provider=fake" in text
+    assert "model=fake-model" in text
+    assert "profile=graph_patch_decision" in text
