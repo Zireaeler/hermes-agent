@@ -89,7 +89,7 @@ Phase 3D Long Running Autonomous Task Runtime
 Phase 4  Production Hardening
 ```
 
-当前代码实现已经推进到 Phase 3D：Phase 2D 本地 compaction 闭环已经具备，Phase 3A 已接入 no-tools real decision provider，Phase 3B 已强化 validator feedback/recovery smoke，Phase 3C 已把真实 provider patch、Kanban evidence ingest 和多轮 runtime advance 串成可验证闭环。Phase 3D 正在补齐长任务 strategy update、goal waiver 和 DB-based resume。真实 LLM compaction provider 仍属于后续阶段。
+当前代码实现已经完成到 Phase 3D：Phase 2D 本地 compaction 闭环已经具备，Phase 3A 已接入 no-tools real decision provider，Phase 3B 已强化 validator feedback/recovery smoke，Phase 3C 已把真实 provider patch、Kanban evidence ingest 和多轮 runtime advance 串成可验证闭环，Phase 3D 已补齐长任务 strategy update、goal waiver 和 DB-based resume 的本地闭环。真实 LLM compaction provider 仍属于后续阶段。
 
 ## 4. Phase 0: Architecture Contract
 
@@ -471,9 +471,6 @@ Goal evolution 第一版先支持 explicit waiver。用户或 operator 可以 wa
 如果现在继续开发，推荐顺序：
 
 ```text
-Phase 3D long-running task runtime
-      |
-      v
 real compaction provider integration
       |
       v
@@ -491,4 +488,4 @@ Phase 4 production hardening
 
 没有 compaction，长期任务无法稳定运行。
 
-这三者是 Hermes Runtime Kernel 从“任务调度器”成为“长期任务执行系统”的关键路径。当前三者已经有本地基础实现，真实 decision provider 也已接入；下一步应继续强化长任务恢复、策略更新和真实 compaction provider。
+这三者是 Hermes Runtime Kernel 从“任务调度器”成为“长期任务执行系统”的关键路径。当前三者已经有本地基础实现，真实 decision provider 也已接入，Phase 3D 的长任务恢复和策略更新本地闭环已经完成；下一步应进入真实 compaction provider、dashboard/API 可观测性和生产 hardening。
