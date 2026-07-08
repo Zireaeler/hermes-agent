@@ -143,10 +143,72 @@ def test_checkpoint_records_profile_hash_and_revision_binding(conn):
     checkpoint = conn.execute("SELECT * FROM decision_checkpoints WHERE id = ?", (result["checkpoint_id"],)).fetchone()
 
     assert checkpoint["profile_name"] == "token_budget_compaction"
+    assert checkpoint["profile_version"] == "1"
     assert checkpoint["profile_hash"]
+    assert checkpoint["profile_path"].endswith("token_budget_compaction.md")
     assert checkpoint["graph_revision"] == _revision(conn, job_id)
     assert checkpoint["ledger_revision"] == _revision(conn, job_id)
     assert checkpoint["validator_status"] == "accepted"
+
+
+def test_compaction_profile_loader_reads_markdown_profile():
+    profile = rd.load_compaction_profile("validator_boundary_compaction")
+
+    assert profile["profile_name"] == "validator_boundary_compaction"
+    assert profile["profile_version"] == "1"
+    assert profile["profile_hash"]
+    assert profile["profile_path"].endswith("validator_boundary_compaction.md")
+    assert "Validator Boundary Compaction" in profile["content"]
+
+
+def test_should_compact_uses_token_telemetry(conn):
+    job_id = _job(conn)
+    rk.append_decision_segment_entry(conn, job_id, "delta_appended", {"large": "x" * 200})
+
+    result = rd.should_compact_decision_session(
+        conn,
+        job_id,
+        {"max_active_segment_tokens": 1},
+    )
+
+    assert result["should_compact"] is True
+    assert result["reason"] == "token_threshold"
+    assert result["profile_name"] == "token_budget_compaction"
+    assert result["telemetry"]["active_segment_tokens"] >= 1
+
+
+def test_should_compact_rejection_threshold_selects_validator_profile(conn):
+    job_id = _job(conn)
+    rk.append_decision_segment_entry(conn, job_id, "patch_rejected", {"status": "rejected", "reason": "bad"})
+
+    result = rd.should_compact_decision_session(
+        conn,
+        job_id,
+        {"max_active_segment_tokens": 999999, "rejected_patch_threshold": 1},
+    )
+
+    assert result["should_compact"] is True
+    assert result["reason"] == "rejection_threshold"
+    assert result["profile_name"] == "validator_boundary_compaction"
+
+
+def test_advance_runtime_job_auto_compacts_when_policy_triggers(conn):
+    job_id = _job(conn)
+    old_segment = rk.ensure_decision_segment(conn, job_id)
+    rk.append_decision_segment_entry(conn, job_id, "delta_appended", {"large": "x" * 200})
+
+    rk.advance_runtime_job(
+        conn,
+        job_id,
+        create_tasks=False,
+        compaction_policy={"max_active_segment_tokens": 1},
+    )
+
+    old_row = conn.execute("SELECT * FROM decision_session_segments WHERE id = ?", (old_segment["id"],)).fetchone()
+    assert old_row["state"] == "compacted"
+    context = rd.decision_context_status(conn, job_id)
+    assert context["latest_checkpoint"]["profile_name"] == "token_budget_compaction"
+    assert context["active_segment"]["id"] != old_segment["id"]
 
 
 def test_new_provider_input_uses_checkpoint_not_old_transcript(conn):
@@ -360,6 +422,7 @@ def test_runtime_context_cli_outputs_active_segment_and_checkpoint(kanban_home):
     assert payload["active_segment"]["state"] == "active"
     assert payload["latest_checkpoint"]["validator_status"] == "accepted"
     assert "strict_short_tail" in payload["provider_input_composition"]
+    assert "compaction_policy" in payload
 
 
 def test_runtime_decision_cli_outputs_parse_failure_record(kanban_home):

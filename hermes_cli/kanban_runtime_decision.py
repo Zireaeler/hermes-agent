@@ -26,6 +26,17 @@ PATCH_OPS = {
     "request_human",
     "propose_blocked",
 }
+DEFAULT_COMPACTION_POLICY = {
+    "mode": "auto",
+    "max_active_segment_tokens": 12000,
+    "max_context_window_ratio": 0.8,
+    "context_window_tokens": 128000,
+    "rejected_patch_threshold": 5,
+    "noop_threshold": 5,
+    "max_tail_entries": 8,
+    "max_tail_tokens": 2000,
+    "default_profile": "token_budget_compaction",
+}
 
 
 class ProviderPatchParseError(ValueError):
@@ -86,6 +97,11 @@ def _id(prefix: str) -> str:
 
 def _json(data: Any) -> str:
     return json.dumps(data if data is not None else {}, ensure_ascii=False, sort_keys=True)
+
+
+def _estimate_tokens(payload: Any) -> int:
+    text = payload if isinstance(payload, str) else _json(payload)
+    return max(1, (len(text) + 3) // 4)
 
 
 def _loads(raw: Any, default: Any = None) -> Any:
@@ -156,12 +172,13 @@ def latest_decision_checkpoint(conn: sqlite3.Connection, job_id: str) -> Optiona
     return data
 
 
-def _profile_metadata(profile_name: str) -> dict[str, Any]:
+def load_compaction_profile(profile_name: str) -> dict[str, Any]:
     profile_dir = Path(__file__).resolve().parents[1] / "docs" / "kanban-runtime-kernel-compaction-profiles"
     profile_path = profile_dir / f"{profile_name}.md"
     if profile_path.exists():
         content = profile_path.read_text(encoding="utf-8")
-        version = "file"
+        match = re.search(r"^Profile-Version:\s*(.+?)\s*$", content, flags=re.MULTILINE)
+        version = match.group(1).strip() if match else "file"
         path_text = str(profile_path.relative_to(Path(__file__).resolve().parents[1]))
     else:
         content = profile_name
@@ -172,7 +189,13 @@ def _profile_metadata(profile_name: str) -> dict[str, Any]:
         "profile_version": version,
         "profile_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
         "profile_path": path_text,
+        "content": content,
     }
+
+
+def _profile_metadata(profile_name: str) -> dict[str, Any]:
+    profile = load_compaction_profile(profile_name)
+    return {key: profile[key] for key in ("profile_name", "profile_version", "profile_hash", "profile_path")}
 
 
 def _source_refs(**refs: Any) -> list[dict[str, Any]]:
@@ -599,6 +622,150 @@ def _render_checkpoint_text(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2)
 
 
+def _job_compaction_policy(conn: sqlite3.Connection, job_id: str, policy: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    row = conn.execute("SELECT metadata_json FROM runtime_jobs WHERE id = ?", (job_id,)).fetchone()
+    metadata = _loads(row["metadata_json"]) if row else {}
+    session = latest_decision_session(conn, job_id)
+    session_metadata = _loads(session.get("metadata_json"))
+    merged = dict(DEFAULT_COMPACTION_POLICY)
+    merged.update(metadata.get("compaction_policy") or {})
+    merged.update(session_metadata.get("compaction_policy") or {})
+    if policy:
+        merged.update(policy)
+    return merged
+
+
+def build_compaction_telemetry(
+    conn: sqlite3.Connection,
+    job_id: str,
+    *,
+    delta: Optional[dict[str, Any]] = None,
+    policy: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Return token/count telemetry consumed by compaction policy."""
+
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    rk.ensure_runtime_schema(conn)
+    resolved_policy = _job_compaction_policy(conn, job_id, policy)
+    active = rk.ensure_decision_segment(conn, job_id)
+    checkpoint = latest_decision_checkpoint(conn, job_id)
+    tail = _short_tail_entries(
+        conn,
+        job_id,
+        checkpoint,
+        max_tail_entries=int(resolved_policy["max_tail_entries"]),
+        max_tail_tokens=int(resolved_policy["max_tail_tokens"]),
+    )
+    checkpoint_payload = (checkpoint or {}).get("checkpoint") if checkpoint else None
+    stable_prefix = {
+        "patch_schema": PATCH_SCHEMA,
+        "allowed_ops": sorted(PATCH_OPS),
+        "forbidden_ops": ["release_node", "complete_job"],
+        "db_is_authoritative": True,
+    }
+    stable_prefix_tokens = _estimate_tokens(stable_prefix)
+    checkpoint_tokens = _estimate_tokens(checkpoint_payload or {})
+    tail_tokens = sum(int(entry.get("estimated_tokens") or 0) for entry in tail)
+    delta_tokens = _estimate_tokens(delta or {})
+    model_output_tokens = conn.execute(
+        """
+        SELECT COALESCE(SUM(estimated_tokens), 0)
+          FROM decision_segment_entries
+         WHERE segment_id = ? AND entry_type = 'provider_output'
+        """,
+        (active["id"],),
+    ).fetchone()[0]
+    rejected_patch_count = conn.execute(
+        """
+        SELECT COUNT(*)
+          FROM decision_segment_entries
+         WHERE segment_id = ? AND entry_type = 'patch_rejected'
+        """,
+        (active["id"],),
+    ).fetchone()[0]
+    noop_count = 0
+    for row in conn.execute(
+        """
+        SELECT payload_json FROM decision_segment_entries
+         WHERE segment_id = ? AND entry_type IN ('validator_result', 'patch_applied')
+        """,
+        (active["id"],),
+    ).fetchall():
+        payload = _loads(row["payload_json"])
+        if payload.get("status") == "noop" or payload.get("ops") == []:
+            noop_count += 1
+    active_segment_tokens = int(active.get("active_segment_tokens") or 0)
+    cacheable_prefix_tokens = stable_prefix_tokens + checkpoint_tokens
+    input_tokens = cacheable_prefix_tokens + tail_tokens + delta_tokens
+    context_window = max(1, int(resolved_policy["context_window_tokens"]))
+    return {
+        "stable_prefix_tokens": stable_prefix_tokens,
+        "checkpoint_tokens": checkpoint_tokens,
+        "tail_tokens": tail_tokens,
+        "delta_tokens": delta_tokens,
+        "model_output_tokens": int(model_output_tokens or 0),
+        "active_segment_tokens": active_segment_tokens,
+        "cacheable_prefix_tokens": cacheable_prefix_tokens,
+        "context_window_ratio": input_tokens / context_window,
+        "accepted_patch_count": int(
+            conn.execute(
+                "SELECT COUNT(*) FROM decision_segment_entries WHERE segment_id = ? AND entry_type = 'patch_applied'",
+                (active["id"],),
+            ).fetchone()[0]
+        ),
+        "rejected_patch_count": int(rejected_patch_count or 0),
+        "noop_count": noop_count,
+        "active_segment_id": active["id"],
+        "latest_checkpoint_id": (checkpoint or {}).get("id"),
+        "policy": resolved_policy,
+    }
+
+
+def should_compact_decision_session(
+    conn: sqlite3.Connection,
+    job_id: str,
+    policy: Optional[dict[str, Any]] = None,
+    *,
+    delta: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Evaluate configured compaction policy against current telemetry."""
+
+    telemetry = build_compaction_telemetry(conn, job_id, delta=delta, policy=policy)
+    resolved = telemetry["policy"]
+    if resolved.get("mode") == "manual":
+        return {"should_compact": False, "reason": "manual_mode", "profile_name": None, "telemetry": telemetry}
+    if telemetry["active_segment_tokens"] >= int(resolved["max_active_segment_tokens"]):
+        return {
+            "should_compact": True,
+            "reason": "token_threshold",
+            "profile_name": resolved.get("default_profile") or "token_budget_compaction",
+            "telemetry": telemetry,
+        }
+    if telemetry["context_window_ratio"] >= float(resolved["max_context_window_ratio"]):
+        return {
+            "should_compact": True,
+            "reason": "context_window_ratio",
+            "profile_name": resolved.get("default_profile") or "token_budget_compaction",
+            "telemetry": telemetry,
+        }
+    if telemetry["rejected_patch_count"] >= int(resolved["rejected_patch_threshold"]):
+        return {
+            "should_compact": True,
+            "reason": "rejection_threshold",
+            "profile_name": "validator_boundary_compaction",
+            "telemetry": telemetry,
+        }
+    if telemetry["noop_count"] >= int(resolved["noop_threshold"]):
+        return {
+            "should_compact": True,
+            "reason": "noop_threshold",
+            "profile_name": "anti_stuck_compaction",
+            "telemetry": telemetry,
+        }
+    return {"should_compact": False, "reason": "below_threshold", "profile_name": None, "telemetry": telemetry}
+
+
 def compact_decision_session(
     conn: sqlite3.Connection,
     job_id: str,
@@ -813,6 +980,7 @@ def decision_context_status(conn: sqlite3.Connection, job_id: str) -> dict[str, 
     rk.ensure_runtime_schema(conn)
     active = rk.ensure_decision_segment(conn, job_id)
     checkpoint = latest_decision_checkpoint(conn, job_id)
+    policy_result = should_compact_decision_session(conn, job_id)
     return {
         "job_id": job_id,
         "active_segment": _row(
@@ -820,6 +988,7 @@ def decision_context_status(conn: sqlite3.Connection, job_id: str) -> dict[str, 
         ),
         "latest_checkpoint": checkpoint,
         "active_segment_tokens": int(active.get("active_segment_tokens") or 0),
+        "compaction_policy": policy_result,
         "provider_input_composition": [
             "stable_runtime_contract",
             "current_goal_contract",

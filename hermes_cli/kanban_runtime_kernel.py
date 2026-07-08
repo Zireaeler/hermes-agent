@@ -1718,6 +1718,8 @@ def advance_runtime_job(
     create_tasks: bool = True,
     decision_provider: Optional[Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]] = None,
     max_patches: int = 1,
+    auto_compact: bool = True,
+    compaction_policy: Optional[dict[str, Any]] = None,
 ) -> AdvanceResult:
     ensure_runtime_schema(conn)
     ingested: list[str] = []
@@ -1864,6 +1866,17 @@ def advance_runtime_job(
                 patch_id=result.get("patch_id"),
                 ref_type="graph_patch",
                 ref_id=result.get("patch_id"),
+            )
+    if auto_compact:
+        from hermes_cli import kanban_runtime_decision as rd
+
+        policy_result = rd.should_compact_decision_session(conn, job_id, compaction_policy)
+        if policy_result["should_compact"]:
+            rd.compact_decision_session(
+                conn,
+                job_id,
+                profile_name=policy_result["profile_name"],
+                reason=policy_result["reason"],
             )
     final_state = _job(conn, job_id)["state"]
     events = [row["event_type"] for row in conn.execute("SELECT event_type FROM execution_events WHERE job_id = ? ORDER BY id", (job_id,))]
