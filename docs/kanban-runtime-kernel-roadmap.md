@@ -458,7 +458,28 @@ Goal evolution 第一版先支持 explicit waiver。用户或 operator 可以 wa
 
 ### 实现内容
 
-并发：graph revision、optimistic concurrency、stale patch detection。
+Phase 4 拆分为：
+
+```text
+Phase 4A Real Compaction Provider Integration
+Phase 4B Runtime Observability / Dashboard API
+Phase 4C Production Supervisor / Recovery
+Phase 4D Concurrency / Safety Hardening
+```
+
+Phase 4A 接入真实 compaction provider，但保留 deterministic fallback、
+checkpoint validator、profile hash/version、旧 segment exclusion 和 provenance。
+
+Phase 4B 补齐 dashboard/API 可观测性，展示 job、goal contract、progress
+ledger、graph frontier、events、patch history、decision session、checkpoint、
+compaction status、human gate、liveness 和 anti-stuck signals。
+
+Phase 4C 实现 production supervisor/recovery：bounded daemon、advance lock、
+pause/cancel、worker crash/stale recovery、retry/rerun policy 和 DB-based resume。
+
+Phase 4D 做并发与安全 hardening。
+
+并发：graph revision、db revision、optimistic concurrency、stale patch/checkpoint detection。
 
 恢复：checkpoint restore、event replay、failed worker recovery。
 
@@ -474,10 +495,10 @@ Goal evolution 第一版先支持 explicit waiver。用户或 operator 可以 wa
 real compaction provider integration
       |
       v
-Phase 4 dashboard / production hardening
+Phase 4B dashboard/API observability
       |
       v
-Phase 4 production hardening
+Phase 4C/4D production supervisor and safety hardening
 ```
 
 原因：

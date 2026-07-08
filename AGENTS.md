@@ -15,7 +15,8 @@ When working on branch `feature-kanban-runtime-kernel`, treat
 `docs/kanban-runtime-kernel-phase3.md` and
 `docs/kanban-runtime-kernel-phase3b.md` and
 `docs/kanban-runtime-kernel-phase3c.md` and
-`docs/kanban-runtime-kernel-phase3d.md` as binding design constraints, not
+`docs/kanban-runtime-kernel-phase3d.md` and
+`docs/kanban-runtime-kernel-phase4.md` as binding design constraints, not
 background reading. If implementation details conflict with those documents,
 update the relevant design document first or stop and ask for direction.
 
@@ -111,6 +112,13 @@ runtime APIs such as goal waiver, with reducer-owned completion. Resume
 semantics must be DB-based: repeated `runtime advance` calls after process
 boundaries must continue from persisted graph, ledger, events, decisions,
 segments, and checkpoints.
+
+Phase 4 is production hardening. Implement it as 4A real compaction provider,
+4B observability/dashboard API, 4C production supervisor/recovery, and 4D
+concurrency/safety hardening. Do not let compaction providers write DB or output
+graph patches; do not remove deterministic compaction fallback; do not make
+dashboard views mutate private tables directly; do not let supervisor hidden
+memory become required for correctness.
 
 For this branch, do not routinely rebase `main`, and do not restore the old
 oversized session `019e497b-56e0-7bb0-a357-0db06954ae4d` as implementation
