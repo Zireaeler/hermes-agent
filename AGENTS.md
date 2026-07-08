@@ -11,7 +11,8 @@ When working on branch `feature-kanban-runtime-kernel`, treat
 `docs/kanban-runtime-kernel-phase2.md` and
 `docs/kanban-runtime-kernel-phase2b.md` and
 `docs/kanban-runtime-kernel-phase2c.md` and
-`docs/kanban-runtime-kernel-phase2d.md` as binding design constraints, not
+`docs/kanban-runtime-kernel-phase2d.md` and
+`docs/kanban-runtime-kernel-phase3.md` as binding design constraints, not
 background reading. If implementation details conflict with those documents,
 update the relevant design document first or stop and ask for direction.
 
@@ -66,6 +67,13 @@ DB-derived checkpoint creation, checkpoint validation, compaction policy/profile
 boundaries, and provider input replacement before adding a live LLM provider.
 Do not treat worker receipts, worker backend internal context compression, or
 dashboard summaries as runtime decision-session compaction.
+
+Phase 3 is a real decision-provider integration stage. Real providers may only
+generate graph patch proposals from the Phase 2D provider request composition;
+they must not own DB facts, create Kanban tasks, release nodes, directly
+complete jobs, mark jobs blocked, or bypass parser/validator boundaries. Unit
+tests for this stage must use fake/replay providers and must not require live
+network calls or API keys.
 
 For this branch, do not routinely rebase `main`, and do not restore the old
 oversized session `019e497b-56e0-7bb0-a357-0db06954ae4d` as implementation
