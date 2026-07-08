@@ -41,6 +41,7 @@ NODE_TYPES = {
     "research",
     "human_gate",
     "artifact_transform",
+    "strategy_update",
 }
 DEPENDENCY_TYPES = {"depends_on", "artifact_input"}
 RELATION_TYPES = {"verifies", "blocks", "supersedes", "explains", "replaces_attempt"}
@@ -50,6 +51,7 @@ PATCH_OPS = {
     "insert_verifier",
     "request_human",
     "propose_blocked",
+    "strategy_update",
 }
 BLOCKER_TYPES = {
     "missing_secret",
@@ -874,6 +876,12 @@ def _validate_goal_linkage(op: dict[str, Any]) -> None:
     raise PatchValidationError("create_node requires goal_item_keys, gap_keys, or human_gate_reason")
 
 
+def _validate_goal_or_gap_linkage(op: dict[str, Any], op_name: str) -> None:
+    if op.get("goal_item_keys") or op.get("gap_keys") or op.get("human_gate_reason"):
+        return
+    raise PatchValidationError(f"{op_name} requires goal_item_keys, gap_keys, or human_gate_reason")
+
+
 def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]) -> None:
     job = _job(conn, job_id)
     if not isinstance(patch, dict):
@@ -951,6 +959,20 @@ def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]
             for field_name in ("target", "reason", "evidence_ref"):
                 if not str(op.get(field_name) or "").strip():
                     raise PatchValidationError(f"propose_blocked requires {field_name}")
+        elif name == "strategy_update":
+            _validate_goal_or_gap_linkage(op, "strategy_update")
+            node_key = str(op.get("node_key") or "").strip()
+            if not node_key or not str(op.get("title") or "").strip() or not str(op.get("description") or "").strip():
+                raise PatchValidationError("strategy_update requires node_key, title, and description")
+            if _node_optional(conn, job_id, node_key) is not None:
+                raise PatchValidationError(f"duplicate node_key {node_key!r}")
+            if not str(op.get("strategy_summary") or "").strip():
+                raise PatchValidationError("strategy_update requires strategy_summary")
+            changes = op.get("changes_from_previous_attempts")
+            if not isinstance(changes, list) or not [str(item).strip() for item in changes if str(item).strip()]:
+                raise PatchValidationError("strategy_update requires changes_from_previous_attempts")
+            for key in op.get("goal_item_keys") or []:
+                _goal_item_by_key(conn, job_id, key)
 
 
 def _would_create_dependency_cycle(conn: sqlite3.Connection, job_id: str, from_id: str, to_id: str) -> bool:
@@ -1119,6 +1141,38 @@ def _apply_op(conn: sqlite3.Connection, job_id: str, op: dict[str, Any]) -> None
         _event(conn, job_id, "human_required", op, node_id=node_id)
     elif name == "propose_blocked":
         _event(conn, job_id, "blocked_proposed", op)
+    elif name == "strategy_update":
+        node_id = _id("rnode")
+        metadata = {
+            "goal_item_keys": op.get("goal_item_keys") or [],
+            "gap_keys": op.get("gap_keys") or [],
+            "human_gate_reason": op.get("human_gate_reason"),
+            "strategy_summary": op.get("strategy_summary"),
+            "changes_from_previous_attempts": op.get("changes_from_previous_attempts") or [],
+        }
+        conn.execute(
+            """
+            INSERT INTO execution_nodes (
+                id, job_id, node_key, node_type, state, title, description,
+                assignee, input_summary, assumptions_json, constraints_json,
+                metadata_json, created_at, updated_at
+            ) VALUES (?, ?, ?, 'strategy_update', 'planned', ?, ?, ?, ?, '{}', ?, ?, ?, ?)
+            """,
+            (
+                node_id,
+                job_id,
+                str(op["node_key"]).strip(),
+                str(op["title"]).strip(),
+                str(op["description"]).strip(),
+                op.get("assignee"),
+                str(op.get("input_summary") or op["description"]).strip(),
+                _json(op.get("constraints") or {}),
+                _json(metadata),
+                now,
+                now,
+            ),
+        )
+        _event(conn, job_id, "strategy_update_requested", metadata, node_id=node_id)
 
 
 def _insert_dependency(conn: sqlite3.Connection, job_id: str, from_node_id: str, to_node_id: str, dep_type: str) -> None:
@@ -1386,7 +1440,7 @@ def _completion_satisfied(conn: sqlite3.Connection, job_id: str) -> bool:
     if not required:
         return False
     for item in required:
-        if item["state"] != "satisfied":
+        if item["state"] not in {"satisfied", "waived"}:
             return False
     running = conn.execute(
         "SELECT 1 FROM execution_nodes WHERE job_id = ? AND state IN ('running', 'waiting_human') LIMIT 1",
@@ -1427,7 +1481,7 @@ def detect_goal_gaps(conn: sqlite3.Connection, job_id: str) -> list[dict[str, An
             (item["id"],),
         ).fetchall()
         gap_type: Optional[str] = None
-        if item["state"] == "satisfied":
+        if item["state"] in {"satisfied", "waived"}:
             continue
         linked_nodes = _nodes_linked_to_goal_item(conn, job_id, item["item_key"])
         has_human_gate = any(node["state"] == "waiting_human" for node in linked_nodes)
@@ -2381,6 +2435,65 @@ def update_progress_ledger(conn: sqlite3.Connection, node_id: str, evidence: dic
     _refresh_goal_item_states(conn, contract["id"])
 
 
+def waive_goal_item(
+    conn: sqlite3.Connection,
+    job_id: str,
+    item_key: str,
+    *,
+    reason: str,
+    source: str = "user",
+) -> dict[str, Any]:
+    """Record an explicit operator/user waiver for a goal item.
+
+    This is a fact-layer goal mutation. It writes ledger/event evidence and lets
+    the reducer decide whether the job is now done.
+    """
+
+    ensure_runtime_schema(conn)
+    if not str(reason or "").strip():
+        raise ValueError("waiver reason is required")
+    item = _goal_item_by_key(conn, job_id, item_key)
+    contract = _contract(conn, job_id)
+    now = _now()
+    metadata = {
+        "reason": str(reason).strip(),
+        "source": str(source or "user").strip() or "user",
+        "goal_item_key": item_key,
+    }
+    ledger_id = _id("pledger")
+    conn.execute(
+        """
+        INSERT INTO progress_ledger (
+            id, job_id, contract_id, goal_item_id, node_id, evidence_ref,
+            satisfaction, verification_state, confidence, summary,
+            metadata_json, created_at
+        ) VALUES (?, ?, ?, ?, NULL, ?, 'waived', 'waived', 1.0, ?, ?, ?)
+        """,
+        (
+            ledger_id,
+            job_id,
+            contract["id"],
+            item["id"],
+            f"waiver:{metadata['source']}:{item_key}",
+            str(reason).strip(),
+            _json(metadata),
+            now,
+        ),
+    )
+    _refresh_goal_item_states(conn, contract["id"])
+    _event(conn, job_id, "goal_item_waived", {"goal_item_key": item_key, "reason": reason, "source": metadata["source"]})
+    _event(conn, job_id, "human_decision_received", {"decision_type": "goal_waiver", "goal_item_key": item_key, "reason": reason, "source": metadata["source"]})
+    reduction = reduce_runtime_job(conn, job_id)
+    return {
+        "job_id": job_id,
+        "goal_item_key": item_key,
+        "ledger_id": ledger_id,
+        "state": _goal_item_by_key(conn, job_id, item_key)["state"],
+        "job_state": _job(conn, job_id)["state"],
+        "reduction": reduction,
+    }
+
+
 def _default_verification_state(node: dict[str, Any], evidence: dict[str, Any], verification_passed: bool) -> str:
     verification = evidence.get("verification")
     verdict = _normalize_verdict(evidence.get("verdict") or "")
@@ -2464,6 +2577,8 @@ def _refresh_goal_item_states(conn: sqlite3.Connection, contract_id: str) -> Non
         state = "open"
         if any(row["satisfaction"] == "contradicted" for row in ledgers):
             state = "contradicted"
+        elif any(row["satisfaction"] == "waived" for row in ledgers):
+            state = "waived"
         elif any(
             row["satisfaction"] == "full"
             and (

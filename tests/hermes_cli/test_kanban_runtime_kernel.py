@@ -533,6 +533,87 @@ def test_rejected_patch_counts_toward_anti_stuck(conn):
     )
 
 
+def test_strategy_update_patch_creates_materializable_strategy_node(conn):
+    job_id = _job(conn)
+    bad = rk.apply_graph_patch(
+        conn,
+        job_id,
+        _patch(
+            job_id,
+            _revision(conn, job_id),
+            {
+                "op": "strategy_update",
+                "node_key": "revise-runtime-strategy",
+                "title": "Revise runtime strategy",
+                "description": "Review failed attempts and choose a smaller verifiable path.",
+                "goal_item_keys": ["initial-runtime-result"],
+                "strategy_summary": "Change approach after repeated failed implementation attempts.",
+            },
+        ),
+    )
+    assert bad["status"] == "rejected"
+    assert "changes_from_previous_attempts" in bad["reason"]
+
+    result = rk.apply_graph_patch(
+        conn,
+        job_id,
+        _patch(
+            job_id,
+            _revision(conn, job_id),
+            {
+                "op": "strategy_update",
+                "node_key": "revise-runtime-strategy",
+                "title": "Revise runtime strategy",
+                "description": "Review failed attempts and choose a smaller verifiable path.",
+                "goal_item_keys": ["initial-runtime-result"],
+                "gap_keys": ["initial-runtime-result:stale_or_no_progress"],
+                "strategy_summary": "Change approach after repeated failed implementation attempts.",
+                "changes_from_previous_attempts": [
+                    "stop repeating the same implementation node",
+                    "insert a debug or research node before another implementation attempt",
+                ],
+            },
+        ),
+    )
+    assert result["status"] == "applied"
+    strategy = _node(conn, job_id, "revise-runtime-strategy")
+    assert strategy["node_type"] == "strategy_update"
+    assert strategy["state"] == "ready"
+
+    task_id = rk.materialize_runtime_node(conn, dict(strategy))
+    assert task_id
+    strategy = _node(conn, job_id, "revise-runtime-strategy")
+    assert strategy["state"] == "running"
+    events = [
+        row["event_type"]
+        for row in conn.execute("SELECT event_type FROM execution_events WHERE job_id = ?", (job_id,))
+    ]
+    assert "strategy_update_requested" in events
+
+
+def test_goal_waiver_is_reducer_owned_completion(conn):
+    job_id = _job(conn)
+    result = rk.waive_goal_item(
+        conn,
+        job_id,
+        "initial-runtime-result",
+        reason="user accepted deferring this goal item",
+        source="user",
+    )
+    assert result["state"] == "waived"
+    assert result["job_state"] == "done"
+    status = rk.status_runtime_job(conn, job_id)
+    assert status["job"]["state"] == "done"
+    assert status["goal_items"][0]["state"] == "waived"
+    assert status["progress_ledger"][0]["satisfaction"] == "waived"
+    events = [
+        row["event_type"]
+        for row in conn.execute("SELECT event_type FROM execution_events WHERE job_id = ?", (job_id,))
+    ]
+    assert "goal_item_waived" in events
+    assert "human_decision_received" in events
+
+
 def test_status_json_has_phase2c_observability(conn):
     job_id = _job(conn)
     status = rk.status_runtime_job(conn, job_id)

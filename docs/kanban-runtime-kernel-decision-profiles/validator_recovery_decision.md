@@ -42,6 +42,9 @@ No Markdown fences, no explanatory prose, no comments.
   `goal_item_keys`, `gap_keys`, or `human_gate_reason`.
 - If the rejected reason is stale revision, use the current `db_revision` /
   `graph_revision` from the request.
+- If the rejected op is `strategy_update`, include `strategy_summary` and a
+  non-empty `changes_from_previous_attempts` list. Do not use it to mark the job
+  done or blocked.
 
 ## Safe Fallback
 

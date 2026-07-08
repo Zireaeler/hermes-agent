@@ -14,7 +14,8 @@ When working on branch `feature-kanban-runtime-kernel`, treat
 `docs/kanban-runtime-kernel-phase2d.md` and
 `docs/kanban-runtime-kernel-phase3.md` and
 `docs/kanban-runtime-kernel-phase3b.md` and
-`docs/kanban-runtime-kernel-phase3c.md` as binding design constraints, not
+`docs/kanban-runtime-kernel-phase3c.md` and
+`docs/kanban-runtime-kernel-phase3d.md` as binding design constraints, not
 background reading. If implementation details conflict with those documents,
 update the relevant design document first or stop and ask for direction.
 
@@ -102,6 +103,14 @@ ledger rows, goal item completion, graph revision, or decision records. Runtime
 state changes still flow through `runtime advance` evidence ingest and the
 local reducer. Default tests must remain offline; live `.codex` provider runs
 are explicit integration smoke only.
+
+Phase 3D is a long-running autonomous task runtime stage. Strategy updates must
+be graph work (`strategy_update` nodes) rather than hidden provider memory or
+direct DB mutation. User goal changes must enter DB facts through explicit
+runtime APIs such as goal waiver, with reducer-owned completion. Resume
+semantics must be DB-based: repeated `runtime advance` calls after process
+boundaries must continue from persisted graph, ledger, events, decisions,
+segments, and checkpoints.
 
 For this branch, do not routinely rebase `main`, and do not restore the old
 oversized session `019e497b-56e0-7bb0-a357-0db06954ae4d` as implementation

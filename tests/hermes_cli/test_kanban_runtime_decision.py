@@ -977,6 +977,55 @@ def test_runtime_cli_drives_multiround_goal_loop_with_evidence_bridge(kanban_hom
     assert any(row["validator_result"]["status"] == "applied" for row in decisions)
 
 
+def test_runtime_cli_resumes_and_completes_after_goal_waiver(kanban_home):
+    created = json.loads(
+        kc.run_slash(
+            "runtime create 'phase3d waiver resume loop' "
+            "--goal-item core-result:Core-result "
+            "--goal-item stretch-result:Stretch-result --json"
+        )
+    )
+    job_id = created["id"]
+    first = json.loads(kc.run_slash(f"runtime advance {job_id} --loop --fake-provider --json"))
+    assert first["state"] == "waiting_worker"
+    assert first["steps"][0]["materialized_nodes"] == ["understand-scope"]
+
+    core_evidence = {
+        "verdict": "succeeded",
+        "summary": "core result verified",
+        "claimed_goal_items": ["core-result"],
+        "verification": {"commands": ["pytest"], "passed": True, "summary": "passed"},
+    }
+    json.loads(
+        kc.run_slash(
+            f"runtime complete-node {job_id} understand-scope "
+            "--summary 'core result verified' "
+            f"--metadata '{_runtime_metadata_arg(core_evidence)}' --json"
+        )
+    )
+    resumed = json.loads(kc.run_slash(f"runtime advance {job_id} --loop --provider none --json"))
+    assert resumed["state"] == "waiting_decision"
+    assert any("understand-scope" in step["ingested_nodes"] for step in resumed["steps"])
+
+    waived = json.loads(
+        kc.run_slash(
+            f"runtime waive-goal {job_id} stretch-result "
+            "--reason 'user deferred stretch goal for this runtime slice' --source user --json"
+        )
+    )
+    assert waived["state"] == "waived"
+    assert waived["job_state"] == "done"
+
+    status = json.loads(kc.run_slash(f"runtime status {job_id} --json"))
+    states = {item["item_key"]: item["state"] for item in status["goal_items"]}
+    assert states == {"core-result": "satisfied", "stretch-result": "waived"}
+    assert status["job"]["state"] == "done"
+    assert any(row["satisfaction"] == "waived" for row in status["progress_ledger"])
+    event_types = [event["event_type"] for event in status["recent_events"]]
+    assert "goal_item_waived" in event_types
+    assert "human_decision_received" in event_types
+
+
 def test_runtime_checkpoint_cli_outputs_db_derived_checkpoint(kanban_home):
     created = json.loads(kc.run_slash("runtime create 'phase2b checkpoint' --json"))
     payload = json.loads(kc.run_slash(f"runtime checkpoint {created['id']} --create --json"))

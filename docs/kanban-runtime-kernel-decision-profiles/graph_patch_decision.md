@@ -34,6 +34,7 @@ No Markdown fences, no explanatory prose, no comments.
 - `insert_verifier`
 - `request_human`
 - `propose_blocked`
+- `strategy_update`
 
 ## Forbidden Ops
 
@@ -62,6 +63,9 @@ Use exactly these field names for patch ops:
   `gap_keys` for the verifier node's own goal/gap linkage.
 - `request_human`: include `decision_type`, `question`,
   `default_recommendation`, `why_user_required`, and affected goal/gap keys.
+- `strategy_update`: include `node_key`, `title`, `description`,
+  `goal_item_keys` or `gap_keys`, `strategy_summary`, and
+  `changes_from_previous_attempts`.
 
 Use `insert_verifier` only when you can name an existing `target_node_key` from
 the graph frontier or a real `target_goal_item_key` from the goal contract, and
@@ -73,6 +77,10 @@ dependencies on nodes that are not present in the request.
 
 Never use alias fields such as `node_key` / `depends_on_node_key` for
 `add_dependency`; they are invalid. Use `from_node_key` / `to_node_key`.
+
+Use `strategy_update` when anti-stuck signals, repeated failed attempts, or
+stale gaps require a changed approach. It creates a materialized
+`strategy_update` node; it does not complete or block the job.
 
 ## Example
 

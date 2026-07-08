@@ -89,7 +89,7 @@ Phase 3D Long Running Autonomous Task Runtime
 Phase 4  Production Hardening
 ```
 
-当前代码实现已经推进到 Phase 3C：Phase 2D 本地 compaction 闭环已经具备，Phase 3A 已接入 no-tools real decision provider，Phase 3B 已强化 validator feedback/recovery smoke，Phase 3C 正在把真实 provider patch、Kanban evidence ingest 和多轮 runtime advance 串成可验证闭环。真实 LLM compaction provider 仍属于后续阶段。
+当前代码实现已经推进到 Phase 3D：Phase 2D 本地 compaction 闭环已经具备，Phase 3A 已接入 no-tools real decision provider，Phase 3B 已强化 validator feedback/recovery smoke，Phase 3C 已把真实 provider patch、Kanban evidence ingest 和多轮 runtime advance 串成可验证闭环。Phase 3D 正在补齐长任务 strategy update、goal waiver 和 DB-based resume。真实 LLM compaction provider 仍属于后续阶段。
 
 ## 4. Phase 0: Architecture Contract
 
@@ -419,7 +419,11 @@ next provider decision or local completion
 
 ### 实现内容
 
-增强 decision session，增加 milestone planning、strategy update、dynamic replanning 和 goal evolution。
+增强长任务 continuation 语义，增加 strategy update、explicit goal waiver、DB-based resume 和 dynamic replanning 的最小闭环。
+
+Strategy update 不是 provider 的隐藏记忆，也不是直接 DB mutation；它必须落成 `strategy_update` execution node，服务 goal item 或 gap，并通过 Kanban evidence 返回。
+
+Goal evolution 第一版先支持 explicit waiver。用户或 operator 可以 waive 某个 goal item，runtime 写入 ledger 和 events，completion 仍由 reducer 判断。
 
 支持：
 
@@ -444,7 +448,7 @@ next provider decision or local completion
 
 ### 验收标准
 
-支持数小时级任务、多轮 worker 执行、多次策略调整、用户中途修改目标和任务恢复。
+支持数小时级任务、多轮 worker 执行、多次策略调整、用户中途修改目标、任务恢复，以及合法 done / waiting_worker / waiting_decision / waiting_human 边界。
 
 ## 14. Phase 4: Production Hardening
 
@@ -467,13 +471,13 @@ next provider decision or local completion
 如果现在继续开发，推荐顺序：
 
 ```text
-Phase 3C real provider runtime loop
-      |
-      v
 Phase 3D long-running task runtime
       |
       v
 real compaction provider integration
+      |
+      v
+Phase 4 dashboard / production hardening
       |
       v
 Phase 4 production hardening
@@ -487,4 +491,4 @@ Phase 4 production hardening
 
 没有 compaction，长期任务无法稳定运行。
 
-这三者是 Hermes Runtime Kernel 从“任务调度器”成为“长期任务执行系统”的关键路径。当前三者已经有本地基础实现，真实 decision provider 也已接入；下一步应继续强化多轮 runtime loop、长任务恢复和真实 compaction provider。
+这三者是 Hermes Runtime Kernel 从“任务调度器”成为“长期任务执行系统”的关键路径。当前三者已经有本地基础实现，真实 decision provider 也已接入；下一步应继续强化长任务恢复、策略更新和真实 compaction provider。

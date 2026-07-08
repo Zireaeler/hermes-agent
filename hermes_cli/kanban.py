@@ -1538,6 +1538,16 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     )
     rt_complete_node.add_argument("--json", action="store_true")
 
+    rt_waive_goal = runtime_sub.add_parser(
+        "waive-goal",
+        help="Explicitly waive a runtime goal item and let the reducer recompute completion",
+    )
+    rt_waive_goal.add_argument("job_id")
+    rt_waive_goal.add_argument("goal_item_key")
+    rt_waive_goal.add_argument("--reason", required=True)
+    rt_waive_goal.add_argument("--source", default="user")
+    rt_waive_goal.add_argument("--json", action="store_true")
+
     rt_decision = runtime_sub.add_parser("decision", help="Show recent runtime decision records")
     rt_decision.add_argument("job_id")
     rt_decision.add_argument("--limit", type=int, default=10)
@@ -2046,6 +2056,8 @@ def _dispatch_runtime(args: argparse.Namespace) -> int:
         return _cmd_runtime_advance(args)
     if sub == "complete-node":
         return _cmd_runtime_complete_node(args)
+    if sub == "waive-goal":
+        return _cmd_runtime_waive_goal(args)
     if sub == "decision":
         return _cmd_runtime_decision(args)
     if sub == "checkpoint":
@@ -2388,6 +2400,30 @@ def _cmd_runtime_complete_node(args: argparse.Namespace) -> int:
     else:
         print(f"Completed runtime node {args.node_key} task {payload['task_id']}")
         print("  Ingest required: run `hermes kanban runtime advance ...`")
+    return 0
+
+
+def _cmd_runtime_waive_goal(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    try:
+        with kb.connect() as conn:
+            payload = rk.waive_goal_item(
+                conn,
+                args.job_id,
+                args.goal_item_key,
+                reason=args.reason,
+                source=args.source,
+            )
+    except Exception as exc:
+        print(f"kanban runtime waive-goal: {exc}", file=sys.stderr)
+        return 1
+    if getattr(args, "json", False):
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    else:
+        print(f"Waived goal {payload['goal_item_key']} for runtime job {payload['job_id']}")
+        print(f"  Goal state: {payload['state']}")
+        print(f"  Job state:  {payload['job_state']}")
     return 0
 
 
