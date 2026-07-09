@@ -52,6 +52,7 @@ class DecisionProviderRequest:
     stable_prefix: dict[str, Any]
     goal_contract: dict[str, Any]
     checkpoint: Optional[dict[str, Any]]
+    memory: dict[str, Any]
     short_tail: list[dict[str, Any]]
     delta: dict[str, Any]
 
@@ -63,6 +64,7 @@ class DecisionProviderRequest:
             "stable_prefix": self.stable_prefix,
             "goal_contract": self.goal_contract,
             "checkpoint": self.checkpoint,
+            "memory": self.memory,
             "short_tail": self.short_tail,
             "delta": self.delta,
         }
@@ -1416,6 +1418,7 @@ def runtime_observability_snapshot(
     """Return a bounded JSON surface for dashboard/operator inspection."""
 
     from hermes_cli import kanban_runtime_kernel as rk
+    from hermes_cli import kanban_runtime_memory as rm
 
     rk.ensure_runtime_schema(conn)
     bounded = max(1, min(int(limit), 200))
@@ -1519,6 +1522,7 @@ def runtime_observability_snapshot(
         "legal_waiting_reason": legal_waiting_reason,
         "recovery": recovery,
         "capabilities": status.get("capabilities") or rk.summarize_runtime_capabilities(conn, job_id, limit=bounded),
+        "memory": rm.summarize_runtime_memory(conn, job_id, limit=bounded),
         "consistency": {
             "status": consistency["status"],
             "violation_count": consistency["violation_count"],
@@ -1574,6 +1578,7 @@ def build_decision_provider_request(
     delta: dict[str, Any],
 ) -> DecisionProviderRequest:
     from hermes_cli import kanban_runtime_kernel as rk
+    from hermes_cli import kanban_runtime_memory as rm
 
     rk.ensure_decision_segment(conn, job_id)
     session = latest_decision_session(conn, job_id)
@@ -1603,6 +1608,12 @@ def build_decision_provider_request(
             "no_direct_db_writes": True,
         },
     }
+    memory = rm.select_runtime_memory_hints(conn, job_id, delta)
+    if memory.get("guidance", {}).get("loaded"):
+        stable_prefix["runtime_guidance"] = {
+            "sources": memory["guidance"]["sources"],
+            "content": memory["guidance"]["content"],
+        }
     return DecisionProviderRequest(
         job_id=job_id,
         db_revision=int(job["graph_revision"]),
@@ -1610,6 +1621,13 @@ def build_decision_provider_request(
         stable_prefix=stable_prefix,
         goal_contract=checkpoint["goal_contract"],
         checkpoint=checkpoint,
+        memory={
+            "non_authoritative_notice": memory["non_authoritative_notice"],
+            "selected_hints": memory["selected_hints"],
+            "budget": memory["budget"],
+            "index": memory["index"],
+            "topic_reads": memory["topic_reads"],
+        },
         short_tail=short_tail,
         delta=delta,
     )
@@ -1622,6 +1640,7 @@ def render_decision_prompt(request: DecisionProviderRequest) -> dict[str, Any]:
         "stable_prefix": request.stable_prefix,
         "stable_goal_contract": request.goal_contract,
         "checkpoint": request.checkpoint,
+        "memory": request.memory,
         "short_tail": request.short_tail,
         "delta": request.delta,
         "provider_instruction": {

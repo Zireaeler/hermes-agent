@@ -237,6 +237,15 @@ def test_run_slash_runtime_capability_json(kanban_home):
     assert payload["blocked_nodes"] == []
 
 
+def test_run_slash_runtime_memory_json(kanban_home):
+    created = json.loads(kc.run_slash("runtime create 'memory runtime' --json"))
+    payload = json.loads(kc.run_slash(f"runtime memory {created['id']} --json"))
+
+    assert payload["guidance_loaded"] is False
+    assert payload["selected_hints"] == []
+    assert payload["recent_usage"] == []
+
+
 def test_run_slash_context_output_format(kanban_home):
     out = kc.run_slash("create 'tech spec' --assignee alice --body 'write an RFC'")
     import re

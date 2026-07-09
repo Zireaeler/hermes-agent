@@ -1512,6 +1512,10 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     rt_capability.add_argument("job_id")
     rt_capability.add_argument("--json", action="store_true")
 
+    rt_memory = runtime_sub.add_parser("memory", help="Show runtime memory lifecycle summary")
+    rt_memory.add_argument("job_id")
+    rt_memory.add_argument("--json", action="store_true")
+
     rt_list = runtime_sub.add_parser("list", aliases=["ls"], help="List runtime jobs")
     rt_list.add_argument("--state", default=None)
     rt_list.add_argument("--limit", type=int, default=50)
@@ -2107,6 +2111,8 @@ def _dispatch_runtime(args: argparse.Namespace) -> int:
         return _cmd_runtime_consistency(args)
     if sub == "capability":
         return _cmd_runtime_capability(args)
+    if sub == "memory":
+        return _cmd_runtime_memory(args)
     if sub == "advance":
         return _cmd_runtime_advance(args)
     if sub == "supervise":
@@ -2412,6 +2418,23 @@ def _cmd_runtime_capability(args: argparse.Namespace) -> int:
                 f"  - {node['node_key']}: {node['status']} "
                 f"requested={','.join(node.get('requested_capabilities') or []) or '-'}"
             )
+    return 0
+
+
+def _cmd_runtime_memory(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_memory as rm
+
+    with kb.connect() as conn:
+        result = rm.summarize_runtime_memory(conn, args.job_id)
+    if getattr(args, "json", False):
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+    print(
+        f"Runtime memory: guidance_loaded={result['guidance_loaded']} "
+        f"selected_hints={len(result.get('selected_hints') or [])} "
+        f"candidates={result.get('candidate_count', 0)} "
+        f"usage_events={len(result.get('recent_usage') or [])}"
+    )
     return 0
 
 

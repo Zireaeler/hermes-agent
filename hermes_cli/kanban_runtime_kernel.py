@@ -3354,6 +3354,7 @@ def advance_runtime_job(
     decision_requested = reduction["state"] == "waiting_decision"
     if decision_provider and decision_requested and max_patches > 0:
         from hermes_cli import kanban_runtime_decision as rd
+        from hermes_cli import kanban_runtime_memory as rm
 
         session = _current_session(conn, job_id)
         if session is None:
@@ -3377,6 +3378,16 @@ def advance_runtime_job(
                 request = rd.build_decision_provider_request(conn, job_id, delta)
                 profile_name = getattr(decision_provider, "profile_name", "graph_patch_decision")
                 messages, rendered, profile = rd.render_decision_messages(request, profile_name=profile_name)
+                provider_request_ref = hashlib.sha256(
+                    _json({"messages": messages, "rendered": rendered}).encode("utf-8")
+                ).hexdigest()
+                rm.record_memory_hint_usage(
+                    conn,
+                    job_id,
+                    decision_id,
+                    request.memory,
+                    provider_request_ref=provider_request_ref,
+                )
                 append_decision_segment_entry(
                     conn,
                     job_id,
@@ -3473,6 +3484,13 @@ def advance_runtime_job(
                         ref_id=decision_id,
                     )
                     patch_status = provider_result.parse_status
+                    rm.record_memory_hint_usage(
+                        conn,
+                        job_id,
+                        decision_id,
+                        locals().get("request").memory if "request" in locals() else {},
+                        outcome=result,
+                    )
                     patch = None
                 else:
                     patch = provider_result.patch
@@ -3544,6 +3562,13 @@ def advance_runtime_job(
                 ref_id=decision_id,
             )
             patch_status = "parse_failed"
+            rm.record_memory_hint_usage(
+                conn,
+                job_id,
+                decision_id,
+                locals().get("request").memory if "request" in locals() else {},
+                outcome=result,
+            )
         except Exception as exc:  # pragma: no cover - defensive path covered by status assertions later.
             conn.execute(
                 "UPDATE kernel_decisions SET status = 'failed', error = ?, completed_at = ? WHERE id = ?",
@@ -3584,6 +3609,13 @@ def advance_runtime_job(
                 )
             result = apply_graph_patch(conn, job_id, patch, decision_id=decision_id)
             patch_status = result["status"]
+            rm.record_memory_hint_usage(
+                conn,
+                job_id,
+                decision_id,
+                locals().get("request").memory if "request" in locals() else {},
+                outcome=result,
+            )
             if result["status"] != "applied":
                 reason = str(result.get("reason") or "")
                 event_type = "decision_stale_revision" if "expected_revision" in reason else "decision_patch_rejected"
