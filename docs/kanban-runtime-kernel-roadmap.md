@@ -547,6 +547,14 @@ workspace boundary、network、git、database migration 等权限判断收敛成
 runtime capability policy，避免安全规则散落在 validator、worker lane、
 dashboard API 和 CLI。
 
+Phase 4F MVP 的实现边界是：定义 capability taxonomy 和默认 policy；让
+`create_node` / `strategy_update` 可以声明 `requested_capabilities`；让 graph
+patch validator 检查未知 capability、denied capability 和 require-human
+capability；materialization 前评估 node capability，未授权危险 capability 不创建
+Kanban task；worker context 明确下发 allowed / denied / requires-human；runtime
+inspect 和 dashboard read-only API 能解释 `blocked_by_policy`。LLM 只能提出
+capability request 或 human gate，不能自行授权。
+
 Phase 4G 专门做 synthetic long-run soak 与真实 compaction smoke。目标不是证明
 某个业务项目能完成，而是证明 runtime 本身能承受几十到上百次
 decision / patch / validator / compaction / reconcile cycle。
@@ -565,7 +573,7 @@ Phase 4 productionization follow-through
 Phase 4E worker recovery MVP 收尾和 stale/crash 补强
       |
       v
-Phase 4F runtime capability/security policy and replay validation
+Phase 4F runtime capability/security policy
       |
       v
 Phase 4G real compaction provider smoke/soak and synthetic long-run tests
@@ -585,7 +593,8 @@ supervisor tick 和 lease 已有，但还不是 packaged daemon。
 compaction provider 边界已接入，但真实模型 compaction 还需要 smoke/soak 验证。
 
 并发和 idempotency 已有关键测试，但 destructive action、external cost、
-credential、workspace boundary 和 event replay 仍需要专门 hardening。
+credential、workspace boundary、network、git write、database migration 和
+event replay 仍需要专门 hardening。
 
 最优先的是 Phase 4E，因为真实长任务最先出问题的地方通常是 worker
 materialization、Kanban task/run、receipt、node state 和 progress ledger 之间

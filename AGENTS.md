@@ -17,7 +17,8 @@ When working on branch `feature-kanban-runtime-kernel`, treat
 `docs/kanban-runtime-kernel-phase3c.md` and
 `docs/kanban-runtime-kernel-phase3d.md` and
 `docs/kanban-runtime-kernel-phase4.md` and
-`docs/kanban-runtime-kernel-phase4e.md` as binding design constraints, not
+`docs/kanban-runtime-kernel-phase4e.md` and
+`docs/kanban-runtime-kernel-phase4f.md` as binding design constraints, not
 background reading. If implementation details conflict with those documents,
 update the relevant design document first or stop and ask for direction.
 
@@ -136,6 +137,15 @@ provider to decide whether a worker run is stale, missing, crashed, retryable,
 or allowed to overwrite terminal facts. Preserve materialization attempt
 history, never silently rewrite terminal node facts, and expose recovery /
 consistency / legal waiting reason through runtime observability.
+
+Phase 4F is runtime capability and security policy. Capability authorization
+must be a local runtime policy boundary, not provider judgment. Decision
+providers may request capabilities or propose a human gate, but they must not
+grant themselves filesystem, network, secret, external-cost, destructive, git,
+or database-migration privileges. Validator and materialization code must
+evaluate requested capabilities before creating worker tasks, worker context
+must include allowed/denied/requires-human capabilities, and policy blocks must
+be observable as structured runtime state rather than hidden worker behavior.
 
 For this branch, do not routinely rebase `main`, and do not restore the old
 oversized session `019e497b-56e0-7bb0-a357-0db06954ae4d` as implementation
