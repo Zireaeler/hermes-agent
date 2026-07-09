@@ -134,6 +134,7 @@ DEFAULT_RUNTIME_RECOVERY_POLICY = {
     "uncertain_auto_retry": False,
     "run_stale_after_seconds": kb.DEFAULT_CLAIM_TTL_SECONDS,
     "retryable_failure_types": [
+        "worker_run_stale",
         "worker_run_timeout",
         "worker_run_crashed",
         "materialization_lost",
@@ -1710,6 +1711,9 @@ def _run_failure_type(snapshot: kb.TaskProgressSnapshot, *, now: int, policy: di
     stale_after = int(policy.get("run_stale_after_seconds") or 0)
     if task.status == "running" and stale_after > 0 and last_heartbeat is not None and now - last_heartbeat > stale_after:
         return "worker_run_stale"
+    active_started = run.started_at if run else task.started_at
+    if task.status == "running" and stale_after > 0 and last_heartbeat is None and active_started is not None and now - int(active_started) > stale_after:
+        return "worker_run_stale"
     if task.status == "ready" and run and outcome == "reclaimed":
         return "worker_run_stale"
     return None
@@ -2048,6 +2052,24 @@ def summarize_runtime_recovery(conn: sqlite3.Connection, job_id: str, *, limit: 
     }
 
 
+def _checkpoint_source_refs(payload: Any) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            source_refs = value.get("source_refs")
+            if isinstance(source_refs, list):
+                refs.extend(ref for ref in source_refs if isinstance(ref, dict))
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(payload)
+    return refs
+
+
 def check_runtime_consistency(
     conn: sqlite3.Connection,
     job_id: str,
@@ -2122,6 +2144,40 @@ def check_runtime_consistency(
                     "checkpoint_graph_revision": int(checkpoint["graph_revision"]),
                 }
             )
+        payload = _loads(checkpoint["payload_json"])
+        for ref in _checkpoint_source_refs(payload):
+            if ref.get("node_key") and conn.execute(
+                "SELECT 1 FROM execution_nodes WHERE job_id = ? AND node_key = ?",
+                (job_id, ref["node_key"]),
+            ).fetchone() is None:
+                violations.append({"type": "checkpoint_node_missing", "checkpoint_id": checkpoint["id"], "node_key": ref["node_key"]})
+            if ref.get("goal_item_key"):
+                contract = _contract(conn, job_id)
+                if conn.execute(
+                    "SELECT 1 FROM goal_items WHERE contract_id = ? AND item_key = ?",
+                    (contract["id"], ref["goal_item_key"]),
+                ).fetchone() is None:
+                    violations.append({"type": "checkpoint_goal_item_missing", "checkpoint_id": checkpoint["id"], "goal_item_key": ref["goal_item_key"]})
+            if ref.get("event_id") and conn.execute(
+                "SELECT 1 FROM execution_events WHERE job_id = ? AND id = ?",
+                (job_id, int(ref["event_id"])),
+            ).fetchone() is None:
+                violations.append({"type": "checkpoint_event_missing", "checkpoint_id": checkpoint["id"], "event_id": ref["event_id"]})
+            if ref.get("decision_id") and conn.execute(
+                "SELECT 1 FROM kernel_decisions WHERE job_id = ? AND id = ?",
+                (job_id, ref["decision_id"]),
+            ).fetchone() is None:
+                violations.append({"type": "checkpoint_decision_missing", "checkpoint_id": checkpoint["id"], "decision_id": ref["decision_id"]})
+            if ref.get("patch_id") and conn.execute(
+                "SELECT 1 FROM graph_patches WHERE job_id = ? AND id = ?",
+                (job_id, ref["patch_id"]),
+            ).fetchone() is None:
+                violations.append({"type": "checkpoint_patch_missing", "checkpoint_id": checkpoint["id"], "patch_id": ref["patch_id"]})
+            if ref.get("artifact_ref") and conn.execute(
+                "SELECT 1 FROM node_artifacts WHERE job_id = ? AND path_or_ref = ?",
+                (job_id, ref["artifact_ref"]),
+            ).fetchone() is None:
+                violations.append({"type": "checkpoint_artifact_missing", "checkpoint_id": checkpoint["id"], "artifact_ref": ref["artifact_ref"]})
     active_segments = conn.execute(
         "SELECT COUNT(*) AS count FROM decision_session_segments WHERE job_id = ? AND state = 'active'",
         (job_id,),
@@ -2170,6 +2226,33 @@ def check_runtime_consistency(
                 "policy_decision": "operator_review" if violations else "none",
             },
         )
+        for violation in violations:
+            if str(violation.get("type") or "").startswith("ledger_"):
+                _recovery_event_once(
+                    conn,
+                    job_id,
+                    "ledger_reference_missing",
+                    f"ledger:{violation}",
+                    {
+                        "recovery_reason": violation["type"],
+                        "retryable": False,
+                        "policy_decision": "operator_review",
+                        "violation": violation,
+                    },
+                )
+            elif str(violation.get("type") or "").startswith("checkpoint_"):
+                _recovery_event_once(
+                    conn,
+                    job_id,
+                    "checkpoint_reference_missing",
+                    f"checkpoint:{violation}",
+                    {
+                        "recovery_reason": violation["type"],
+                        "retryable": False,
+                        "policy_decision": "operator_review",
+                        "violation": violation,
+                    },
+                )
     return result
 
 

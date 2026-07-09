@@ -501,24 +501,34 @@ Phase 4E MVP 已实现：
 
 - `reconcile_runtime_materializations()` 本地 reducer；
 - `materialization_lost`、`receipt_missing`、`node_recovery_retry_scheduled`、
-  `receipt_recovery_requested`、`materialization_reconciled` 等 recovery events；
+  `receipt_recovery_requested`、`worker_run_stale`、`worker_run_timeout`、
+  `worker_run_crashed`、`node_recovery_not_retryable`、
+  `materialization_reconciled` 等 recovery events；
 - retry 时通过新的 `node_materializations.attempt` 创建新 Kanban task；
+- 默认 retry policy 已覆盖 stale / timeout / crash / missing task / missing
+  receipt，并在超过 retry limit 后标记 not retryable；
+- business failure receipt 进入 evidence ingest，不由 recovery 原地 retry；
+- failed verifier 不改写 implementation node 的 terminal fact；
 - `advance_runtime_job()` 在 ingest 和 decision 前先执行 reconcile；
 - `runtime reconcile <job_id> --json` CLI；
 - `check_runtime_consistency()` 基础一致性检查；
+- consistency checker 已覆盖 ledger node/goal/artifact 引用、checkpoint
+  source segment、checkpoint payload provenance 中的 node/goal/event/decision
+  /patch/artifact 引用；
 - `runtime consistency <job_id> --json` CLI；
 - `runtime_observability_snapshot()` 暴露 `legal_waiting_reason`、`recovery` 和
   `consistency`；
 - dashboard 只读 API 支持 `recovery` 和 `consistency` section；
-- focused tests 覆盖 missing task、missing receipt、reconcile 幂等、
-  consistency violation、observability 字段和 CLI 入口。
+- focused tests 覆盖 missing task、missing receipt、stale、timeout、crash、
+  retry limit、business failure 不 retry、verifier failure 不改写实现节点、
+  reconcile 幂等、consistency violation、observability 字段和 CLI 入口。
 
 Phase 4E MVP 仍不是 production complete。尚未完成的部分包括：
 
-- 完整 stale heartbeat / crash / timeout recovery case 覆盖；
-- business failure 和 verifier failure 的更细 retry/rerun policy；
+- 更复杂的真实 worker crash/timeout 组合场景和跨 supervisor 重启验证；
+- 更细的 lane-specific retry/rerun policy；
 - synthetic long-run soak；
-- checkpoint / ledger provenance 的更深 replay consistency checker；
+- 更深的 event replay consistency checker；
 - supervisor packaged daemon；
 - capability/security policy；
 - dashboard runtime UI。

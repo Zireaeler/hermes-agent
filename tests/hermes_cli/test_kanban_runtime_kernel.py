@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -83,6 +84,53 @@ def _complete_node(conn, node, evidence: dict):
         summary=evidence.get("summary", "done"),
         metadata=evidence,
     )
+
+
+def _install_task_run(
+    conn,
+    task_id: str,
+    *,
+    status: str = "running",
+    outcome: str | None = None,
+    started_at: int = 100,
+    ended_at: int | None = None,
+    claim_expires: int | None = None,
+    last_heartbeat_at: int | None = None,
+    metadata: dict | None = None,
+) -> int:
+    conn.execute("DELETE FROM task_runs WHERE task_id = ?", (task_id,))
+    cur = conn.execute(
+        """
+        INSERT INTO task_runs (
+            task_id, profile, step_key, status, claim_lock, claim_expires,
+            worker_pid, max_runtime_seconds, last_heartbeat_at, started_at,
+            ended_at, outcome, summary, metadata, error
+        ) VALUES (?, NULL, NULL, ?, 'test-claim', ?, NULL, NULL, ?, ?, ?, ?, NULL, ?, NULL)
+        """,
+        (
+            task_id,
+            status,
+            claim_expires,
+            last_heartbeat_at,
+            started_at,
+            ended_at,
+            outcome,
+            json.dumps(metadata or {}, ensure_ascii=False) if metadata is not None else None,
+        ),
+    )
+    run_id = int(cur.lastrowid)
+    conn.execute(
+        """
+        UPDATE tasks
+           SET status = ?,
+               current_run_id = ?, claim_lock = 'test-claim',
+               claim_expires = ?, last_heartbeat_at = ?,
+               started_at = COALESCE(started_at, ?)
+         WHERE id = ?
+        """,
+        ("running" if status == "running" else "ready", run_id, claim_expires, last_heartbeat_at, started_at, task_id),
+    )
+    return run_id
 
 
 def test_schema_initializes_runtime_tables(conn):
@@ -300,6 +348,207 @@ def test_reconcile_receipt_missing_does_not_ingest_goal_evidence(conn):
     assert mat["status"] == "receipt_missing"
 
 
+def test_reconcile_worker_run_stale_without_heartbeat_schedules_retry(conn):
+    job_id = _job(conn)
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = _node(conn, job_id, "understand-scope")
+    run_id = _install_task_run(
+        conn,
+        node["latest_task_id"],
+        status="running",
+        started_at=100,
+        claim_expires=1000,
+        last_heartbeat_at=None,
+    )
+    conn.execute("UPDATE node_materializations SET run_id = ? WHERE node_id = ?", (run_id, node["id"]))
+
+    result = rk.reconcile_runtime_materializations(
+        conn,
+        job_id,
+        now=200,
+        policy={"run_stale_after_seconds": 50},
+    )
+
+    assert result["events"] == ["worker_run_stale"]
+    assert result["scheduled_retries"] == ["understand-scope"]
+    node = _node(conn, job_id, "understand-scope")
+    assert node["state"] == "ready"
+    mat = conn.execute("SELECT status FROM node_materializations WHERE node_id = ? AND attempt = 1", (node["id"],)).fetchone()
+    assert mat["status"] == "stale"
+
+
+def test_reconcile_worker_run_timeout_schedules_retry(conn):
+    job_id = _job(conn)
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = _node(conn, job_id, "understand-scope")
+    run_id = _install_task_run(
+        conn,
+        node["latest_task_id"],
+        status="running",
+        started_at=100,
+        claim_expires=150,
+        last_heartbeat_at=140,
+    )
+    conn.execute("UPDATE node_materializations SET run_id = ? WHERE node_id = ?", (run_id, node["id"]))
+
+    result = rk.reconcile_runtime_materializations(conn, job_id, now=200)
+
+    assert result["events"] == ["worker_run_timeout"]
+    assert result["scheduled_retries"] == ["understand-scope"]
+    mat = conn.execute("SELECT status FROM node_materializations WHERE node_id = ? AND attempt = 1", (node["id"],)).fetchone()
+    assert mat["status"] == "timed_out"
+
+
+def test_reconcile_worker_run_crashed_schedules_retry(conn):
+    job_id = _job(conn)
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = _node(conn, job_id, "understand-scope")
+    run_id = _install_task_run(
+        conn,
+        node["latest_task_id"],
+        status="crashed",
+        outcome="crashed",
+        started_at=100,
+        ended_at=120,
+    )
+    conn.execute("UPDATE node_materializations SET run_id = ? WHERE node_id = ?", (run_id, node["id"]))
+
+    result = rk.reconcile_runtime_materializations(conn, job_id, now=200)
+
+    assert result["events"] == ["worker_run_crashed"]
+    assert result["scheduled_retries"] == ["understand-scope"]
+    mat = conn.execute("SELECT status FROM node_materializations WHERE node_id = ? AND attempt = 1", (node["id"],)).fetchone()
+    assert mat["status"] == "crashed"
+
+
+def test_reconcile_retry_limit_marks_node_not_retryable(conn):
+    job_id = _job(conn)
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = _node(conn, job_id, "understand-scope")
+    run_id = _install_task_run(
+        conn,
+        node["latest_task_id"],
+        status="crashed",
+        outcome="crashed",
+        started_at=100,
+        ended_at=120,
+    )
+    conn.execute("UPDATE node_materializations SET run_id = ? WHERE node_id = ?", (run_id, node["id"]))
+
+    result = rk.reconcile_runtime_materializations(conn, job_id, now=200, policy={"infra_retry_limit": 0})
+
+    assert result["events"] == ["worker_run_crashed"]
+    assert result["scheduled_retries"] == []
+    assert result["failed_nodes"] == ["understand-scope"]
+    node = _node(conn, job_id, "understand-scope")
+    assert node["state"] == "failed"
+    events = [
+        row["event_type"]
+        for row in conn.execute("SELECT event_type FROM execution_events WHERE job_id = ?", (job_id,))
+    ]
+    assert "node_recovery_not_retryable" in events
+
+
+def test_business_failure_receipt_is_ingested_not_retried(conn):
+    job_id = _job(conn)
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = _node(conn, job_id, "understand-scope")
+    _complete_node(
+        conn,
+        node,
+        {
+            "verdict": "failed",
+            "summary": "business validation failed",
+            "unmet_goal_items": ["initial-runtime-result"],
+            "verification": {"passed": False, "summary": "assertion failed"},
+        },
+    )
+
+    result = rk.advance_runtime_job(conn, job_id, create_tasks=False)
+
+    assert result.recovery["events"] == []
+    node = _node(conn, job_id, "understand-scope")
+    assert node["state"] == "failed"
+    assert conn.execute("SELECT COUNT(*) FROM node_materializations WHERE node_id = ?", (node["id"],)).fetchone()[0] == 1
+    assert any(gap["gap_type"] == "failed_required_node" for gap in rk.status_runtime_job(conn, job_id)["goal_gaps"] if gap["state"] == "open")
+
+
+def test_failed_verifier_does_not_rewrite_implementation_success(conn):
+    job_id = _job(conn)
+    impl_result = rk.apply_graph_patch(
+        conn,
+        job_id,
+        _patch(
+            job_id,
+            _revision(conn, job_id),
+            {
+                "op": "create_node",
+                "node_key": "implement-runtime",
+                "node_type": "implementation",
+                "title": "Implement runtime",
+                "description": "Produce the runtime artifact.",
+                "goal_item_keys": ["initial-runtime-result"],
+            },
+        ),
+    )
+    assert impl_result["status"] == "applied"
+    impl = _node(conn, job_id, "implement-runtime")
+    rk.materialize_runtime_node(conn, dict(impl))
+    impl = _node(conn, job_id, "implement-runtime")
+    _complete_node(
+        conn,
+        impl,
+        {
+            "verdict": "succeeded",
+            "summary": "implementation self-reported success",
+            "claimed_goal_items": ["initial-runtime-result"],
+            "verification": {"passed": False},
+        },
+    )
+    assert rk.ingest_runtime_node_evidence(conn, impl["id"])
+    assert _node(conn, job_id, "implement-runtime")["state"] == "succeeded"
+
+    verify_result = rk.apply_graph_patch(
+        conn,
+        job_id,
+        _patch(
+            job_id,
+            _revision(conn, job_id),
+            {
+                "op": "insert_verifier",
+                "target_node_key": "implement-runtime",
+                "verifier_node_key": "verify-runtime",
+                "title": "Verify runtime",
+                "goal_item_keys": ["initial-runtime-result"],
+                "gap_keys": ["initial-runtime-result:needs_verification"],
+            },
+        ),
+    )
+    assert verify_result["status"] == "applied"
+    verifier = _node(conn, job_id, "verify-runtime")
+    rk.materialize_runtime_node(conn, dict(verifier))
+    verifier = _node(conn, job_id, "verify-runtime")
+    _complete_node(
+        conn,
+        verifier,
+        {
+            "verdict": "failed",
+            "summary": "verifier failed",
+            "contradicted_goal_items": ["initial-runtime-result"],
+            "verification": {"passed": False, "summary": "pytest failed"},
+        },
+    )
+    assert rk.ingest_runtime_node_evidence(conn, verifier["id"])
+
+    assert _node(conn, job_id, "implement-runtime")["state"] == "succeeded"
+    assert _node(conn, job_id, "verify-runtime")["state"] == "failed"
+    assert any(
+        gap["gap_type"] in {"contradicted_evidence", "verification_failed"}
+        for gap in rk.status_runtime_job(conn, job_id)["goal_gaps"]
+        if gap["state"] == "open"
+    )
+
+
 def test_reconcile_is_idempotent_for_same_missing_task(conn):
     job_id = _job(conn)
     rk.advance_runtime_job(conn, job_id, create_tasks=True)
@@ -333,6 +582,69 @@ def test_consistency_checker_reports_missing_materialization_task(conn):
         for row in conn.execute("SELECT event_type FROM execution_events WHERE job_id = ?", (job_id,))
     ]
     assert "consistency_violation" in events
+
+
+def test_consistency_checker_reports_ledger_and_checkpoint_reference_breaks(conn):
+    job_id = _job(conn)
+    contract = conn.execute("SELECT * FROM goal_contracts WHERE job_id = ?", (job_id,)).fetchone()
+    goal_item = conn.execute("SELECT * FROM goal_items WHERE contract_id = ?", (contract["id"],)).fetchone()
+    session = conn.execute("SELECT * FROM decision_sessions WHERE job_id = ?", (job_id,)).fetchone()
+    now = 200
+    conn.execute(
+        """
+        INSERT INTO progress_ledger (
+            id, job_id, contract_id, goal_item_id, node_id, artifact_id,
+            evidence_ref, satisfaction, verification_state, confidence,
+            summary, metadata_json, created_at
+        ) VALUES ('pledger_missing_node', ?, ?, ?, 'node_missing', NULL,
+                  'node:node_missing', 'full', 'verified', 1.0,
+                  'bad ledger ref', '{}', ?)
+        """,
+        (job_id, contract["id"], goal_item["id"], now),
+    )
+    checkpoint_payload = {
+        "key_decisions": [
+            {
+                "summary": "bad checkpoint ref",
+                "source_refs": [
+                    {"node_key": "missing-node"},
+                    {"goal_item_key": "missing-goal"},
+                    {"event_id": 999999},
+                    {"decision_id": "kdec_missing"},
+                    {"patch_id": "gpatch_missing"},
+                    {"artifact_ref": "artifact://missing"},
+                ],
+            }
+        ]
+    }
+    conn.execute(
+        """
+        INSERT INTO decision_checkpoints (
+            id, job_id, decision_session_id, revision, checkpoint_json,
+            reason, created_at, source_segment_id, checkpoint_revision,
+            db_revision, graph_revision, ledger_revision, payload_json,
+            validator_status
+        ) VALUES ('chk_bad_refs', ?, ?, 1, '{}', 'test', ?, NULL, 1, 0, 0, 0, ?, 'accepted')
+        """,
+        (job_id, session["id"], now, json.dumps(checkpoint_payload, ensure_ascii=False)),
+    )
+
+    result = rk.check_runtime_consistency(conn, job_id)
+
+    types = {item["type"] for item in result["violations"]}
+    assert "ledger_node_missing" in types
+    assert "checkpoint_node_missing" in types
+    assert "checkpoint_goal_item_missing" in types
+    assert "checkpoint_event_missing" in types
+    assert "checkpoint_decision_missing" in types
+    assert "checkpoint_patch_missing" in types
+    assert "checkpoint_artifact_missing" in types
+    events = [
+        row["event_type"]
+        for row in conn.execute("SELECT event_type FROM execution_events WHERE job_id = ?", (job_id,))
+    ]
+    assert "ledger_reference_missing" in events
+    assert "checkpoint_reference_missing" in events
 
 
 def test_observability_snapshot_exposes_recovery_and_consistency(conn):
