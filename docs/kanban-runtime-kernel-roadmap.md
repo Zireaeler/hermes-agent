@@ -526,7 +526,7 @@ safety hardening。
 ```text
 Phase 4E Worker Recovery Policy
 Phase 4F Runtime Capability / Security Policy
-Phase 4G Synthetic Long-Run Soak and Real Compaction Smoke
+Phase 4G Synthetic Long-Run Soak and Runtime Consistency Baseline
 Phase 4H Dashboard Runtime UI
 ```
 
@@ -563,9 +563,13 @@ candidate 默认不注入，人工 promote 后才进入 accepted memory。第一
 runtime-global、workspace/repo、domain/job-family、job-local 四类 scope，防止经验
 跨项目污染。
 
-Phase 4G 专门做 synthetic long-run soak 与真实 compaction smoke。目标不是证明
-某个业务项目能完成，而是证明 runtime 本身能承受几十到上百次
-decision / patch / validator / compaction / reconcile cycle。
+Phase 4G 专门做 deterministic synthetic long-run soak 和 runtime consistency
+baseline。目标不是证明某个业务项目能完成，也不是证明真实模型质量，而是先证明
+runtime 本身能承受几十到上百次 decision / patch / validator / compaction /
+reconcile / memory / capability cycle，并且在 goal 未完成时不会静默 idle。
+
+真实 compaction provider smoke、真实 provider / worker 长任务 soak 应放在 Phase 4G
+baseline 稳定之后，复用 Phase 4G 的 report 和 consistency checker。
 
 Phase 4H 再做 dashboard runtime UI。UI 应消费前面阶段形成的稳定
 observability API，而不是提前展示一个 recovery 和 consistency 尚未稳定的系统。
@@ -587,7 +591,10 @@ Phase 4F runtime capability/security policy
 Phase 4G0 runtime memory hints
       |
       v
-Phase 4G real compaction provider smoke/soak and synthetic long-run tests
+Phase 4G synthetic long-run soak and runtime consistency baseline
+      |
+      v
+real compaction/provider/worker smoke and soak
       |
       v
 Phase 4H dashboard runtime UI
