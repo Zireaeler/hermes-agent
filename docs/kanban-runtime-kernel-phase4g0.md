@@ -1,7 +1,7 @@
-# Hermes Kanban Runtime Kernel Phase 4G0：Runtime Memory Hints
+# Hermes Kanban Runtime Kernel Phase 4G0：Runtime Memory Lifecycle
 
-Phase 4G0 的目标是为 runtime kernel 增加一层轻量、可人工审查、可回滚的经验提示
-机制。它不是复杂学习系统，也不是第二套事实源；它更接近 Claude Code / Codex 的
+Phase 4G0 的目标是为 runtime kernel 增加一层轻量、可人工审查、可回滚的经验生命
+周期。它不是复杂学习系统，也不是第二套事实源；它更接近 Claude Code / Codex 的
 `CLAUDE.md`、`AGENTS.md`、`MEMORY.md` 实践：稳定规则放 guidance，项目经验放
 memory topic，当前 job 连续性仍由 DB facts、decision session 和 compaction
 checkpoint 管理。
@@ -31,10 +31,11 @@ validator rejection、noop decision、anti-stuck recovery 和相同失败路径�
 embedding store 或自动学习闭环。那会让系统很难验证，也容易把偶然失败升级成长期
 规则。
 
-Phase 4G0 的第一版只做 Runtime Memory Hints：
+Phase 4G0 的第一版只做 Runtime Memory Lifecycle MVP：
 
 - runtime 在特定事件后生成 memory candidate；
 - candidate 写入 Markdown；
+- candidate 通过 deterministic schema / provenance / redaction validation；
 - candidate 默认不注入未来 job；
 - operator 或人工 review 后 promote 到 accepted memory；
 - decision provider 构造输入时按 scope 和 goal/gap 检索少量相关 hints；
@@ -118,11 +119,98 @@ Memory hint 不能影响 Phase 4F 的 capability authorization。
 `network_access` 或提出 human gate。最终是否允许，仍由 runtime capability policy
 和 human authorization 决定。Memory 永远不能成为权限来源。
 
-## 4. Scope 分层
+## 4. Memory 生命周期
+
+Runtime Memory 的生命周期是：
+
+```text
+runtime execution
+      |
+      v
+memory candidate
+      |
+      v
+validation checks
+      |
+      v
+accepted memory
+      |
+      v
+future decision hint
+      |
+      v
+usage outcome
+      |
+      v
+deprecated memory
+```
+
+第一版只把 `candidate`、`accepted`、`deprecated` 作为持久状态。
+
+`validated` 不建议在 Phase 4G0 中实现成独立持久状态。它应被视为 promote 前的
+校验步骤，包括 schema validation、provenance check、redaction check 和 scope
+check。这样可以保留生命周期语义，但避免第一版引入难以验证的半状态。
+
+### 4.1 Candidate
+
+Candidate 是从 runtime trace 中抽取的候选经验。
+
+触发来源可以包括：
+
+- job done；
+- validator 连续拒绝；
+- anti-stuck recovery 后产生 progress；
+- successful recovery；
+- human decision 修改目标或授权 capability；
+- milestone completion；
+- verifier failed 后 debug / strategy_update 修复；
+- worker recovery 重试后成功。
+
+Candidate 默认不进入 provider request，不参与 retrieval，不影响 runtime state。
+
+### 4.2 Validation Checks
+
+Candidate 进入 accepted memory 前必须通过 deterministic validation：
+
+- `Status` / `Scope` / `Applies when` / `Lesson` / `Evidence` / `Use as` 字段存在；
+- source refs 指向存在的 job、event、decision、patch、ledger、artifact 或 node；
+- sensitive data 已 redacted；
+- `Use as` 明确是 non-authoritative decision hint；
+- scope 与目标位置相容；
+- lesson 没有把一次偶然失败写成硬规则。
+
+Validation checks 只决定 candidate 是否可以 promote。它不能让 candidate 直接进入
+provider request。
+
+### 4.3 Accepted
+
+Accepted memory 可以被未来 job 按 scope、goal/gap 和 keyword 检索。
+
+Phase 4G0 MVP 只要求人工或 operator promote。Repeated successful usage 和
+automatic validation policy 可以作为未来扩展，不应在第一版自动 promotion。第一版
+只记录 usage outcome，不自动调整 confidence 或状态。
+
+Accepted memory 仍然不是事实，不影响 reducer、validator、completion、readiness、
+capability policy 或 worker recovery。
+
+### 4.4 Deprecated
+
+以下情况可以进入 deprecated：
+
+- 长期无使用；
+- 使用后持续导致 rejected patch；
+- 适用范围失效；
+- 项目环境变化；
+- operator 判断经验已经过时。
+
+Deprecated memory 保留审计和 provenance，但默认不参与 retrieval，也不得注入
+provider request。
+
+## 5. Scope 分层
 
 建议第一版支持四类 scope。
 
-### 4.1 Runtime-global
+### 5.1 Runtime-global
 
 位置：
 
@@ -148,7 +236,7 @@ Memory hint 不能影响 Phase 4F 的 capability authorization。
 - 不允许包含某个 repo 的具体接口、文件路径、测试命令或业务事实；
 - 默认弱注入。
 
-### 4.2 Workspace / Repo
+### 5.2 Workspace / Repo
 
 位置：
 
@@ -173,7 +261,7 @@ Memory hint 不能影响 Phase 4F 的 capability authorization。
 这是最重要的 memory scope。Workspace memory 可以被提交协作，也可以存在本地
 `.hermes` 目录。是否提交由项目约定决定。
 
-### 4.3 Domain / Job-family
+### 5.3 Domain / Job-family
 
 位置：
 
@@ -197,7 +285,7 @@ Memory hint 不能影响 Phase 4F 的 capability authorization。
 - 不能覆盖 workspace memory；
 - 不应包含某个项目的具体事实，除非 scope 明确限制到该项目。
 
-### 4.4 Job-local
+### 5.4 Job-local
 
 位置：
 
@@ -223,18 +311,27 @@ job artifacts
 Job-local 不是长期 memory。它由 decision session segment 和 checkpoint 管理。
 不要把 job-local checkpoint 当成跨 job memory。
 
-## 5. 权威性顺序
+## 6. 权威性顺序
 
-Memory scope 的加载优先级建议为：
+Memory scope 的加载优先级与权威性不同。
+
+当前 job 的 checkpoint 属于 job-local context，不是跨 job memory。它在 provider
+input 中仍然位于 selected memory hints 之前，用于表达当前任务的压缩状态。
+
+跨 job memory 的选择优先级建议为：
 
 ```text
-job-local checkpoint
-workspace memory
-domain memory
-runtime-global memory
+workspace accepted memory
+      >
+domain accepted memory
+      >
+runtime-global accepted memory
 ```
 
-但权威性顺序必须是：
+原因是 workspace memory 与当前 repo/工作目录最相关；domain memory 次之；
+runtime-global memory 必须抽象、短小、弱注入。
+
+权威性顺序必须是：
 
 ```text
 DB facts / goal contract / progress ledger / validator / capability policy
@@ -246,39 +343,39 @@ memory hints
 
 也就是说，即使 workspace memory 很相关，也不能覆盖 DB、validator 或 policy。
 
-## 5.1 Memory Trust Policy
+## 6.1 Memory Trust Policy
 
 Scope 只描述适用范围，不等于信任级别。第一版需要一套简单 trust policy：
 
 ```text
-runtime-global/user-home accepted memory
+accepted user-home / runtime-global memory
       >
-workspace accepted memory
+accepted workspace memory
       >
-domain accepted memory
+accepted domain memory
       >
-candidate memory
+candidate / deprecated / parse-failed memory
 ```
 
 规则：
 
-- runtime-global/user-home memory 默认较可信，但必须抽象、短小，不包含项目事实；
+- runtime-global/user-home memory 可以更可信，但必须抽象、短小，不包含项目事实；
 - workspace memory 默认只对当前 workspace 生效；
 - repo 中提交的 workspace memory 仍是 non-authoritative，必要时可以要求 operator
   opt-in；
 - domain memory 是弱 hint，不能覆盖 workspace memory；
 - candidate memory 永不注入；
 - deprecated memory 永不注入；
-- 解析失败的 memory 永不注入。
+- parse-failed memory 永不注入。
 
 如果 workspace memory 来自不可信 repo 或外部 checkout，loader 应允许配置为
 `workspace_memory_requires_opt_in=true`。第一版可以先记录 warning，不阻塞实现。
 
-## 6. 文件布局
+## 7. 文件布局
 
 建议第一版使用 Markdown 文件。
 
-### 6.1 Runtime guidance
+### 7.1 Runtime guidance
 
 稳定强规则：
 
@@ -289,7 +386,7 @@ docs/runtime-guidance.md
 
 Guidance 应短小，每次注入 provider request 的稳定前缀。
 
-### 6.2 Memory index
+### 7.2 Memory index
 
 索引文件：
 
@@ -321,7 +418,7 @@ docs/runtime-memory/MEMORY.md
   - keywords: backtest, market data, strategy runner
 ```
 
-### 6.3 Topic files
+### 7.3 Topic files
 
 Topic 文件：
 
@@ -334,7 +431,7 @@ Topic 文件：
 
 每个 topic 可以包含 accepted 和 deprecated sections。
 
-### 6.4 Candidate files
+### 7.4 Candidate files
 
 自动生成候选：
 
@@ -345,7 +442,7 @@ Topic 文件：
 Candidate 默认不提交、不注入、不影响运行时决策。Operator review 后可以 promote
 到 accepted topic。
 
-## 7. Memory Entry 格式
+## 8. Memory Entry 格式
 
 第一版使用 Markdown，要求结构固定但不需要 YAML frontmatter。
 
@@ -384,6 +481,16 @@ Evidence:
 
 Use as:
 - non-authoritative decision hint
+
+Source:
+- generated_from: runtime_trace
+- reviewed_by: operator
+
+Confidence:
+- optional; not used for automatic scoring in Phase 4G0
+
+Usage:
+- optional; updated from audited usage outcome, not used for automatic promotion in Phase 4G0
 ```
 
 必须字段：
@@ -401,6 +508,8 @@ Parser 硬约束：
 
 - 缺少 `Status` 不注入；
 - 缺少 `Scope` 不注入；
+- 缺少 `Applies when` 不注入；
+- 缺少 `Lesson` 不注入；
 - 缺少 `Evidence` 不注入；
 - 缺少 `Use as` 不注入；
 - `Status` 不是 `accepted` 不注入；
@@ -416,6 +525,9 @@ accepted
 deprecated
 ```
 
+`validated` 不是 Phase 4G0 的持久 status。它是 promote 前 validation checks 的执行
+结果。
+
 允许的 scope_type：
 
 ```text
@@ -425,7 +537,7 @@ domain
 job
 ```
 
-## 8. Candidate 生成触发
+## 9. Candidate 生成触发
 
 第一版候选生成应尽量 deterministic。
 
@@ -460,7 +572,7 @@ Redaction 规则：
 Candidate 即使默认不注入，也不能写入敏感原文。否则后续 promote 或提交时会造成
 泄露。
 
-## 9. Promote / Deprecate 流程
+## 10. Promote / Deprecate 流程
 
 第一版可以是人工文件编辑，不需要 UI。
 
@@ -482,7 +594,7 @@ Deprecate：
 
 Promote 后必须保留 source refs，不能只复制 lesson。
 
-## 10. Provider Input 组成
+## 11. Provider Input 组成
 
 Decision provider request 建议组成：
 
@@ -536,7 +648,7 @@ runtime-global accepted memory
 - 把 memory 写入 DB fact；
 - 用 memory 绕过 validator。
 
-## 11. Loader 设计
+## 12. Loader 设计
 
 建议接口：
 
@@ -574,7 +686,7 @@ outcome
 `outcome` 可以在 validator result 后回填，或追加
 `memory_hint_outcome_recorded` event。
 
-## 12. Event Types
+## 13. Event Types
 
 建议新增：
 
@@ -601,7 +713,7 @@ memory_hint_outcome_recorded
 }
 ```
 
-## 13. Observability
+## 14. Observability
 
 `runtime_observability_snapshot()` 可以新增：
 
@@ -627,11 +739,11 @@ Dashboard 第一版只读即可。
 - candidate 是否已 promote；
 - hint 使用后 patch 是 accepted、rejected 还是 noop。
 
-## 14. 实现顺序
+## 15. 实现顺序
 
 ### Step 1：文档和文件约定
 
-- 新增 Phase 4G0 文档；
+- 更新 Phase 4G0 文档；
 - 更新 roadmap；
 - 更新 AGENTS 约束；
 - 定义 memory scope 和 entry format。
@@ -666,7 +778,7 @@ Dashboard 第一版只读即可。
 - runtime inspect 暴露 memory usage；
 - focused tests 覆盖 scope、candidate、accepted、deprecated、non-authoritative。
 
-## 15. 测试要求
+## 16. 测试要求
 
 必须覆盖：
 
@@ -687,20 +799,27 @@ Dashboard 第一版只读即可。
 - hint usage 写入 decision segment entry；
 - validator rejection 后可以生成 candidate；
 - candidate 没有 provenance 时拒绝写入；
+- candidate 通过 validation checks 前不能 promote；
+- accepted memory 才能进入 hint selection；
+- usage outcome 不会自动 promote candidate；
 - 默认测试离线，不依赖真实 provider、网络或 embedding。
 
-## 16. 完成定义
+## 17. 完成定义
 
 Phase 4G0 MVP 完成时必须满足：
 
 - runtime 有 guidance / index / topic / candidate 的 Markdown 布局；
+- runtime memory lifecycle 明确区分 candidate / validation checks / accepted / deprecated；
 - memory entry 有明确 scope、status、applies_when、lesson、evidence；
+- candidate 必须通过 schema、provenance、redaction 和 scope validation 才能 promote；
 - provider request 可以按 scope 和 gap 选择少量 accepted hints；
 - candidate 默认不进入 provider request；
+- deprecated 默认不进入 provider request；
 - memory parser 有硬约束，解析失败不注入；
 - memory injection 有 token budget；
 - candidate redaction 防止写入敏感原文；
 - memory hint usage 可审计；
+- usage outcome 第一版只记录，不自动 promotion、不自动 confidence scoring；
 - memory 不影响 reducer、validator、completion、readiness、capability policy；
 - focused tests 证明不会全量注入和不会跨 workspace 污染。
 
