@@ -119,6 +119,20 @@ Memory hint 不能影响 Phase 4F 的 capability authorization。
 `network_access` 或提出 human gate。最终是否允许，仍由 runtime capability policy
 和 human authorization 决定。Memory 永远不能成为权限来源。
 
+### 3.7 Memory 不进入 checkpoint
+
+Checkpoint 是当前 job 的压缩状态，Runtime Memory 是跨 job 的历史经验。两者不能
+混合。
+
+Decision session compaction 可以在 checkpoint 中记录“本轮使用过哪些 memory hint
+refs”，用于审计 provider input；但不得把 memory hint 正文写成当前 job 的事实状态，
+也不得把 memory lesson 变成 `key_decisions`、`known_failure_boundaries` 或
+`do_not_repeat`。
+
+如果某条 memory hint 在当前 job 中被事实验证，应通过 progress ledger、execution
+event、artifact 或 human decision 进入 DB，再由 checkpoint 汇总这些当前 job 事实。
+Memory 本身不能绕过这条事实链路。
+
 ## 4. Memory 生命周期
 
 Runtime Memory 的生命周期是：
@@ -155,16 +169,24 @@ check。这样可以保留生命周期语义，但避免第一版引入难以验
 
 Candidate 是从 runtime trace 中抽取的候选经验。
 
-触发来源可以包括：
+候选只应来自可复用模式，而不是“发生过什么”。优先触发来源包括：
 
-- job done；
 - validator 连续拒绝；
 - anti-stuck recovery 后产生 progress；
 - successful recovery；
 - human decision 修改目标或授权 capability；
 - milestone completion；
+- 复杂任务成功闭环；
 - verifier failed 后 debug / strategy_update 修复；
 - worker recovery 重试后成功。
+
+低价值事件默认不生成 candidate：
+
+- 普通 node success；
+- 普通代码修改；
+- 一次性测试失败；
+- 没有 recovery pattern 的普通 bug fix；
+- 无 validator / verifier / progress ledger 关联的模型总结。
 
 Candidate 默认不进入 provider request，不参与 retrieval，不影响 runtime state。
 
@@ -537,7 +559,88 @@ domain
 job
 ```
 
-## 9. Candidate 生成触发
+## 9. Memory Read Path
+
+Memory read path 必须由 runtime kernel 控制，不能让 decision provider 随意读取
+memory 目录。
+
+正确读取流程：
+
+```text
+current goal contract
+      +
+current open gaps
+      +
+recent validator/recovery pattern
+      |
+      v
+load small MEMORY.md index
+      |
+      v
+scope / keyword / goal-gap filter
+      |
+      v
+read selected topic entries
+      |
+      v
+parse accepted entries
+      |
+      v
+rank under budget
+      |
+      v
+inject non-authoritative hints
+```
+
+禁止读取流程：
+
+```text
+runtime-memory/**/*.md
+      |
+      v
+concat all files
+      |
+      v
+provider context
+```
+
+`MEMORY.md` index 可以作为轻量入口，但 topic 正文必须按需读取。第一版不需要 memory
+tool，也不需要 provider 自行 grep。Runtime kernel 根据 current goal、open gap、
+recent failure pattern 和 workspace/domain scope 选择 top K entries。
+
+## 10. Memory Write Path
+
+Memory write path 不从完整 conversation transcript、worker log 或未验证模型输出
+生成经验。
+
+允许输入：
+
+- goal contract；
+- progress ledger；
+- execution events；
+- graph patches；
+- validator results；
+- recovery result；
+- final outcome；
+- artifact summary；
+- human decision metadata。
+
+禁止输入：
+
+- raw provider transcript；
+- raw worker log；
+- 大段测试输出；
+- 未经 validator 或 reducer 归档的模型总结；
+- secret、credential、token 或完整外部响应。
+
+Memory candidate 必须表达可复用模式。它应该回答：
+
+- 适用于什么 goal/gap/context；
+- 学到了什么 lesson；
+- 证据来自哪些 source refs；
+- 后续应作为什么级别的 hint 使用。
+
+## 11. Candidate 生成触发
 
 第一版候选生成应尽量 deterministic。
 
@@ -572,7 +675,7 @@ Redaction 规则：
 Candidate 即使默认不注入，也不能写入敏感原文。否则后续 promote 或提交时会造成
 泄露。
 
-## 10. Promote / Deprecate 流程
+## 12. Promote / Deprecate 流程
 
 第一版可以是人工文件编辑，不需要 UI。
 
@@ -582,8 +685,28 @@ Promote：
 candidates/foo.md
       |
       v
+validation checks
+      |
+      v
 accepted topic file
 ```
+
+Phase 4G0 MVP 的 accepted 条件：
+
+- candidate 已通过 schema validation；
+- candidate 有 source refs，且 source refs 可追溯；
+- applicability 清楚，不是泛泛经验；
+- lesson 清晰、可执行、非强制 workflow；
+- redaction 已完成；
+- `Use as` 是 non-authoritative decision hint；
+- 人工或 operator 明确 promote。
+
+以下条件可以作为未来自动 promotion 的输入，但第一版只记录，不自动 promote：
+
+- 相同 pattern 多次出现；
+- hint 多次使用后 patch accepted；
+- hint 使用后 progress ledger 有推进；
+- hint 使用后减少同类 validator rejection。
 
 Deprecate：
 
@@ -594,7 +717,7 @@ Deprecate：
 
 Promote 后必须保留 source refs，不能只复制 lesson。
 
-## 11. Provider Input 组成
+## 13. Provider Input 组成
 
 Decision provider request 建议组成：
 
@@ -648,7 +771,7 @@ runtime-global accepted memory
 - 把 memory 写入 DB fact；
 - 用 memory 绕过 validator。
 
-## 12. Loader 设计
+## 14. Loader 设计
 
 建议接口：
 
@@ -686,7 +809,34 @@ outcome
 `outcome` 可以在 validator result 后回填，或追加
 `memory_hint_outcome_recorded` event。
 
-## 13. Event Types
+## 15. Usage Feedback Metrics
+
+Memory usage 不应只记录 created_at 和 content。第一版至少应支持按 entry 聚合以下
+指标，哪怕聚合结果先来自 `decision_segment_entries` 和 events：
+
+```text
+retrieved_count
+used_in_decision_count
+patch_accept_count
+patch_reject_count
+patch_noop_count
+goal_progress_count
+validator_rejection_after_use_count
+last_used_at
+last_outcome
+```
+
+这些指标用于未来 ranking、deprecation 和人工 review。Phase 4G0 MVP 不应基于这些
+指标自动 promote candidate，也不应让这些指标改变 runtime correctness。
+
+有害或低价值 memory 的处理原则：
+
+- 经常被检索但从不进入 provider input，应降权或缩小 applies_when；
+- 经常导致 patch rejected / noop，应进入 operator review；
+- 多次使用后无 progress ledger 推进，应考虑 deprecated；
+- scope 过宽导致跨 workspace 污染，应拆分或降级为 workspace-local。
+
+## 16. Event Types
 
 建议新增：
 
@@ -713,7 +863,7 @@ memory_hint_outcome_recorded
 }
 ```
 
-## 14. Observability
+## 17. Observability
 
 `runtime_observability_snapshot()` 可以新增：
 
@@ -739,7 +889,7 @@ Dashboard 第一版只读即可。
 - candidate 是否已 promote；
 - hint 使用后 patch 是 accepted、rejected 还是 noop。
 
-## 15. 实现顺序
+## 18. 实现顺序
 
 ### Step 1：文档和文件约定
 
@@ -755,7 +905,7 @@ Dashboard 第一版只读即可。
 - 实现 workspace/global/domain 搜索路径；
 - 不做 embedding。
 
-### Step 3：hint selection
+### Step 3：memory read path / hint selection
 
 - 基于 objective、goal gaps、node types、validator rejection keywords 选择 topic；
 - topic 内只选 accepted entry；
@@ -767,18 +917,24 @@ Dashboard 第一版只读即可。
 - 标记 non-authoritative；
 - 写入 `decision_segment_entries`。
 
-### Step 5：candidate writer
+### Step 5：memory write path / candidate writer
 
 - job done / validator rejection / anti-stuck recovery / human decision 后写 candidate；
 - candidate 默认 local；
 - candidate 必须带 provenance。
 
-### Step 6：observability / tests
+### Step 6：promotion / usage feedback
+
+- 实现 candidate validation checks；
+- 支持人工 promote / deprecate；
+- 记录 usage outcome 和聚合指标来源。
+
+### Step 7：observability / tests
 
 - runtime inspect 暴露 memory usage；
 - focused tests 覆盖 scope、candidate、accepted、deprecated、non-authoritative。
 
-## 16. 测试要求
+## 19. 测试要求
 
 必须覆盖：
 
@@ -792,19 +948,25 @@ Dashboard 第一版只读即可。
 - deprecated memory 不注入；
 - 解析缺少 Status / Scope / Evidence / Use as 的条目不注入；
 - memory hints 有 max count 和 token budget；
+- `MEMORY.md` index 可轻量读取，但 topic 正文按需读取；
+- provider request 不全量包含所有 memory topic；
+- runtime kernel 控制 memory selection，provider 不自行 grep memory 目录；
 - hint 注入不会改变 DB facts；
 - hint 注入不会绕过 validator；
 - hint 注入不会授权 capability；
-- provider request 不全量包含所有 topic；
+- hint 正文不写入 checkpoint payload；
 - hint usage 写入 decision segment entry；
+- usage feedback 至少能表达 retrieved / used / accepted / rejected / progress；
 - validator rejection 后可以生成 candidate；
 - candidate 没有 provenance 时拒绝写入；
+- 普通 node success 不生成 candidate；
+- raw worker log / raw transcript 不生成 candidate；
 - candidate 通过 validation checks 前不能 promote；
 - accepted memory 才能进入 hint selection；
 - usage outcome 不会自动 promote candidate；
 - 默认测试离线，不依赖真实 provider、网络或 embedding。
 
-## 17. 完成定义
+## 20. 完成定义
 
 Phase 4G0 MVP 完成时必须满足：
 
@@ -813,12 +975,16 @@ Phase 4G0 MVP 完成时必须满足：
 - memory entry 有明确 scope、status、applies_when、lesson、evidence；
 - candidate 必须通过 schema、provenance、redaction 和 scope validation 才能 promote；
 - provider request 可以按 scope 和 gap 选择少量 accepted hints；
+- memory read path 使用 index + scope/goal/gap filter + selected topic entries，不全量读取；
+- memory write path 只从 DB facts/events/validator/progress/recovery/final outcome 中生成 candidate；
 - candidate 默认不进入 provider request；
 - deprecated 默认不进入 provider request；
 - memory parser 有硬约束，解析失败不注入；
 - memory injection 有 token budget；
 - candidate redaction 防止写入敏感原文；
 - memory hint usage 可审计；
+- memory usage metrics 可用于未来 ranking/deprecation，但第一版不自动改变状态；
+- memory hint 内容不进入 checkpoint payload，checkpoint 最多记录 memory hint refs；
 - usage outcome 第一版只记录，不自动 promotion、不自动 confidence scoring；
 - memory 不影响 reducer、validator、completion、readiness、capability policy；
 - focused tests 证明不会全量注入和不会跨 workspace 污染。
