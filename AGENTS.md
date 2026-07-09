@@ -21,6 +21,13 @@ When working on branch `feature-kanban-runtime-kernel`, treat
 background reading. If implementation details conflict with those documents,
 update the relevant design document first or stop and ask for direction.
 
+Runtime kernel design and roadmap documents must use Chinese as the normative
+narrative language. English is acceptable for stable technical names such as
+function names, class names, schema fields, event_type values, CLI commands,
+API paths, model/provider names, and quoted source identifiers, but explanatory
+paragraphs, section descriptions, implementation plans, acceptance criteria,
+and test descriptions should be written in Chinese.
+
 Do not continue the old Orchestra phase-manager architecture in this branch.
 Do not reuse `kanban_orchestra.py` as the runtime kernel core, do not introduce
 planner/coder/reviewer/tester phase semantics, and do not turn
