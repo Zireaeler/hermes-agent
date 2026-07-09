@@ -2649,6 +2649,14 @@ def check_runtime_consistency(
     warnings: list[dict[str, Any]] = []
 
     for node in conn.execute("SELECT * FROM execution_nodes WHERE job_id = ?", (job_id,)).fetchall():
+        metadata = _loads(node["metadata_json"])
+        if not (
+            metadata.get("goal_item_keys")
+            or metadata.get("gap_keys")
+            or metadata.get("human_gate_reason")
+            or node["node_type"] == "human_gate"
+        ):
+            violations.append({"type": "node_without_goal_gap_or_human_linkage", "node_key": node["node_key"]})
         if node["latest_task_id"]:
             materialization = conn.execute(
                 """
@@ -2674,6 +2682,43 @@ def check_runtime_consistency(
                         "type": "terminal_node_has_active_materialization",
                         "node_key": node["node_key"],
                         "materialization_id": active["id"],
+                    }
+                )
+        active_materializations = conn.execute(
+            """
+            SELECT * FROM node_materializations
+             WHERE node_id = ? AND status IN ('created', 'running')
+             ORDER BY attempt
+            """,
+            (node["id"],),
+        ).fetchall()
+        if node["state"] == "ready" and active_materializations:
+            violations.append(
+                {
+                    "type": "ready_node_has_active_materialization",
+                    "node_key": node["node_key"],
+                    "materialization_ids": [row["id"] for row in active_materializations],
+                }
+            )
+        if node["state"] == "running" and not active_materializations:
+            violations.append({"type": "running_node_without_active_materialization", "node_key": node["node_key"]})
+        if len(active_materializations) > 1:
+            violations.append(
+                {
+                    "type": "duplicate_active_materialization",
+                    "node_key": node["node_key"],
+                    "materialization_ids": [row["id"] for row in active_materializations],
+                }
+            )
+        cap_policy = metadata.get("capability_policy") if isinstance(metadata, dict) else None
+        if isinstance(cap_policy, dict) and cap_policy.get("status") in {"denied", "lane_incapable", "requires_human"}:
+            if active_materializations:
+                violations.append(
+                    {
+                        "type": "capability_blocked_node_materialized",
+                        "node_key": node["node_key"],
+                        "capability_status": cap_policy.get("status"),
+                        "materialization_ids": [row["id"] for row in active_materializations],
                     }
                 )
     for mat in conn.execute("SELECT * FROM node_materializations WHERE job_id = ?", (job_id,)).fetchall():
@@ -2743,13 +2788,48 @@ def check_runtime_consistency(
                 (job_id, ref["artifact_ref"]),
             ).fetchone() is None:
                 violations.append({"type": "checkpoint_artifact_missing", "checkpoint_id": checkpoint["id"], "artifact_ref": ref["artifact_ref"]})
+        checkpoint_text = json.dumps(
+            {
+                "payload": _loads(checkpoint["payload_json"]),
+                "checkpoint": _loads(checkpoint["checkpoint_json"]),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        if "selected_hints" in checkpoint_text or "non_authoritative_notice" in checkpoint_text:
+            violations.append({"type": "memory_hint_leaked_into_checkpoint", "checkpoint_id": checkpoint["id"]})
     active_segments = conn.execute(
         "SELECT COUNT(*) AS count FROM decision_session_segments WHERE job_id = ? AND state = 'active'",
         (job_id,),
     ).fetchone()
     if int(active_segments["count"] or 0) != 1:
         violations.append({"type": "active_segment_count_invalid", "count": int(active_segments["count"] or 0)})
+    for entry in conn.execute(
+        """
+        SELECT * FROM decision_segment_entries
+         WHERE job_id = ? AND entry_type IN ('memory_hint_used', 'memory_hint_outcome_recorded')
+        """,
+        (job_id,),
+    ).fetchall():
+        payload = _loads(entry["payload_json"])
+        if entry["decision_id"] and conn.execute(
+            "SELECT 1 FROM kernel_decisions WHERE job_id = ? AND id = ?",
+            (job_id, entry["decision_id"]),
+        ).fetchone() is None:
+            violations.append({"type": "memory_usage_decision_missing", "entry_id": entry["id"], "decision_id": entry["decision_id"]})
+        if entry["entry_type"] == "memory_hint_used" and not payload.get("provider_request_ref"):
+            warnings.append({"type": "memory_usage_missing_provider_request_ref", "entry_id": entry["id"]})
+        for hint in payload.get("hints") or []:
+            if not isinstance(hint, dict):
+                violations.append({"type": "memory_usage_hint_invalid", "entry_id": entry["id"]})
+                continue
+            if hint.get("status") != "accepted":
+                violations.append({"type": "memory_usage_non_accepted_hint", "entry_id": entry["id"], "entry_id_ref": hint.get("entry_id")})
+            if hint.get("non_authoritative") is not True:
+                violations.append({"type": "memory_usage_hint_not_non_authoritative", "entry_id": entry["id"], "entry_id_ref": hint.get("entry_id")})
     job = _job(conn, job_id)
+    if job.get("advance_lock") and job.get("claim_expires_at") and int(job["claim_expires_at"]) <= _now():
+        warnings.append({"type": "expired_supervisor_lease", "owner": job["advance_lock"], "claim_expires_at": int(job["claim_expires_at"])})
     if job["state"] == "done":
         contract = _contract(conn, job_id)
         incomplete = conn.execute(

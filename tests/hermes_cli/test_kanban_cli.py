@@ -246,6 +246,20 @@ def test_run_slash_runtime_memory_json(kanban_home):
     assert payload["recent_usage"] == []
 
 
+def test_run_slash_runtime_soak_json(kanban_home, tmp_path):
+    payload = json.loads(
+        kc.run_slash(
+            f"runtime soak --scenario phase4g-baseline --max-ticks 20 "
+            f"--workspace-path {tmp_path / 'soak-workspace'} --json"
+        )
+    )
+
+    assert payload["scenario"] == "phase4g-baseline"
+    assert payload["final_state"] == "done"
+    assert payload["consistency"]["status"] == "passed"
+    assert payload["old_segment_excluded_from_provider_input"] is True
+
+
 def test_run_slash_context_output_format(kanban_home):
     out = kc.run_slash("create 'tech spec' --assignee alice --body 'write an RFC'")
     import re

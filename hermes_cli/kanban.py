@@ -1516,6 +1516,12 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     rt_memory.add_argument("job_id")
     rt_memory.add_argument("--json", action="store_true")
 
+    rt_soak = runtime_sub.add_parser("soak", help="Run a deterministic runtime soak scenario")
+    rt_soak.add_argument("--scenario", default="phase4g-baseline")
+    rt_soak.add_argument("--max-ticks", type=int, default=None)
+    rt_soak.add_argument("--workspace-path", default=None)
+    rt_soak.add_argument("--json", action="store_true")
+
     rt_list = runtime_sub.add_parser("list", aliases=["ls"], help="List runtime jobs")
     rt_list.add_argument("--state", default=None)
     rt_list.add_argument("--limit", type=int, default=50)
@@ -2113,6 +2119,8 @@ def _dispatch_runtime(args: argparse.Namespace) -> int:
         return _cmd_runtime_capability(args)
     if sub == "memory":
         return _cmd_runtime_memory(args)
+    if sub == "soak":
+        return _cmd_runtime_soak(args)
     if sub == "advance":
         return _cmd_runtime_advance(args)
     if sub == "supervise":
@@ -2434,6 +2442,27 @@ def _cmd_runtime_memory(args: argparse.Namespace) -> int:
         f"selected_hints={len(result.get('selected_hints') or [])} "
         f"candidates={result.get('candidate_count', 0)} "
         f"usage_events={len(result.get('recent_usage') or [])}"
+    )
+    return 0
+
+
+def _cmd_runtime_soak(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_soak as soak
+
+    with kb.connect() as conn:
+        result = soak.run_runtime_soak(
+            conn,
+            scenario=args.scenario,
+            max_ticks=args.max_ticks,
+            workspace_path=args.workspace_path,
+        )
+    if getattr(args, "json", False):
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+    print(
+        f"Runtime soak {result['scenario']}: state={result['final_state']} "
+        f"ticks={result['ticks']} consistency={result['consistency']['status']} "
+        f"patches={result['patch_applied']}/{result['patch_rejected']}"
     )
     return 0
 

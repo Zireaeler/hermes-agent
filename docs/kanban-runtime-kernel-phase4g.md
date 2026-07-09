@@ -483,7 +483,47 @@ Phase 4G MVP 完成时必须满足：
 - report bounded、可审计、无 secret；
 - focused tests 全部离线通过。
 
-## 11. 与后续阶段的关系
+## 11. 当前 MVP 实现入口
+
+当前 Phase 4G MVP 的实现入口是：
+
+```text
+hermes_cli/kanban_runtime_soak.py
+```
+
+它提供 deterministic `phase4g-baseline` scenario：
+
+- 创建 synthetic runtime job；
+- 生成并 promote runtime memory candidate；
+- 写入旧 decision segment sentinel 并执行 compaction rollover；
+- 通过 DB lease takeover 跑 supervisor tick；
+- 注入 validator rejected patch 和 stale revision patch；
+- 创建 requires-human capability node；
+- 通过 human authorization 解除 capability gate；
+- 注入 worker run crash 并通过 reconcile retry；
+- 完成 retry attempt 并由 progress ledger 证明 goal completion；
+- 输出 bounded soak report。
+
+CLI 入口：
+
+```bash
+hermes kanban runtime soak --scenario phase4g-baseline --json
+```
+
+当前 consistency checker 也已补充跨模块检查：
+
+- node goal/gap/human linkage；
+- ready/running node 与 active materialization；
+- duplicate active materialization；
+- capability blocked node 不得 materialize；
+- memory hint 不得进入 checkpoint；
+- memory usage 必须保持 accepted / non-authoritative；
+- expired supervisor lease warning。
+
+这些入口仍然是 deterministic baseline，不代表真实模型 compaction smoke 或真实 worker
+长跑已经完成。
+
+## 12. 与后续阶段的关系
 
 Phase 4G 完成后，再推进：
 
@@ -507,7 +547,7 @@ production complete audit
 如果真实模型长跑失败，应优先用 Phase 4G deterministic baseline 判断问题是否来自
 runtime 本身。
 
-## 12. 总结
+## 13. 总结
 
 Phase 4G 不是让 runtime 更聪明，而是证明 runtime 在长期、复杂、可恢复的执行过程中
 不会自己破坏事实状态。
