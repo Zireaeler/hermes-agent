@@ -494,3 +494,31 @@ Phase 4F Runtime Capability / Security Policy
 Phase 4G Synthetic Long-Run Soak and Real Compaction Smoke
 Phase 4H Dashboard Runtime UI
 ```
+
+## 14. 当前实现状态
+
+Phase 4E MVP 已实现：
+
+- `reconcile_runtime_materializations()` 本地 reducer；
+- `materialization_lost`、`receipt_missing`、`node_recovery_retry_scheduled`、
+  `receipt_recovery_requested`、`materialization_reconciled` 等 recovery events；
+- retry 时通过新的 `node_materializations.attempt` 创建新 Kanban task；
+- `advance_runtime_job()` 在 ingest 和 decision 前先执行 reconcile；
+- `runtime reconcile <job_id> --json` CLI；
+- `check_runtime_consistency()` 基础一致性检查；
+- `runtime consistency <job_id> --json` CLI；
+- `runtime_observability_snapshot()` 暴露 `legal_waiting_reason`、`recovery` 和
+  `consistency`；
+- dashboard 只读 API 支持 `recovery` 和 `consistency` section；
+- focused tests 覆盖 missing task、missing receipt、reconcile 幂等、
+  consistency violation、observability 字段和 CLI 入口。
+
+Phase 4E MVP 仍不是 production complete。尚未完成的部分包括：
+
+- 完整 stale heartbeat / crash / timeout recovery case 覆盖；
+- business failure 和 verifier failure 的更细 retry/rerun policy；
+- synthetic long-run soak；
+- checkpoint / ledger provenance 的更深 replay consistency checker；
+- supervisor packaged daemon；
+- capability/security policy；
+- dashboard runtime UI。

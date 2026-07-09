@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from hermes_cli import kanban_db as kb
+from hermes_cli import kanban_runtime_decision as rd
 from hermes_cli import kanban_runtime_kernel as rk
 from hermes_cli.worker_lanes import WorkerLane, clear_worker_lanes, register_worker_lane
 
@@ -247,6 +248,106 @@ def test_materialization_is_idempotent(conn):
     assert first.materialized_nodes == ["understand-scope"]
     assert second.materialized_nodes == []
     assert conn.execute("SELECT COUNT(*) FROM node_materializations WHERE job_id = ?", (job_id,)).fetchone()[0] == 1
+
+
+def test_reconcile_missing_task_schedules_retry_attempt(conn):
+    job_id = _job(conn)
+    assert rk.advance_runtime_job(conn, job_id, create_tasks=True).materialized_nodes == ["understand-scope"]
+    node = _node(conn, job_id, "understand-scope")
+    first_task_id = node["latest_task_id"]
+    conn.execute("DELETE FROM tasks WHERE id = ?", (first_task_id,))
+
+    result = rk.reconcile_runtime_materializations(conn, job_id)
+
+    assert result["events"] == ["materialization_lost"]
+    assert result["scheduled_retries"] == ["understand-scope"]
+    node = _node(conn, job_id, "understand-scope")
+    assert node["state"] == "ready"
+    old_mat = conn.execute(
+        "SELECT * FROM node_materializations WHERE job_id = ? AND attempt = 1",
+        (job_id,),
+    ).fetchone()
+    assert old_mat["status"] == "lost"
+
+    advanced = rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    assert advanced.materialized_nodes == ["understand-scope"]
+    mats = conn.execute(
+        "SELECT attempt, task_id, status FROM node_materializations WHERE job_id = ? ORDER BY attempt",
+        (job_id,),
+    ).fetchall()
+    assert [row["attempt"] for row in mats] == [1, 2]
+    assert mats[0]["task_id"] != mats[1]["task_id"]
+    assert mats[1]["status"] == "running"
+
+
+def test_reconcile_receipt_missing_does_not_ingest_goal_evidence(conn):
+    job_id = _job(conn)
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = _node(conn, job_id, "understand-scope")
+    assert kb.complete_task(conn, node["latest_task_id"], result="done without receipt", summary="done without receipt")
+
+    result = rk.reconcile_runtime_materializations(conn, job_id)
+
+    assert result["events"] == ["receipt_missing"]
+    assert result["scheduled_retries"] == ["understand-scope"]
+    assert rk.status_runtime_job(conn, job_id)["progress_ledger"] == []
+    node = _node(conn, job_id, "understand-scope")
+    assert node["state"] == "ready"
+    mat = conn.execute(
+        "SELECT status FROM node_materializations WHERE job_id = ? AND attempt = 1",
+        (job_id,),
+    ).fetchone()
+    assert mat["status"] == "receipt_missing"
+
+
+def test_reconcile_is_idempotent_for_same_missing_task(conn):
+    job_id = _job(conn)
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = _node(conn, job_id, "understand-scope")
+    conn.execute("DELETE FROM tasks WHERE id = ?", (node["latest_task_id"],))
+
+    first = rk.reconcile_runtime_materializations(conn, job_id)
+    second = rk.reconcile_runtime_materializations(conn, job_id)
+
+    assert first["events"] == ["materialization_lost"]
+    assert second["events"] == []
+    events = [
+        row["event_type"]
+        for row in conn.execute("SELECT event_type FROM execution_events WHERE job_id = ?", (job_id,))
+    ]
+    assert events.count("materialization_lost") == 1
+
+
+def test_consistency_checker_reports_missing_materialization_task(conn):
+    job_id = _job(conn)
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = _node(conn, job_id, "understand-scope")
+    conn.execute("DELETE FROM tasks WHERE id = ?", (node["latest_task_id"],))
+
+    result = rk.check_runtime_consistency(conn, job_id)
+
+    assert result["status"] == "failed"
+    assert any(item["type"] == "materialization_task_missing" for item in result["violations"])
+    events = [
+        row["event_type"]
+        for row in conn.execute("SELECT event_type FROM execution_events WHERE job_id = ?", (job_id,))
+    ]
+    assert "consistency_violation" in events
+
+
+def test_observability_snapshot_exposes_recovery_and_consistency(conn):
+    job_id = _job(conn)
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = _node(conn, job_id, "understand-scope")
+    conn.execute("DELETE FROM tasks WHERE id = ?", (node["latest_task_id"],))
+    rk.reconcile_runtime_materializations(conn, job_id)
+
+    payload = rd.runtime_observability_snapshot(conn, job_id)
+
+    assert payload["legal_waiting_reason"] == "ready_to_materialize"
+    assert payload["recovery"]["open_recovery_events"]
+    assert payload["consistency"]["status"] == "failed"
+    assert any(item["type"] == "materialization_task_missing" for item in payload["consistency"]["violations"])
 
 
 def test_advance_lock_is_exclusive_and_expires(conn):

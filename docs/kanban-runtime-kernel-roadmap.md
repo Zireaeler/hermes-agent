@@ -534,6 +534,12 @@ Phase 4E 专门处理 stale materialization、run timeout、worker crash、task 
 但 receipt missing、task failed 但 node running、node running 但 task/run
 消失、retry/rerun policy，以及 terminal node fact 不可静默改写。
 
+当前 Phase 4E MVP 已完成 worker/materialization reconcile 主路径、missing task
+和 missing receipt recovery、retry attempt history、supervisor/advance 前置接入、
+基础 consistency checker、CLI 入口和 observability 字段。它仍不是 production
+complete；stale heartbeat / crash / timeout 的完整 case、synthetic long-run
+soak、更深 replay consistency 和 capability/security policy 仍属于后续收尾。
+
 Phase 4F 专门把 destructive action、external cost、credential/secret、
 workspace boundary、network、git、database migration 等权限判断收敛成
 runtime capability policy，避免安全规则散落在 validator、worker lane、
@@ -554,7 +560,7 @@ observability API，而不是提前展示一个 recovery 和 consistency 尚未�
 Phase 4 productionization follow-through
       |
       v
-Phase 4E worker stale/crash recovery policy
+Phase 4E worker recovery MVP 收尾和 stale/crash 补强
       |
       v
 Phase 4F runtime capability/security policy and replay validation

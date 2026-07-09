@@ -1421,6 +1421,9 @@ def runtime_observability_snapshot(
     bounded = max(1, min(int(limit), 200))
     status = rk.status_runtime_job(conn, job_id)
     context = decision_context_status(conn, job_id)
+    legal_waiting_reason = rk.runtime_legal_waiting_reason(conn, job_id)
+    recovery = rk.summarize_runtime_recovery(conn, job_id, limit=bounded)
+    consistency = rk.check_runtime_consistency(conn, job_id, write_events=False)
     decisions = _query_rows(
         conn,
         """
@@ -1513,7 +1516,15 @@ def runtime_observability_snapshot(
     ]
     return {
         "job": status["job"],
-        "legal_waiting_reason": status["job"].get("state"),
+        "legal_waiting_reason": legal_waiting_reason,
+        "recovery": recovery,
+        "consistency": {
+            "status": consistency["status"],
+            "violation_count": consistency["violation_count"],
+            "warning_count": consistency["warning_count"],
+            "warnings": consistency["warnings"],
+            "violations": consistency["violations"],
+        },
         "goals": {
             "contract": status["goal_contract"],
             "items": status["goal_items"],
@@ -1546,6 +1557,8 @@ def runtime_observability_snapshot(
             "read_only": True,
             "allowed_commands": [
                 "runtime advance",
+                "runtime reconcile",
+                "runtime consistency",
                 "runtime compact",
                 "runtime waive-goal",
                 "runtime complete-node",

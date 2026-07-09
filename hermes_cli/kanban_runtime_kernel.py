@@ -90,10 +90,64 @@ class AdvanceResult:
     decision_requested: bool = False
     patch_status: Optional[str] = None
     events: list[str] = field(default_factory=list)
+    recovery: dict[str, Any] = field(default_factory=dict)
 
 
 class PatchValidationError(ValueError):
     """Raised when a graph patch violates runtime kernel invariants."""
+
+
+RECOVERY_EVENT_TYPES = {
+    "materialization_lost",
+    "worker_run_stale",
+    "worker_run_timeout",
+    "worker_run_crashed",
+    "receipt_missing",
+    "receipt_invalid",
+    "receipt_recovery_requested",
+    "node_recovery_retry_scheduled",
+    "node_recovery_rerun_scheduled",
+    "node_recovery_not_retryable",
+    "materialization_reconciled",
+    "terminal_fact_preserved",
+    "task_node_state_mismatch",
+    "ledger_reference_missing",
+    "checkpoint_reference_missing",
+    "consistency_violation",
+    "consistency_check_passed",
+    "legal_waiting_reason_updated",
+}
+
+RECOVERY_FAILURE_STATUSES = {
+    "lost",
+    "stale",
+    "timed_out",
+    "crashed",
+    "receipt_missing",
+    "receipt_invalid",
+}
+
+DEFAULT_RUNTIME_RECOVERY_POLICY = {
+    "infra_retry_limit": 1,
+    "receipt_recovery_limit": 1,
+    "business_failure_auto_retry": False,
+    "uncertain_auto_retry": False,
+    "run_stale_after_seconds": kb.DEFAULT_CLAIM_TTL_SECONDS,
+    "retryable_failure_types": [
+        "worker_run_timeout",
+        "worker_run_crashed",
+        "materialization_lost",
+        "receipt_missing",
+        "receipt_invalid",
+    ],
+    "non_retryable_failure_types": [
+        "business_failed",
+        "verification_failed",
+        "policy_blocked",
+        "missing_secret",
+        "external_permission",
+    ],
+}
 
 
 def _now() -> int:
@@ -1416,6 +1470,709 @@ def summarize_liveness(conn: sqlite3.Connection, job_id: str, frontier: Optional
     }
 
 
+def _runtime_recovery_policy(policy: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    merged = dict(DEFAULT_RUNTIME_RECOVERY_POLICY)
+    if policy:
+        merged.update({key: value for key, value in policy.items() if value is not None})
+    for key in ("infra_retry_limit", "receipt_recovery_limit", "run_stale_after_seconds"):
+        try:
+            merged[key] = max(0, int(merged.get(key) or 0))
+        except (TypeError, ValueError):
+            merged[key] = int(DEFAULT_RUNTIME_RECOVERY_POLICY[key])
+    return merged
+
+
+def _recovery_event_once(
+    conn: sqlite3.Connection,
+    job_id: str,
+    event_type: str,
+    key: str,
+    payload: Optional[dict[str, Any]] = None,
+    *,
+    node_id: Optional[str] = None,
+    task_id: Optional[str] = None,
+    run_id: Optional[int] = None,
+) -> tuple[Optional[int], bool]:
+    job = _job(conn, job_id)
+    payload_data = dict(payload or {})
+    payload_data.setdefault("key", key)
+    rows = conn.execute(
+        """
+        SELECT id, payload_json FROM execution_events
+         WHERE job_id = ? AND event_type = ? AND graph_revision = ?
+         ORDER BY id DESC
+        """,
+        (job_id, event_type, int(job["graph_revision"])),
+    ).fetchall()
+    for row in rows:
+        if _loads(row["payload_json"]).get("key") == key:
+            return int(row["id"]), False
+    event_id = _event(
+        conn,
+        job_id,
+        event_type,
+        payload_data,
+        node_id=node_id,
+        task_id=task_id,
+        run_id=run_id,
+    )
+    return event_id, True
+
+
+def _latest_materialization(conn: sqlite3.Connection, node_id: str) -> Optional[dict[str, Any]]:
+    row = conn.execute(
+        "SELECT * FROM node_materializations WHERE node_id = ? ORDER BY attempt DESC, created_at DESC LIMIT 1",
+        (node_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _active_materialization(conn: sqlite3.Connection, node_id: str) -> Optional[dict[str, Any]]:
+    row = conn.execute(
+        """
+        SELECT * FROM node_materializations
+         WHERE node_id = ? AND status IN ('created', 'running')
+         ORDER BY attempt DESC, created_at DESC LIMIT 1
+        """,
+        (node_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _update_materialization_recovery_status(
+    conn: sqlite3.Connection,
+    materialization: Optional[dict[str, Any]],
+    status: str,
+    *,
+    now: int,
+    recovery_reason: str,
+    payload: Optional[dict[str, Any]] = None,
+) -> None:
+    if not materialization:
+        return
+    metadata = _loads(materialization.get("metadata_json"))
+    recovery = metadata.setdefault("recovery", {})
+    recovery.update(
+        {
+            "status": status,
+            "recovery_reason": recovery_reason,
+            "updated_at": now,
+            **(payload or {}),
+        }
+    )
+    conn.execute(
+        """
+        UPDATE node_materializations
+           SET status = ?, completed_at = COALESCE(completed_at, ?),
+               metadata_json = ?
+         WHERE id = ?
+        """,
+        (status, now, _json(metadata), materialization["id"]),
+    )
+
+
+def _recovery_failure_count(conn: sqlite3.Connection, node_id: str) -> int:
+    placeholders = ",".join("?" for _ in RECOVERY_FAILURE_STATUSES)
+    row = conn.execute(
+        f"""
+        SELECT COUNT(*) AS count
+          FROM node_materializations
+         WHERE node_id = ? AND status IN ({placeholders})
+        """,
+        (node_id, *sorted(RECOVERY_FAILURE_STATUSES)),
+    ).fetchone()
+    return int(row["count"] or 0)
+
+
+def _receipt_evidence_valid(evidence: Any) -> bool:
+    if not isinstance(evidence, dict) or not evidence:
+        return False
+    return any(
+        evidence.get(key) is not None
+        for key in (
+            "verdict",
+            "summary",
+            "claimed_goal_items",
+            "claimed_goal_item_keys",
+            "partial_goal_items",
+            "partial_goal_item_keys",
+            "unmet_goal_items",
+            "unmet_goal_item_keys",
+            "verification",
+            "artifacts",
+            "artifact_refs",
+        )
+    )
+
+
+def _schedule_recovery_retry_or_fail(
+    conn: sqlite3.Connection,
+    node: dict[str, Any],
+    materialization: Optional[dict[str, Any]],
+    failure_type: str,
+    *,
+    now: int,
+    policy: dict[str, Any],
+    summary: dict[str, Any],
+    task_id: Optional[str] = None,
+    run_id: Optional[int] = None,
+) -> None:
+    retryable_types = {str(item) for item in policy.get("retryable_failure_types") or []}
+    retry_limit_key = "receipt_recovery_limit" if failure_type in {"receipt_missing", "receipt_invalid"} else "infra_retry_limit"
+    retry_limit = int(policy.get(retry_limit_key) or 0)
+    retryable = failure_type in retryable_types and _recovery_failure_count(conn, node["id"]) <= retry_limit
+    payload = {
+        "node_key": node["node_key"],
+        "materialization_id": materialization["id"] if materialization else None,
+        "attempt": int(materialization["attempt"]) if materialization else None,
+        "task_id": task_id,
+        "run_id": run_id,
+        "recovery_reason": failure_type,
+        "retryable": retryable,
+        "policy_decision": "retry" if retryable else "mark_failed",
+        "retry_limit": retry_limit,
+    }
+    if retryable:
+        conn.execute(
+            """
+            UPDATE execution_nodes
+               SET state = 'ready', latest_task_id = NULL, latest_run_id = NULL,
+                   updated_at = ?, completed_at = NULL
+             WHERE id = ? AND state = 'running'
+            """,
+            (now, node["id"]),
+        )
+        _recovery_event_once(
+            conn,
+            node["job_id"],
+            "receipt_recovery_requested" if failure_type in {"receipt_missing", "receipt_invalid"} else "node_recovery_retry_scheduled",
+            f"{failure_type}:{node['id']}:{payload['attempt']}:retry",
+            payload,
+            node_id=node["id"],
+            task_id=task_id,
+            run_id=run_id,
+        )
+        if failure_type in {"receipt_missing", "receipt_invalid"}:
+            _recovery_event_once(
+                conn,
+                node["job_id"],
+                "node_recovery_retry_scheduled",
+                f"{failure_type}:{node['id']}:{payload['attempt']}:retry-scheduled",
+                payload,
+                node_id=node["id"],
+                task_id=task_id,
+                run_id=run_id,
+            )
+        summary["scheduled_retries"].append(node["node_key"])
+    else:
+        conn.execute(
+            """
+            UPDATE execution_nodes
+               SET state = 'failed', output_summary = ?, updated_at = ?, completed_at = ?
+             WHERE id = ? AND state = 'running'
+            """,
+            (f"Runtime recovery marked node failed: {failure_type}", now, now, node["id"]),
+        )
+        _recovery_event_once(
+            conn,
+            node["job_id"],
+            "node_recovery_not_retryable",
+            f"{failure_type}:{node['id']}:{payload['attempt']}:not-retryable",
+            payload,
+            node_id=node["id"],
+            task_id=task_id,
+            run_id=run_id,
+        )
+        summary["failed_nodes"].append(node["node_key"])
+
+
+def _run_failure_type(snapshot: kb.TaskProgressSnapshot, *, now: int, policy: dict[str, Any]) -> Optional[str]:
+    task = snapshot.task
+    run = snapshot.run
+    run_status = str(run.status if run else "").strip().lower()
+    outcome = str(run.outcome if run and run.outcome else "").strip().lower()
+    if run_status == "timed_out" or outcome == "timed_out":
+        return "worker_run_timeout"
+    if run_status == "crashed" or outcome == "crashed":
+        return "worker_run_crashed"
+    if run_status in {"failed", "released"} or outcome in {"spawn_failed", "gave_up"}:
+        return "worker_run_crashed"
+    task_claim_expires = task.claim_expires
+    run_claim_expires = run.claim_expires if run else None
+    claim_expires = run_claim_expires if run_claim_expires is not None else task_claim_expires
+    if task.status == "running" and claim_expires is not None and int(claim_expires) < now:
+        return "worker_run_timeout"
+    last_heartbeat = None
+    if run and run.last_heartbeat_at is not None:
+        last_heartbeat = int(run.last_heartbeat_at)
+    elif task.last_heartbeat_at is not None:
+        last_heartbeat = int(task.last_heartbeat_at)
+    stale_after = int(policy.get("run_stale_after_seconds") or 0)
+    if task.status == "running" and stale_after > 0 and last_heartbeat is not None and now - last_heartbeat > stale_after:
+        return "worker_run_stale"
+    if task.status == "ready" and run and outcome == "reclaimed":
+        return "worker_run_stale"
+    return None
+
+
+def _recovery_status_for_failure(failure_type: str) -> str:
+    return {
+        "materialization_lost": "lost",
+        "worker_run_stale": "stale",
+        "worker_run_timeout": "timed_out",
+        "worker_run_crashed": "crashed",
+        "receipt_missing": "receipt_missing",
+        "receipt_invalid": "receipt_invalid",
+    }.get(failure_type, "failed")
+
+
+def reconcile_runtime_materializations(
+    conn: sqlite3.Connection,
+    job_id: str,
+    *,
+    board: Optional[str] = None,
+    now: Optional[int] = None,
+    policy: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Normalize worker/materialization mismatches into runtime facts."""
+
+    ensure_runtime_schema(conn)
+    current = int(now if now is not None else _now())
+    effective_policy = _runtime_recovery_policy(policy)
+    summary: dict[str, Any] = {
+        "job_id": job_id,
+        "checked_nodes": 0,
+        "events": [],
+        "scheduled_retries": [],
+        "failed_nodes": [],
+        "materializations_updated": [],
+        "policy": {
+            "infra_retry_limit": effective_policy["infra_retry_limit"],
+            "receipt_recovery_limit": effective_policy["receipt_recovery_limit"],
+            "run_stale_after_seconds": effective_policy["run_stale_after_seconds"],
+        },
+    }
+    nodes = conn.execute(
+        """
+        SELECT * FROM execution_nodes
+         WHERE job_id = ? AND state = 'running'
+         ORDER BY updated_at, created_at, node_key
+        """,
+        (job_id,),
+    ).fetchall()
+    for row in nodes:
+        node = dict(row)
+        summary["checked_nodes"] += 1
+        materialization = _active_materialization(conn, node["id"]) or _latest_materialization(conn, node["id"])
+        task_id = node.get("latest_task_id") or (materialization or {}).get("task_id")
+        run_id = node.get("latest_run_id") or (materialization or {}).get("run_id")
+        if not task_id:
+            failure_type = "materialization_lost"
+            _update_materialization_recovery_status(
+                conn,
+                materialization,
+                _recovery_status_for_failure(failure_type),
+                now=current,
+                recovery_reason=failure_type,
+                payload={"task_id": None, "run_id": run_id},
+            )
+            event_id, created = _recovery_event_once(
+                conn,
+                job_id,
+                failure_type,
+                f"{failure_type}:{node['id']}:{(materialization or {}).get('attempt')}:missing-task-id",
+                {
+                    "node_key": node["node_key"],
+                    "materialization_id": (materialization or {}).get("id"),
+                    "attempt": (materialization or {}).get("attempt"),
+                    "task_id": None,
+                    "run_id": run_id,
+                    "recovery_reason": failure_type,
+                    "retryable": True,
+                    "policy_decision": "evaluate_retry",
+                },
+                node_id=node["id"],
+                run_id=run_id,
+            )
+            if created:
+                summary["events"].append(failure_type)
+            _schedule_recovery_retry_or_fail(
+                conn,
+                node,
+                materialization,
+                failure_type,
+                now=current,
+                policy=effective_policy,
+                summary=summary,
+                task_id=None,
+                run_id=run_id,
+            )
+            continue
+        snapshot = kb.task_progress_snapshot(conn, str(task_id), board=board)
+        if snapshot is None:
+            failure_type = "materialization_lost"
+            _update_materialization_recovery_status(
+                conn,
+                materialization,
+                _recovery_status_for_failure(failure_type),
+                now=current,
+                recovery_reason=failure_type,
+                payload={"task_id": task_id, "run_id": run_id},
+            )
+            if materialization:
+                summary["materializations_updated"].append(materialization["id"])
+            _, created = _recovery_event_once(
+                conn,
+                job_id,
+                failure_type,
+                f"{failure_type}:{node['id']}:{(materialization or {}).get('attempt')}:{task_id}",
+                {
+                    "node_key": node["node_key"],
+                    "materialization_id": (materialization or {}).get("id"),
+                    "attempt": (materialization or {}).get("attempt"),
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "recovery_reason": failure_type,
+                    "retryable": True,
+                    "policy_decision": "evaluate_retry",
+                },
+                node_id=node["id"],
+                task_id=str(task_id),
+                run_id=run_id,
+            )
+            if created:
+                summary["events"].append(failure_type)
+            _schedule_recovery_retry_or_fail(
+                conn,
+                node,
+                materialization,
+                failure_type,
+                now=current,
+                policy=effective_policy,
+                summary=summary,
+                task_id=str(task_id),
+                run_id=run_id,
+            )
+            continue
+        snapshot_run_id = snapshot.run.id if snapshot.run else run_id
+        failure_type = _run_failure_type(snapshot, now=current, policy=effective_policy)
+        if failure_type is not None:
+            _update_materialization_recovery_status(
+                conn,
+                materialization,
+                _recovery_status_for_failure(failure_type),
+                now=current,
+                recovery_reason=failure_type,
+                payload={"task_id": task_id, "run_id": snapshot_run_id},
+            )
+            if materialization:
+                summary["materializations_updated"].append(materialization["id"])
+            event_type = failure_type
+            _, created = _recovery_event_once(
+                conn,
+                job_id,
+                event_type,
+                f"{event_type}:{node['id']}:{(materialization or {}).get('attempt')}:{task_id}:{snapshot_run_id}",
+                {
+                    "node_key": node["node_key"],
+                    "materialization_id": (materialization or {}).get("id"),
+                    "attempt": (materialization or {}).get("attempt"),
+                    "task_id": task_id,
+                    "run_id": snapshot_run_id,
+                    "recovery_reason": failure_type,
+                    "retryable": True,
+                    "policy_decision": "evaluate_retry",
+                    "task_status": snapshot.task.status,
+                    "run_status": snapshot.run.status if snapshot.run else None,
+                    "run_outcome": snapshot.run.outcome if snapshot.run else None,
+                },
+                node_id=node["id"],
+                task_id=str(task_id),
+                run_id=snapshot_run_id,
+            )
+            if created:
+                summary["events"].append(event_type)
+            _schedule_recovery_retry_or_fail(
+                conn,
+                node,
+                materialization,
+                failure_type,
+                now=current,
+                policy=effective_policy,
+                summary=summary,
+                task_id=str(task_id),
+                run_id=snapshot_run_id,
+            )
+            continue
+        if snapshot.task.status in {"done", "blocked"} and not _receipt_evidence_valid(snapshot.evidence):
+            failure_type = "receipt_missing" if not snapshot.evidence else "receipt_invalid"
+            _update_materialization_recovery_status(
+                conn,
+                materialization,
+                _recovery_status_for_failure(failure_type),
+                now=current,
+                recovery_reason=failure_type,
+                payload={"task_id": task_id, "run_id": snapshot_run_id},
+            )
+            if materialization:
+                summary["materializations_updated"].append(materialization["id"])
+            _, created = _recovery_event_once(
+                conn,
+                job_id,
+                failure_type,
+                f"{failure_type}:{node['id']}:{(materialization or {}).get('attempt')}:{task_id}:{snapshot_run_id}",
+                {
+                    "node_key": node["node_key"],
+                    "materialization_id": (materialization or {}).get("id"),
+                    "attempt": (materialization or {}).get("attempt"),
+                    "task_id": task_id,
+                    "run_id": snapshot_run_id,
+                    "recovery_reason": failure_type,
+                    "retryable": True,
+                    "policy_decision": "evaluate_retry",
+                    "task_status": snapshot.task.status,
+                },
+                node_id=node["id"],
+                task_id=str(task_id),
+                run_id=snapshot_run_id,
+            )
+            if created:
+                summary["events"].append(failure_type)
+            _schedule_recovery_retry_or_fail(
+                conn,
+                node,
+                materialization,
+                failure_type,
+                now=current,
+                policy=effective_policy,
+                summary=summary,
+                task_id=str(task_id),
+                run_id=snapshot_run_id,
+            )
+            continue
+        if materialization and snapshot.task.status in {"done", "blocked"}:
+            conn.execute(
+                """
+                UPDATE node_materializations
+                   SET run_id = COALESCE(?, run_id)
+                 WHERE id = ?
+                """,
+                (snapshot_run_id, materialization["id"]),
+            )
+    if summary["events"] or summary["scheduled_retries"] or summary["failed_nodes"]:
+        _recovery_event_once(
+            conn,
+            job_id,
+            "materialization_reconciled",
+            f"reconcile:{current}",
+            {
+                "checked_nodes": summary["checked_nodes"],
+                "event_types": summary["events"],
+                "scheduled_retries": summary["scheduled_retries"],
+                "failed_nodes": summary["failed_nodes"],
+                "recovery_reason": "reconcile_runtime_materializations",
+                "retryable": bool(summary["scheduled_retries"]),
+                "policy_decision": "reconciled",
+            },
+        )
+    reduce_runtime_job(conn, job_id)
+    return summary
+
+
+def runtime_legal_waiting_reason(conn: sqlite3.Connection, job_id: str) -> str:
+    ensure_runtime_schema(conn)
+    job = _job(conn, job_id)
+    if job["state"] in {"done", "cancelled", "failed"}:
+        return str(job["state"])
+    frontier = summarize_active_frontier(conn, job_id)
+    if frontier["running"]:
+        return "waiting_worker"
+    if frontier["waiting_human"]:
+        return "waiting_human"
+    if _has_pending_decision(conn, job_id):
+        return "waiting_decision"
+    if frontier["ready"]:
+        return "ready_to_materialize"
+    if job["state"] == "blocked":
+        return "blocked_by_policy"
+    liveness = summarize_liveness(conn, job_id, frontier)
+    if liveness["illegal_idle"]:
+        return "liveness_violation"
+    open_gaps = conn.execute(
+        "SELECT 1 FROM goal_gaps WHERE job_id = ? AND state = 'open' LIMIT 1",
+        (job_id,),
+    ).fetchone()
+    if open_gaps:
+        return "waiting_decision"
+    return "active"
+
+
+def summarize_runtime_recovery(conn: sqlite3.Connection, job_id: str, *, limit: int = 20) -> dict[str, Any]:
+    ensure_runtime_schema(conn)
+    rows = conn.execute(
+        """
+        SELECT id, event_type, payload_json, created_at
+          FROM execution_events
+         WHERE job_id = ?
+           AND event_type IN (%s)
+         ORDER BY id DESC
+         LIMIT ?
+        """ % ",".join("?" for _ in RECOVERY_EVENT_TYPES),
+        (job_id, *sorted(RECOVERY_EVENT_TYPES), max(1, int(limit))),
+    ).fetchall()
+    events = []
+    retryable_count = 0
+    non_retryable_count = 0
+    latest_reconcile_at = None
+    for row in rows:
+        payload = _loads(row["payload_json"])
+        if payload.get("retryable") is True:
+            retryable_count += 1
+        elif payload.get("retryable") is False:
+            non_retryable_count += 1
+        if row["event_type"] == "materialization_reconciled" and latest_reconcile_at is None:
+            latest_reconcile_at = int(row["created_at"])
+        events.append(
+            {
+                "id": int(row["id"]),
+                "event_type": row["event_type"],
+                "created_at": int(row["created_at"]),
+                "payload": payload,
+            }
+        )
+    return {
+        "open_recovery_events": events,
+        "retryable_count": retryable_count,
+        "non_retryable_count": non_retryable_count,
+        "latest_reconcile_at": latest_reconcile_at,
+    }
+
+
+def check_runtime_consistency(
+    conn: sqlite3.Connection,
+    job_id: str,
+    *,
+    write_events: bool = True,
+) -> dict[str, Any]:
+    """Run a deterministic consistency check over runtime DB facts."""
+
+    ensure_runtime_schema(conn)
+    _job(conn, job_id)
+    violations: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+
+    for node in conn.execute("SELECT * FROM execution_nodes WHERE job_id = ?", (job_id,)).fetchall():
+        if node["latest_task_id"]:
+            materialization = conn.execute(
+                """
+                SELECT * FROM node_materializations
+                 WHERE node_id = ? AND task_id = ?
+                 ORDER BY attempt DESC LIMIT 1
+                """,
+                (node["id"], node["latest_task_id"]),
+            ).fetchone()
+            if materialization is None:
+                violations.append(
+                    {
+                        "type": "latest_task_without_materialization",
+                        "node_key": node["node_key"],
+                        "task_id": node["latest_task_id"],
+                    }
+                )
+        if node["state"] in TERMINAL_NODE_STATES:
+            active = _active_materialization(conn, node["id"])
+            if active is not None:
+                warnings.append(
+                    {
+                        "type": "terminal_node_has_active_materialization",
+                        "node_key": node["node_key"],
+                        "materialization_id": active["id"],
+                    }
+                )
+    for mat in conn.execute("SELECT * FROM node_materializations WHERE job_id = ?", (job_id,)).fetchall():
+        node = conn.execute("SELECT id, node_key FROM execution_nodes WHERE id = ?", (mat["node_id"],)).fetchone()
+        if node is None:
+            violations.append({"type": "materialization_node_missing", "materialization_id": mat["id"], "node_id": mat["node_id"]})
+        if kb.get_task(conn, mat["task_id"]) is None:
+            violations.append({"type": "materialization_task_missing", "materialization_id": mat["id"], "task_id": mat["task_id"]})
+    for row in conn.execute("SELECT * FROM progress_ledger WHERE job_id = ?", (job_id,)).fetchall():
+        if row["node_id"] and conn.execute("SELECT 1 FROM execution_nodes WHERE id = ?", (row["node_id"],)).fetchone() is None:
+            violations.append({"type": "ledger_node_missing", "ledger_id": row["id"], "node_id": row["node_id"]})
+        if conn.execute("SELECT 1 FROM goal_items WHERE id = ?", (row["goal_item_id"],)).fetchone() is None:
+            violations.append({"type": "ledger_goal_item_missing", "ledger_id": row["id"], "goal_item_id": row["goal_item_id"]})
+        if row["artifact_id"] and conn.execute("SELECT 1 FROM node_artifacts WHERE id = ?", (row["artifact_id"],)).fetchone() is None:
+            violations.append({"type": "ledger_artifact_missing", "ledger_id": row["id"], "artifact_id": row["artifact_id"]})
+    for checkpoint in conn.execute("SELECT * FROM decision_checkpoints WHERE job_id = ?", (job_id,)).fetchall():
+        if checkpoint["source_segment_id"] and conn.execute(
+            "SELECT 1 FROM decision_session_segments WHERE id = ?",
+            (checkpoint["source_segment_id"],),
+        ).fetchone() is None:
+            violations.append(
+                {
+                    "type": "checkpoint_source_segment_missing",
+                    "checkpoint_id": checkpoint["id"],
+                    "source_segment_id": checkpoint["source_segment_id"],
+                }
+            )
+        if checkpoint["graph_revision"] is not None and int(checkpoint["graph_revision"]) > int(_job(conn, job_id)["graph_revision"]):
+            violations.append(
+                {
+                    "type": "checkpoint_future_graph_revision",
+                    "checkpoint_id": checkpoint["id"],
+                    "checkpoint_graph_revision": int(checkpoint["graph_revision"]),
+                }
+            )
+    active_segments = conn.execute(
+        "SELECT COUNT(*) AS count FROM decision_session_segments WHERE job_id = ? AND state = 'active'",
+        (job_id,),
+    ).fetchone()
+    if int(active_segments["count"] or 0) != 1:
+        violations.append({"type": "active_segment_count_invalid", "count": int(active_segments["count"] or 0)})
+    job = _job(conn, job_id)
+    if job["state"] == "done":
+        contract = _contract(conn, job_id)
+        incomplete = conn.execute(
+            """
+            SELECT item_key, state FROM goal_items
+             WHERE contract_id = ? AND required = 1 AND state NOT IN ('satisfied', 'waived')
+             ORDER BY item_key
+            """,
+            (contract["id"],),
+        ).fetchall()
+        for item in incomplete:
+            violations.append({"type": "done_job_has_incomplete_goal", "goal_item_key": item["item_key"], "state": item["state"]})
+    liveness = summarize_liveness(conn, job_id)
+    if liveness["illegal_idle"]:
+        warnings.append({"type": "illegal_idle", "liveness": liveness})
+
+    result = {
+        "job_id": job_id,
+        "status": "failed" if violations else "passed",
+        "violation_count": len(violations),
+        "warning_count": len(warnings),
+        "violations": violations,
+        "warnings": warnings,
+    }
+    if write_events:
+        event_type = "consistency_violation" if violations else "consistency_check_passed"
+        _event(
+            conn,
+            job_id,
+            event_type,
+            {
+                "status": result["status"],
+                "violation_count": len(violations),
+                "warning_count": len(warnings),
+                "violations": violations[:20],
+                "warnings": warnings[:20],
+                "recovery_reason": "check_runtime_consistency",
+                "retryable": False,
+                "policy_decision": "operator_review" if violations else "none",
+            },
+        )
+    return result
+
+
 def _stale_gap_candidates(conn: sqlite3.Connection, job_id: str) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
@@ -1916,6 +2673,7 @@ def advance_runtime_job(
     compaction_policy: Optional[dict[str, Any]] = None,
 ) -> AdvanceResult:
     ensure_runtime_schema(conn)
+    recovery = reconcile_runtime_materializations(conn, job_id, board=board)
     ingested: list[str] = []
     for node in conn.execute(
         "SELECT * FROM execution_nodes WHERE job_id = ? AND state = 'running'",
@@ -2164,6 +2922,7 @@ def advance_runtime_job(
                     ingested_nodes=ingested,
                     decision_requested=decision_requested,
                     patch_status=patch_status,
+                    recovery=recovery,
                 )
             result = apply_graph_patch(conn, job_id, patch, decision_id=decision_id)
             patch_status = result["status"]
@@ -2225,6 +2984,7 @@ def advance_runtime_job(
         decision_requested=decision_requested,
         patch_status=patch_status,
         events=events,
+        recovery=recovery,
     )
 
 
@@ -2258,6 +3018,8 @@ def advance_runtime_job_until_idle(
             tuple(result.materialized_nodes),
             tuple(result.ingested_nodes),
             result.patch_status,
+            tuple(result.recovery.get("events") or []),
+            tuple(result.recovery.get("scheduled_retries") or []),
         )
         steps.append(
             {
@@ -2266,6 +3028,7 @@ def advance_runtime_job_until_idle(
                 "ingested_nodes": result.ingested_nodes,
                 "decision_requested": result.decision_requested,
                 "patch_status": result.patch_status,
+                "recovery": result.recovery,
                 "graph_revision_before": before_revision,
                 "graph_revision_after": int(after["graph_revision"]),
             }
@@ -2344,6 +3107,7 @@ def supervisor_runtime_tick(
                 "ingested_nodes": result.ingested_nodes,
                 "decision_requested": result.decision_requested,
                 "patch_status": result.patch_status,
+                "recovery": result.recovery,
                 "events": result.events,
             },
         }
@@ -2420,7 +3184,7 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
         workspace_kind="worktree" if job.get("workspace_path") else "scratch",
         workspace_path=job.get("workspace_path"),
         tenant=f"runtime:{job['id']}",
-        idempotency_key=f"runtime:{job['id']}:{node['id']}",
+        idempotency_key=f"runtime:{job['id']}:{node['id']}:{attempt}",
         initial_status="running",
         board=board or job.get("board"),
     )

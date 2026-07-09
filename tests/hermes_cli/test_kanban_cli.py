@@ -205,6 +205,27 @@ def test_run_slash_runtime_advance_materializes_initial_node(kanban_home):
     assert second["step"]["materialized_nodes"] == []
 
 
+def test_run_slash_runtime_reconcile_and_consistency_json(kanban_home):
+    created = json.loads(kc.run_slash("runtime create 'reconcile runtime' --json"))
+    first = json.loads(kc.run_slash(f"runtime advance {created['id']} --json"))
+    task_id = first["frontier"][0]["task_id"] if "frontier" in first else None
+    if task_id is None:
+        status = json.loads(kc.run_slash(f"runtime status {created['id']} --json"))
+        task_id = next(node["latest_task_id"] for node in status["nodes"] if node["node_key"] == "understand-scope")
+    with kb.connect() as conn:
+        conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+
+    reconciled = json.loads(kc.run_slash(f"runtime reconcile {created['id']} --json"))
+    consistency = json.loads(kc.run_slash(f"runtime consistency {created['id']} --json"))
+    inspected = json.loads(kc.run_slash(f"runtime inspect {created['id']} --json"))
+
+    assert reconciled["events"] == ["materialization_lost"]
+    assert reconciled["scheduled_retries"] == ["understand-scope"]
+    assert consistency["status"] == "failed"
+    assert inspected["legal_waiting_reason"] == "ready_to_materialize"
+    assert inspected["recovery"]["open_recovery_events"]
+
+
 def test_run_slash_context_output_format(kanban_home):
     out = kc.run_slash("create 'tech spec' --assignee alice --body 'write an RFC'")
     import re

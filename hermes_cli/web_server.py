@@ -822,6 +822,8 @@ async def get_runtime_job_section(job_id: str, section: str, limit: int = 50):
         "compactions",
         "human-gates",
         "liveness",
+        "recovery",
+        "consistency",
     }
     if section not in allowed:
         raise HTTPException(status_code=404, detail=f"Unknown runtime section: {section}")
@@ -844,6 +846,8 @@ async def get_runtime_job_section(job_id: str, section: str, limit: int = 50):
         "compactions": snapshot["compactions"],
         "human-gates": snapshot["human_gates"],
         "liveness": snapshot["liveness"],
+        "recovery": snapshot["recovery"],
+        "consistency": snapshot["consistency"],
     }
     return {"job_id": job_id, "section": section, "data": mapping[section]}
 

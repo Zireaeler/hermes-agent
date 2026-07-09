@@ -1500,6 +1500,14 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     rt_inspect.add_argument("--limit", type=int, default=50)
     rt_inspect.add_argument("--json", action="store_true")
 
+    rt_reconcile = runtime_sub.add_parser("reconcile", help="Reconcile runtime worker materializations")
+    rt_reconcile.add_argument("job_id")
+    rt_reconcile.add_argument("--json", action="store_true")
+
+    rt_consistency = runtime_sub.add_parser("consistency", help="Check runtime DB consistency")
+    rt_consistency.add_argument("job_id")
+    rt_consistency.add_argument("--json", action="store_true")
+
     rt_list = runtime_sub.add_parser("list", aliases=["ls"], help="List runtime jobs")
     rt_list.add_argument("--state", default=None)
     rt_list.add_argument("--limit", type=int, default=50)
@@ -2089,6 +2097,10 @@ def _dispatch_runtime(args: argparse.Namespace) -> int:
         return _cmd_runtime_status(args)
     if sub == "inspect":
         return _cmd_runtime_inspect(args)
+    if sub == "reconcile":
+        return _cmd_runtime_reconcile(args)
+    if sub == "consistency":
+        return _cmd_runtime_consistency(args)
     if sub == "advance":
         return _cmd_runtime_advance(args)
     if sub == "supervise":
@@ -2314,10 +2326,20 @@ def _cmd_runtime_inspect(args: argparse.Namespace) -> int:
     )
     print(
         "Liveness: "
+        f"reason={payload.get('legal_waiting_reason')} "
         f"illegal_idle={payload['liveness'].get('illegal_idle', False)} "
         f"ready={payload['liveness'].get('ready_count', 0)} "
         f"running={payload['liveness'].get('running_count', 0)} "
         f"human={payload['liveness'].get('waiting_human_count', 0)}"
+    )
+    recovery = payload.get("recovery") or {}
+    consistency = payload.get("consistency") or {}
+    print(
+        "Recovery: "
+        f"events={len(recovery.get('open_recovery_events') or [])} "
+        f"retryable={recovery.get('retryable_count', 0)} "
+        f"non_retryable={recovery.get('non_retryable_count', 0)} "
+        f"consistency={consistency.get('status', '-')}"
     )
     print(
         "Recent: "
@@ -2327,6 +2349,40 @@ def _cmd_runtime_inspect(args: argparse.Namespace) -> int:
         f"human_gates={len(payload['human_gates'])}"
     )
     return 0
+
+
+def _cmd_runtime_reconcile(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    board = kb.get_current_board()
+    with kb.connect() as conn:
+        result = rk.reconcile_runtime_materializations(conn, args.job_id, board=board)
+    if getattr(args, "json", False):
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+    print(
+        f"Runtime reconcile {result['job_id']}: "
+        f"checked={result['checked_nodes']} "
+        f"events={len(result['events'])} "
+        f"retries={len(result['scheduled_retries'])} "
+        f"failed={len(result['failed_nodes'])}"
+    )
+    return 0
+
+
+def _cmd_runtime_consistency(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    with kb.connect() as conn:
+        result = rk.check_runtime_consistency(conn, args.job_id)
+    if getattr(args, "json", False):
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+    print(
+        f"Runtime consistency {result['job_id']}: {result['status']} "
+        f"violations={result['violation_count']} warnings={result['warning_count']}"
+    )
+    return 0 if result["status"] == "passed" else 1
 
 
 def _cmd_runtime_list(args: argparse.Namespace) -> int:
@@ -2385,6 +2441,7 @@ def _cmd_runtime_advance(args: argparse.Namespace) -> int:
                     "ingested_nodes": tick.ingested_nodes,
                     "decision_requested": tick.decision_requested,
                     "patch_status": tick.patch_status,
+                    "recovery": tick.recovery,
                 },
             }
     if getattr(args, "json", False):
@@ -2399,6 +2456,14 @@ def _cmd_runtime_advance(args: argparse.Namespace) -> int:
                 print(f"  Ingested:     {', '.join(step['ingested_nodes'])}")
             if step["patch_status"]:
                 print(f"  Patch:        {step['patch_status']}")
+            recovery = step.get("recovery") or {}
+            if recovery.get("events") or recovery.get("scheduled_retries") or recovery.get("failed_nodes"):
+                print(
+                    "  Recovery:     "
+                    f"events={len(recovery.get('events') or [])} "
+                    f"retries={len(recovery.get('scheduled_retries') or [])} "
+                    f"failed={len(recovery.get('failed_nodes') or [])}"
+                )
         else:
             print(f"  Steps: {len(result['steps'])}")
     return 0
