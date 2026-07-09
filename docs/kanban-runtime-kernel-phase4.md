@@ -49,10 +49,10 @@ Phase 4 的第一版生产化硬化实现已经落地在：
 
 - 常驻 daemon / service packaging；
 - worker crash / timeout / stale run 的完整 recovery policy；
-- destructive action / external cost / credential / workspace boundary 的完整安全策略；
+- runtime capability policy，以及 destructive action / external cost / credential / workspace boundary 的完整安全策略；
 - dashboard 前端 UI 页面；
 - event replay consistency checker；
-- 真实模型 compaction smoke 和长任务 soak 测试。
+- 真实模型 compaction smoke、provider-specific prompt behavior 验证和长任务 soak 测试。
 
 因此当前状态应表述为：Phase 4 文档主干已经实现，Phase 4 MVP 已完成；严格
 production complete 仍需要后续运行化、UI 和安全策略补强。
@@ -150,6 +150,17 @@ hermes kanban runtime compact <job_id> --provider real --no-fallback --json
 - `--no-fallback` 时 rejected checkpoint 只写审计 entry，不关闭 source segment；
 - 成功后旧 segment 标记 `compacted`，新 active segment 使用 checkpoint，不带旧 transcript 原文。
 
+注意：当前实现证明的是 real compaction provider 的调用路径、解析、validator、
+fallback 和审计闭环已经存在；它不等于真实模型 compaction 质量已经被证明。
+真实模型的 checkpoint 质量、长任务上下文稳定性、provider-specific prompt
+behavior 和多轮 compaction 后的策略连续性，仍需要后续 smoke / soak 测试验证。
+
+自动 supervisor 使用真实 compaction provider 时还需要额外质量保护：如果同一
+job 连续多次 provider_error、parse_failed 或 validator rejected 后被
+deterministic fallback 接管，系统不应静默认为质量正常。后续应记录
+`fallback_count` / `fallback_streak`，超过阈值时产生
+`compaction_quality_degraded` 或 `operator_attention_required` synthetic event。
+
 ## Phase 4B: Runtime Observability / Dashboard API
 
 ### 目标
@@ -236,6 +247,23 @@ advance、compact、waive-goal、human-decision、cancel/pause/resume。
 当前未实现 dashboard 前端 UI 页面；本阶段只提供 dashboard 可消费的 API/CLI
 结构。
 
+后续 observability 需要把 legal waiting reason 做成一等字段，而不是只依赖
+events 推断。Operator 应能直接区分：
+
+```text
+waiting_worker
+waiting_human
+waiting_decision
+provider_unavailable
+budget_exhausted
+blocked_by_policy
+liveness_violation
+operator_attention_required
+```
+
+这类字段应和 job state、liveness summary 一起出现在 runtime snapshot/API 中，
+让 dashboard 能判断当前状态是合法等待、可恢复等待、策略降级，还是非法 idle。
+
 ## Phase 4C: Production Supervisor / Recovery
 
 ### 目标
@@ -306,6 +334,21 @@ hermes kanban runtime supervise --limit 10 --owner <owner> --json
 当前未实现完整常驻 daemon packaging，也未实现完整 stale worker run recovery；
 worker recovery 仍依赖已有 Kanban task/run/evidence 机制和后续策略补强。
 
+Worker recovery 应拆成后续明确交付项，而不是藏在 Phase 4C 的泛化描述里。
+建议后续新增 `Phase 4E Worker Recovery Policy`，专门处理：
+
+- stale materialization；
+- run timeout；
+- worker crash；
+- task done 但 receipt missing；
+- task failed 但 node 仍 running；
+- node running 但 task/run 消失；
+- retry/rerun policy；
+- terminal node fact 不可静默改写；
+- recovery event 和 operator audit。
+
+这部分比 dashboard UI 更接近长期任务生产运行的必需条件。
+
 ## Phase 4D: Concurrency / Safety Hardening
 
 ### 目标
@@ -324,6 +367,7 @@ worker recovery 仍依赖已有 Kanban task/run/evidence 机制和后续策略�
 
 安全：
 
+- runtime capability policy；
 - permission policy；
 - destructive action policy；
 - credentials/secrets human gate；
@@ -381,6 +425,7 @@ worker recovery 仍依赖已有 Kanban task/run/evidence 机制和后续策略�
 
 仍需后续补强：
 
+- runtime capability policy；
 - destructive action policy；
 - external cost policy；
 - credentials/secrets policy；
@@ -390,11 +435,28 @@ worker recovery 仍依赖已有 Kanban task/run/evidence 机制和后续策略�
 - checkpoint restore validation command；
 - provider backoff policy。
 
+Runtime capability policy 是后续安全 hardening 的核心对象。Provider 和 worker
+都可能提出动作，但最终必须由本地策略判断某类 node、lane 或 worker 是否允许：
+
+- 读写文件系统；
+- 访问 workspace 外路径；
+- 访问网络；
+- 使用凭证或 secret；
+- 调用外部付费 API；
+- 执行 git 操作；
+- 执行数据库迁移；
+- 执行破坏性命令。
+
+模型可以 propose `request_human` 或 `strategy_update`，但不能自行判断这些
+安全边界。Capability policy 应尽量成为 validator、worker lane、dashboard API
+和 CLI 共享的策略对象，避免安全规则散落在多处。
+
 ## Phase 4 完成定义
 
 Phase 4 完成时，Hermes Runtime Kernel 应具备：
 
-- 真实 decision provider；
+- 真实 decision provider 已由 Phase 3 集成，并在 Phase 4 中继续受
+  audit、observability、retry/backoff 和 validator recovery 边界约束；
 - 真实 compaction provider + deterministic fallback；
 - job-level decision session segmentation/checkpoint lifecycle；
 - goal contract / progress ledger / gap detector；
@@ -407,6 +469,20 @@ Phase 4 完成时，Hermes Runtime Kernel 应具备：
 - complete audit trail。
 
 此时系统才可以从“runtime kernel prototype”进入“可长期运行的生产 runtime”。
+
+Production complete 之前还必须补一类 synthetic long-run soak test。这个测试不
+一定要真实运行数小时，但至少要模拟几十到上百次
+decision / patch / validator / compaction cycle，覆盖：
+
+- 多次 segment compaction；
+- 旧 transcript 不进入新 provider input；
+- stale checkpoint 被拒绝；
+- deterministic fallback 生效但可观测；
+- fallback streak 触发 quality degraded / operator attention；
+- supervisor lease 释放和过期抢占；
+- materialization 不重复；
+- goal 未完成时不静默停止；
+- liveness violation 能触发 gap decision / strategy update。
 
 ## 当前验证命令
 

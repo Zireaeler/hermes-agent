@@ -513,7 +513,23 @@ stale checkpoint / materialization idempotency / provider fallback tests
 Phase 4 MVP 的含义是：生产 hardening 的核心 runtime 闭环已经在代码中成立。
 它不等于完整 production final。常驻 daemon、dashboard 前端 UI、完整 worker
 crash/stale recovery、destructive/cost/credential safety policy、event replay
-checker 和真实 compaction provider soak 仍属于后续补强。
+checker、runtime capability policy 和真实 compaction provider smoke/soak 仍属于后续补强。
+
+Phase 4 的完成定义需要区分 Phase 3 前提和 Phase 4 新增能力：真实 decision
+provider 已在 Phase 3 集成，Phase 4 继续要求它受 audit、observability、
+retry/backoff 和 validator recovery 约束；Phase 4 自己新增的是真实
+compaction provider 边界、observability、supervisor/recovery、concurrency 和
+safety hardening。
+
+建议后续新增：
+
+```text
+Phase 4E Worker Recovery Policy
+```
+
+Phase 4E 专门处理 stale materialization、run timeout、worker crash、task done
+但 receipt missing、task failed 但 node running、node running 但 task/run
+消失、retry/rerun policy，以及 terminal node fact 不可静默改写。
 
 ## 15. 当前实现优先级
 
@@ -526,13 +542,13 @@ Phase 4 productionization follow-through
 dashboard runtime UI
       |
       v
-worker stale/crash recovery policy
+Phase 4E worker stale/crash recovery policy
       |
       v
-security policy and replay validation
+runtime capability/security policy and replay validation
       |
       v
-real compaction provider smoke/soak
+real compaction provider smoke/soak and synthetic long-run tests
 ```
 
 原因：
@@ -547,3 +563,9 @@ compaction provider 边界已接入，但真实模型 compaction 还需要 smoke
 
 并发和 idempotency 已有关键测试，但 destructive action、external cost、
 credential、workspace boundary 和 event replay 仍需要专门 hardening。
+
+Production complete 前还需要一类 synthetic long-run soak：模拟几十到上百次
+decision / patch / validator / compaction cycle，多次 segment compaction，
+确认旧 transcript 不进入 provider input、stale checkpoint 被拒绝、fallback
+可观测、supervisor lease 可释放/抢占、materialization 不重复，且 goal 未完成
+时不会静默停止。
