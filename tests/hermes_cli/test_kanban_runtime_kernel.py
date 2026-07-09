@@ -158,6 +158,8 @@ def test_schema_initializes_runtime_tables(conn):
         "decision_segment_entries",
         "decision_checkpoints",
         "node_artifacts",
+        "runtime_capability_policies",
+        "runtime_capability_authorizations",
     }.issubset(tables)
 
 
@@ -229,6 +231,77 @@ def test_patch_rejects_stale_revision(conn):
     assert "expected_revision" in result["reason"]
 
 
+def test_patch_validator_rejects_unknown_or_self_authorized_capability(conn):
+    job_id = _job(conn)
+    unknown = rk.apply_graph_patch(
+        conn,
+        job_id,
+        _patch(
+            job_id,
+            _revision(conn, job_id),
+            {
+                "op": "create_node",
+                "node_key": "network-thing",
+                "node_type": "implementation",
+                "title": "Network thing",
+                "description": "Request an unknown capability.",
+                "goal_item_keys": ["initial-runtime-result"],
+                "requested_capabilities": ["not_a_capability"],
+            },
+        ),
+    )
+    assert unknown["status"] == "rejected"
+    assert "unknown capability" in unknown["reason"]
+
+    self_authorized = rk.apply_graph_patch(
+        conn,
+        job_id,
+        _patch(
+            job_id,
+            _revision(conn, job_id),
+            {
+                "op": "create_node",
+                "node_key": "self-authorized",
+                "node_type": "implementation",
+                "title": "Self authorized",
+                "description": "Provider must not write runtime policy.",
+                "goal_item_keys": ["initial-runtime-result"],
+                "metadata": {"capability_policy": {"allowed": ["secret_access"]}},
+            },
+        ),
+    )
+    assert self_authorized["status"] == "rejected"
+    assert "capability_policy" in self_authorized["reason"]
+
+
+def test_patch_validator_accepts_capability_human_request_shape(conn):
+    job_id = _job(conn)
+    result = rk.apply_graph_patch(
+        conn,
+        job_id,
+        _patch(
+            job_id,
+            _revision(conn, job_id),
+            {
+                "op": "request_human",
+                "node_key": "authorize-secret",
+                "decision_type": "permission",
+                "question": "Allow secret access?",
+                "why_user_required": "Secret access can expose credentials.",
+                "risk_if_defaulted": "The node remains blocked.",
+                "default_recommendation": "Do not allow unless credentials are required.",
+                "goal_item_keys": ["initial-runtime-result"],
+                "capability_request": {
+                    "capabilities": ["secret_access"],
+                    "scope": "job",
+                    "reason": "Worker needs a credential to continue.",
+                },
+            },
+        ),
+    )
+    assert result["status"] == "applied"
+
+
 def test_dependency_cycle_rejected(conn):
     job_id = _job(conn)
     for node_key in ("a", "b"):
@@ -296,6 +369,210 @@ def test_materialization_is_idempotent(conn):
     assert first.materialized_nodes == ["understand-scope"]
     assert second.materialized_nodes == []
     assert conn.execute("SELECT COUNT(*) FROM node_materializations WHERE job_id = ?", (job_id,)).fetchone()[0] == 1
+
+
+def test_default_allowed_capabilities_materialize_and_reach_worker_context(conn):
+    job_id = _job(conn)
+    result = rk.apply_graph_patch(
+        conn,
+        job_id,
+        _patch(
+            job_id,
+            _revision(conn, job_id),
+            {
+                "op": "create_node",
+                "node_key": "allowed-workspace-work",
+                "node_type": "implementation",
+                "title": "Allowed workspace work",
+                "description": "Run ordinary workspace implementation.",
+                "goal_item_keys": ["initial-runtime-result"],
+                "requested_capabilities": ["workspace_write", "process_spawn"],
+            },
+        ),
+    )
+    assert result["status"] == "applied"
+    node = _node(conn, job_id, "allowed-workspace-work")
+    task_id = rk.materialize_runtime_node(conn, dict(node))
+    assert task_id
+    body = kb.get_task(conn, task_id).body or ""
+    assert "runtime_capability_policy" in body
+    assert "workspace_write" in body
+    assert "process_spawn" in body
+    assert conn.execute("SELECT COUNT(*) FROM node_materializations WHERE node_id = ?", (node["id"],)).fetchone()[0] == 1
+
+
+def test_denied_capability_does_not_materialize_and_is_observable(conn):
+    job_id = _job(conn)
+    assert rk.apply_graph_patch(
+        conn,
+        job_id,
+        _patch(
+            job_id,
+            _revision(conn, job_id),
+            {
+                "op": "create_node",
+                "node_key": "network-node",
+                "node_type": "research",
+                "title": "Network node",
+                "description": "Try to use network access.",
+                "goal_item_keys": ["initial-runtime-result"],
+                "requested_capabilities": ["network_access"],
+            },
+        ),
+    )["status"] == "applied"
+    node = _node(conn, job_id, "network-node")
+
+    assert rk.materialize_runtime_node(conn, dict(node)) is None
+
+    node = _node(conn, job_id, "network-node")
+    assert node["state"] == "blocked"
+    assert conn.execute("SELECT COUNT(*) FROM node_materializations WHERE node_id = ?", (node["id"],)).fetchone()[0] == 0
+    assert rk.runtime_legal_waiting_reason(conn, job_id) == "blocked_by_policy"
+    summary = rk.summarize_runtime_capabilities(conn, job_id)
+    assert summary["blocked_nodes"][0]["status"] == "denied"
+    assert summary["blocked_nodes"][0]["denied"] == ["network_access"]
+    events = [row["event_type"] for row in conn.execute("SELECT event_type FROM execution_events WHERE job_id = ?", (job_id,))]
+    assert "capability_denied" in events
+    assert "capability_policy_blocked" in events
+
+
+def test_require_human_capability_waits_for_authorization_then_materializes(conn):
+    job_id = _job(conn)
+    assert rk.apply_graph_patch(
+        conn,
+        job_id,
+        _patch(
+            job_id,
+            _revision(conn, job_id),
+            {
+                "op": "create_node",
+                "node_key": "secret-node",
+                "node_type": "implementation",
+                "title": "Secret node",
+                "description": "Use a secret only after authorization.",
+                "goal_item_keys": ["initial-runtime-result"],
+                "requested_capabilities": ["secret_access"],
+            },
+        ),
+    )["status"] == "applied"
+    node = _node(conn, job_id, "secret-node")
+    assert rk.materialize_runtime_node(conn, dict(node)) is None
+    assert _node(conn, job_id, "secret-node")["state"] == "waiting_human"
+    assert rk.runtime_legal_waiting_reason(conn, job_id) == "waiting_capability_authorization"
+
+    authorization = rk.authorize_runtime_capability(
+        conn,
+        job_id,
+        ["secret_access"],
+        reason="User approved secret access for this job.",
+    )
+
+    assert authorization["reenabled_nodes"] == ["secret-node"]
+    node = _node(conn, job_id, "secret-node")
+    assert node["state"] == "ready"
+    assert rk.materialize_runtime_node(conn, dict(node))
+    assert _node(conn, job_id, "secret-node")["state"] == "running"
+
+
+def test_expired_or_revoked_authorization_does_not_allow_capability(conn):
+    job_id = _job(conn)
+    now = rk._now()
+    for status, expires_at, revoked_at in (("active", now - 1, None), ("revoked", None, now)):
+        conn.execute(
+            """
+            INSERT INTO runtime_capability_authorizations (
+                id, job_id, scope_type, scope_ref, capabilities_json, status,
+                expires_at, revoked_at, reason, created_at, updated_at, metadata_json
+            ) VALUES (?, ?, 'job', NULL, ?, ?, ?, ?, 'test invalid auth', ?, ?, '{}')
+            """,
+            (f"auth_{status}", job_id, json.dumps(["secret_access"]), status, expires_at, revoked_at, now, now),
+        )
+    assert rk.apply_graph_patch(
+        conn,
+        job_id,
+        _patch(
+            job_id,
+            _revision(conn, job_id),
+            {
+                "op": "create_node",
+                "node_key": "secret-invalid-auth",
+                "node_type": "implementation",
+                "title": "Secret invalid auth",
+                "description": "Invalid auth must not allow this.",
+                "goal_item_keys": ["initial-runtime-result"],
+                "requested_capabilities": ["secret_access"],
+            },
+        ),
+    )["status"] == "applied"
+    node = _node(conn, job_id, "secret-invalid-auth")
+    assert rk.materialize_runtime_node(conn, dict(node)) is None
+    assert _node(conn, job_id, "secret-invalid-auth")["state"] == "waiting_human"
+
+
+def test_human_authorization_cannot_override_hard_deny(conn):
+    job_id = _job(conn)
+    rk.authorize_runtime_capability(
+        conn,
+        job_id,
+        ["network_access"],
+        reason="Even explicit authorization cannot override hard deny.",
+    )
+    assert rk.apply_graph_patch(
+        conn,
+        job_id,
+        _patch(
+            job_id,
+            _revision(conn, job_id),
+            {
+                "op": "create_node",
+                "node_key": "network-still-denied",
+                "node_type": "research",
+                "title": "Network still denied",
+                "description": "Hard deny wins over authorization.",
+                "goal_item_keys": ["initial-runtime-result"],
+                "requested_capabilities": ["network_access"],
+            },
+        ),
+    )["status"] == "applied"
+    node = _node(conn, job_id, "network-still-denied")
+    assert rk.materialize_runtime_node(conn, dict(node)) is None
+    summary = rk.summarize_runtime_capabilities(conn, job_id)
+    assert summary["active_authorizations"][0]["capabilities"] == ["network_access"]
+    assert summary["blocked_nodes"][0]["status"] == "denied"
+
+
+def test_lane_physical_incapability_wins_over_authorization(conn):
+    job_id = _job(conn)
+    rk.authorize_runtime_capability(
+        conn,
+        job_id,
+        ["process_spawn"],
+        reason="User authorization cannot add a capability the lane lacks.",
+    )
+    assert rk.apply_graph_patch(
+        conn,
+        job_id,
+        _patch(
+            job_id,
+            _revision(conn, job_id),
+            {
+                "op": "create_node",
+                "node_key": "lane-lacks-process",
+                "node_type": "implementation",
+                "title": "Lane lacks process",
+                "description": "Lane cannot spawn processes.",
+                "goal_item_keys": ["initial-runtime-result"],
+                "requested_capabilities": ["process_spawn"],
+            },
+        ),
+    )["status"] == "applied"
+    node = _node(conn, job_id, "lane-lacks-process")
+    metadata = json.loads(node["metadata_json"])
+    metadata["capability_policy"] = {"lane_incapable": ["process_spawn"]}
+    conn.execute("UPDATE execution_nodes SET metadata_json = ? WHERE id = ?", (json.dumps(metadata), node["id"]))
+    assert rk.materialize_runtime_node(conn, dict(_node(conn, job_id, "lane-lacks-process"))) is None
+    summary = rk.summarize_runtime_capabilities(conn, job_id)
+    assert summary["blocked_nodes"][0]["status"] == "lane_incapable"
 
 
 def test_reconcile_missing_task_schedules_retry_attempt(conn):
@@ -660,6 +937,34 @@ def test_observability_snapshot_exposes_recovery_and_consistency(conn):
     assert payload["recovery"]["open_recovery_events"]
     assert payload["consistency"]["status"] == "failed"
     assert any(item["type"] == "materialization_task_missing" for item in payload["consistency"]["violations"])
+
+
+def test_observability_snapshot_exposes_capability_policy(conn):
+    job_id = _job(conn)
+    assert rk.apply_graph_patch(
+        conn,
+        job_id,
+        _patch(
+            job_id,
+            _revision(conn, job_id),
+            {
+                "op": "create_node",
+                "node_key": "needs-secret",
+                "node_type": "implementation",
+                "title": "Needs secret",
+                "description": "Needs a human capability authorization.",
+                "goal_item_keys": ["initial-runtime-result"],
+                "requested_capabilities": ["secret_access"],
+            },
+        ),
+    )["status"] == "applied"
+    rk.materialize_runtime_node(conn, dict(_node(conn, job_id, "needs-secret")))
+
+    payload = rd.runtime_observability_snapshot(conn, job_id)
+
+    assert payload["legal_waiting_reason"] == "waiting_capability_authorization"
+    assert payload["capabilities"]["pending_authorizations"][0]["node_key"] == "needs-secret"
+    assert payload["capabilities"]["policy_resolution_order"][0] == "lane/backend physical incapability"
 
 
 def test_advance_lock_is_exclusive_and_expires(conn):

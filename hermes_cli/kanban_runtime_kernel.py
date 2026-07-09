@@ -118,6 +118,43 @@ RECOVERY_EVENT_TYPES = {
     "legal_waiting_reason_updated",
 }
 
+RUNTIME_CAPABILITIES = {
+    "filesystem_read",
+    "filesystem_write",
+    "workspace_write",
+    "workspace_escape",
+    "network_access",
+    "secret_access",
+    "external_cost",
+    "destructive_action",
+    "git_read",
+    "git_write",
+    "db_read",
+    "db_migration",
+    "process_spawn",
+    "long_running_process",
+}
+
+POLICY_RESOLUTION_ORDER = [
+    "lane/backend physical incapability",
+    "hard deny",
+    "unresolved require_human",
+    "valid human authorization",
+    "job policy",
+    "workspace/lane policy",
+    "global default",
+]
+
+CAPABILITY_EVENT_TYPES = {
+    "capability_policy_created",
+    "capability_policy_updated",
+    "capability_request_evaluated",
+    "capability_denied",
+    "capability_requires_human",
+    "capability_authorized",
+    "capability_policy_blocked",
+}
+
 RECOVERY_FAILURE_STATUSES = {
     "lost",
     "stale",
@@ -150,6 +187,29 @@ DEFAULT_RUNTIME_RECOVERY_POLICY = {
     ],
 }
 
+DEFAULT_RUNTIME_CAPABILITY_POLICY = {
+    "policy_revision": 1,
+    "allow_by_default": [
+        "filesystem_read",
+        "workspace_write",
+        "git_read",
+        "process_spawn",
+    ],
+    "require_human": [
+        "workspace_escape",
+        "secret_access",
+        "external_cost",
+        "destructive_action",
+        "git_write",
+        "db_migration",
+        "long_running_process",
+    ],
+    "deny_by_default": [
+        "network_access",
+        "db_read",
+    ],
+}
+
 
 def _now() -> int:
     return int(time.time())
@@ -172,6 +232,34 @@ def _loads(raw: Any, default: Any = None) -> Any:
         return json.loads(raw)
     except (TypeError, json.JSONDecodeError):
         return {} if default is None else default
+
+
+def _loads_list(raw: Any) -> list[Any]:
+    value = _loads(raw, default=[])
+    return value if isinstance(value, list) else []
+
+
+def _normalize_capability_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    items = value if isinstance(value, list) else [value]
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        key = str(item or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        normalized.append(key)
+    return normalized
+
+
+def _validate_capabilities(capabilities: Any, *, field_name: str = "requested_capabilities") -> list[str]:
+    normalized = _normalize_capability_list(capabilities)
+    unknown = [key for key in normalized if key not in RUNTIME_CAPABILITIES]
+    if unknown:
+        raise PatchValidationError(f"{field_name} contains unknown capability {unknown[0]!r}")
+    return normalized
 
 
 def _row_to_dict(row: sqlite3.Row | None) -> Optional[dict[str, Any]]:
@@ -464,6 +552,39 @@ def ensure_runtime_schema(conn: sqlite3.Connection) -> None:
             created_at INTEGER NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS runtime_capability_policies (
+            id TEXT PRIMARY KEY,
+            job_id TEXT,
+            scope_type TEXT NOT NULL,
+            scope_ref TEXT,
+            policy_revision INTEGER NOT NULL DEFAULT 1,
+            allow_json TEXT NOT NULL DEFAULT '[]',
+            deny_json TEXT NOT NULL DEFAULT '[]',
+            require_human_json TEXT NOT NULL DEFAULT '[]',
+            defaults_json TEXT NOT NULL DEFAULT '{}',
+            source TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+
+        CREATE TABLE IF NOT EXISTS runtime_capability_authorizations (
+            id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL,
+            scope_type TEXT NOT NULL,
+            scope_ref TEXT,
+            capabilities_json TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL,
+            expires_at INTEGER,
+            revoked_at INTEGER,
+            source_event_id INTEGER,
+            source_human_decision_id TEXT,
+            reason TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+
         CREATE INDEX IF NOT EXISTS idx_runtime_jobs_state ON runtime_jobs(state);
         CREATE INDEX IF NOT EXISTS idx_runtime_nodes_job_state ON execution_nodes(job_id, state);
         CREATE INDEX IF NOT EXISTS idx_runtime_events_job ON execution_events(job_id, id);
@@ -472,6 +593,8 @@ def ensure_runtime_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_decision_segments_job_state ON decision_session_segments(job_id, state);
         CREATE INDEX IF NOT EXISTS idx_decision_entries_segment_order ON decision_segment_entries(segment_id, entry_index);
         CREATE INDEX IF NOT EXISTS idx_decision_entries_job_order ON decision_segment_entries(job_id, id);
+        CREATE INDEX IF NOT EXISTS idx_runtime_capability_policies_job ON runtime_capability_policies(job_id, scope_type, scope_ref);
+        CREATE INDEX IF NOT EXISTS idx_runtime_capability_authorizations_job ON runtime_capability_authorizations(job_id, status, scope_type, scope_ref);
         """
     )
     _ensure_column(conn, "decision_sessions", "active_segment_id", "TEXT")
@@ -627,6 +750,348 @@ def _goal_item_optional(conn: sqlite3.Connection, job_id: str, item_key: str) ->
         (contract["id"], item_key),
     ).fetchone()
     return dict(row) if row else None
+
+
+def _node_capability_metadata(op: dict[str, Any]) -> dict[str, Any]:
+    metadata = op.get("metadata")
+    if isinstance(metadata, dict) and metadata.get("capability_policy") is not None:
+        raise PatchValidationError("LLM patch must not write capability_policy")
+    if op.get("capability_policy") is not None:
+        raise PatchValidationError("LLM patch must not write capability_policy")
+    requested = _validate_capabilities(op.get("requested_capabilities") or [], field_name="requested_capabilities")
+    return {"requested_capabilities": requested}
+
+
+def _merge_capability_overrides(policy: dict[str, Any], override: dict[str, Any]) -> None:
+    for target, *aliases in (
+        ("allow_by_default", "allow_by_default", "allowed", "allow"),
+        ("require_human", "require_human", "requires_human"),
+        ("deny_by_default", "deny_by_default", "denied", "deny"),
+    ):
+        for alias in aliases:
+            if alias in override:
+                policy[target] = _validate_capabilities(override.get(alias), field_name=f"runtime_capability_policy.{alias}")
+                break
+    if override.get("policy_revision") is not None:
+        try:
+            policy["policy_revision"] = max(int(policy.get("policy_revision") or 1), int(override["policy_revision"]))
+        except (TypeError, ValueError):
+            pass
+
+
+def _capability_policy_rows(conn: sqlite3.Connection, job_id: str) -> list[dict[str, Any]]:
+    return [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT * FROM runtime_capability_policies
+             WHERE job_id IS NULL OR job_id = ?
+             ORDER BY
+               CASE scope_type
+                 WHEN 'global_default' THEN 0
+                 WHEN 'workspace' THEN 1
+                 WHEN 'lane' THEN 2
+                 WHEN 'job' THEN 3
+                 WHEN 'node_type' THEN 4
+                 ELSE 5
+               END,
+               policy_revision ASC,
+               created_at ASC
+            """,
+            (job_id,),
+        ).fetchall()
+    ]
+
+
+def _active_capability_authorizations(
+    conn: sqlite3.Connection,
+    job_id: str,
+    *,
+    now: Optional[int] = None,
+) -> list[dict[str, Any]]:
+    current = _now() if now is None else int(now)
+    rows = conn.execute(
+        """
+        SELECT * FROM runtime_capability_authorizations
+         WHERE job_id = ?
+         ORDER BY created_at ASC, id ASC
+        """,
+        (job_id,),
+    ).fetchall()
+    active: list[dict[str, Any]] = []
+    for row in rows:
+        auth = dict(row)
+        if str(auth.get("status") or "") != "active":
+            continue
+        expires_at = auth.get("expires_at")
+        if expires_at is not None and int(expires_at) <= current:
+            continue
+        if auth.get("revoked_at") is not None:
+            continue
+        auth["capabilities"] = _normalize_capability_list(_loads_list(auth.get("capabilities_json")))
+        active.append(auth)
+    return active
+
+
+def build_runtime_capability_policy(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
+    """Build the local runtime capability policy for a job.
+
+    This is a fact-layer policy view. Decision providers may request
+    capabilities, but this function decides what the runtime can execute.
+    """
+
+    ensure_runtime_schema(conn)
+    job = _job(conn, job_id)
+    policy: dict[str, Any] = {
+        "policy_revision": int(DEFAULT_RUNTIME_CAPABILITY_POLICY["policy_revision"]),
+        "allow_by_default": list(DEFAULT_RUNTIME_CAPABILITY_POLICY["allow_by_default"]),
+        "require_human": list(DEFAULT_RUNTIME_CAPABILITY_POLICY["require_human"]),
+        "deny_by_default": list(DEFAULT_RUNTIME_CAPABILITY_POLICY["deny_by_default"]),
+        "policy_resolution_order": list(POLICY_RESOLUTION_ORDER),
+        "source": "default",
+    }
+    metadata = _loads(job.get("metadata_json"))
+    job_override = metadata.get("runtime_capability_policy")
+    if isinstance(job_override, dict):
+        _merge_capability_overrides(policy, job_override)
+        policy["source"] = "job_metadata"
+    for row in _capability_policy_rows(conn, job_id):
+        override = {
+            "policy_revision": row.get("policy_revision"),
+            "allow_by_default": _loads_list(row.get("allow_json")),
+            "deny_by_default": _loads_list(row.get("deny_json")),
+            "require_human": _loads_list(row.get("require_human_json")),
+        }
+        _merge_capability_overrides(policy, override)
+        policy["source"] = str(row.get("source") or "runtime_capability_policies")
+    policy["allow_by_default"] = sorted(set(policy["allow_by_default"]))
+    policy["require_human"] = sorted(set(policy["require_human"]))
+    policy["deny_by_default"] = sorted(set(policy["deny_by_default"]))
+    policy["active_authorizations"] = [
+        {
+            "id": auth["id"],
+            "scope_type": auth["scope_type"],
+            "scope_ref": auth["scope_ref"],
+            "capabilities": auth["capabilities"],
+            "expires_at": auth["expires_at"],
+            "source_event_id": auth["source_event_id"],
+            "source_human_decision_id": auth["source_human_decision_id"],
+            "reason": auth["reason"],
+        }
+        for auth in _active_capability_authorizations(conn, job_id)
+    ]
+    return policy
+
+
+def _authorization_matches_node(auth: dict[str, Any], node: dict[str, Any], capability: str) -> bool:
+    if capability not in set(auth.get("capabilities") or []):
+        return False
+    scope_type = str(auth.get("scope_type") or "")
+    scope_ref = auth.get("scope_ref")
+    if scope_type == "job":
+        return scope_ref in {None, "", node["job_id"]}
+    if scope_type == "node":
+        return scope_ref in {node["id"], node["node_key"]}
+    return False
+
+
+def _node_lane_incapable_capabilities(node: dict[str, Any]) -> list[str]:
+    metadata = _loads(node.get("metadata_json"))
+    policy = metadata.get("capability_policy")
+    if not isinstance(policy, dict):
+        return []
+    return _normalize_capability_list(
+        policy.get("lane_incapable")
+        or policy.get("backend_incapable")
+        or policy.get("physical_incapability")
+        or []
+    )
+
+
+def evaluate_node_capability_policy(
+    conn: sqlite3.Connection,
+    job_id: str,
+    node: dict[str, Any],
+    *,
+    now: Optional[int] = None,
+) -> dict[str, Any]:
+    ensure_runtime_schema(conn)
+    policy = build_runtime_capability_policy(conn, job_id)
+    metadata = _loads(node.get("metadata_json"))
+    requested = _validate_capabilities(metadata.get("requested_capabilities") or [], field_name="node.requested_capabilities")
+    active_authorizations = _active_capability_authorizations(conn, job_id, now=now)
+    lane_incapable = set(_node_lane_incapable_capabilities(node))
+    allowed: list[str] = []
+    denied: list[str] = []
+    requires_human: list[str] = []
+    authorized: list[str] = []
+    lane_blocked: list[str] = []
+    deny_set = set(policy["deny_by_default"])
+    require_set = set(policy["require_human"])
+    allow_set = set(policy["allow_by_default"])
+    for capability in requested:
+        if capability in lane_incapable:
+            lane_blocked.append(capability)
+            denied.append(capability)
+            continue
+        if capability in deny_set:
+            denied.append(capability)
+            continue
+        matching_auth = any(_authorization_matches_node(auth, node, capability) for auth in active_authorizations)
+        if capability in require_set and not matching_auth:
+            requires_human.append(capability)
+            continue
+        if matching_auth:
+            authorized.append(capability)
+        if capability in allow_set or matching_auth:
+            allowed.append(capability)
+        else:
+            denied.append(capability)
+    if lane_blocked:
+        status = "lane_incapable"
+        reason = "lane/backend physical incapability"
+    elif denied:
+        status = "denied"
+        reason = "hard deny"
+    elif requires_human:
+        status = "requires_human"
+        reason = "human authorization required"
+    else:
+        status = "allowed"
+        reason = "allowed"
+    return {
+        "status": status,
+        "reason": reason,
+        "policy_revision": policy["policy_revision"],
+        "requested": requested,
+        "allowed": sorted(set(allowed)),
+        "denied": sorted(set(denied)),
+        "requires_human": sorted(set(requires_human)),
+        "authorized": sorted(set(authorized)),
+        "lane_incapable": sorted(set(lane_blocked)),
+        "defaults": {
+            "allowed_by_default": policy["allow_by_default"],
+            "denied_by_default": policy["deny_by_default"],
+            "require_human": policy["require_human"],
+        },
+        "policy_resolution_order": policy["policy_resolution_order"],
+    }
+
+
+def _store_node_capability_evaluation(
+    conn: sqlite3.Connection,
+    node: dict[str, Any],
+    evaluation: dict[str, Any],
+) -> None:
+    metadata = _loads(node.get("metadata_json"))
+    metadata["capability_policy"] = {
+        "status": evaluation["status"],
+        "reason": evaluation["reason"],
+        "policy_revision": evaluation["policy_revision"],
+        "requested": evaluation["requested"],
+        "allowed": evaluation["allowed"],
+        "denied": evaluation["denied"],
+        "requires_human": evaluation["requires_human"],
+        "authorized": evaluation["authorized"],
+        "lane_incapable": evaluation["lane_incapable"],
+        "defaults": evaluation["defaults"],
+    }
+    conn.execute(
+        "UPDATE execution_nodes SET metadata_json = ?, updated_at = ? WHERE id = ?",
+        (_json(metadata), _now(), node["id"]),
+    )
+
+
+def authorize_runtime_capability(
+    conn: sqlite3.Connection,
+    job_id: str,
+    capabilities: list[str],
+    *,
+    scope: str = "job",
+    scope_ref: Optional[str] = None,
+    reason: str,
+    expires_at: Optional[int] = None,
+    source_event_id: Optional[int] = None,
+    source_human_decision_id: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    ensure_runtime_schema(conn)
+    if scope not in {"job", "node"}:
+        raise ValueError("capability authorization scope must be job or node")
+    caps = _validate_capabilities(capabilities, field_name="capabilities")
+    if not caps:
+        raise ValueError("capabilities are required")
+    if not str(reason or "").strip():
+        raise ValueError("authorization reason is required")
+    now = _now()
+    auth_id = _id("cpauth")
+    conn.execute(
+        """
+        INSERT INTO runtime_capability_authorizations (
+            id, job_id, scope_type, scope_ref, capabilities_json, status,
+            expires_at, revoked_at, source_event_id, source_human_decision_id,
+            reason, created_at, updated_at, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, 'active', ?, NULL, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            auth_id,
+            job_id,
+            scope,
+            scope_ref,
+            _json(caps),
+            expires_at,
+            source_event_id,
+            source_human_decision_id,
+            str(reason).strip(),
+            now,
+            now,
+            _json(metadata or {}),
+        ),
+    )
+    event_id = _event(
+        conn,
+        job_id,
+        "capability_authorized",
+        {
+            "authorization_id": auth_id,
+            "capabilities": caps,
+            "scope": scope,
+            "scope_ref": scope_ref,
+            "expires_at": expires_at,
+            "status": "active",
+            "reason": str(reason).strip(),
+        },
+        source_event_id=source_event_id,
+    )
+    reenabled: list[str] = []
+    for row in conn.execute(
+        "SELECT * FROM execution_nodes WHERE job_id = ? AND state = 'waiting_human'",
+        (job_id,),
+    ).fetchall():
+        node = dict(row)
+        metadata_json = _loads(node.get("metadata_json"))
+        cap_policy = metadata_json.get("capability_policy")
+        if not isinstance(cap_policy, dict) or cap_policy.get("status") != "requires_human":
+            continue
+        evaluation = evaluate_node_capability_policy(conn, job_id, node)
+        _store_node_capability_evaluation(conn, node, evaluation)
+        if evaluation["status"] == "allowed":
+            conn.execute(
+                "UPDATE execution_nodes SET state = 'ready', updated_at = ? WHERE id = ?",
+                (now, node["id"]),
+            )
+            reenabled.append(node["node_key"])
+    reduce_runtime_job(conn, job_id)
+    return {
+        "id": auth_id,
+        "job_id": job_id,
+        "capabilities": caps,
+        "scope": scope,
+        "scope_ref": scope_ref,
+        "expires_at": expires_at,
+        "event_id": event_id,
+        "reenabled_nodes": reenabled,
+    }
 
 
 def _touch_job(conn: sqlite3.Connection, job_id: str, *, state: Optional[str] = None, bump_revision: bool = False) -> None:
@@ -998,6 +1463,7 @@ def status_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
         raise ValueError(f"unknown runtime job {job_id}")
     frontier = summarize_active_frontier(conn, job_id)
     liveness = summarize_liveness(conn, job_id, frontier)
+    capabilities = summarize_runtime_capabilities(conn, job_id)
     return {
         "job": job,
         "goal_contract": _row_to_dict(
@@ -1016,6 +1482,7 @@ def status_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
         "ledger_summary": summarize_progress_ledger(conn, job_id),
         "frontier_summary": frontier,
         "liveness": liveness,
+        "capabilities": capabilities,
     }
 
 
@@ -1066,6 +1533,7 @@ def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]
             raise PatchValidationError(f"unsupported patch op {name!r}")
         if name == "create_node":
             _validate_goal_linkage(op)
+            _node_capability_metadata(op)
             node_key = str(op.get("node_key") or "").strip()
             node_type = str(op.get("node_type") or "").strip()
             if not node_key or not str(op.get("title") or "").strip() or not str(op.get("description") or "").strip():
@@ -1109,6 +1577,7 @@ def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]
                 raise PatchValidationError(f"duplicate node_key {verifier_key!r}")
             if not (op.get("goal_item_keys") or op.get("gap_keys")):
                 raise PatchValidationError("insert_verifier requires goal_item_keys or gap_keys")
+            _node_capability_metadata(op)
             for key in op.get("goal_item_keys") or []:
                 _goal_item_by_key(conn, job_id, key)
         elif name == "request_human":
@@ -1118,6 +1587,15 @@ def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]
             for field_name in ("node_key", "question", "why_user_required", "default_recommendation"):
                 if not str(op.get(field_name) or "").strip():
                     raise PatchValidationError(f"request_human requires {field_name}")
+            cap_request = op.get("capability_request")
+            if cap_request is not None:
+                if not isinstance(cap_request, dict):
+                    raise PatchValidationError("capability_request must be an object")
+                _validate_capabilities(cap_request.get("capabilities") or [], field_name="capability_request.capabilities")
+                if not str(cap_request.get("reason") or "").strip():
+                    raise PatchValidationError("capability_request requires reason")
+                if not str(op.get("risk_if_defaulted") or "").strip():
+                    raise PatchValidationError("request_human capability authorization requires risk_if_defaulted")
         elif name == "propose_blocked":
             if str(op.get("blocker_type") or "") not in BLOCKER_TYPES:
                 raise PatchValidationError("propose_blocked requires a supported blocker_type")
@@ -1126,6 +1604,7 @@ def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]
                     raise PatchValidationError(f"propose_blocked requires {field_name}")
         elif name == "strategy_update":
             _validate_goal_or_gap_linkage(op, "strategy_update")
+            _node_capability_metadata(op)
             node_key = str(op.get("node_key") or "").strip()
             if not node_key or not str(op.get("title") or "").strip() or not str(op.get("description") or "").strip():
                 raise PatchValidationError("strategy_update requires node_key, title, and description")
@@ -1230,6 +1709,7 @@ def _apply_op(conn: sqlite3.Connection, job_id: str, op: dict[str, Any]) -> None
             "goal_item_keys": op.get("goal_item_keys") or [],
             "gap_keys": op.get("gap_keys") or [],
             "human_gate_reason": op.get("human_gate_reason"),
+            **_node_capability_metadata(op),
         }
         depends_on = op.get("depends_on") or []
         state = "waiting_dependency" if depends_on else "planned"
@@ -1277,6 +1757,7 @@ def _apply_op(conn: sqlite3.Connection, job_id: str, op: dict[str, Any]) -> None
             "gap_keys": op.get("gap_keys") or [],
             "assignee": op.get("assignee"),
             "depends_on": [op["target_node_key"]] if op.get("target_node_key") else [],
+            "requested_capabilities": op.get("requested_capabilities") or [],
         }
         _apply_op(conn, job_id, verifier_op)
         verifier = _node_by_key(conn, job_id, str(op["verifier_node_key"]))
@@ -1314,6 +1795,7 @@ def _apply_op(conn: sqlite3.Connection, job_id: str, op: dict[str, Any]) -> None
             "human_gate_reason": op.get("human_gate_reason"),
             "strategy_summary": op.get("strategy_summary"),
             "changes_from_previous_attempts": op.get("changes_from_previous_attempts") or [],
+            **_node_capability_metadata(op),
         }
         conn.execute(
             """
@@ -1468,6 +1950,84 @@ def summarize_liveness(conn: sqlite3.Connection, job_id: str, frontier: Optional
         "running_count": len(frontier["running"]),
         "waiting_human_count": len(frontier["waiting_human"]),
         "pending_decision": _has_pending_decision(conn, job_id),
+    }
+
+
+def summarize_runtime_capabilities(
+    conn: sqlite3.Connection,
+    job_id: str,
+    *,
+    limit: int = 20,
+) -> dict[str, Any]:
+    ensure_runtime_schema(conn)
+    policy = build_runtime_capability_policy(conn, job_id)
+    blocked_nodes: list[dict[str, Any]] = []
+    pending_authorizations: list[dict[str, Any]] = []
+    for row in conn.execute(
+        """
+        SELECT * FROM execution_nodes
+         WHERE job_id = ?
+           AND state IN ('ready', 'waiting_human', 'blocked', 'running')
+         ORDER BY created_at, node_key
+        """,
+        (job_id,),
+    ).fetchall():
+        node = dict(row)
+        metadata = _loads(node.get("metadata_json"))
+        requested = _normalize_capability_list(metadata.get("requested_capabilities") or [])
+        cap_policy = metadata.get("capability_policy")
+        if requested and not isinstance(cap_policy, dict):
+            cap_policy = evaluate_node_capability_policy(conn, job_id, node)
+        if not isinstance(cap_policy, dict):
+            continue
+        status = str(cap_policy.get("status") or "")
+        if status in {"denied", "lane_incapable", "requires_human"}:
+            entry = {
+                "node_key": node["node_key"],
+                "node_id": node["id"],
+                "state": node["state"],
+                "status": status,
+                "requested_capabilities": cap_policy.get("requested") or requested,
+                "allowed": cap_policy.get("allowed") or [],
+                "denied": cap_policy.get("denied") or [],
+                "requires_human": cap_policy.get("requires_human") or [],
+                "lane_incapable": cap_policy.get("lane_incapable") or [],
+                "reason": cap_policy.get("reason"),
+                "policy_revision": cap_policy.get("policy_revision"),
+            }
+            blocked_nodes.append(entry)
+            if status == "requires_human":
+                pending_authorizations.append(entry)
+    rows = conn.execute(
+        """
+        SELECT id, event_type, payload_json, created_at
+          FROM execution_events
+         WHERE job_id = ?
+           AND event_type IN (%s)
+         ORDER BY id DESC
+         LIMIT ?
+        """ % ",".join("?" for _ in CAPABILITY_EVENT_TYPES),
+        (job_id, *sorted(CAPABILITY_EVENT_TYPES), max(1, int(limit))),
+    ).fetchall()
+    recent = [
+        {
+            "id": int(row["id"]),
+            "event_type": row["event_type"],
+            "created_at": int(row["created_at"]),
+            "payload": _loads(row["payload_json"]),
+        }
+        for row in rows
+    ]
+    return {
+        "policy_revision": policy["policy_revision"],
+        "allowed_by_default": policy["allow_by_default"],
+        "require_human": policy["require_human"],
+        "denied_by_default": policy["deny_by_default"],
+        "policy_resolution_order": policy["policy_resolution_order"],
+        "blocked_nodes": blocked_nodes,
+        "pending_authorizations": pending_authorizations,
+        "active_authorizations": policy["active_authorizations"],
+        "recent_policy_events": recent,
     }
 
 
@@ -1991,6 +2551,11 @@ def runtime_legal_waiting_reason(conn: sqlite3.Connection, job_id: str) -> str:
     frontier = summarize_active_frontier(conn, job_id)
     if frontier["running"]:
         return "waiting_worker"
+    capability_summary = summarize_runtime_capabilities(conn, job_id, limit=5)
+    if capability_summary["pending_authorizations"]:
+        return "waiting_capability_authorization"
+    if any(item.get("status") in {"denied", "lane_incapable"} for item in capability_summary["blocked_nodes"]):
+        return "blocked_by_policy"
     if frontier["waiting_human"]:
         return "waiting_human"
     if _has_pending_decision(conn, job_id):
@@ -2348,6 +2913,12 @@ def reduce_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
     has_ready = counts.get("ready", 0) > 0
     has_pending_decision = _has_pending_decision(conn, job_id)
     complete = _completion_satisfied(conn, job_id)
+    capability_summary = summarize_runtime_capabilities(conn, job_id, limit=5)
+    has_pending_capability_authorization = bool(capability_summary["pending_authorizations"])
+    has_policy_block = any(
+        item.get("status") in {"denied", "lane_incapable"}
+        for item in capability_summary["blocked_nodes"]
+    )
     if complete:
         state = "done"
     elif has_human:
@@ -2356,6 +2927,10 @@ def reduce_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
         state = "waiting_worker"
     elif has_ready:
         state = "active"
+    elif has_pending_capability_authorization:
+        state = "waiting_human"
+    elif has_policy_block:
+        state = "blocked"
     elif gaps:
         state = "waiting_decision"
         _event_once(
@@ -3251,6 +3826,85 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
     if existing:
         return str(existing["task_id"])
     job = _job(conn, node["job_id"])
+    evaluation = evaluate_node_capability_policy(conn, job["id"], node)
+    _store_node_capability_evaluation(conn, node, evaluation)
+    metadata = _loads(node.get("metadata_json"))
+    metadata["capability_policy"] = {
+        "status": evaluation["status"],
+        "reason": evaluation["reason"],
+        "policy_revision": evaluation["policy_revision"],
+        "requested": evaluation["requested"],
+        "allowed": evaluation["allowed"],
+        "denied": evaluation["denied"],
+        "requires_human": evaluation["requires_human"],
+        "authorized": evaluation["authorized"],
+        "lane_incapable": evaluation["lane_incapable"],
+        "defaults": evaluation["defaults"],
+    }
+    node["metadata_json"] = _json(metadata)
+    if evaluation["requested"]:
+        _event(
+            conn,
+            job["id"],
+            "capability_request_evaluated",
+            {
+                "node_key": node["node_key"],
+                "requested_capabilities": evaluation["requested"],
+                "allowed": evaluation["allowed"],
+                "denied": evaluation["denied"],
+                "requires_human": evaluation["requires_human"],
+                "lane_incapable": evaluation["lane_incapable"],
+                "policy_revision": evaluation["policy_revision"],
+                "status": evaluation["status"],
+                "reason": evaluation["reason"],
+            },
+            node_id=node["id"],
+        )
+    if evaluation["status"] in {"denied", "lane_incapable", "requires_human"}:
+        next_state = "waiting_human" if evaluation["status"] == "requires_human" else "blocked"
+        event_type = "capability_requires_human" if evaluation["status"] == "requires_human" else "capability_denied"
+        now = _now()
+        conn.execute(
+            "UPDATE execution_nodes SET state = ?, updated_at = ? WHERE id = ?",
+            (next_state, now, node["id"]),
+        )
+        event_id = _event(
+            conn,
+            job["id"],
+            event_type,
+            {
+                "node_key": node["node_key"],
+                "requested_capabilities": evaluation["requested"],
+                "allowed": evaluation["allowed"],
+                "denied": evaluation["denied"],
+                "requires_human": evaluation["requires_human"],
+                "lane_incapable": evaluation["lane_incapable"],
+                "policy_revision": evaluation["policy_revision"],
+                "reason": evaluation["reason"],
+            },
+            node_id=node["id"],
+        )
+        _event(
+            conn,
+            job["id"],
+            "capability_policy_blocked",
+            {
+                "node_key": node["node_key"],
+                "status": evaluation["status"],
+                "event_id": event_id,
+                "legal_waiting_reason": "waiting_capability_authorization"
+                if evaluation["status"] == "requires_human"
+                else "blocked_by_policy",
+            },
+            node_id=node["id"],
+            source_event_id=event_id,
+        )
+        _touch_job(
+            conn,
+            job["id"],
+            state="waiting_human" if evaluation["status"] == "requires_human" else "blocked",
+        )
+        return None
     attempts = conn.execute(
         "SELECT COALESCE(MAX(attempt), 0) AS max_attempt FROM node_materializations WHERE node_id = ?",
         (node["id"],),
@@ -3299,6 +3953,9 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
 
 def _worker_context(conn: sqlite3.Connection, job: dict[str, Any], node: dict[str, Any], materialization_id: str) -> str:
     metadata = _loads(node.get("metadata_json"))
+    capability_policy = metadata.get("capability_policy")
+    if not isinstance(capability_policy, dict):
+        capability_policy = evaluate_node_capability_policy(conn, job["id"], node)
     dep_rows = conn.execute(
         """
         SELECT n.node_key, n.output_summary
@@ -3316,6 +3973,24 @@ def _worker_context(conn: sqlite3.Connection, job: dict[str, Any], node: dict[st
         "node_key": node["node_key"],
         "node_type": node["node_type"],
         "node_materialization_id": materialization_id,
+        "runtime_capability_policy": {
+            "policy_revision": capability_policy.get("policy_revision"),
+            "requested": capability_policy.get("requested") or [],
+            "allowed": sorted(
+                set((capability_policy.get("defaults") or {}).get("allowed_by_default") or [])
+                | set(capability_policy.get("allowed") or [])
+            ),
+            "denied": sorted(
+                set((capability_policy.get("defaults") or {}).get("denied_by_default") or [])
+                | set(capability_policy.get("denied") or [])
+            ),
+            "requires_human": sorted(
+                set((capability_policy.get("defaults") or {}).get("require_human") or [])
+                | set(capability_policy.get("requires_human") or [])
+            ),
+            "on_denied": "return receipt with verdict=blocked and blocked_reason=policy_blocked",
+            "on_requires_human": "return receipt with human_required=true",
+        },
     }
     return (
         f"# Runtime node\n\n"
@@ -3328,6 +4003,8 @@ def _worker_context(conn: sqlite3.Connection, job: dict[str, Any], node: dict[st
         "Expected receipt fields: verdict, summary, claimed_goal_items, "
         "partial_goal_items, unmet_goal_items, verification, artifacts, "
         "active_assumptions, rejected_approaches, known_failure_boundaries.\n\n"
+        "Capability policy: obey Runtime footer.runtime_capability_policy. "
+        "Do not perform denied actions; return blocked or human_required instead.\n\n"
         f"Runtime footer: {json.dumps(footer, sort_keys=True)}"
     )
 

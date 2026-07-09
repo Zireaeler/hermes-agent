@@ -1508,6 +1508,10 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     rt_consistency.add_argument("job_id")
     rt_consistency.add_argument("--json", action="store_true")
 
+    rt_capability = runtime_sub.add_parser("capability", help="Show runtime capability policy summary")
+    rt_capability.add_argument("job_id")
+    rt_capability.add_argument("--json", action="store_true")
+
     rt_list = runtime_sub.add_parser("list", aliases=["ls"], help="List runtime jobs")
     rt_list.add_argument("--state", default=None)
     rt_list.add_argument("--limit", type=int, default=50)
@@ -2101,6 +2105,8 @@ def _dispatch_runtime(args: argparse.Namespace) -> int:
         return _cmd_runtime_reconcile(args)
     if sub == "consistency":
         return _cmd_runtime_consistency(args)
+    if sub == "capability":
+        return _cmd_runtime_capability(args)
     if sub == "advance":
         return _cmd_runtime_advance(args)
     if sub == "supervise":
@@ -2383,6 +2389,30 @@ def _cmd_runtime_consistency(args: argparse.Namespace) -> int:
         f"violations={result['violation_count']} warnings={result['warning_count']}"
     )
     return 0 if result["status"] == "passed" else 1
+
+
+def _cmd_runtime_capability(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    with kb.connect() as conn:
+        result = rk.summarize_runtime_capabilities(conn, args.job_id)
+    if getattr(args, "json", False):
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+    print(
+        f"Runtime capability policy rev={result['policy_revision']} "
+        f"blocked={len(result['blocked_nodes'])} "
+        f"pending_authorizations={len(result['pending_authorizations'])} "
+        f"active_authorizations={len(result['active_authorizations'])}"
+    )
+    if result["blocked_nodes"]:
+        print("Blocked nodes:")
+        for node in result["blocked_nodes"]:
+            print(
+                f"  - {node['node_key']}: {node['status']} "
+                f"requested={','.join(node.get('requested_capabilities') or []) or '-'}"
+            )
+    return 0
 
 
 def _cmd_runtime_list(args: argparse.Namespace) -> int:

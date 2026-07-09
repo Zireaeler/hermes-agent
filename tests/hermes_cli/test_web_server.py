@@ -208,12 +208,17 @@ class TestWebServerEndpoints:
         assert snapshot.status_code == 200
         payload = snapshot.json()
         assert payload["job"]["id"] == job_id
-        assert {"goals", "graph", "decision_session", "liveness"}.issubset(payload)
+        assert {"goals", "graph", "decision_session", "liveness", "capabilities"}.issubset(payload)
 
         goals = self.client.get(f"/api/runtime/jobs/{job_id}/goals")
         assert goals.status_code == 200
         assert goals.json()["section"] == "goals"
         assert goals.json()["data"]["items"][0]["item_key"] == "initial-runtime-result"
+
+        capabilities = self.client.get(f"/api/runtime/jobs/{job_id}/capabilities")
+        assert capabilities.status_code == 200
+        assert capabilities.json()["section"] == "capabilities"
+        assert "workspace_write" in capabilities.json()["data"]["allowed_by_default"]
 
     def test_get_config_schema(self):
         resp = self.client.get("/api/config/schema")

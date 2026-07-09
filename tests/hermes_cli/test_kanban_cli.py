@@ -226,6 +226,17 @@ def test_run_slash_runtime_reconcile_and_consistency_json(kanban_home):
     assert inspected["recovery"]["open_recovery_events"]
 
 
+def test_run_slash_runtime_capability_json(kanban_home):
+    created = json.loads(kc.run_slash("runtime create 'capability runtime' --json"))
+    payload = json.loads(kc.run_slash(f"runtime capability {created['id']} --json"))
+
+    assert payload["policy_revision"] == 1
+    assert "workspace_write" in payload["allowed_by_default"]
+    assert "secret_access" in payload["require_human"]
+    assert "network_access" in payload["denied_by_default"]
+    assert payload["blocked_nodes"] == []
+
+
 def test_run_slash_context_output_format(kanban_home):
     out = kc.run_slash("create 'tech spec' --assignee alice --body 'write an RFC'")
     import re

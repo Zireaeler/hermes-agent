@@ -1518,6 +1518,7 @@ def runtime_observability_snapshot(
         "job": status["job"],
         "legal_waiting_reason": legal_waiting_reason,
         "recovery": recovery,
+        "capabilities": status.get("capabilities") or rk.summarize_runtime_capabilities(conn, job_id, limit=bounded),
         "consistency": {
             "status": consistency["status"],
             "violation_count": consistency["violation_count"],
