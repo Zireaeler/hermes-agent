@@ -1,4 +1,4 @@
-# Hermes Kanban Runtime Kernel Phase 4 实现计划
+# Hermes Kanban Runtime Kernel Phase 4 实现计划与落地状态
 
 Phase 4 的目标是把已经具备本地闭环和真实 decision provider 的 runtime kernel
 推进到生产化边界。Phase 4 不再证明“runtime 能不能持续推进”，而是补齐真实
@@ -23,6 +23,39 @@ Phase 4D Concurrency / Safety Hardening
 
 这四个阶段可以局部并行，但实现顺序建议从 4A 开始。原因是长期运行的 context
 生命周期必须先稳定，否则 dashboard 和 daemon 会放大错误上下文。
+
+## 当前落地状态
+
+Phase 4 的第一版生产化硬化实现已经落地在：
+
+```text
+6028c53 feat(kanban): harden runtime production phase4
+```
+
+这个提交完成的是 Phase 4 MVP，也就是生产 hardening 的核心 runtime 闭环：
+
+- real/fake/deterministic compaction provider 边界；
+- compaction checkpoint validator 和 deterministic fallback；
+- compaction provider audit；
+- 失败 compaction 不污染 active segment；
+- runtime observability snapshot；
+- CLI `runtime inspect`；
+- dashboard 只读 runtime API；
+- DB-backed supervisor lease；
+- CLI `runtime supervise`；
+- stale checkpoint、materialization idempotency、supervisor lease 互斥等测试。
+
+它不是完整生产最终态。以下能力仍属于后续补强：
+
+- 常驻 daemon / service packaging；
+- worker crash / timeout / stale run 的完整 recovery policy；
+- destructive action / external cost / credential / workspace boundary 的完整安全策略；
+- dashboard 前端 UI 页面；
+- event replay consistency checker；
+- 真实模型 compaction smoke 和长任务 soak 测试。
+
+因此当前状态应表述为：Phase 4 文档主干已经实现，Phase 4 MVP 已完成；严格
+production complete 仍需要后续运行化、UI 和安全策略补强。
 
 ## Phase 4A: Real Compaction Provider Integration
 
@@ -83,6 +116,40 @@ Checkpoint candidate 必须经过现有 checkpoint validator。validator 继续�
 - validator 拒绝错误 checkpoint 时不会污染 active segment；
 - deterministic fallback 仍可用。
 
+### 当前实现
+
+已实现：
+
+- `CompactionProviderRequest`
+- `CompactionProviderResult`
+- `RuntimeCompactionProvider`
+- `DeterministicCompactionProvider`
+- `build_compaction_provider_request()`
+- `render_compaction_prompt()`
+- `render_compaction_messages()`
+- `parse_compaction_checkpoint()`
+- provider-shaped `compact_decision_session()`
+
+CLI：
+
+```bash
+hermes kanban runtime compact <job_id> --provider deterministic --json
+hermes kanban runtime compact <job_id> --provider fake --json
+hermes kanban runtime compact <job_id> --provider real --model-provider <provider> --model <model> --json
+hermes kanban runtime compact <job_id> --provider real --codex-config --json
+hermes kanban runtime compact <job_id> --provider real --no-fallback --json
+```
+
+实现边界：
+
+- provider 调用是 no-tools single-shot；
+- provider 只能输出 checkpoint candidate；
+- graph patch JSON 会被 compaction parser 拒绝；
+- checkpoint 必须通过 `validate_decision_checkpoint()`；
+- provider rejected / parse_failed / provider_error 默认可 fallback 到 deterministic checkpoint；
+- `--no-fallback` 时 rejected checkpoint 只写审计 entry，不关闭 source segment；
+- 成功后旧 segment 标记 `compacted`，新 active segment 使用 checkpoint，不带旧 transcript 原文。
+
 ## Phase 4B: Runtime Observability / Dashboard API
 
 ### 目标
@@ -137,6 +204,38 @@ bounded summary 和 refs。
   liveness 还是 validator 问题；
 - 默认测试覆盖 API JSON shape。
 
+### 当前实现
+
+已实现只读 observability surface：
+
+- `runtime_observability_snapshot(conn, job_id, limit=50)`
+- CLI `runtime inspect <job_id> --json`
+- API `GET /api/runtime/jobs`
+- API `GET /api/runtime/jobs/{job_id}`
+- API `GET /api/runtime/jobs/{job_id}/{section}`
+
+支持的 section：
+
+```text
+goals
+ledger
+graph
+events
+patches
+decisions
+decision-session
+checkpoints
+compactions
+human-gates
+liveness
+```
+
+这些 API 只读，不直接修改 DB。写操作仍必须走 runtime command/API，例如
+advance、compact、waive-goal、human-decision、cancel/pause/resume。
+
+当前未实现 dashboard 前端 UI 页面；本阶段只提供 dashboard 可消费的 API/CLI
+结构。
+
 ## Phase 4C: Production Supervisor / Recovery
 
 ### 目标
@@ -182,6 +281,30 @@ Worker recovery：
 - stale worker run produces auditable event and recoverable state；
 - pause/cancel respected；
 - budget exhausted is resumable, not failed。
+
+### 当前实现
+
+已实现 DB-backed supervisor lease 和可测试 tick：
+
+- `acquire_runtime_advance_lock()`
+- `release_runtime_advance_lock()`
+- `supervisor_runtime_tick()`
+- `supervise_runtime_jobs_once()`
+- CLI `runtime supervise`
+
+CLI：
+
+```bash
+hermes kanban runtime supervise --job-id <job_id> --owner <owner> --json
+hermes kanban runtime supervise --limit 10 --owner <owner> --json
+```
+
+当前 supervisor 不持有 correctness 所需的隐藏内存。每次 tick 通过 DB lease
+保护同一 job 的 advance，并在 finally 中释放 lease。崩溃后依赖
+`claim_expires_at` TTL 被新 owner 接管。
+
+当前未实现完整常驻 daemon packaging，也未实现完整 stale worker run recovery；
+worker recovery 仍依赖已有 Kanban task/run/evidence 机制和后续策略补强。
 
 ## Phase 4D: Concurrency / Safety Hardening
 
@@ -230,6 +353,43 @@ Worker recovery：
 - repeated ingest/materialization is idempotent；
 - production failure modes不直接 corrupt runtime state。
 
+### 当前实现
+
+已实现或已有：
+
+- graph patch expected revision stale rejection；
+- checkpoint revision stale rejection；
+- compaction provider rejection 不替换 active segment；
+- deterministic fallback；
+- materialization idempotency；
+- supervisor lease 互斥和 TTL 接管；
+- compaction provider input/output/checkpoint audit；
+- runtime operator/API observability。
+
+测试覆盖：
+
+- fake compaction provider accepted checkpoint；
+- compaction provider graph patch output rejection；
+- provider checkpoint validator rejection；
+- fallback disabled 时 active segment preserved；
+- fallback enabled 时 deterministic checkpoint 接管；
+- stale checkpoint rejection；
+- supervisor lock exclusivity and expiry；
+- supervisor tick 不重复 materialization；
+- runtime inspect JSON shape；
+- runtime dashboard API shape。
+
+仍需后续补强：
+
+- destructive action policy；
+- external cost policy；
+- credentials/secrets policy；
+- workspace boundary checks；
+- event replay consistency checks；
+- failed worker retry/rerun policy；
+- checkpoint restore validation command；
+- provider backoff policy。
+
 ## Phase 4 完成定义
 
 Phase 4 完成时，Hermes Runtime Kernel 应具备：
@@ -247,3 +407,40 @@ Phase 4 完成时，Hermes Runtime Kernel 应具备：
 - complete audit trail。
 
 此时系统才可以从“runtime kernel prototype”进入“可长期运行的生产 runtime”。
+
+## 当前验证命令
+
+Phase 4 MVP 的默认验证必须保持离线，不依赖真实网络或 API key。
+
+已使用的验证命令：
+
+```bash
+scripts/run_tests.sh \
+  tests/hermes_cli/test_kanban_runtime_kernel.py \
+  tests/hermes_cli/test_kanban_runtime_decision.py \
+  tests/hermes_cli/test_kanban_cli.py \
+  -- --tb=short
+```
+
+结果：
+
+```text
+167 passed
+```
+
+Runtime dashboard API 的 focused 验证：
+
+```bash
+scripts/run_tests.sh tests/hermes_cli/test_web_server.py \
+  -- -k test_runtime_observability_api --tb=short
+```
+
+结果：
+
+```text
+1 passed
+```
+
+完整 `test_web_server.py` 在当前环境存在无关失败，主要是缺少 `requests`、
+`agent.model_metadata` patch 目标问题和 PTY websocket 测试问题；这些不是
+Phase 4 runtime API 引入的。

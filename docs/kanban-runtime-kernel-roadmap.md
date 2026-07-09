@@ -487,26 +487,63 @@ Phase 4D 做并发与安全 hardening。
 
 安全：validator hardening、permission policy、audit trail。
 
+### 当前落地状态
+
+Phase 4 MVP 已经落地，提交为：
+
+```text
+6028c53 feat(kanban): harden runtime production phase4
+```
+
+当前已经具备：
+
+```text
+real/fake/deterministic compaction provider boundary
+      |
+      v
+runtime inspect + dashboard read-only API observability
+      |
+      v
+DB-backed supervisor lease + runtime supervise
+      |
+      v
+stale checkpoint / materialization idempotency / provider fallback tests
+```
+
+Phase 4 MVP 的含义是：生产 hardening 的核心 runtime 闭环已经在代码中成立。
+它不等于完整 production final。常驻 daemon、dashboard 前端 UI、完整 worker
+crash/stale recovery、destructive/cost/credential safety policy、event replay
+checker 和真实 compaction provider soak 仍属于后续补强。
+
 ## 15. 当前实现优先级
 
 如果现在继续开发，推荐顺序：
 
 ```text
-real compaction provider integration
+Phase 4 productionization follow-through
       |
       v
-Phase 4B dashboard/API observability
+dashboard runtime UI
       |
       v
-Phase 4C/4D production supervisor and safety hardening
+worker stale/crash recovery policy
+      |
+      v
+security policy and replay validation
+      |
+      v
+real compaction provider smoke/soak
 ```
 
 原因：
 
-没有 goal-driven runtime，系统不知道为什么继续。
+Phase 4 MVP 已经补齐 runtime 的核心生产化边界，但还没有完整产品化运行形态。
 
-没有 decision session，LLM 无法长期理解任务。
+dashboard/API 已有读面，但还没有前端 UI。
 
-没有 compaction，长期任务无法稳定运行。
+supervisor tick 和 lease 已有，但还不是 packaged daemon。
 
-这三者是 Hermes Runtime Kernel 从“任务调度器”成为“长期任务执行系统”的关键路径。当前三者已经有本地基础实现，真实 decision provider 也已接入，Phase 3D 的长任务恢复和策略更新本地闭环已经完成；下一步应进入真实 compaction provider、dashboard/API 可观测性和生产 hardening。
+compaction provider 边界已接入，但真实模型 compaction 还需要 smoke/soak 验证。
+
+并发和 idempotency 已有关键测试，但 destructive action、external cost、
+credential、workspace boundary 和 event replay 仍需要专门 hardening。
