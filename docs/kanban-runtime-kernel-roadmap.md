@@ -525,11 +525,26 @@ safety hardening。
 
 ```text
 Phase 4E Worker Recovery Policy
+Phase 4F Runtime Capability / Security Policy
+Phase 4G Synthetic Long-Run Soak and Real Compaction Smoke
+Phase 4H Dashboard Runtime UI
 ```
 
 Phase 4E 专门处理 stale materialization、run timeout、worker crash、task done
 但 receipt missing、task failed 但 node running、node running 但 task/run
 消失、retry/rerun policy，以及 terminal node fact 不可静默改写。
+
+Phase 4F 专门把 destructive action、external cost、credential/secret、
+workspace boundary、network、git、database migration 等权限判断收敛成
+runtime capability policy，避免安全规则散落在 validator、worker lane、
+dashboard API 和 CLI。
+
+Phase 4G 专门做 synthetic long-run soak 与真实 compaction smoke。目标不是证明
+某个业务项目能完成，而是证明 runtime 本身能承受几十到上百次
+decision / patch / validator / compaction / reconcile cycle。
+
+Phase 4H 再做 dashboard runtime UI。UI 应消费前面阶段形成的稳定
+observability API，而不是提前展示一个 recovery 和 consistency 尚未稳定的系统。
 
 ## 15. 当前实现优先级
 
@@ -539,16 +554,16 @@ Phase 4E 专门处理 stale materialization、run timeout、worker crash、task 
 Phase 4 productionization follow-through
       |
       v
-dashboard runtime UI
-      |
-      v
 Phase 4E worker stale/crash recovery policy
       |
       v
-runtime capability/security policy and replay validation
+Phase 4F runtime capability/security policy and replay validation
       |
       v
-real compaction provider smoke/soak and synthetic long-run tests
+Phase 4G real compaction provider smoke/soak and synthetic long-run tests
+      |
+      v
+Phase 4H dashboard runtime UI
 ```
 
 原因：
@@ -563,6 +578,11 @@ compaction provider 边界已接入，但真实模型 compaction 还需要 smoke
 
 并发和 idempotency 已有关键测试，但 destructive action、external cost、
 credential、workspace boundary 和 event replay 仍需要专门 hardening。
+
+最优先的是 Phase 4E，因为真实长任务最先出问题的地方通常是 worker
+materialization、Kanban task/run、receipt、node state 和 progress ledger 之间
+的不一致。如果先做 dashboard UI 或继续扩展智能层，卡住时仍然无法判断是 worker
+状态脏、supervisor recovery 有 bug、compaction 降级，还是模型决策差。
 
 Production complete 前还需要一类 synthetic long-run soak：模拟几十到上百次
 decision / patch / validator / compaction cycle，多次 segment compaction，

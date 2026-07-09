@@ -16,7 +16,8 @@ When working on branch `feature-kanban-runtime-kernel`, treat
 `docs/kanban-runtime-kernel-phase3b.md` and
 `docs/kanban-runtime-kernel-phase3c.md` and
 `docs/kanban-runtime-kernel-phase3d.md` and
-`docs/kanban-runtime-kernel-phase4.md` as binding design constraints, not
+`docs/kanban-runtime-kernel-phase4.md` and
+`docs/kanban-runtime-kernel-phase4e.md` as binding design constraints, not
 background reading. If implementation details conflict with those documents,
 update the relevant design document first or stop and ask for direction.
 
@@ -119,6 +120,15 @@ concurrency/safety hardening. Do not let compaction providers write DB or output
 graph patches; do not remove deterministic compaction fallback; do not make
 dashboard views mutate private tables directly; do not let supervisor hidden
 memory become required for correctness.
+
+Phase 4E is worker recovery and runtime consistency. Implement it before
+opening a Phase 5 or prioritizing dashboard UI. Recovery must be a local,
+deterministic reducer over execution_nodes, node_materializations, Kanban
+tasks/runs/events, receipts, ledger, and policy; do not ask the decision
+provider to decide whether a worker run is stale, missing, crashed, retryable,
+or allowed to overwrite terminal facts. Preserve materialization attempt
+history, never silently rewrite terminal node facts, and expose recovery /
+consistency / legal waiting reason through runtime observability.
 
 For this branch, do not routinely rebase `main`, and do not restore the old
 oversized session `019e497b-56e0-7bb0-a357-0db06954ae4d` as implementation
