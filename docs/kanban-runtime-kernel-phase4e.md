@@ -1,4 +1,4 @@
-# Hermes Kanban Runtime Kernel Phase 4E: Worker Recovery and Runtime Consistency
+# Hermes Kanban Runtime Kernel Phase 4E：Worker Recovery 和 Runtime Consistency
 
 Phase 4E 的目标是把 Phase 4 MVP 收成可长期运行的 production baseline。
 
@@ -121,7 +121,7 @@ Worker recovery 必须是本地 deterministic reducer，不依赖 LLM。
 Recovery 不是日志字符串。每个 recovery case 都应产生 kernel 关心的结构事件，供
 dashboard、soak test、decision delta 和 replay checker 使用。
 
-## 5. Recovery Event Taxonomy
+## 5. Recovery Event 分类
 
 建议新增或正式使用以下 event_type：
 
@@ -204,28 +204,28 @@ release lease
 
 Decision provider 不应该在 reconcile 之前看到脏的 worker 状态。
 
-## 7. Mismatch Cases
+## 7. 不一致状态分类
 
-### 7.1 Node running but task missing
+### 7.1 Node running 但 task missing
 
-Condition:
+条件：
 
 ```text
 execution_nodes.state = running
 latest_task_id is null OR task row missing
 ```
 
-Action:
+处理：
 
-- record `materialization_lost`;
-- mark latest materialization `lost` if present;
-- mark node `failed` or `waiting_recovery` depending on schema support;
-- if infra retry policy allows, schedule retry materialization;
-- do not call LLM first.
+- 记录 `materialization_lost`；
+- 如果存在 latest materialization，将其标记为 `lost`；
+- 根据 schema 支持情况，将 node 标记为 `failed` 或 `waiting_recovery`；
+- 如果 infra retry policy 允许，调度一次 retry materialization；
+- 不先调用 LLM。
 
-### 7.2 Node running but run stale / heartbeat expired
+### 7.2 Node running 但 run stale / heartbeat expired
 
-Condition:
+条件：
 
 ```text
 node running
@@ -233,96 +233,95 @@ task/run exists
 run heartbeat or claim expired beyond policy
 ```
 
-Action:
+处理：
 
-- record `worker_run_stale` or `worker_run_timeout`;
-- update materialization status to `stale` / `timed_out`;
-- if infra retry count below threshold, retry once;
-- otherwise mark node failed with infra failure reason.
+- 记录 `worker_run_stale` 或 `worker_run_timeout`；
+- 将 materialization status 更新为 `stale` / `timed_out`；
+- 如果 infra retry 次数低于阈值，自动 retry 一次；
+- 否则用 infra failure reason 将 node 标记为 failed。
 
-### 7.3 Task terminal but receipt missing
+### 7.3 Task terminal 但 receipt missing
 
-Condition:
+条件：
 
 ```text
 task.status in done/blocked/failed
 receipt/evidence missing or not JSON object
 ```
 
-Action:
+处理：
 
-- record `receipt_missing` or `receipt_invalid`;
-- do not mark goal item satisfied;
-- if task result text can be wrapped into minimal failed/uncertain receipt, ingest as
-  `node_uncertain`;
-- otherwise schedule receipt recovery once or mark node failed with receipt failure.
+- 记录 `receipt_missing` 或 `receipt_invalid`；
+- 不标记任何 goal item satisfied；
+- 如果 task result text 可以包装成最小 failed/uncertain receipt，则按 `node_uncertain` ingest；
+- 否则调度一次 receipt recovery，或用 receipt failure 将 node 标记为 failed。
 
-### 7.4 Task failed but node still running
+### 7.4 Task failed 但 node 仍 running
 
-Condition:
+条件：
 
 ```text
 task terminal failure
 node.state = running
 ```
 
-Action:
+处理：
 
-- normalize through ingest/reconcile into `node_failed`;
-- update materialization terminal status;
-- record `task_node_state_mismatch` and `materialization_reconciled`.
+- 通过 ingest/reconcile 规范化为 `node_failed`；
+- 更新 materialization terminal status；
+- 记录 `task_node_state_mismatch` 和 `materialization_reconciled`。
 
-### 7.5 Verifier failed after implementation succeeded
+### 7.5 Implementation succeeded 后 verifier failed
 
-Condition:
+条件：
 
 ```text
 implementation node succeeded
 verifier node failed
 ```
 
-Action:
+处理：
 
-- preserve implementation node succeeded fact;
-- mark verifier failed;
-- update ledger/gap as failed verification;
-- create or expose gap for debug/fix/supersede decision;
-- do not mutate implementation terminal fact.
+- 保留 implementation node succeeded fact；
+- 将 verifier 标记为 failed；
+- 将 ledger/gap 更新为 failed verification；
+- 创建或暴露 gap，供后续 debug/fix/supersede decision 使用；
+- 不修改 implementation terminal fact。
 
-### 7.6 Retry needed after infra failure
+### 7.6 Infra failure 后需要 retry
 
-Condition:
+条件：
 
 ```text
 infra failure and retry_count < retry_limit
 ```
 
-Action:
+处理：
 
-- create new node_materializations attempt;
-- update latest_task_id/latest_run_id snapshot only after new materialization;
-- keep old attempt terminal status;
-- record `node_recovery_retry_scheduled`.
+- 创建新的 node_materializations attempt；
+- 只有在新 materialization 创建后才更新 latest_task_id/latest_run_id 快照；
+- 保留旧 attempt terminal status；
+- 记录 `node_recovery_retry_scheduled`。
 
 ### 7.7 Business failure
 
-Condition:
+条件：
 
 ```text
 worker receipt says failed because task approach failed
 verifier failed because artifact behavior is wrong
 ```
 
-Action:
+处理：
 
-- do not auto retry same node by default;
-- mark node failed;
-- open goal gap;
-- decision provider may later create debug/fix/supersede/strategy_update node.
+- 默认不自动 retry 同一个 node；
+- 将 node 标记为 failed；
+- 打开 goal gap；
+- decision provider 后续可以基于 gap 创建 debug/fix/supersede/strategy_update node。
 
 ## 8. Retry / Rerun Policy
 
-Default local policy:
+默认本地 policy：
 
 ```json
 {
@@ -346,7 +345,7 @@ Default local policy:
 }
 ```
 
-Policy must be configurable per job, but deterministic defaults should be enough for Phase 4E.
+Policy 必须支持按 job 配置，但 Phase 4E MVP 应先提供 deterministic defaults。
 
 ## 9. Event Replay / Consistency Checker
 
@@ -385,7 +384,7 @@ POST /api/runtime/jobs/{id}/reconcile
 
 第一版 API 可以只做 GET，POST reconcile 先通过 CLI/supervisor tick 暴露。
 
-## 10. Observability Changes
+## 10. Observability 变更
 
 Runtime snapshot 应增加一等字段：
 
@@ -408,87 +407,87 @@ Runtime snapshot 应增加一等字段：
 
 Legal waiting reason 不应只藏在 event log 里。
 
-## 11. Implementation Plan
+## 11. 实现计划
 
-### Step 1: Document and schema compatibility
+### Step 1：文档和 schema 兼容
 
-- Document recovery events and policies.
-- Reuse existing `node_materializations` table where possible.
-- Add schema columns only if required, preferring metadata_json for Phase 4E MVP.
-- Ensure all new state is recoverable from DB.
+- 明确 recovery events 和 policies；
+- 尽量复用现有 `node_materializations` 表；
+- 只有必要时才增加 schema column，Phase 4E MVP 优先使用 metadata_json；
+- 确保所有新增状态都能从 DB 恢复。
 
-### Step 2: Reconcile reducer
+### Step 2：实现 reconcile reducer
 
-- Implement `reconcile_runtime_materializations()`.
-- Add deterministic tests for each mismatch case.
-- Ensure repeated reconcile is idempotent.
+- 实现 `reconcile_runtime_materializations()`；
+- 为每类 mismatch case 增加 deterministic tests；
+- 确保重复 reconcile 幂等。
 
-### Step 3: Retry/rerun policy
+### Step 3：实现 retry/rerun policy
 
-- Implement default retry policy.
-- Add new materialization attempt on retry.
-- Preserve old attempt terminal facts.
-- Prevent business failure auto retry.
+- 实现默认 retry policy；
+- retry 时创建新的 materialization attempt；
+- 保留旧 attempt terminal facts；
+- 禁止 business failure 自动原地 retry。
 
-### Step 4: Supervisor integration
+### Step 4：接入 supervisor
 
-- Call reconcile before ingest in `advance_runtime_job()` or supervisor tick.
-- Record reconcile summary in tick result.
-- Ensure lease release still happens on reconcile errors.
+- 在 `advance_runtime_job()` 或 supervisor tick 中先 reconcile，再 ingest；
+- 在 tick result 中记录 reconcile summary；
+- 确保 reconcile 出错时 lease 仍会释放。
 
-### Step 5: Consistency checker
+### Step 5：实现 consistency checker
 
-- Implement `check_runtime_consistency()`.
-- Add CLI `runtime consistency`.
-- Add focused tests for checkpoint/ledger/node/materialization references.
+- 实现 `check_runtime_consistency()`；
+- 增加 CLI `runtime consistency`；
+- 为 checkpoint/ledger/node/materialization references 增加 focused tests。
 
-### Step 6: Observability API
+### Step 6：扩展 observability API
 
-- Add recovery/consistency/legal_waiting_reason to `runtime_observability_snapshot()`.
-- Extend `runtime inspect`.
-- Add focused API shape tests.
+- 将 recovery/consistency/legal_waiting_reason 加入 `runtime_observability_snapshot()`；
+- 扩展 `runtime inspect`；
+- 增加 focused API shape tests。
 
-### Step 7: Synthetic long-run foundation
+### Step 7：建立 synthetic long-run 基础测试
 
-- Add a deterministic synthetic test that runs multiple reconcile / advance / compaction cycles.
-- Include stale worker, retry, validator rejection, compaction fallback and liveness recovery.
+- 增加一个 deterministic synthetic test，运行多轮 reconcile / advance / compaction cycle；
+- 覆盖 stale worker、retry、validator rejection、compaction fallback 和 liveness recovery。
 
 ## 12. Tests
 
-Required offline tests:
+必须新增的离线测试：
 
-- node running but task missing records `materialization_lost`;
-- node running but run stale records `worker_run_stale`;
-- task terminal but receipt missing records `receipt_missing`;
-- task failed but node running becomes node_failed through reconcile/ingest;
-- verifier failed does not rewrite implementation succeeded;
-- infra timeout retries once and creates new materialization attempt;
-- business failure does not auto retry same node;
-- repeated reconcile is idempotent;
-- retry does not overwrite old attempt terminal status;
-- consistency checker rejects missing ledger node ref;
-- consistency checker rejects checkpoint refs to missing node/event/patch;
-- job done consistency requires required goal evidence;
-- active incomplete job without runnable path requires liveness event;
-- supervisor tick calls reconcile before decision;
-- runtime inspect exposes legal_waiting_reason/recovery/consistency.
+- node running 但 task missing 时记录 `materialization_lost`；
+- node running 但 run stale 时记录 `worker_run_stale`；
+- task terminal 但 receipt missing 时记录 `receipt_missing`；
+- task failed 但 node running 时通过 reconcile/ingest 变成 node_failed；
+- verifier failed 不改写 implementation succeeded；
+- infra timeout 自动 retry 一次，并创建新的 materialization attempt；
+- business failure 不自动 retry 同一个 node；
+- repeated reconcile 幂等；
+- retry 不覆盖旧 attempt terminal status；
+- consistency checker 拒绝缺失 ledger node ref；
+- consistency checker 拒绝 checkpoint refs 指向缺失 node/event/patch；
+- job done consistency 要求 required goal evidence；
+- active incomplete job 无 runnable path 时必须存在 liveness event；
+- supervisor tick 在 decision 前调用 reconcile；
+- runtime inspect 暴露 legal_waiting_reason/recovery/consistency。
 
-Default tests must remain offline and deterministic. Real worker/LLM smoke tests are not prerequisites
-for Phase 4E unit coverage.
+默认测试必须保持离线和 deterministic。真实 worker/LLM smoke tests 不能成为
+Phase 4E 单测覆盖的前提。
 
-## 13. Completion Definition
+## 13. 完成定义
 
-Phase 4E is complete when:
+Phase 4E 完成时必须满足：
 
-- runtime can reconcile common worker/materialization mismatches without LLM;
-- retry/rerun creates attempt history and preserves terminal facts;
-- supervisor tick starts from reconciled worker state;
-- consistency checker catches critical DB/reference violations;
-- observability exposes legal waiting reason and recovery status;
-- synthetic long-run test can include worker stale/retry/reconcile without silent idle;
-- all default tests remain offline.
+- runtime 能在不调用 LLM 的情况下 reconcile 常见 worker/materialization mismatches；
+- retry/rerun 会创建 attempt history，并保留 terminal facts；
+- supervisor tick 从已 reconcile 的 worker 状态开始；
+- consistency checker 能发现关键 DB/reference violations；
+- observability 暴露 legal waiting reason 和 recovery status；
+- synthetic long-run test 能包含 worker stale/retry/reconcile，且不会 silent idle；
+- 所有默认测试保持离线。
 
-After Phase 4E, the recommended next stages are:
+Phase 4E 之后建议进入：
 
 ```text
 Phase 4F Runtime Capability / Security Policy
