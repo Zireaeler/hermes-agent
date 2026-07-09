@@ -1522,6 +1522,25 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     rt_soak.add_argument("--workspace-path", default=None)
     rt_soak.add_argument("--json", action="store_true")
 
+    rt_real_smoke = runtime_sub.add_parser("real-smoke", help="Run bounded real model provider smoke checks")
+    rt_real_smoke.add_argument("job_id")
+    rt_real_smoke.add_argument("--execute-decision", action="store_true",
+                               help="Call the real decision provider but do not apply the patch")
+    rt_real_smoke.add_argument("--apply-decision", action="store_true",
+                               help="Call production advance with the real decision provider when job is waiting_decision")
+    rt_real_smoke.add_argument("--compact", action="store_true",
+                               help="Call the real compaction provider")
+    rt_real_smoke.add_argument("--model-provider", default=None)
+    rt_real_smoke.add_argument("--model", default=None)
+    rt_real_smoke.add_argument("--codex-config", action="store_true",
+                               help="Use ~/.codex config.toml/auth.json model source")
+    rt_real_smoke.add_argument("--profile", default="graph_patch_decision")
+    rt_real_smoke.add_argument("--compaction-profile", default="token_budget_compaction")
+    rt_real_smoke.add_argument("--max-retries", type=int, default=1)
+    rt_real_smoke.add_argument("--timeout", type=float, default=None)
+    rt_real_smoke.add_argument("--no-fallback", action="store_true")
+    rt_real_smoke.add_argument("--json", action="store_true")
+
     rt_list = runtime_sub.add_parser("list", aliases=["ls"], help="List runtime jobs")
     rt_list.add_argument("--state", default=None)
     rt_list.add_argument("--limit", type=int, default=50)
@@ -2121,6 +2140,8 @@ def _dispatch_runtime(args: argparse.Namespace) -> int:
         return _cmd_runtime_memory(args)
     if sub == "soak":
         return _cmd_runtime_soak(args)
+    if sub == "real-smoke":
+        return _cmd_runtime_real_smoke(args)
     if sub == "advance":
         return _cmd_runtime_advance(args)
     if sub == "supervise":
@@ -2463,6 +2484,38 @@ def _cmd_runtime_soak(args: argparse.Namespace) -> int:
         f"Runtime soak {result['scenario']}: state={result['final_state']} "
         f"ticks={result['ticks']} consistency={result['consistency']['status']} "
         f"patches={result['patch_applied']}/{result['patch_rejected']}"
+    )
+    return 0
+
+
+def _cmd_runtime_real_smoke(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_real_smoke as real_smoke
+
+    needs_source = bool(getattr(args, "execute_decision", False) or getattr(args, "apply_decision", False) or getattr(args, "compact", False))
+    source = _runtime_model_source_from_args(args, require_for_real=needs_source)
+    with kb.connect() as conn:
+        result = real_smoke.run_real_model_smoke(
+            conn,
+            args.job_id,
+            provider_source=source,
+            execute_decision=bool(getattr(args, "execute_decision", False)),
+            apply_decision=bool(getattr(args, "apply_decision", False)),
+            compact=bool(getattr(args, "compact", False)),
+            profile_name=args.profile,
+            compaction_profile_name=args.compaction_profile,
+            max_retries=getattr(args, "max_retries", 1),
+            timeout_seconds=getattr(args, "timeout", None),
+            fallback_to_deterministic=not getattr(args, "no_fallback", False),
+        )
+    if getattr(args, "json", False):
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+    print(
+        f"Runtime real-smoke {args.job_id}: "
+        f"execute={bool(result.get('decision_execute'))} "
+        f"apply={(result.get('one_step_advance') or {}).get('patch_status') or 'skipped'} "
+        f"compact={(result.get('real_compaction') or {}).get('status') or 'skipped'} "
+        f"consistency={result['consistency']['status']}"
     )
     return 0
 

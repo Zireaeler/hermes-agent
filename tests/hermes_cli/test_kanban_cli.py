@@ -260,6 +260,17 @@ def test_run_slash_runtime_soak_json(kanban_home, tmp_path):
     assert payload["old_segment_excluded_from_provider_input"] is True
 
 
+def test_run_slash_runtime_real_smoke_dry_run_json(kanban_home):
+    created = json.loads(kc.run_slash("runtime create 'phase4g1 real smoke dry run' --json"))
+    payload = json.loads(kc.run_slash(f"runtime real-smoke {created['id']} --json"))
+
+    assert payload["job_id"] == created["id"]
+    assert payload["decision_dry_run"]["called_model"] is False
+    assert payload["decision_execute"] is None
+    assert payload["real_compaction"] is None
+    assert payload["consistency"]["status"] == "passed"
+
+
 def test_run_slash_context_output_format(kanban_home):
     out = kc.run_slash("create 'tech spec' --assignee alice --body 'write an RFC'")
     import re

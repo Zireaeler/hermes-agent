@@ -297,7 +297,59 @@ Phase 4G1 MVP 完成时必须满足：
 - 默认测试不依赖网络或真实模型；
 - smoke 结果可以被 operator 用来判断下一步是否进入真实 provider bounded loop。
 
-## 10. 与后续阶段的关系
+## 10. 当前 MVP 实现入口
+
+当前 Phase 4G1 MVP 的实现入口是：
+
+```text
+hermes_cli/kanban_runtime_real_smoke.py
+```
+
+CLI：
+
+```bash
+hermes kanban runtime real-smoke <job_id> --json
+```
+
+默认 `real-smoke` 只构造 provider request、profile summary、token estimate 和 bounded
+report，不调用模型，不创建 `kernel_decisions`，不插入 `graph_patches`，不改变
+`graph_revision`。
+
+显式调用真实 decision provider：
+
+```bash
+hermes kanban runtime real-smoke <job_id> \
+  --execute-decision \
+  --codex-config \
+  --json
+```
+
+显式执行 one-step apply：
+
+```bash
+hermes kanban runtime real-smoke <job_id> \
+  --apply-decision \
+  --codex-config \
+  --json
+```
+
+`--apply-decision` 只在 job 当前是 `waiting_decision` 时调用生产
+`advance_runtime_job()`。如果 job 仍有 ready/running/human 节点，命令应报告 skipped，
+不能为了 smoke 私自改写 job 状态。
+
+显式调用真实 compaction provider：
+
+```bash
+hermes kanban runtime real-smoke <job_id> \
+  --compact \
+  --codex-config \
+  --json
+```
+
+当前测试使用 fake-real provider class 覆盖 success、provider_error、validate-no-apply、
+one-step apply、real compaction smoke 和 secret redaction。默认 pytest 不触网。
+
+## 11. 与后续阶段的关系
 
 Phase 4G1 通过后，再进入：
 
@@ -314,7 +366,7 @@ Phase 4H Dashboard Runtime UI
 Phase 4G1 只证明真实模型源能通过 runtime 边界。它不证明真实 worker 稳定，也不证明真实
 长任务质量。真实 worker 和真实长任务必须在 provider smoke 稳定后再接入。
 
-## 11. 总结
+## 12. 总结
 
 Phase 4G1 是从 deterministic runtime baseline 走向真实模型运行的第一道门。
 
