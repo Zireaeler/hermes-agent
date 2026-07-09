@@ -555,6 +555,14 @@ Kanban task；worker context 明确下发 allowed / denied / requires-human；ru
 inspect 和 dashboard read-only API 能解释 `blocked_by_policy`。LLM 只能提出
 capability request 或 human gate，不能自行授权。
 
+Phase 4G0 专门做 Runtime Memory Hints。它不是复杂学习系统，也不是新的事实源；
+它只把跨 job 经验以 Markdown guidance / memory index / scoped topic /
+candidate 的形式回流到 decision provider 输入。Runtime guidance 是强规则、短小、
+常驻；memory topic 是按 scope 和 goal/gap 检索的 non-authoritative hint；
+candidate 默认不注入，人工 promote 后才进入 accepted memory。第一版必须显式支持
+runtime-global、workspace/repo、domain/job-family、job-local 四类 scope，防止经验
+跨项目污染。
+
 Phase 4G 专门做 synthetic long-run soak 与真实 compaction smoke。目标不是证明
 某个业务项目能完成，而是证明 runtime 本身能承受几十到上百次
 decision / patch / validator / compaction / reconcile cycle。
@@ -576,6 +584,9 @@ Phase 4E worker recovery MVP 收尾和 stale/crash 补强
 Phase 4F runtime capability/security policy
       |
       v
+Phase 4G0 runtime memory hints
+      |
+      v
 Phase 4G real compaction provider smoke/soak and synthetic long-run tests
       |
       v
@@ -595,6 +606,10 @@ compaction provider 边界已接入，但真实模型 compaction 还需要 smoke
 并发和 idempotency 已有关键测试，但 destructive action、external cost、
 credential、workspace boundary、network、git write、database migration 和
 event replay 仍需要专门 hardening。
+
+runtime 还缺少跨 job 的经验回流。Phase 4G0 应先用 Markdown + scope + candidate /
+accepted / deprecated 的轻量模型验证经验提示是否能减少重复错误，避免一开始实现
+复杂 `runtime_experience_items` / confidence / promotion 系统。
 
 最优先的是 Phase 4E，因为真实长任务最先出问题的地方通常是 worker
 materialization、Kanban task/run、receipt、node state 和 progress ledger 之间

@@ -18,7 +18,8 @@ When working on branch `feature-kanban-runtime-kernel`, treat
 `docs/kanban-runtime-kernel-phase3d.md` and
 `docs/kanban-runtime-kernel-phase4.md` and
 `docs/kanban-runtime-kernel-phase4e.md` and
-`docs/kanban-runtime-kernel-phase4f.md` as binding design constraints, not
+`docs/kanban-runtime-kernel-phase4f.md` and
+`docs/kanban-runtime-kernel-phase4g0.md` as binding design constraints, not
 background reading. If implementation details conflict with those documents,
 update the relevant design document first or stop and ask for direction.
 
@@ -146,6 +147,15 @@ or database-migration privileges. Validator and materialization code must
 evaluate requested capabilities before creating worker tasks, worker context
 must include allowed/denied/requires-human capabilities, and policy blocks must
 be observable as structured runtime state rather than hidden worker behavior.
+
+Phase 4G0 is runtime memory hints. Runtime memory is non-authoritative context,
+not a fact source and not a validator override. Stable hard rules belong in
+runtime guidance; cross-job experience belongs in scoped memory topics; current
+job continuity belongs in decision session checkpoints. Candidate memory must
+not be injected by default, accepted memory must be scope-filtered, deprecated
+memory must not be injected, and memory hints must never affect readiness,
+completion, blocked state, capability policy, worker recovery, or graph patch
+validation.
 
 For this branch, do not routinely rebase `main`, and do not restore the old
 oversized session `019e497b-56e0-7bb0-a357-0db06954ae4d` as implementation
