@@ -57,6 +57,11 @@ job 级安全边界和可审计授权事实。
 Capability policy 来自 DB state、job metadata、workspace policy、lane policy、
 human decision 和默认 runtime policy。它不能来自 LLM 隐性判断。
 
+Policy 主要约束 materialization 和 worker execution，不约束 decision provider 的
+“想法”。Provider 可以提出某个 node 需要哪些 capability，也可以提议
+`request_human`；真正是否允许执行，必须在 runtime materialization 之前由本地
+policy evaluator 裁决。
+
 ### 3.3 Human gate 只用于真实授权边界
 
 需要 credentials、外部费用、破坏性操作、workspace 外访问、高影响 git 操作或 DB
@@ -73,6 +78,81 @@ Decision provider 只能提出 capability request 或 human gate proposal。它�
 Worker 启动时应看到 node 被允许和禁止的 capability，以及哪些动作需要停止并返回
 `human_required` / `blocked` receipt。Worker receipt 仍是节点交付契约，不是
 runtime compaction。
+
+### 3.6 Policy 冲突解决顺序
+
+多个 policy 来源冲突时，第一版采用最小确定性规则：
+
+```text
+lane/backend physical incapability
+      >
+hard deny
+      >
+unresolved require_human
+      >
+valid human authorization
+      >
+job policy
+      >
+workspace / lane policy
+      >
+global default
+```
+
+含义：
+
+- lane/backend 物理不支持某能力时，任何软授权都不能覆盖；
+- hard deny 不能被 human authorization 覆盖；
+- 未解决的 require_human 优先于默认 allow；
+- 有效 human authorization 可以解除 require_human，但不能解除 hard deny；
+- job scope 优先于 global default；
+- workspace/lane policy 可以收紧默认策略，但不能突破 hard deny。
+
+这样可以避免 global default 允许、lane 不支持、human 又授权时 validator 不知道听谁
+的问题。
+
+### 3.7 授权生命周期
+
+Capability authorization 不是永久事实。第一版即使不实现复杂 UI，也必须在 schema
+或 metadata 中预留：
+
+```text
+scope
+scope_ref
+capabilities
+status
+expires_at
+revoked_at
+source_event_id
+source_human_decision_id
+reason
+```
+
+`status` 建议为：
+
+```text
+active
+expired
+revoked
+superseded
+```
+
+长期 job 中，用户可能只允许一次网络访问或一次 destructive action；授权不能无限期
+复用到后续无关 node。第一版可以先支持 job-scope 和 no-expiry，但必须在设计上保留
+过期和撤销。
+
+### 3.8 Policy block 和 liveness
+
+Capability block 不能变成 runtime 死锁。Runtime 必须能区分：
+
+- 合法等待 human authorization；
+- 被 hard deny 的 node；
+- capability policy 配置错误；
+- graph 无法继续推进的 liveness violation。
+
+`blocked_by_policy` / `waiting_capability_authorization` 应是一等 projection 或
+observability 字段，不能只靠 recent events 推断。若 job 仍未完成，但只剩 policy
+blocked node，supervisor 应报告合法等待原因或明确触发 human gate，而不是静默 idle。
 
 ## 4. Capability Taxonomy
 
@@ -211,6 +291,9 @@ Human gate decision 应写入 event / ledger / policy metadata，表达：
   "capabilities": ["network_access"],
   "scope": "job",
   "expires_at": null,
+  "status": "active",
+  "revoked_at": null,
+  "source_event_id": 123,
   "reason": "User allowed network access for package metadata lookup."
 }
 ```
@@ -325,8 +408,10 @@ reason
     "allowed_by_default": [],
     "require_human": [],
     "denied_by_default": [],
+    "policy_resolution_order": [],
     "blocked_nodes": [],
     "pending_authorizations": [],
+    "active_authorizations": [],
     "recent_policy_events": []
   },
   "legal_waiting_reason": "blocked_by_policy"
@@ -340,6 +425,8 @@ Dashboard 第一版不需要复杂 UI，但 API 必须能回答：
 - 是否已有 human decision；
 - policy block 是合法等待还是 runtime bug；
 - worker context 中实际下发了哪些 allowed/denied capability。
+- capability block 是否是 `waiting_capability_authorization`、`blocked_by_policy`
+  还是 lane/backend incapability。
 
 ## 10. CLI / API
 
@@ -410,11 +497,16 @@ Dashboard API 建议新增只读 section：
 - denied capability 不会 materialize worker task；
 - require_human capability 没有授权时创建或要求 human gate；
 - human decision 授权后同 scope capability 可以通过；
+- expired / revoked authorization 不再生效；
+- hard deny 不能被 human authorization 覆盖；
+- lane/backend physical incapability 优先于 human authorization；
 - worker context 包含 allowed / denied / requires_human；
 - LLM 不能通过 metadata 写入 allowed capability；
 - dashboard/read-only API 不直接修改 policy；
 - policy blocked job 的 `legal_waiting_reason` 是 `blocked_by_policy`，不是
   liveness violation；
+- waiting authorization 的 `legal_waiting_reason` 是
+  `waiting_capability_authorization`；
 - 默认测试离线，不依赖真实 provider、网络或 secret。
 
 ## 13. 完成定义
@@ -427,6 +519,8 @@ Phase 4F MVP 完成时必须满足：
 - worker context 明确下发 capability policy；
 - human gate 是 capability authorization 的唯一升级路径；
 - observability 能解释 policy block；
+- policy conflict resolution 有本地确定性顺序；
+- authorization lifecycle 支持 active / expired / revoked / superseded 的设计边界；
 - focused tests 证明普通内部实现不被过度 gate，危险动作不会静默执行。
 
 Phase 4F 完成后，再进入：

@@ -106,6 +106,18 @@ validator rules, capability policy, and current checkpoint override them.
 
 第一版只记录 outcome，不做自动评分。
 
+Usage 记录应优先落在 `decision_segment_entries`，并与 `decision_id`、goal gap、
+provider request 和后续 validator result 对齐。不要另写一个无法关联 patch 结果的
+普通日志。
+
+### 3.6 Memory 不能授权 capability
+
+Memory hint 不能影响 Phase 4F 的 capability authorization。
+
+例如 memory 写“这个项目通常允许网络查包”，也只能提示 provider 申请
+`network_access` 或提出 human gate。最终是否允许，仍由 runtime capability policy
+和 human authorization 决定。Memory 永远不能成为权限来源。
+
 ## 4. Scope 分层
 
 建议第一版支持四类 scope。
@@ -234,6 +246,34 @@ memory hints
 
 也就是说，即使 workspace memory 很相关，也不能覆盖 DB、validator 或 policy。
 
+## 5.1 Memory Trust Policy
+
+Scope 只描述适用范围，不等于信任级别。第一版需要一套简单 trust policy：
+
+```text
+runtime-global/user-home accepted memory
+      >
+workspace accepted memory
+      >
+domain accepted memory
+      >
+candidate memory
+```
+
+规则：
+
+- runtime-global/user-home memory 默认较可信，但必须抽象、短小，不包含项目事实；
+- workspace memory 默认只对当前 workspace 生效；
+- repo 中提交的 workspace memory 仍是 non-authoritative，必要时可以要求 operator
+  opt-in；
+- domain memory 是弱 hint，不能覆盖 workspace memory；
+- candidate memory 永不注入；
+- deprecated memory 永不注入；
+- 解析失败的 memory 永不注入。
+
+如果 workspace memory 来自不可信 repo 或外部 checkout，loader 应允许配置为
+`workspace_memory_requires_opt_in=true`。第一版可以先记录 warning，不阻塞实现。
+
 ## 6. 文件布局
 
 建议第一版使用 Markdown 文件。
@@ -357,6 +397,17 @@ Evidence
 Use as
 ```
 
+Parser 硬约束：
+
+- 缺少 `Status` 不注入；
+- 缺少 `Scope` 不注入；
+- 缺少 `Evidence` 不注入；
+- 缺少 `Use as` 不注入；
+- `Status` 不是 `accepted` 不注入；
+- `Use as` 不是 non-authoritative hint 不注入；
+- `scope_type` 未知不注入；
+- `scope_ref` 与当前 workspace/job/domain 不匹配不注入。
+
 允许的 status：
 
 ```text
@@ -393,8 +444,21 @@ job
 - 从 DB facts、events、validator result、progress ledger 和 artifact summary 中抽取；
 - 不让模型自由编造经验；
 - 没有 provenance 不写 candidate；
+- 写入前执行 redaction；
 - candidate 状态默认 `candidate`；
 - candidate 默认写入 local `.hermes/runtime-memory/candidates/`。
+
+Redaction 规则：
+
+- 去除 API key、token、credential、secret 片段；
+- 去除完整外部响应和大段日志；
+- 去除客户数据、业务敏感原文和不必要的内部 URL；
+- 路径只保留必要的相对路径或抽象路径；
+- human decision 中的敏感偏好或凭据不得原文写入；
+- accepted memory 只保留抽象 lesson 和必要 provenance。
+
+Candidate 即使默认不注入，也不能写入敏感原文。否则后续 promote 或提交时会造成
+泄露。
 
 ## 9. Promote / Deprecate 流程
 
@@ -444,6 +508,27 @@ Memory hints 的注入规则：
 - domain/global hint 弱于 workspace hint；
 - hint 必须带 scope 和 provenance 的简短版本。
 
+预算建议：
+
+```text
+max_hints: 5
+max_tokens_per_hint: 240
+max_total_memory_tokens: 1200
+max_provider_input_ratio: 0.10
+```
+
+如果 budget 不足，选择顺序为：
+
+```text
+workspace accepted memory
+      >
+domain accepted memory
+      >
+runtime-global accepted memory
+```
+
+同一 scope 内优先选择 applies_when 与当前 goal/gap/rejection 最匹配的条目。
+
 禁止：
 
 - 每轮全量 grep 所有 memory；
@@ -468,6 +553,26 @@ write_runtime_memory_candidate(conn, job_id, trigger_event_id, kind) -> Path
 - `decision_segment_entries`；
 - `execution_events`；
 - provider request audit。
+
+`record_memory_hint_usage()` 至少应记录：
+
+```text
+decision_id
+segment_id
+topic
+entry_id
+scope_type
+scope_ref
+goal_gap_keys
+node_keys
+selected_reason
+injected_tokens
+provider_request_ref
+outcome
+```
+
+`outcome` 可以在 validator result 后回填，或追加
+`memory_hint_outcome_recorded` event。
 
 ## 12. Event Types
 
@@ -567,12 +672,17 @@ Dashboard 第一版只读即可。
 
 - guidance 每次注入；
 - candidate 不注入；
+- candidate 写入前 redaction；
 - accepted workspace memory 只对同 workspace 注入；
+- workspace memory 可配置为需要 operator opt-in；
 - global memory 不包含项目事实；
 - domain memory 弱于 workspace memory；
 - deprecated memory 不注入；
+- 解析缺少 Status / Scope / Evidence / Use as 的条目不注入；
+- memory hints 有 max count 和 token budget；
 - hint 注入不会改变 DB facts；
 - hint 注入不会绕过 validator；
+- hint 注入不会授权 capability；
 - provider request 不全量包含所有 topic；
 - hint usage 写入 decision segment entry；
 - validator rejection 后可以生成 candidate；
@@ -587,6 +697,9 @@ Phase 4G0 MVP 完成时必须满足：
 - memory entry 有明确 scope、status、applies_when、lesson、evidence；
 - provider request 可以按 scope 和 gap 选择少量 accepted hints；
 - candidate 默认不进入 provider request；
+- memory parser 有硬约束，解析失败不注入；
+- memory injection 有 token budget；
+- candidate redaction 防止写入敏感原文；
 - memory hint usage 可审计；
 - memory 不影响 reducer、validator、completion、readiness、capability policy；
 - focused tests 证明不会全量注入和不会跨 workspace 污染。
