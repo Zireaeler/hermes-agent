@@ -527,6 +527,9 @@ safety hardening。
 Phase 4E Worker Recovery Policy
 Phase 4F Runtime Capability / Security Policy
 Phase 4G Synthetic Long-Run Soak and Runtime Consistency Baseline
+Phase 4G1 Real Model Provider Smoke
+Phase 4G2 Real Provider Bounded Loop with Synthetic Worker Evidence
+Phase 4G3 Real Worker Lane Smoke
 Phase 4H Dashboard Runtime UI
 ```
 
@@ -568,8 +571,19 @@ baseline。目标不是证明某个业务项目能完成，也不是证明真实
 runtime 本身能承受几十到上百次 decision / patch / validator / compaction /
 reconcile / memory / capability cycle，并且在 goal 未完成时不会静默 idle。
 
-真实 compaction provider smoke、真实 provider / worker 长任务 soak 应放在 Phase 4G
-baseline 稳定之后，复用 Phase 4G 的 report 和 consistency checker。
+Phase 4G1 专门做真实模型源 smoke。它验证 real decision provider 和 real compaction
+provider 的 no-tools single-shot 调用、解析、validator、fallback、审计和隔离行为。
+它不接真实 worker，也不跑真实长任务。
+
+Phase 4G2 专门做真实 decision provider 的 bounded loop，但 worker evidence 仍使用
+synthetic receipt。目标是验证真实 provider 能在多轮 validator / ledger / gap feedback
+中保持 runtime 边界。
+
+Phase 4G3 再接真实 worker lane smoke，验证真实 provider proposal、Kanban
+materialization、真实 worker evidence 和 runtime ingest 的端到端边界。
+
+真实 compaction/provider/worker smoke 和 soak 都应复用 Phase 4G 的 report 和
+consistency checker。
 
 Phase 4H 再做 dashboard runtime UI。UI 应消费前面阶段形成的稳定
 observability API，而不是提前展示一个 recovery 和 consistency 尚未稳定的系统。
@@ -594,7 +608,13 @@ Phase 4G0 runtime memory hints
 Phase 4G synthetic long-run soak and runtime consistency baseline
       |
       v
-real compaction/provider/worker smoke and soak
+Phase 4G1 real model provider smoke
+      |
+      v
+Phase 4G2 real provider bounded loop with synthetic worker evidence
+      |
+      v
+Phase 4G3 real worker lane smoke
       |
       v
 Phase 4H dashboard runtime UI

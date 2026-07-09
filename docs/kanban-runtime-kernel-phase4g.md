@@ -528,10 +528,13 @@ hermes kanban runtime soak --scenario phase4g-baseline --json
 Phase 4G 完成后，再推进：
 
 ```text
-真实模型 compaction smoke
+Phase 4G1 Real Model Provider Smoke
       |
       v
-真实 provider / worker 长任务 soak
+Phase 4G2 Real Provider Bounded Loop with Synthetic Worker Evidence
+      |
+      v
+Phase 4G3 Real Worker Lane Smoke
       |
       v
 dashboard runtime UI
