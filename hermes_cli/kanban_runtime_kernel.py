@@ -1606,6 +1606,20 @@ def _validate_node_contract(op: dict[str, Any], *, required: bool = False) -> No
         values = contract.get(key, [])
         if not isinstance(values, list) or any(not isinstance(value, str) or not value.strip() for value in values):
             raise PatchValidationError(f"create_node contract {key} must be a string list")
+    _validate_declared_write_scopes(
+        contract.get("declared_write_scope") or [],
+        field_name="create_node contract declared_write_scope",
+    )
+
+
+def _validate_declared_write_scopes(scopes: list[str], *, field_name: str) -> None:
+    for scope in scopes:
+        clean = scope.strip().replace("\\", "/")
+        parts = clean.split("/")
+        if scope != clean or clean.startswith("/") or clean.startswith("./") or ".." in parts:
+            raise PatchValidationError(f"{field_name} must use canonical workspace-relative globs")
+        if clean in {"repository", "workspace"} or clean.startswith(("repository/", "workspace/")):
+            raise PatchValidationError(f"{field_name} must use '**' for the whole workspace")
 
 
 def _scope_prefix(scope: str) -> str:
@@ -1728,6 +1742,10 @@ def _validate_decomposition(conn: sqlite3.Connection, job_id: str, patch: dict[s
                 node_scopes = scopes.get(node_key)
                 if not isinstance(node_scopes, list):
                     raise PatchValidationError("declared_write_scopes values must be lists")
+                _validate_declared_write_scopes(
+                    node_scopes,
+                    field_name="decomposition declared_write_scopes",
+                )
                 for other_key in nodes[index + 1:]:
                     if _scopes_obviously_overlap(node_scopes, scopes.get(other_key) or []):
                         raise PatchValidationError(f"durable_parallelism write scopes overlap for {node_key!r} and {other_key!r}")

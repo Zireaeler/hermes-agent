@@ -74,7 +74,10 @@ Use exactly these field names for patch ops:
   `goal_item_keys` or `gap_keys` or `human_gate_reason`; optional
   `depends_on` may list existing node keys. Include `contract` with `outcome`,
   `acceptance_criteria`, `success_evidence`, `declared_write_scope`, and
-  `prohibited_actions`.
+  `prohibited_actions`. Write scopes are canonical workspace-relative globs:
+  use `**` for the whole workspace or paths such as `src/**` and `tests/**`.
+  Never prefix them with `repository/` or `workspace/`, and never use absolute
+  paths or `..` segments.
 - `add_dependency`: `from_node_key` is the prerequisite node and `to_node_key`
   is the dependent node; optional `dependency_type` defaults to `depends_on`.
 - `insert_verifier`: `verifier_node_key`, `title`, either
@@ -82,7 +85,10 @@ Use exactly these field names for patch ops:
   `gap_keys` for the verifier node's own goal/gap linkage. Also fix at least
   one immutable target reference: `target_evidence_ref`,
   `target_materialization_attempt`, `target_artifact_ref`, or
-  `target_workspace_revision`.
+  `target_workspace_revision`. A `target_evidence_ref` must use a validator
+  supported immutable format: `receipt:<node_key>:attempt-<n>`,
+  `event:<event_id>`, or `artifact:<artifact_id_or_ref>`. Do not copy a
+  mutable `node:<id>` ledger reference into this field.
 - `request_human`: include `decision_type`, `question`,
   `default_recommendation`, `why_user_required`, and affected goal/gap keys.
 - `strategy_update`: include `node_key`, `title`, `description`,

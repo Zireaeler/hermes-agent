@@ -58,6 +58,10 @@ Do not recover from validator rejection by splitting work into analysis,
 research, implementation, testing, or debugging phases. Without a valid
 `decomposition`, return at most one new runnable worker node.
 
+Write scopes must be canonical workspace-relative globs. Use `**` for the
+whole workspace; do not use `repository/**`, `workspace/**`, absolute paths,
+or `..` segments.
+
 ## Example
 
 ```json

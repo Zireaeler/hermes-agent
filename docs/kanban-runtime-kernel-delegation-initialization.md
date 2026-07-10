@@ -125,6 +125,10 @@ decomposition 规则。
 node 的责任可以包含 inspection、必要 research、local planning、implementation、testing、
 debugging 和 local verification。它不应只负责“理解范围”或“编写计划”。
 
+`declared_write_scope` 使用 workspace-relative canonical glob。整个 workspace 写为 `**`；
+局部范围写为 `src/**`、`tests/**` 或具体文件。`repository/**`、`workspace/**`、绝对路径和
+包含 `..` 的 scope 必须由 validator 拒绝，避免 worker 成功后才发现 scope 表达无法匹配。
+
 ## 8. 真实验证
 
 真实 smoke 使用一次性 `HERMES_HOME`、独立 Git workspace、专属 Codex lane 和当前只读

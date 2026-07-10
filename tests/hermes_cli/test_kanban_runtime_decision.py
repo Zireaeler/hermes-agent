@@ -251,6 +251,8 @@ def test_decision_profile_loader_reads_markdown_profile():
     assert profile["profile_version"] == "2"
     assert "External research does not by itself justify" in profile["content"]
     assert "at most one new runnable worker node" in profile["content"]
+    assert "use `**` for the whole workspace" in profile["content"]
+    assert "receipt:<node_key>:attempt-<n>" in profile["content"]
     assert profile["profile_hash"]
     assert profile["profile_path"].endswith("graph_patch_decision.md")
     assert "Graph Patch Decision Profile" in profile["content"]

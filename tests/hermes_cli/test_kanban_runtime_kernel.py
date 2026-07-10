@@ -242,6 +242,33 @@ def test_provider_first_job_requires_typed_node_contract(conn):
     assert _node(conn, job_id, "primary")["state"] == "ready"
 
 
+@pytest.mark.parametrize(
+    "invalid_scope, reason",
+    [
+        ("repository/**", "use '**' for the whole workspace"),
+        ("workspace/**", "use '**' for the whole workspace"),
+        ("/tmp/output/**", "canonical workspace-relative globs"),
+        ("../outside/**", "canonical workspace-relative globs"),
+    ],
+)
+def test_node_contract_rejects_noncanonical_write_scope(conn, invalid_scope, reason):
+    job_id = rk.create_runtime_job(conn, _root_task(conn), "canonical write scope")
+    op = {
+        "op": "create_node",
+        "node_key": "primary",
+        "node_type": "implementation",
+        "title": "Primary worker",
+        "description": "Own the complete runtime result.",
+        "goal_item_keys": ["initial-runtime-result"],
+        "contract": _contract(invalid_scope),
+    }
+
+    result = rk.apply_graph_patch(conn, job_id, _patch(job_id, 0, op))
+
+    assert result["status"] == "rejected"
+    assert reason in result["reason"]
+
+
 @pytest.mark.parametrize("existing_state", sorted(rk.NONTERMINAL_EXECUTION_STATES))
 def test_provider_first_job_requires_decomposition_for_existing_nonterminal_node(
     conn,
