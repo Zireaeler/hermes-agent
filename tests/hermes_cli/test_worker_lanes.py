@@ -16,6 +16,7 @@ from hermes_cli.codex_worker import (
     run_codex_worker,
     _safe_env_for_codex,
     _safe_env_for_worker,
+    _extract_runtime_receipt,
     _extract_worker_receipt,
     _metadata,
 )
@@ -515,6 +516,20 @@ def test_codex_receipt_extracts_final_allowed_verdict():
     assert receipt["verdict"] == "request_changes"
 
 
+def test_codex_runtime_receipt_extracts_only_explicit_json_envelope():
+    receipt = _extract_runtime_receipt(
+        "Progress:\n- [x] bounded task complete\n\n"
+        "```json\n"
+        '{"schema":"runtime_worker_receipt_v1","verdict":"pass","summary":"verified",'
+        '"claimed_goal_items":["runtime-result"],"verification":{"passed":true}}\n'
+        "```\n"
+    )
+
+    assert receipt is not None
+    assert receipt["claimed_goal_items"] == ["runtime-result"]
+    assert _extract_runtime_receipt("runtime_worker_receipt_v1 in prose") is None
+
+
 def test_codex_metadata_output_tail_excludes_echoed_prompt_prefix():
     meta = _metadata(
         lane="codex-deep",
@@ -632,6 +647,19 @@ def test_codex_prompt_uses_implementation_role_for_normal_tasks():
     assert "Implement the assigned task in the workspace" in prompt
     assert "review lane `codex-deep`" not in prompt
     assert "test lane `codex-deep`" not in prompt
+
+
+def test_codex_prompt_requires_runtime_receipt_for_runtime_node():
+    from hermes_cli.codex_worker import build_codex_prompt
+
+    prompt = build_codex_prompt(
+        "# Runtime node\n\nGoal items: runtime-result\n\nRuntime footer: {}\n",
+        lane="codex-deep",
+        model="gpt-5.5",
+    )
+
+    assert "runtime_worker_receipt_v1" in prompt
+    assert "Do not claim success merely" in prompt
 
 
 def test_codex_prompt_uses_review_followup_role():

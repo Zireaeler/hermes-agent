@@ -38,6 +38,7 @@ _RECEIPT_SECTION_RE = re.compile(r"^\s*([A-Za-z][A-Za-z ]{0,60})\s*:\s*$")
 _VERDICT_LINE_RE = re.compile(r"(?i)^\s*verdict\s*:\s*(?:[-*]\s*)?([a-z][a-z_-]*)\s*$")
 _VERDICT_HEADER_RE = re.compile(r"(?i)^\s*verdict\s*:\s*$")
 _VERDICT_BULLET_RE = re.compile(r"^\s*[-*]?\s*([a-z][a-z_-]*)\s*$")
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 _ALLOWED_STRUCTURED_VERDICTS = {
     "approve",
     "approved",
@@ -921,6 +922,18 @@ def _extract_worker_receipt(output: str) -> dict[str, Any]:
     return receipt
 
 
+def _extract_runtime_receipt(output: str) -> Optional[dict[str, Any]]:
+    """Extract the final explicit runtime receipt envelope from worker output."""
+    for match in reversed(list(_JSON_FENCE_RE.finditer(output or ""))):
+        try:
+            candidate = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, dict) and candidate.get("schema") == "runtime_worker_receipt_v1":
+            return candidate
+    return None
+
+
 def _metadata(
     *,
     lane: str,
@@ -938,6 +951,7 @@ def _metadata(
 ) -> dict[str, Any]:
     succeeded = (exit_code == 0 and not timed_out and not binary_missing)
     receipt = _extract_worker_receipt(output_tail)
+    runtime_receipt = _extract_runtime_receipt(output_tail)
     verification = _extract_verification_summary(output_tail)
     review_output_tail = _review_output_tail(output_tail, receipt)
     if receipt.get("verdict"):
@@ -970,6 +984,7 @@ def _metadata(
         "git": collect_git_evidence(workspace),
         "verification": verification,
         "worker_receipt": receipt,
+        "runtime_receipt": runtime_receipt,
         "review": {
             "required": succeeded,
             "reason": (
@@ -1029,6 +1044,30 @@ def build_codex_prompt(task_context: str, *, lane: str, model: Optional[str]) ->
             "Kanban task done yourself; this wrapper will return your "
             "structured receipt to Hermes and block the task for review."
         )
+    runtime_receipt_instructions = ""
+    if "Runtime footer:" in task_context:
+        runtime_receipt_instructions = """
+
+This is a Runtime Kernel node. After the normal Markdown receipt, emit one
+final fenced JSON object and no prose after it:
+
+```json
+{
+  "schema": "runtime_worker_receipt_v1",
+  "verdict": "pass",
+  "summary": "short factual result",
+  "claimed_goal_items": ["only keys listed under Goal items"],
+  "partial_goal_items": [],
+  "unmet_goal_items": [],
+  "verification": {"passed": true, "summary": "command and result"},
+  "artifacts": []
+}
+```
+
+Use only goal keys listed in the task context. Do not claim success merely
+because the process exits successfully. If verification did not pass, use an
+appropriate non-pass verdict and list unmet goal items.
+"""
     return f"""{task_context.rstrip()}
 
 ## External worker instructions
@@ -1065,6 +1104,7 @@ contain a "Required review output" or "Required test output" section. Follow
 that section exactly and include one final `Verdict: ...` line. Review verdicts
 must be one of `approve`, `request_changes`, or `blocked`; test verdicts must
 be one of `pass`, `fail`, or `blocked`.
+{runtime_receipt_instructions}
 """
 
 

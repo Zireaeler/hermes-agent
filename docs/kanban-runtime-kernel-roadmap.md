@@ -594,7 +594,8 @@ synthetic receipt。目标是验证真实 provider 能在多轮 validator / ledg
 `docs/kanban-runtime-kernel-phase4g2.md`。
 
 Phase 4G3 再接真实 worker lane smoke，验证真实 provider proposal、Kanban
-materialization、真实 worker evidence 和 runtime ingest 的端到端边界。
+materialization、真实 worker evidence 和 runtime ingest 的端到端边界。具体 receipt
+contract、隔离规则和验收见 `docs/kanban-runtime-kernel-phase4g3.md`。
 
 真实 compaction/provider/worker smoke 和 soak 都应复用 Phase 4G 的 report 和
 consistency checker。

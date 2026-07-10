@@ -1557,6 +1557,25 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     rt_bounded_loop.add_argument("--timeout", type=float, default=None)
     rt_bounded_loop.add_argument("--json", action="store_true")
 
+    rt_worker_smoke = runtime_sub.add_parser(
+        "worker-smoke",
+        help="Run a bounded real decision-provider and Codex worker-lane smoke",
+    )
+    rt_worker_smoke.add_argument("job_id")
+    rt_worker_smoke.add_argument("--lane", required=True)
+    rt_worker_smoke.add_argument("--model-provider", default=None)
+    rt_worker_smoke.add_argument("--model", default=None)
+    rt_worker_smoke.add_argument("--codex-config", action="store_true",
+                                 help="Use ~/.codex config.toml/auth.json model source")
+    rt_worker_smoke.add_argument("--profile", default="graph_patch_decision")
+    rt_worker_smoke.add_argument("--max-decision-ticks", type=int, default=3)
+    rt_worker_smoke.add_argument("--max-steps", type=int, default=24)
+    rt_worker_smoke.add_argument("--worker-wait", type=float, default=120.0)
+    rt_worker_smoke.add_argument("--poll-interval", type=float, default=0.5)
+    rt_worker_smoke.add_argument("--max-retries", type=int, default=1)
+    rt_worker_smoke.add_argument("--timeout", type=float, default=None)
+    rt_worker_smoke.add_argument("--json", action="store_true")
+
     rt_list = runtime_sub.add_parser("list", aliases=["ls"], help="List runtime jobs")
     rt_list.add_argument("--state", default=None)
     rt_list.add_argument("--limit", type=int, default=50)
@@ -2160,6 +2179,8 @@ def _dispatch_runtime(args: argparse.Namespace) -> int:
         return _cmd_runtime_real_smoke(args)
     if sub == "bounded-loop":
         return _cmd_runtime_bounded_loop(args)
+    if sub == "worker-smoke":
+        return _cmd_runtime_worker_smoke(args)
     if sub == "advance":
         return _cmd_runtime_advance(args)
     if sub == "supervise":
@@ -2560,6 +2581,35 @@ def _cmd_runtime_bounded_loop(args: argparse.Namespace) -> int:
         f"Runtime bounded-loop {args.job_id}: decisions={result['decision_tick_count']} "
         f"accepted={result['accepted_patch_count']} rejected={result['rejected_patch_count']} "
         f"state={result['final_state']} consistency={result['consistency']['status']}"
+    )
+    return 0
+
+
+def _cmd_runtime_worker_smoke(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_worker_smoke as worker_smoke
+
+    source = _runtime_model_source_from_args(args, require_for_real=True)
+    with kb.connect() as conn:
+        result = worker_smoke.run_real_worker_lane_smoke(
+            conn,
+            args.job_id,
+            provider_source=source,
+            lane_name=args.lane,
+            max_decision_ticks=args.max_decision_ticks,
+            max_steps=args.max_steps,
+            worker_wait_seconds=args.worker_wait,
+            poll_interval_seconds=args.poll_interval,
+            profile_name=args.profile,
+            max_retries=args.max_retries,
+            timeout_seconds=args.timeout,
+        )
+    if getattr(args, "json", False):
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+    print(
+        f"Runtime worker-smoke {args.job_id}: decisions={result['decision_tick_count']} "
+        f"receipts={len(result['terminal_receipts'])} state={result['final_state']} "
+        f"consistency={result['consistency']['status']}"
     )
     return 0
 

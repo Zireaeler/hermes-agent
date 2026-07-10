@@ -1570,6 +1570,28 @@ def runtime_observability_snapshot(
             ],
         },
     }
+    # Lanes describe available execution backends, not runtime fact or a
+    # permission grant. The provider still only proposes an assignee; the
+    # materialization/capability path remains authoritative.
+    try:
+        from hermes_cli.worker_lanes import list_worker_lanes
+
+        lanes = [
+            {
+                "name": lane.name,
+                "kind": lane.kind,
+                "description": lane.description,
+                "max_concurrency": lane.max_concurrency,
+            }
+            for lane in list_worker_lanes()
+        ]
+        if lanes:
+            stable_prefix["available_execution_backends"] = {
+                "worker_lanes": lanes,
+                "instruction": "Assign a node only to a listed lane when it needs worker execution.",
+            }
+    except Exception:
+        pass
 
 
 def build_decision_provider_request(

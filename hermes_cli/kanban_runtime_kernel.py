@@ -2145,7 +2145,46 @@ def _recovery_failure_count(conn: sqlite3.Connection, node_id: str) -> int:
     return int(row["count"] or 0)
 
 
-def _receipt_evidence_valid(evidence: Any) -> bool:
+def _is_codex_lane_evidence(evidence: Any) -> bool:
+    lane = evidence.get("worker_lane") if isinstance(evidence, dict) else None
+    return isinstance(lane, dict) and lane.get("kind") == "codex_cli"
+
+
+def _runtime_receipt_from_evidence(evidence: Any, node: Optional[dict[str, Any]] = None) -> Optional[dict[str, Any]]:
+    """Validate a Codex runtime receipt before allowing it into the ledger."""
+    if not isinstance(evidence, dict):
+        return None
+    receipt = evidence.get("runtime_receipt")
+    if not isinstance(receipt, dict) or receipt.get("schema") != "runtime_worker_receipt_v1":
+        return None
+    if not isinstance(receipt.get("summary"), str) or not receipt["summary"].strip():
+        return None
+    if not isinstance(receipt.get("verification"), dict) or not isinstance(receipt["verification"].get("passed"), bool):
+        return None
+    verdict = str(receipt.get("verdict") or "").strip().lower()
+    if verdict not in {"pass", "passed", "success", "succeeded", "failed", "fail", "blocked", "human_required", "uncertain"}:
+        return None
+    result = dict(receipt)
+    keys = ("claimed_goal_items", "partial_goal_items", "unmet_goal_items", "contradicted_goal_items")
+    for key in keys:
+        values = result.get(key, [])
+        if not isinstance(values, list) or any(not isinstance(value, str) or not value.strip() for value in values):
+            return None
+        result[key] = [value.strip() for value in values]
+    if node is not None:
+        metadata = _loads(node.get("metadata_json"))
+        allowed = {str(value) for value in metadata.get("goal_item_keys") or []}
+        referenced = set().union(*(set(result[key]) for key in keys))
+        if not referenced.issubset(allowed):
+            return None
+    result["worker_lane"] = evidence.get("worker_lane")
+    result["worker_receipt"] = evidence.get("worker_receipt")
+    return result
+
+
+def _receipt_evidence_valid(evidence: Any, *, node: Optional[dict[str, Any]] = None) -> bool:
+    if _is_codex_lane_evidence(evidence):
+        return _runtime_receipt_from_evidence(evidence, node) is not None
     if not isinstance(evidence, dict) or not evidence:
         return False
     return any(
@@ -2468,7 +2507,7 @@ def reconcile_runtime_materializations(
                 run_id=snapshot_run_id,
             )
             continue
-        if snapshot.task.status in {"done", "blocked"} and not _receipt_evidence_valid(snapshot.evidence):
+        if snapshot.task.status in {"done", "blocked"} and not _receipt_evidence_valid(snapshot.evidence, node=node):
             failure_type = "receipt_missing" if not snapshot.evidence else "receipt_invalid"
             _update_materialization_recovery_status(
                 conn,
@@ -4130,7 +4169,14 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
     snapshot = kb.task_progress_snapshot(conn, node["latest_task_id"], board=board)
     if snapshot is None or snapshot.task.status not in {"done", "blocked"}:
         return False
-    metadata = dict(snapshot.evidence or {})
+    raw_evidence = dict(snapshot.evidence or {})
+    metadata = (
+        _runtime_receipt_from_evidence(raw_evidence, dict(node))
+        if _is_codex_lane_evidence(raw_evidence)
+        else raw_evidence
+    )
+    if metadata is None:
+        return False
     snapshot_run_id = snapshot.run.id if snapshot.run else node["latest_run_id"]
     verdict = _normalize_verdict(metadata.get("verdict") or snapshot.task.status)
     if node["state"] in TERMINAL_NODE_STATES:

@@ -1558,3 +1558,54 @@ def test_runtime_materialized_task_dispatch_and_ingest_fixture_lane(conn, monkey
     refreshed = _node(conn, job_id, "understand-scope")
     assert refreshed["latest_run_id"] is not None
     assert rk.status_runtime_job(conn, job_id)["job"]["state"] == "done"
+
+
+def test_codex_runtime_receipt_is_required_for_runtime_goal_evidence(conn):
+    job_id = _job(conn)
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = _node(conn, job_id, "understand-scope")
+    _complete_node(
+        conn,
+        node,
+        {
+            "worker_lane": {"name": "codex-smoke", "kind": "codex_cli", "exit_code": 0},
+            "worker_receipt": {"schema": "codex_cli_receipt_v1", "verdict": "pass"},
+            "runtime_receipt": {
+                "schema": "runtime_worker_receipt_v1",
+                "verdict": "pass",
+                "summary": "real lane receipt verified the runtime node",
+                "claimed_goal_items": ["initial-runtime-result"],
+                "verification": {"passed": True, "summary": "local smoke command passed"},
+            },
+            "verification": {"passed": True},
+        },
+    )
+
+    assert rk.ingest_runtime_node_evidence(conn, node["id"])
+    assert _node(conn, job_id, "understand-scope")["state"] == "succeeded"
+    assert rk.status_runtime_job(conn, job_id)["job"]["state"] == "done"
+
+
+def test_codex_runtime_receipt_rejects_goal_item_outside_node_linkage(conn):
+    job_id = _job(conn)
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = _node(conn, job_id, "understand-scope")
+    _complete_node(
+        conn,
+        node,
+        {
+            "worker_lane": {"name": "codex-smoke", "kind": "codex_cli", "exit_code": 0},
+            "runtime_receipt": {
+                "schema": "runtime_worker_receipt_v1",
+                "verdict": "pass",
+                "summary": "invalid cross-goal claim",
+                "claimed_goal_items": ["unlinked-goal"],
+                "verification": {"passed": True, "summary": "not relevant"},
+            },
+        },
+    )
+
+    assert not rk.ingest_runtime_node_evidence(conn, node["id"])
+    reconciled = rk.reconcile_runtime_materializations(conn, job_id)
+    assert reconciled["events"] == ["receipt_invalid"]
+    assert _node(conn, job_id, "understand-scope")["state"] == "ready"
