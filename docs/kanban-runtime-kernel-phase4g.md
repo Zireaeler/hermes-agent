@@ -523,6 +523,11 @@ hermes kanban runtime soak --scenario phase4g-baseline --json
 这些入口仍然是 deterministic baseline，不代表真实模型 compaction smoke 或真实 worker
 长跑已经完成。
 
+该 baseline 的 tick 总数包含 terminal job 后的 no-op padding，且仍使用 fixture
+initialization。Phase 4G6 已新增 `phase4g6-active-long-run`，使用 production provider-first
+初始化并以 50+ 个真实状态推进 tick、6 个 accepted checkpoint 和 goal gap reopen/resolution
+替代 padding。Phase 4G baseline 保留用于早期跨模块回归，不再作为长期活跃运行的最高门槛。
+
 ## 12. 与后续阶段的关系
 
 Phase 4G 完成后，再推进：
@@ -535,6 +540,15 @@ Phase 4G2 Real Provider Bounded Loop with Synthetic Worker Evidence
       |
       v
 Phase 4G3 Real Worker Lane Smoke
+      |
+      v
+Phase 4G4 Worker Execution Continuity
+      |
+      v
+Phase 4G5 Real Compaction Candidate Quality
+      |
+      v
+Phase 4G6 Runtime Long-Run Reliability Soak
       |
       v
 dashboard runtime UI

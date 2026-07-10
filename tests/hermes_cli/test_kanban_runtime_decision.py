@@ -736,6 +736,114 @@ def test_provider_compaction_failure_falls_back_to_deterministic(conn):
     assert metadata["provider_name"] == "deterministic"
 
 
+def test_compaction_health_tracks_fallback_degradation_and_recovery(conn):
+    job_id = _job(conn)
+
+    first = rd.compact_decision_session(
+        conn,
+        job_id,
+        compaction_provider=_StaticCompactionProvider(conn, error="first provider failure"),
+    )
+    second = rd.compact_decision_session(
+        conn,
+        job_id,
+        compaction_provider=_StaticCompactionProvider(conn, error="second provider failure"),
+    )
+    recovered = rd.compact_decision_session(
+        conn,
+        job_id,
+        compaction_provider=_StaticCompactionProvider(
+            conn,
+            checkpoint_factory=lambda request: rd.build_deterministic_checkpoint(
+                conn,
+                request.job_id,
+                request.source_segment["id"],
+                profile_name=request.profile["profile_name"],
+            ),
+        ),
+        fallback_to_deterministic=False,
+    )
+
+    assert first["compaction_health"]["fallback_streak"] == 1
+    assert second["compaction_health"]["status"] == "degraded"
+    assert second["compaction_health"]["fallback_streak"] == 2
+    assert recovered["compaction_health"]["status"] == "healthy"
+    assert recovered["compaction_health"]["fallback_streak"] == 0
+    assert recovered["compaction_health"]["fallback_count"] == 2
+    events = [
+        row["event_type"]
+        for row in conn.execute(
+            "SELECT event_type FROM execution_events WHERE job_id = ? ORDER BY id", (job_id,)
+        ).fetchall()
+    ]
+    assert events.count("compaction_quality_degraded") == 1
+    assert events.count("compaction_quality_recovered") == 1
+
+
+def test_context_chain_selects_prior_checkpoint_when_latest_is_corrupt(conn):
+    job_id = _job(conn)
+    first = rd.compact_decision_session(conn, job_id, reason="first")
+    second = rd.compact_decision_session(conn, job_id, reason="second")
+    assert rd.latest_decision_checkpoint(conn, job_id)["id"] == second["checkpoint_id"]
+    conn.execute(
+        "UPDATE decision_session_segments SET compacted_checkpoint_id = 'broken' WHERE id = ?",
+        (second["source_segment_id"],),
+    )
+
+    validation = rd.validate_decision_context_chain(conn, job_id)
+    delta = rk.build_decision_delta(conn, job_id)
+    first_request = rd.build_decision_provider_request(conn, job_id, delta)
+    second_request = rd.build_decision_provider_request(conn, job_id, delta)
+
+    assert validation["status"] == "degraded"
+    assert validation["selection_mode"] == "prior_checkpoint"
+    assert validation["latest_checkpoint_id"] == second["checkpoint_id"]
+    assert validation["selected_checkpoint_id"] == first["checkpoint_id"]
+    assert first_request.checkpoint["metadata"]["source_segment_id"] == first["source_segment_id"]
+    assert second_request.checkpoint == first_request.checkpoint
+    invalid_events = conn.execute(
+        "SELECT COUNT(*) FROM execution_events WHERE job_id = ? AND event_type = 'decision_context_checkpoint_invalid'",
+        (job_id,),
+    ).fetchone()[0]
+    assert invalid_events == 1
+
+
+def test_context_chain_accepts_checkpoint_older_than_current_graph_revision(conn):
+    job_id = _job(conn)
+    compacted = rd.compact_decision_session(conn, job_id, reason="historical-revision")
+    conn.execute("UPDATE runtime_jobs SET graph_revision = graph_revision + 1 WHERE id = ?", (job_id,))
+
+    validation = rd.validate_decision_context_chain(conn, job_id)
+
+    assert validation["status"] == "valid"
+    assert validation["selected_checkpoint_id"] == compacted["checkpoint_id"]
+
+
+def test_context_chain_invalid_checkpoint_falls_back_without_restoring_truth(conn):
+    job_id = _job(conn)
+    compacted = rd.compact_decision_session(conn, job_id, reason="broken-source")
+    conn.execute(
+        "UPDATE decision_checkpoints SET source_segment_id = 'missing-segment' WHERE id = ?",
+        (compacted["checkpoint_id"],),
+    )
+    before_revision = _revision(conn, job_id)
+    before_ledger = conn.execute(
+        "SELECT COUNT(*) FROM progress_ledger WHERE job_id = ?", (job_id,)
+    ).fetchone()[0]
+
+    request = rd.build_decision_provider_request(conn, job_id, rk.build_decision_delta(conn, job_id))
+    validation = rd.validate_decision_context_chain(conn, job_id)
+
+    assert validation["status"] == "invalid"
+    assert validation["selection_mode"] == "db_derived"
+    assert validation["selected_checkpoint_id"] is None
+    assert request.checkpoint["job"]["id"] == job_id
+    assert _revision(conn, job_id) == before_revision
+    assert conn.execute(
+        "SELECT COUNT(*) FROM progress_ledger WHERE job_id = ?", (job_id,)
+    ).fetchone()[0] == before_ledger
+
+
 def test_checkpoint_validator_rejects_stale_revision(conn):
     job_id = _job(conn)
     segment = rk.ensure_decision_segment(conn, job_id)
@@ -1409,6 +1517,8 @@ def test_runtime_inspect_cli_outputs_observability_snapshot(kanban_home):
     assert {"decision_session", "checkpoints", "compactions", "human_gates", "liveness"}.issubset(payload)
     assert payload["operator_actions"]["read_only"] is True
     assert payload["compactions"]["checkpoints"][0]["profile_hash"]
+    assert payload["compactions"]["health"]["status"] == "healthy"
+    assert payload["compactions"]["context_chain_validation"]["status"] == "valid"
 
 
 def test_runtime_supervise_cli_runs_leased_tick(kanban_home):

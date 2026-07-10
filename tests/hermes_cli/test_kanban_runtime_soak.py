@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from hermes_cli import kanban_db as kb
+from hermes_cli import kanban_runtime_decision as rd
 from hermes_cli import kanban_runtime_kernel as rk
 from hermes_cli import kanban_runtime_soak as soak
 
@@ -92,6 +93,45 @@ def test_phase4g_soak_baseline_report(conn, tmp_path):
     assert report["checkpoint_memory_hint_leak"] is False
     assert report["consistency"]["status"] == "passed"
     assert {item["state"] for item in report["required_goals"]} == {"satisfied"}
+
+
+def test_phase4g6_active_long_run_uses_meaningful_ticks_and_compaction_chain(conn, tmp_path):
+    report = soak.run_runtime_soak(
+        conn,
+        scenario=soak.PHASE4G6_SCENARIO,
+        max_ticks=50,
+        workspace_path=str(tmp_path / "active-workspace"),
+    )
+
+    assert report["scenario"] == soak.PHASE4G6_SCENARIO
+    assert report["final_state"] == "done"
+    assert report["active_tick_count"] >= 50
+    assert report["active_tick_count"] + report["noop_tick_count"] == report["ticks"]
+    assert report["terminal_noop_padding_count"] == 0
+    assert report["graph_revision_delta"] >= 25
+    assert report["decision_count"] >= 27
+    assert report["materialization_attempts"] >= 26
+    assert report["compactions"] >= 5
+    assert report["compaction_attempts"] == 7
+    assert report["historical_segment_sentinels"] == 7
+    assert report["historical_sentinels_excluded"] is True
+    assert report["compaction_health"]["status"] == "healthy"
+    assert report["compaction_health"]["fallback_count"] == 2
+    assert report["quality_degraded_events"] == 1
+    assert report["quality_recovered_events"] == 1
+    assert report["goal_gap_reopened_events"] == 1
+    assert report["context_chain_validation"]["status"] == "valid"
+    assert report["consistency"]["status"] == "passed"
+    assert {item["state"] for item in report["required_goals"]} == {"satisfied"}
+    assert conn.execute(
+        "SELECT COUNT(*) FROM execution_nodes WHERE job_id = ? AND node_key = 'understand-scope'",
+        (report["job_id"],),
+    ).fetchone()[0] == 0
+
+    with kb.connect() as restarted:
+        restart_validation = rd.validate_decision_context_chain(restarted, report["job_id"])
+    assert restart_validation["status"] == "valid"
+    assert restart_validation["selected_checkpoint_id"] == report["context_chain_validation"]["selected_checkpoint_id"]
 
 
 def test_consistency_checker_reports_memory_and_capability_cross_module_violations(conn, tmp_path):

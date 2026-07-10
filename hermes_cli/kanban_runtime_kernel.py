@@ -4136,23 +4136,7 @@ def _completion_satisfied(conn: sqlite3.Connection, job_id: str) -> bool:
         "SELECT 1 FROM execution_nodes WHERE job_id = ? AND state IN ('running', 'waiting_human') LIMIT 1",
         (job_id,),
     ).fetchone()
-    contradicted = conn.execute(
-        "SELECT 1 FROM progress_ledger WHERE job_id = ? AND satisfaction = 'contradicted' LIMIT 1",
-        (job_id,),
-    ).fetchone()
-    failed_required_verifier = conn.execute(
-        """
-        SELECT 1
-          FROM execution_nodes n
-         WHERE n.job_id = ?
-           AND n.node_type = 'verification'
-           AND n.state = 'failed'
-           AND n.metadata_json LIKE '%goal_item_keys%'
-         LIMIT 1
-        """,
-        (job_id,),
-    ).fetchone()
-    return running is None and contradicted is None and failed_required_verifier is None
+    return running is None
 
 
 def detect_goal_gaps(conn: sqlite3.Connection, job_id: str) -> list[dict[str, Any]]:
@@ -4167,9 +4151,10 @@ def detect_goal_gaps(conn: sqlite3.Connection, job_id: str) -> list[dict[str, An
     ).fetchall()
     for item in items:
         ledger = conn.execute(
-            "SELECT * FROM progress_ledger WHERE goal_item_id = ? ORDER BY created_at DESC",
+            "SELECT * FROM progress_ledger WHERE goal_item_id = ? ORDER BY created_at DESC, rowid DESC",
             (item["id"],),
         ).fetchall()
+        latest_ledger = ledger[0] if ledger else None
         gap_type: Optional[str] = None
         if item["state"] in {"satisfied", "waived"}:
             continue
@@ -4179,20 +4164,19 @@ def detect_goal_gaps(conn: sqlite3.Connection, job_id: str) -> list[dict[str, An
         failed_required = any(node["state"] in {"failed", "blocked"} for node in linked_nodes)
         if has_human_gate:
             gap_type = "blocked_by_human_gate"
-        elif any(row["satisfaction"] == "contradicted" for row in ledger):
+        elif latest_ledger and latest_ledger["satisfaction"] == "contradicted":
             gap_type = "contradicted_evidence"
-        elif any(row["verification_state"] in {"failed", "failed_verification"} for row in ledger):
+        elif latest_ledger and latest_ledger["verification_state"] in {"failed", "failed_verification"}:
             gap_type = "verification_failed"
         elif failed_required and not has_open_path:
             gap_type = "failed_required_node"
         elif not ledger:
             gap_type = "missing_evidence"
-        elif any(row["satisfaction"] == "partial" for row in ledger):
+        elif latest_ledger and latest_ledger["satisfaction"] == "partial":
             gap_type = "partial_evidence"
-        elif any(
-            row["satisfaction"] == "full" and row["verification_state"] in {"unverified", "self_reported"}
-            for row in ledger
-        ):
+        elif latest_ledger and latest_ledger["satisfaction"] == "full" and latest_ledger[
+            "verification_state"
+        ] in {"unverified", "self_reported"}:
             gap_type = "needs_verification" if item["verifier_required"] else "partial_evidence"
         else:
             gap_type = "missing_evidence"
@@ -5682,31 +5666,46 @@ def _insert_ledger(
 
 def _refresh_goal_item_states(conn: sqlite3.Connection, contract_id: str) -> None:
     now = _now()
+    contract = conn.execute("SELECT job_id FROM goal_contracts WHERE id = ?", (contract_id,)).fetchone()
     for item in conn.execute("SELECT * FROM goal_items WHERE contract_id = ?", (contract_id,)).fetchall():
-        ledgers = conn.execute(
-            "SELECT satisfaction, verification_state FROM progress_ledger WHERE goal_item_id = ?",
+        latest = conn.execute(
+            """
+            SELECT id, satisfaction, verification_state
+              FROM progress_ledger
+             WHERE goal_item_id = ?
+             ORDER BY created_at DESC, rowid DESC
+             LIMIT 1
+            """,
             (item["id"],),
-        ).fetchall()
+        ).fetchone()
         state = "open"
-        if any(row["satisfaction"] == "contradicted" for row in ledgers):
+        if latest and latest["satisfaction"] == "contradicted":
             state = "contradicted"
-        elif any(row["satisfaction"] == "waived" for row in ledgers):
+        elif latest and latest["satisfaction"] == "waived":
             state = "waived"
-        elif any(
-            row["satisfaction"] == "full"
-            and (
-                row["verification_state"] == "verified"
-                or (not item["verifier_required"] and row["verification_state"] not in {"failed", "failed_verification"})
-            )
-            for row in ledgers
+        elif latest and latest["satisfaction"] == "full" and (
+            latest["verification_state"] == "verified"
+            or (not item["verifier_required"] and latest["verification_state"] not in {"failed", "failed_verification"})
         ):
             state = "satisfied"
-        elif any(row["satisfaction"] in {"full", "partial"} for row in ledgers):
+        elif latest and latest["satisfaction"] in {"full", "partial"}:
             state = "partial"
         conn.execute(
             "UPDATE goal_items SET state = ?, updated_at = ? WHERE id = ?",
             (state, now, item["id"]),
         )
+        if contract and item["state"] in {"satisfied", "waived"} and state not in {"satisfied", "waived"}:
+            _event(
+                conn,
+                contract["job_id"],
+                "goal_gap_reopened",
+                {
+                    "goal_item_key": item["item_key"],
+                    "previous_state": item["state"],
+                    "new_state": state,
+                    "latest_ledger_id": latest["id"] if latest else None,
+                },
+            )
 
 
 def fixture_decision_provider(session: dict[str, Any], delta: dict[str, Any]) -> dict[str, Any]:

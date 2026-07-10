@@ -283,3 +283,32 @@ def test_real_smoke_apply_and_compaction_use_runtime_boundaries(conn, monkeypatc
     assert report["real_compaction"]["status"] == "compacted"
     assert report["real_compaction"]["fallback_used"] is False
     assert report["consistency"]["status"] == "passed"
+
+
+def test_real_compaction_soak_runs_three_no_fallback_cycles(conn, monkeypatch):
+    job_id = _job(conn)
+    monkeypatch.setattr(rd, "RuntimeCompactionProvider", AcceptingCompactionProvider)
+
+    report = rs.run_real_compaction_soak(
+        conn,
+        job_id,
+        provider_source=_provider_source(secret="multi-cycle-secret"),
+        cycles=3,
+        profile_names=["token_budget_compaction", "validator_boundary_compaction"],
+    )
+
+    assert report["requested_cycles"] == 3
+    assert report["completed_cycles"] == 3
+    assert report["accepted_count"] == 3
+    assert report["all_accepted"] is True
+    assert [item["profile_name"] for item in report["results"]] == [
+        "token_budget_compaction",
+        "validator_boundary_compaction",
+        "token_budget_compaction",
+    ]
+    assert all(item["fallback_used"] is False for item in report["results"])
+    assert all(item["context_chain_status"] == "valid" for item in report["results"])
+    assert report["compaction_health"]["provider_success_count"] == 3
+    assert report["consistency"]["status"] == "passed"
+    assert report["secrets_leaked"] is False
+    assert "multi-cycle-secret" not in json.dumps(report, ensure_ascii=False)

@@ -1541,6 +1541,21 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     rt_real_smoke.add_argument("--no-fallback", action="store_true")
     rt_real_smoke.add_argument("--json", action="store_true")
 
+    rt_real_compaction_soak = runtime_sub.add_parser(
+        "real-compaction-soak",
+        help="Run bounded multi-cycle real compaction validation",
+    )
+    rt_real_compaction_soak.add_argument("job_id")
+    rt_real_compaction_soak.add_argument("--cycles", type=int, default=3)
+    rt_real_compaction_soak.add_argument("--compaction-profile", action="append", default=[])
+    rt_real_compaction_soak.add_argument("--model-provider", default=None)
+    rt_real_compaction_soak.add_argument("--model", default=None)
+    rt_real_compaction_soak.add_argument("--codex-config", action="store_true",
+                                         help="Use CODEX_HOME (default ~/.codex) model source")
+    rt_real_compaction_soak.add_argument("--max-retries", type=int, default=0)
+    rt_real_compaction_soak.add_argument("--timeout", type=float, default=None)
+    rt_real_compaction_soak.add_argument("--json", action="store_true")
+
     rt_bounded_loop = runtime_sub.add_parser(
         "bounded-loop",
         help="Run a bounded real decision-provider loop with synthetic worker evidence",
@@ -2197,6 +2212,8 @@ def _dispatch_runtime(args: argparse.Namespace) -> int:
         return _cmd_runtime_soak(args)
     if sub == "real-smoke":
         return _cmd_runtime_real_smoke(args)
+    if sub == "real-compaction-soak":
+        return _cmd_runtime_real_compaction_soak(args)
     if sub == "bounded-loop":
         return _cmd_runtime_bounded_loop(args)
     if sub == "worker-smoke":
@@ -2579,6 +2596,31 @@ def _cmd_runtime_real_smoke(args: argparse.Namespace) -> int:
         f"execute={bool(result.get('decision_execute'))} "
         f"apply={(result.get('one_step_advance') or {}).get('patch_status') or 'skipped'} "
         f"compact={(result.get('real_compaction') or {}).get('status') or 'skipped'} "
+        f"consistency={result['consistency']['status']}"
+    )
+    return 0
+
+
+def _cmd_runtime_real_compaction_soak(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_real_smoke as real_smoke
+
+    source = _runtime_model_source_from_args(args, require_for_real=True)
+    with kb.connect() as conn:
+        result = real_smoke.run_real_compaction_soak(
+            conn,
+            args.job_id,
+            provider_source=source,
+            cycles=args.cycles,
+            profile_names=args.compaction_profile or None,
+            max_retries=args.max_retries,
+            timeout_seconds=args.timeout,
+        )
+    if getattr(args, "json", False):
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+    print(
+        f"Runtime real compaction soak {args.job_id}: "
+        f"accepted={result['accepted_count']}/{result['requested_cycles']} "
         f"consistency={result['consistency']['status']}"
     )
     return 0

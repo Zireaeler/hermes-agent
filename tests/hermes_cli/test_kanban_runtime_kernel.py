@@ -1507,6 +1507,56 @@ def test_contradicted_ledger_blocks_completion(conn):
     assert any(gap["gap_type"] == "contradicted_evidence" for gap in status["goal_gaps"] if gap["state"] == "open")
 
 
+def test_later_evidence_reopens_and_then_resolves_satisfied_goal(conn):
+    job_id = _job(conn)
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = _node(conn, job_id, "understand-scope")
+    _complete_node(
+        conn,
+        node,
+        {
+            "verdict": "succeeded",
+            "summary": "initial evidence verified",
+            "claimed_goal_items": ["initial-runtime-result"],
+            "verification": {"passed": True},
+        },
+    )
+    assert rk.ingest_runtime_node_evidence(conn, node["id"])
+    assert rk.reduce_runtime_job(conn, job_id)["state"] == "done"
+
+    rk.update_progress_ledger(
+        conn,
+        node["id"],
+        {
+            "summary": "later evidence contradicted the result",
+            "contradicted_goal_items": ["initial-runtime-result"],
+            "verification": {"passed": False},
+        },
+    )
+    reopened = rk.reduce_runtime_job(conn, job_id)
+
+    assert reopened["state"] == "waiting_decision"
+    assert any(gap["gap_type"] == "contradicted_evidence" for gap in reopened["gaps"])
+    assert conn.execute(
+        "SELECT COUNT(*) FROM execution_events WHERE job_id = ? AND event_type = 'goal_gap_reopened'",
+        (job_id,),
+    ).fetchone()[0] == 1
+
+    rk.update_progress_ledger(
+        conn,
+        node["id"],
+        {
+            "summary": "replacement evidence verified",
+            "claimed_goal_items": ["initial-runtime-result"],
+            "verification": {"passed": True},
+        },
+    )
+    resolved = rk.reduce_runtime_job(conn, job_id)
+
+    assert resolved["state"] == "done"
+    assert rk.status_runtime_job(conn, job_id)["goal_items"][0]["state"] == "satisfied"
+
+
 def test_no_runnable_unmet_goal_requests_decision_without_liveness_violation(conn):
     job_id = _job(conn)
     conn.execute("UPDATE execution_nodes SET state = 'failed' WHERE job_id = ? AND node_key = 'understand-scope'", (job_id,))

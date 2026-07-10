@@ -238,9 +238,9 @@ Phase 4G5 MVP 完成时：
 ## 11. 后续关系
 
 Phase 4G5 通过只证明单次真实 compaction candidate quality 达到 L3，不证明多轮 compaction
-稳定性。下一步应把该能力放入 synthetic long-run soak，覆盖多次 segment compaction、stale
-checkpoint rejection、fallback quality degradation、supervisor lease/recovery 和 goal 未完成时的
-anti-idle invariant。
+稳定性。后续 Phase 4G6 已把该能力放入 active long-run soak，覆盖多次 segment compaction、
+checkpoint context chain、fallback quality degradation、supervisor lease/recovery、goal gap
+reopen 和 anti-idle invariant，并完成三轮真实 no-fallback compaction。
 
 ## 12. 当前真实验证结果
 
@@ -265,4 +265,5 @@ provenance；没有由 parser 补造引用，也没有触发 repair 或 determin
 - Runtime Kernel 与 CLI 离线回归 239 项通过，Runtime observability API 定向测试 1 项通过。
 
 该结果满足 Phase 4G5 单次 candidate L3 门槛。它不证明多 provider、多 profile 或多轮长任务
-compaction 的稳定性；这些仍属于后续 soak。
+compaction 的稳定性；其中 bounded multi-profile/multi-cycle 已由 Phase 4G6 验证，数小时与
+多 provider soak 仍属于后续发布门槛。

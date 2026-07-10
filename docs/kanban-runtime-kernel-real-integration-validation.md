@@ -73,6 +73,7 @@ hermes kanban runtime real-smoke <job_id> --compact --codex-config --json
 | real decision one-step apply | Phase 3B / 4G1 | 已验证 | patch 只能经 validator apply/reject；完整 audit | 通过，包含一次 rejected 和一次 applied |
 | real compaction transport + fallback | Phase 4A / 4G1 | 已验证 | candidate 经 validator；拒绝不污染 active segment；fallback 可审计 | 通过 |
 | real compaction candidate quality | Phase 4G5 | 已验证 | 至少一次真实 candidate 无 fallback 通过 checkpoint validator | 通过：真实 candidate 自带 gap provenance，validator accepted，segment rollover |
+| real compaction multi-cycle | Phase 4G6 | 已验证 | 至少三次真实 no-fallback compaction，覆盖多个 profile，checkpoint chain valid | 通过：3/3 accepted，三个 profile，fresh process chain valid，consistency 0/0 |
 | real provider bounded loop | Phase 4G2 | 已验证 | 3-5 decision ticks + synthetic worker evidence + consistency passed | 通过：3 ticks、2 applied、1 rejected、synthetic receipt `failed -> succeeded`、最终 done |
 | real worker lane smoke | Phase 4G3 | 已验证 | 真实 worker receipt 进入 runtime ingest，端到端 consistency passed | 通过：两个 dispatcher-started Codex worker receipt 写入 verified ledger，job done |
 | delegation Profile v2 | Delegation Policy MVP | 已验证 | 单 coherent primary node、typed contract、无无理由 decomposition、validator dry-run | 通过：1 个 immediate `create_node`、contract 1/1、accepted、未 apply |
@@ -306,6 +307,40 @@ terminal event 后提供有界退出宽限，并增加 deterministic regression�
 L3。该结论限于单 provider、单 profile、单次 compaction，不覆盖真实多轮长任务 compaction
 soak。
 
+### 2026-07-11 Phase 4G6 active long-run 与 real compaction multi-cycle
+
+运行代码：Phase 4G6 实现提交（本记录随提交落地）。
+
+Deterministic 环境使用 production provider-first initialization 和 synthetic worker
+receipt，但所有状态变化均经过 production supervisor、patch validator、materialization、
+evidence ingest、ledger、compaction 和 consistency 路径。
+
+| 场景 | 结果 | 事实 |
+| --- | --- | --- |
+| active ticks | 通过 | 62 active、2 incidental noop、0 terminal padding |
+| graph/decision | 通过 | graph revision 25；27 decisions；25 applied、2 rejected |
+| worker lifecycle | 通过 | 25 coherent nodes；26 attempts；1 crash/retry；无 fixture node |
+| compaction | 通过 | 7 attempts；6 accepted checkpoints；三个 profile |
+| quality health | 通过 | fallback streak 2 产生 degraded；provider accepted 后 recovered |
+| no-fallback rejection | 通过 | invalid provenance candidate rejected；source segment preserved |
+| goal reopen | 通过 | temporary satisfied -> contradicted/reopened -> later verified/done |
+| context isolation | 通过 | 7 个 historical sentinel 均不进入最新 provider input |
+| restart validation | 通过 | fresh DB connection 检查 6-checkpoint chain valid |
+| consistency | 通过 | 0 violations、0 warnings |
+| offline regression | 通过 | Runtime/CLI 247 项；Runtime observability API 定向测试 1 项 |
+
+真实环境使用全新隔离 `HERMES_HOME`、Git workspace 和 `CODEX_HOME` 配置/认证副本；未启动
+worker。脱敏模型标识：`codex:MySub2api` / `gpt-5.6-sol`。
+
+`real-compaction-soak` 连续执行 `token_budget_compaction`、
+`validator_boundary_compaction` 和 `anti_stuck_compaction`。三轮全部 parsed、provider
+validation accepted、`fallback_used=false`，每轮均完成 segment rollover 和 context chain
+validation。最终 3 个 compacted segment、1 个 active segment，health healthy，fresh process
+chain valid，consistency 0/0，credential scan 0 命中，主 `.codex` 哈希不变。
+
+该结果证明单 provider 下的 bounded real multi-cycle compaction。它仍不等于数小时真实 worker
+长跑、多 provider soak 或 daemon restart 验收。
+
 ## 6. 结果记录模板
 
 每次新运行追加一条记录，格式如下：
@@ -367,4 +402,5 @@ process，不能影响用户自己的 Codex 会话。
 - `docs/kanban-runtime-kernel-phase4g2.md`：真实 decision provider bounded loop；
 - `docs/kanban-runtime-kernel-worker-execution-continuity.md`：Phase 4G4 worker session resume；
 - `docs/kanban-runtime-kernel-phase4g5.md`：真实 compaction candidate provenance 与 L3；
-- `docs/kanban-runtime-kernel-roadmap.md`：4G1 至 4G5 演进顺序。
+- `docs/kanban-runtime-kernel-phase4g6.md`：active long-run、compaction health 与 context chain；
+- `docs/kanban-runtime-kernel-roadmap.md`：4G1 至 4G6 演进顺序。

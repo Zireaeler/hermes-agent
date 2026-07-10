@@ -388,12 +388,15 @@ Phase 4G4 Worker Execution Continuity
 Phase 4G5 Real Compaction Candidate Quality
       |
       v
+Phase 4G6 Runtime Long-Run Reliability Soak
+      |
+      v
 Phase 4H Dashboard Runtime UI
 ```
 
 Phase 4G1 本身只证明真实模型源能通过 runtime 边界。真实 worker、worker continuity 和
-compaction candidate quality 分别由后续 4G3、4G4 和 4G5 验证；真实长任务质量仍需单独
-soak。
+compaction candidate quality 分别由后续 4G3、4G4 和 4G5 验证；4G6 再验证 active long-run
+和 bounded real multi-cycle compaction。数小时真实 worker 质量仍需单独 soak。
 
 ## 12. 总结
 

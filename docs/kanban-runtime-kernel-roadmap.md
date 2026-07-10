@@ -92,11 +92,12 @@ Phase 3D Long Running Autonomous Task Runtime
 Phase 4  Production Hardening
 ```
 
-当前代码已经推进到 Phase 4G5 MVP：Phase 2D 本地 compaction 闭环、Phase 3 real
+当前代码已经推进到 Phase 4G6 MVP：Phase 2D 本地 compaction 闭环、Phase 3 real
 decision provider、Phase 4 production hardening、Phase 4E recovery、Phase 4F capability
 policy、Phase 4G deterministic soak、Phase 4G0 memory lifecycle、Phase 4G1 real-smoke、
 Phase 4G2 real-provider bounded loop、Phase 4G3 real worker lane smoke、Phase 4G4 worker
-execution continuity 和 Phase 4G5 real compaction candidate quality 均已实现。
+execution continuity、Phase 4G5 real compaction candidate quality 和 Phase 4G6 active
+long-run reliability soak 均已实现。
 
 隔离真实验证已经覆盖 decision execute/apply/reject、compaction fallback safety、3-tick
 real-provider loop，以及真实 provider -> validator -> Kanban dispatcher -> Codex worker ->
@@ -104,6 +105,11 @@ runtime receipt -> verified ledger 的 L5 路径。Phase 4G5 又通过 provenanc
 checkpoint fact schema，使真实 compaction candidate 在无 fallback 时通过 checkpoint
 validator 并完成 segment rollover，L3 已通过。详见
 `docs/kanban-runtime-kernel-real-integration-validation.md`。
+
+Phase 4G6 已将旧 soak 的 terminal no-op padding 替换为 production initialization 下的
+50+ active tick 长期路径，并验证 fallback degradation/recovery、checkpoint context chain、
+goal gap reopen 和三轮真实 no-fallback compaction。实现与限制见
+`docs/kanban-runtime-kernel-phase4g6.md`。
 
 Worker delegation policy enforcement MVP 已完成：Decision Profile v2 使用
 primary-node-first 规则；patch validator 条件要求 decomposition；typed node contract 暂存于
@@ -569,6 +575,7 @@ Phase 4G2 Real Provider Bounded Loop with Synthetic Worker Evidence
 Phase 4G3 Real Worker Lane Smoke
 Phase 4G4 Worker Execution Continuity
 Phase 4G5 Real Compaction Candidate Quality
+Phase 4G6 Runtime Long-Run Reliability Soak
 Phase 4H Dashboard Runtime UI
 ```
 
@@ -633,6 +640,10 @@ Phase 4G4 补齐 timeout/crash 后的 backend session continuity，具体见
 candidate 的 provenance contract 和 L3 no-fallback 质量门槛，具体见
 `docs/kanban-runtime-kernel-phase4g5.md`。
 
+Phase 4G6 将这些能力放入 production-initialized active long-run scenario，补齐 compaction
+health、checkpoint context chain validation、goal gap reopen/resolution 和 bounded real
+multi-cycle compaction。具体见 `docs/kanban-runtime-kernel-phase4g6.md`。
+
 真实 compaction/provider/worker smoke 和 soak 都应复用 Phase 4G 的 report 和
 consistency checker。
 
@@ -674,7 +685,10 @@ Phase 4G4 worker execution continuity and Codex session resume
 Phase 4G5 real compaction candidate L3 quality
       |
       v
-Real compaction multi-cycle soak
+Phase 4G6 active long-run and real compaction multi-cycle soak
+      |
+      v
+Packaged supervisor daemon/service
       |
       v
 Phase 4H dashboard runtime UI
@@ -688,8 +702,9 @@ dashboard/API 已有读面，但还没有前端 UI。
 
 supervisor tick 和 lease 已有，但还不是 packaged daemon。
 
-compaction provider 边界已接入，真实 fallback smoke 和单次 no-fallback candidate L3
-均已验证；真实多轮 compaction 的 long-run soak 仍需要继续验证。
+compaction provider 边界、真实 fallback safety、单次 candidate L3 和三轮真实 no-fallback
+compaction 均已验证；更长时间、多 provider 和真实 worker 组合 soak 仍属于 production final
+前的持续验证。
 
 并发和 idempotency 已有关键测试，但 destructive action、external cost、
 credential、workspace boundary、network、git write、database migration 和
@@ -704,8 +719,6 @@ materialization、Kanban task/run、receipt、node state 和 progress ledger 之
 的不一致。如果先做 dashboard UI 或继续扩展智能层，卡住时仍然无法判断是 worker
 状态脏、supervisor recovery 有 bug、compaction 降级，还是模型决策差。
 
-Production complete 前还需要一类 synthetic long-run soak：模拟几十到上百次
-decision / patch / validator / compaction cycle，多次 segment compaction，
-确认旧 transcript 不进入 provider input、stale checkpoint 被拒绝、fallback
-可观测、supervisor lease 可释放/抢占、materialization 不重复，且 goal 未完成
-时不会静默停止。
+Phase 4G6 已完成 50+ active tick 的 synthetic long-run baseline，不再使用 terminal no-op
+充数。Production complete 前的下一项工程重点是把 supervisor tick/lease 包装成可部署 daemon
+或 service，并保留更长时间真实 worker soak 作为发布门槛。

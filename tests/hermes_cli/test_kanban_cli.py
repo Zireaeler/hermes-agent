@@ -287,6 +287,22 @@ def test_run_slash_runtime_soak_json(kanban_home, tmp_path):
     assert payload["old_segment_excluded_from_provider_input"] is True
 
 
+def test_run_slash_runtime_active_long_run_soak_json(kanban_home, tmp_path):
+    payload = json.loads(
+        kc.run_slash(
+            f"runtime soak --scenario phase4g6-active-long-run --max-ticks 50 "
+            f"--workspace-path {tmp_path / 'active-soak-workspace'} --json"
+        )
+    )
+
+    assert payload["scenario"] == "phase4g6-active-long-run"
+    assert payload["active_tick_count"] >= 50
+    assert payload["compactions"] >= 5
+    assert payload["historical_sentinels_excluded"] is True
+    assert payload["context_chain_validation"]["status"] == "valid"
+    assert payload["consistency"]["status"] == "passed"
+
+
 def test_run_slash_runtime_real_smoke_dry_run_json(kanban_home):
     created = json.loads(kc.run_slash("runtime create 'phase4g1 real smoke dry run' --json"))
     payload = json.loads(kc.run_slash(f"runtime real-smoke {created['id']} --json"))

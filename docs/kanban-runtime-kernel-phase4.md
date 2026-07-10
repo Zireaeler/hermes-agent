@@ -483,9 +483,8 @@ Phase 4 完成时，Hermes Runtime Kernel 应具备：
 
 此时系统才可以从“runtime kernel prototype”进入“可长期运行的生产 runtime”。
 
-Production complete 之前还必须补一类 synthetic long-run soak test。这个测试不
-一定要真实运行数小时，但至少要模拟几十到上百次
-decision / patch / validator / compaction cycle，覆盖：
+Phase 4G6 已补齐一类 synthetic active long-run soak test。它不真实运行数小时，但模拟
+50+ 个发生状态推进的 active tick，并覆盖：
 
 - 多次 segment compaction；
 - 旧 transcript 不进入新 provider input；
@@ -496,6 +495,11 @@ decision / patch / validator / compaction cycle，覆盖：
 - materialization 不重复；
 - goal 未完成时不静默停止；
 - liveness violation 能触发 gap decision / strategy update。
+
+当前结果为 62 active ticks、6 个 accepted checkpoints、fallback degraded/recovered、goal
+gap reopen/resolution 和 consistency 0/0；另有三轮真实 no-fallback compaction 通过。该结果
+满足 Phase 4 的长期运行 MVP 门槛，但不替代数小时真实 worker、多 provider 或 daemon
+restart soak。
 
 ## 当前验证命令
 

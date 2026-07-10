@@ -185,6 +185,127 @@ def run_real_model_smoke(
     return report
 
 
+def run_real_compaction_soak(
+    conn: sqlite3.Connection,
+    job_id: str,
+    *,
+    provider_source: dict[str, Any],
+    cycles: int = 3,
+    profile_names: Optional[list[str]] = None,
+    max_retries: int = 0,
+    timeout_seconds: Optional[float] = None,
+) -> dict[str, Any]:
+    """Run a bounded sequence of real no-fallback compactions."""
+
+    rk.ensure_runtime_schema(conn)
+    source = provider_source or {}
+    if not source.get("provider_name") or not source.get("model"):
+        raise ValueError("real compaction soak requires an explicit model source")
+    bounded_cycles = max(3, min(int(cycles), 5))
+    profiles = profile_names or [
+        "token_budget_compaction",
+        "validator_boundary_compaction",
+        "anti_stuck_compaction",
+    ]
+    if not profiles:
+        raise ValueError("real compaction soak requires at least one compaction profile")
+
+    results: list[dict[str, Any]] = []
+    for index in range(bounded_cycles):
+        profile_name = profiles[index % len(profiles)]
+        event_id = rk._event(
+            conn,
+            job_id,
+            "real_compaction_soak_cycle_started",
+            {"cycle": index + 1, "profile_name": profile_name},
+            source="runtime_real_compaction_soak",
+        )
+        rk.append_decision_segment_entry(
+            conn,
+            job_id,
+            "real_compaction_soak_delta",
+            {"cycle": index + 1, "profile_name": profile_name, "event_id": event_id},
+            event_id=event_id,
+            ref_type="execution_event",
+            ref_id=str(event_id),
+        )
+        provider = _compaction_provider(
+            source,
+            profile_name=profile_name,
+            max_retries=max_retries,
+            timeout_seconds=timeout_seconds,
+        )
+        result = rd.compact_decision_session(
+            conn,
+            job_id,
+            profile_name=profile_name,
+            reason=f"phase4g6_real_compaction_cycle_{index + 1}",
+            compaction_provider=provider,
+            fallback_to_deterministic=False,
+        )
+        chain = rd.validate_decision_context_chain(conn, job_id)
+        results.append(
+            {
+                "cycle": index + 1,
+                "profile_name": profile_name,
+                "status": result.get("status"),
+                "fallback_used": bool(result.get("fallback_used")),
+                "parse_status": result.get("parse_status")
+                or (result.get("provider_result") or {}).get("parse_status"),
+                "provider_validation": result.get("provider_validation"),
+                "checkpoint_id": result.get("checkpoint_id"),
+                "source_segment_id": result.get("source_segment_id"),
+                "new_segment_id": result.get("new_segment_id"),
+                "active_segment_preserved": bool(result.get("active_segment_preserved")),
+                "reason": result.get("reason"),
+                "context_chain_status": chain.get("status"),
+                "selected_checkpoint_id": chain.get("selected_checkpoint_id"),
+            }
+        )
+
+    consistency = rk.check_runtime_consistency(conn, job_id, write_events=False)
+    health = rd.summarize_compaction_health(conn, job_id)
+    report = {
+        "job_id": job_id,
+        "provider": _source_summary(source),
+        "requested_cycles": bounded_cycles,
+        "completed_cycles": len(results),
+        "profiles": profiles,
+        "results": results,
+        "accepted_count": sum(item["status"] == "compacted" for item in results),
+        "all_accepted": all(
+            item["status"] == "compacted"
+            and not item["fallback_used"]
+            and item["context_chain_status"] == "valid"
+            for item in results
+        ),
+        "compaction_health": health,
+        "consistency": {
+            "status": consistency["status"],
+            "violation_count": consistency["violation_count"],
+            "warning_count": consistency["warning_count"],
+            "violations": consistency["violations"][:20],
+            "warnings": consistency["warnings"][:20],
+        },
+        "secrets_leaked": False,
+    }
+    report["secrets_leaked"] = _secrets_leaked(report, source)
+    rk._event(
+        conn,
+        job_id,
+        "real_compaction_soak_completed",
+        {
+            "requested_cycles": bounded_cycles,
+            "accepted_count": report["accepted_count"],
+            "all_accepted": report["all_accepted"],
+            "consistency_status": report["consistency"]["status"],
+            "secrets_leaked": report["secrets_leaked"],
+        },
+        source="runtime_real_compaction_soak",
+    )
+    return report
+
+
 def _decision_provider(source: dict[str, Any], *, profile_name: str, max_retries: int, timeout_seconds: Optional[float]) -> Any:
     return rd.RuntimeDecisionProvider(
         provider_name=source["provider_name"],

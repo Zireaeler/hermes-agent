@@ -21,6 +21,7 @@ from hermes_cli import kanban_runtime_memory as rm
 
 
 PHASE4G_SCENARIO = "phase4g-baseline"
+PHASE4G6_SCENARIO = "phase4g6-active-long-run"
 OLD_SEGMENT_SENTINEL = "phase4g_old_segment_sentinel_should_not_reappear"
 
 
@@ -125,6 +126,146 @@ class Phase4GScriptedDecisionProvider:
         ]
 
 
+class Phase4G6ActiveDecisionProvider:
+    """Create one goal-linked primary node per active long-run cycle."""
+
+    profile_name = "graph_patch_decision"
+
+    def __init__(self, target_nodes: int = 25) -> None:
+        self.target_nodes = max(25, int(target_nodes))
+        self.requests: list[dict[str, Any]] = []
+        self.call_count = 0
+        self.node_count = 0
+
+    def decide(self, request: rd.DecisionProviderRequest) -> rd.DecisionProviderResult:
+        self.requests.append(request.to_dict())
+        self.call_count += 1
+        if self.call_count == 1:
+            patch = {
+                "schema": rk.PATCH_SCHEMA,
+                "expected_revision": request.db_revision,
+                "rationale_summary": "exercise unlinked node validator rejection",
+                "ops": [
+                    {
+                        "op": "create_node",
+                        "node_key": "phase4g6-invalid-unlinked",
+                        "node_type": "implementation",
+                        "title": "Invalid unlinked node",
+                        "description": "Intentionally missing goal linkage.",
+                    }
+                ],
+            }
+            step = "unlinked-rejection"
+        elif self.call_count == 2:
+            patch = {
+                "schema": rk.PATCH_SCHEMA,
+                "expected_revision": request.db_revision - 1,
+                "rationale_summary": "exercise stale revision rejection",
+                "ops": [],
+            }
+            step = "stale-revision"
+        elif self.node_count >= self.target_nodes:
+            patch = {
+                "schema": rk.PATCH_SCHEMA,
+                "expected_revision": request.db_revision,
+                "rationale_summary": "long-run node budget exhausted",
+                "ops": [],
+            }
+            step = "node-budget-exhausted"
+        else:
+            self.node_count += 1
+            node_key = f"phase4g6-cycle-{self.node_count:02d}"
+            gaps = [
+                item
+                for item in request.delta.get("goal_gaps") or []
+                if item.get("gap_type") not in {"no_runnable_graph", "no_runnable_for_open_goal"}
+            ]
+            gap_keys = [gaps[0]["gap_key"]] if gaps else []
+            op = {
+                "op": "create_node",
+                "node_key": node_key,
+                "node_type": "implementation",
+                "title": f"Long-run coherent delivery {self.node_count}",
+                "description": "Produce the next bounded evidence increment for the long-run goal.",
+                "goal_item_keys": ["long-run-result"],
+                "gap_keys": gap_keys,
+                "contract": {
+                    "outcome": f"Produce evidence increment {self.node_count} for the long-run result.",
+                    "acceptance_criteria": [
+                        "The evidence increment is explicit",
+                        "The worker receipt remains linked to long-run-result",
+                    ],
+                    "success_evidence": ["worker_summary", "verification"],
+                    "declared_write_scope": [],
+                    "prohibited_actions": ["production_deployment"],
+                },
+            }
+            if self.node_count == 5:
+                op["requested_capabilities"] = ["secret_access"]
+            patch = {
+                "schema": rk.PATCH_SCHEMA,
+                "expected_revision": request.db_revision,
+                "rationale_summary": f"create coherent long-run node {self.node_count}",
+                "ops": [op],
+            }
+            step = node_key
+        return rd.DecisionProviderResult(
+            patch=patch,
+            raw_output={"scripted_step": step},
+            provider_name="phase4g6-active-scripted",
+            model="deterministic",
+            profile_name=self.profile_name,
+            parse_status="parsed",
+        )
+
+
+class _FailingCompactionProvider:
+    provider_name = "phase4g6-failing-compactor"
+    model = "deterministic-failure"
+
+    def compact(self, request: rd.CompactionProviderRequest) -> rd.CompactionProviderResult:
+        return rd.CompactionProviderResult(
+            checkpoint=None,
+            raw_output="synthetic compaction provider failure",
+            provider_name=self.provider_name,
+            model=self.model,
+            profile_name=request.profile["profile_name"],
+            profile_version=request.profile["profile_version"],
+            profile_hash=request.profile["profile_hash"],
+            parse_status="provider_error",
+            error="synthetic compaction provider failure",
+        )
+
+
+class _AcceptingCompactionProvider:
+    provider_name = "phase4g6-accepting-compactor"
+    model = "db-derived-candidate"
+
+    def __init__(self, conn: sqlite3.Connection, *, invalid_provenance: bool = False) -> None:
+        self.conn = conn
+        self.invalid_provenance = invalid_provenance
+
+    def compact(self, request: rd.CompactionProviderRequest) -> rd.CompactionProviderResult:
+        checkpoint = rd.build_deterministic_checkpoint(
+            self.conn,
+            request.job_id,
+            request.source_segment["id"],
+            profile_name=request.profile["profile_name"],
+        )
+        if self.invalid_provenance and checkpoint["open_goal_gaps"]:
+            checkpoint["open_goal_gaps"][0].pop("source_refs", None)
+        return rd.CompactionProviderResult(
+            checkpoint=checkpoint,
+            raw_output=checkpoint,
+            provider_name=self.provider_name,
+            model=self.model,
+            profile_name=request.profile["profile_name"],
+            profile_version=request.profile["profile_version"],
+            profile_hash=request.profile["profile_hash"],
+            parse_status="parsed",
+        )
+
+
 def run_runtime_soak(
     conn: sqlite3.Connection,
     scenario: str = PHASE4G_SCENARIO,
@@ -134,6 +275,12 @@ def run_runtime_soak(
 ) -> dict[str, Any]:
     """Run the Phase 4G deterministic soak and return a bounded report."""
 
+    if scenario == PHASE4G6_SCENARIO:
+        return run_active_long_run_soak(
+            conn,
+            max_ticks=max_ticks,
+            workspace_path=workspace_path,
+        )
     if scenario != PHASE4G_SCENARIO:
         raise ValueError(f"unknown runtime soak scenario {scenario!r}")
     rk.ensure_runtime_schema(conn)
@@ -263,6 +410,296 @@ def run_runtime_soak(
     return report
 
 
+def run_active_long_run_soak(
+    conn: sqlite3.Connection,
+    *,
+    max_ticks: Optional[int] = None,
+    workspace_path: Optional[str] = None,
+) -> dict[str, Any]:
+    """Run a production-initialized long soak with meaningful active ticks."""
+
+    rk.ensure_runtime_schema(conn)
+    active_tick_target = max(50, int(max_ticks or 50))
+    workspace = Path(workspace_path) if workspace_path else _default_workspace() / PHASE4G6_SCENARIO
+    workspace.mkdir(parents=True, exist_ok=True)
+    root_task_id = kb.create_task(
+        conn,
+        title="phase4g6 active long-run soak",
+        body="phase4g6 active long-run soak",
+        created_by="runtime_soak",
+        workspace_kind="worktree",
+        workspace_path=str(workspace),
+        tenant="runtime-soak",
+        initial_status="running",
+    )
+    job_id = rk.create_runtime_job(
+        conn,
+        root_task_id,
+        "phase4g6 production initialized active long-run reliability soak",
+        workspace_path=str(workspace),
+        goal_items=[
+            {
+                "item_key": "long-run-result",
+                "description": "long-run runtime result has full verified evidence",
+                "required": True,
+                "verifier_required": True,
+            }
+        ],
+        initialization_mode="provider_first",
+    )
+    provider = Phase4G6ActiveDecisionProvider(target_nodes=25)
+    ticks: list[dict[str, Any]] = []
+    sentinels: list[str] = []
+    compaction_results: list[dict[str, Any]] = []
+    compaction_schedule = {4, 8, 12, 16, 20, 21, 24}
+    completed_at_compaction: set[int] = set()
+    crashed_node_key = "phase4g6-cycle-09"
+    crash_injected = False
+    authorized = False
+    gap_reopened = False
+    max_iterations = max(active_tick_target * 8, 500)
+
+    stale_lock = rk.acquire_runtime_advance_lock(conn, job_id, owner="phase4g6-stale-owner", ttl_seconds=60)
+    conn.execute("UPDATE runtime_jobs SET claim_expires_at = 0 WHERE id = ?", (job_id,))
+
+    for iteration in range(max_iterations):
+        tick = _tick(
+            conn,
+            job_id,
+            provider,
+            label=f"active-supervisor-{iteration + 1}",
+            owner="phase4g6-takeover" if iteration == 0 else None,
+        )
+        ticks.append(tick)
+
+        waiting_capability = conn.execute(
+            """
+            SELECT node_key FROM execution_nodes
+             WHERE job_id = ? AND state = 'waiting_human'
+             ORDER BY created_at, node_key LIMIT 1
+            """,
+            (job_id,),
+        ).fetchone()
+        if waiting_capability and not authorized:
+            before = _counts(conn, job_id)
+            rk.authorize_runtime_capability(
+                conn,
+                job_id,
+                ["secret_access"],
+                reason="phase4g6 bounded human authorization",
+            )
+            ticks.append(_action_tick(conn, job_id, "capability-authorization", before, {"status": "authorized"}))
+            authorized = True
+
+        running_nodes = conn.execute(
+            """
+            SELECT * FROM execution_nodes
+             WHERE job_id = ? AND state = 'running' AND latest_task_id IS NOT NULL
+             ORDER BY created_at, node_key
+            """,
+            (job_id,),
+        ).fetchall()
+        for node in running_nodes:
+            task = kb.get_task(conn, node["latest_task_id"])
+            if task is None or task.status in {"done", "blocked", "archived"}:
+                continue
+            if node["node_key"] == crashed_node_key and not crash_injected:
+                before = _counts(conn, job_id)
+                _mark_latest_run_crashed(conn, job_id, node["node_key"])
+                ticks.append(_action_tick(conn, job_id, "worker-crash-injected", before, {"status": "crashed"}))
+                crash_injected = True
+                continue
+            node_number = int(str(node["node_key"]).rsplit("-", 1)[-1])
+            final = node_number == provider.target_nodes
+            temporary_satisfaction = node_number == 14
+            evidence = {
+                "verdict": "succeeded",
+                "summary": f"phase4g6 evidence increment {node_number}",
+                "verification": {
+                    "passed": final or temporary_satisfaction,
+                    "summary": "verification passed" if final or temporary_satisfaction else "partial evidence recorded",
+                },
+            }
+            if final or temporary_satisfaction:
+                evidence["claimed_goal_items"] = ["long-run-result"]
+            else:
+                evidence["partial_goal_items"] = ["long-run-result"]
+            _complete_node(conn, job_id, node["node_key"], evidence)
+
+        completed_count = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM execution_nodes WHERE job_id = ? AND state = 'succeeded' AND node_key LIKE 'phase4g6-cycle-%'",
+                (job_id,),
+            ).fetchone()[0]
+            or 0
+        )
+        goal_state = conn.execute(
+            """
+            SELECT gi.state
+              FROM goal_items gi
+              JOIN goal_contracts gc ON gc.id = gi.contract_id
+             WHERE gc.job_id = ? AND gi.item_key = 'long-run-result'
+            """,
+            (job_id,),
+        ).fetchone()[0]
+        if completed_count == 14 and goal_state == "satisfied" and not gap_reopened:
+            before = _counts(conn, job_id)
+            reopening_node = conn.execute(
+                "SELECT id FROM execution_nodes WHERE job_id = ? AND node_key = 'phase4g6-cycle-14'",
+                (job_id,),
+            ).fetchone()
+            rk.update_progress_ledger(
+                conn,
+                reopening_node["id"],
+                {
+                    "summary": "later verification invalidated the temporary result",
+                    "contradicted_goal_items": ["long-run-result"],
+                    "verification": {"passed": False, "summary": "later verification failed"},
+                },
+            )
+            rk.reduce_runtime_job(conn, job_id)
+            ticks.append(_action_tick(conn, job_id, "goal-gap-reopened", before, {"status": "reopened"}))
+            gap_reopened = True
+        if completed_count in compaction_schedule and completed_count not in completed_at_compaction:
+            completed_at_compaction.add(completed_count)
+            profile_name = {
+                4: "token_budget_compaction",
+                8: "validator_boundary_compaction",
+                12: "anti_stuck_compaction",
+                16: "token_budget_compaction",
+                20: "validator_boundary_compaction",
+                21: "token_budget_compaction",
+                24: "anti_stuck_compaction",
+            }[completed_count]
+            sentinel = f"SEGMENT_SENTINEL_{completed_count}_{len(sentinels) + 1}"
+            sentinels.append(sentinel)
+            before = _counts(conn, job_id)
+            rk.append_decision_segment_entry(
+                conn,
+                job_id,
+                "phase4g6_segment_marker",
+                {"marker": sentinel},
+                payload_text=sentinel,
+            )
+            if completed_count in {4, 8}:
+                result = rd.compact_decision_session(
+                    conn,
+                    job_id,
+                    profile_name=profile_name,
+                    reason=f"phase4g6-cycle-{completed_count}-fallback",
+                    compaction_provider=_FailingCompactionProvider(),
+                )
+            elif completed_count == 20:
+                result = rd.compact_decision_session(
+                    conn,
+                    job_id,
+                    profile_name=profile_name,
+                    reason="phase4g6-no-fallback-rejection",
+                    compaction_provider=_AcceptingCompactionProvider(conn, invalid_provenance=True),
+                    fallback_to_deterministic=False,
+                )
+            elif completed_count in {12, 24}:
+                result = rd.compact_decision_session(
+                    conn,
+                    job_id,
+                    profile_name=profile_name,
+                    reason=f"phase4g6-cycle-{completed_count}-provider-recovery",
+                    compaction_provider=_AcceptingCompactionProvider(conn),
+                    fallback_to_deterministic=False,
+                )
+            else:
+                result = rd.compact_decision_session(
+                    conn,
+                    job_id,
+                    profile_name=profile_name,
+                    reason=f"phase4g6-cycle-{completed_count}-deterministic",
+                )
+            compaction_results.append(result)
+            ticks.append(_action_tick(conn, job_id, f"compaction-{completed_count}", before, result))
+
+        state = rk.reduce_runtime_job(conn, job_id)["state"]
+        active_count = sum(bool(item.get("active")) for item in ticks)
+        if state == "done" and active_count >= active_tick_target:
+            break
+    else:
+        raise RuntimeError("phase4g6 active long-run soak exceeded iteration budget")
+
+    rendered = rd.render_decision_prompt(
+        rd.build_decision_provider_request(conn, job_id, rk.build_decision_delta(conn, job_id))
+    )
+    rendered_text = json.dumps(rendered, ensure_ascii=False, sort_keys=True)
+    context_chain = rd.validate_decision_context_chain(conn, job_id)
+    consistency = rk.check_runtime_consistency(conn, job_id, write_events=True)
+    status = rk.status_runtime_job(conn, job_id)
+    active_ticks = [item for item in ticks if item.get("active")]
+    noop_ticks = [item for item in ticks if not item.get("active")]
+    patch_counts = _patch_counts(conn, job_id)
+    event_counts = _event_counts(conn, job_id)
+    health = rd.summarize_compaction_health(conn, job_id)
+    report = {
+        "scenario": PHASE4G6_SCENARIO,
+        "job_id": job_id,
+        "ticks": len(ticks),
+        "active_tick_count": len(active_ticks),
+        "noop_tick_count": len(noop_ticks),
+        "terminal_noop_padding_count": sum(
+            not item.get("active") and item.get("job_state") == "done" for item in ticks
+        ),
+        "final_state": status["job"]["state"],
+        "goal_completion": status["job"]["state"] == "done",
+        "graph_revision_delta": int(status["job"]["graph_revision"]),
+        "decision_count": int(
+            conn.execute("SELECT COUNT(*) FROM kernel_decisions WHERE job_id = ?", (job_id,)).fetchone()[0] or 0
+        ),
+        "patch_applied": patch_counts.get("applied", 0),
+        "patch_rejected": patch_counts.get("rejected", 0),
+        "materialization_attempts": int(
+            conn.execute("SELECT COUNT(*) FROM node_materializations WHERE job_id = ?", (job_id,)).fetchone()[0] or 0
+        ),
+        "worker_recoveries": event_counts.get("worker_run_crashed", 0),
+        "lease_takeovers": 1 if stale_lock.get("acquired") else 0,
+        "compactions": int(
+            conn.execute("SELECT COUNT(*) FROM decision_checkpoints WHERE job_id = ?", (job_id,)).fetchone()[0] or 0
+        ),
+        "compaction_attempts": len(compaction_results),
+        "compaction_statuses": [item.get("status") for item in compaction_results],
+        "compaction_profiles": [item.get("profile_name") for item in compaction_results],
+        "compaction_health": health,
+        "quality_degraded_events": event_counts.get("compaction_quality_degraded", 0),
+        "quality_recovered_events": event_counts.get("compaction_quality_recovered", 0),
+        "goal_gap_reopened_events": event_counts.get("goal_gap_reopened", 0),
+        "historical_segment_sentinels": len(sentinels),
+        "historical_sentinels_excluded": all(sentinel not in rendered_text for sentinel in sentinels),
+        "context_chain_validation": {
+            key: context_chain.get(key)
+            for key in (
+                "status",
+                "selection_mode",
+                "latest_checkpoint_id",
+                "selected_checkpoint_id",
+                "checked_checkpoint_count",
+                "errors",
+            )
+        },
+        "required_goals": [
+            {"item_key": item["item_key"], "state": item["state"], "required": bool(item["required"])}
+            for item in status["goal_items"]
+            if item["required"]
+        ],
+        "liveness_violations": event_counts.get("liveness_violation", 0),
+        "ticks_detail": ticks[:100],
+        "consistency": {
+            "status": consistency["status"],
+            "violation_count": consistency["violation_count"],
+            "warning_count": consistency["warning_count"],
+            "violations": consistency["violations"][:20],
+            "warnings": consistency["warnings"][:20],
+        },
+    }
+    rk._event(conn, job_id, "runtime_soak_completed", report)
+    return report
+
+
 def _default_workspace() -> Path:
     home = Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes")).expanduser()
     return home / "runtime-soak" / PHASE4G_SCENARIO
@@ -288,6 +725,7 @@ def _tick(
     )
     consistency = rk.check_runtime_consistency(conn, job_id, write_events=False)
     after = _counts(conn, job_id)
+    event_delta = {key: after[key] - before.get(key, 0) for key in after}
     return {
         "label": label,
         "status": result.get("status"),
@@ -295,12 +733,31 @@ def _tick(
         "job_state": rk._job(conn, job_id)["state"],
         "legal_waiting_reason": rk.runtime_legal_waiting_reason(conn, job_id),
         "result": result.get("result"),
-        "event_delta": {key: after[key] - before.get(key, 0) for key in after},
+        "active": any(value != 0 for value in event_delta.values()),
+        "event_delta": event_delta,
         "consistency": {
             "status": consistency["status"],
             "violation_count": consistency["violation_count"],
             "warning_count": consistency["warning_count"],
         },
+    }
+
+
+def _action_tick(
+    conn: sqlite3.Connection,
+    job_id: str,
+    label: str,
+    before: dict[str, int],
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    after = _counts(conn, job_id)
+    event_delta = {key: after[key] - before.get(key, 0) for key in after}
+    return {
+        "label": label,
+        "status": result.get("status"),
+        "job_state": rk._job(conn, job_id)["state"],
+        "active": any(value != 0 for value in event_delta.values()),
+        "event_delta": event_delta,
     }
 
 
@@ -399,10 +856,15 @@ def _counts(conn: sqlite3.Connection, job_id: str) -> dict[str, int]:
         "events": "SELECT COUNT(*) FROM execution_events WHERE job_id = ?",
         "patches": "SELECT COUNT(*) FROM graph_patches WHERE job_id = ?",
         "decisions": "SELECT COUNT(*) FROM kernel_decisions WHERE job_id = ?",
+        "nodes": "SELECT COUNT(*) FROM execution_nodes WHERE job_id = ?",
         "materializations": "SELECT COUNT(*) FROM node_materializations WHERE job_id = ?",
         "ledger": "SELECT COUNT(*) FROM progress_ledger WHERE job_id = ?",
+        "checkpoints": "SELECT COUNT(*) FROM decision_checkpoints WHERE job_id = ?",
+        "segments": "SELECT COUNT(*) FROM decision_session_segments WHERE job_id = ?",
     }
-    return {key: int(conn.execute(sql, (job_id,)).fetchone()[0] or 0) for key, sql in counts.items()}
+    values = {key: int(conn.execute(sql, (job_id,)).fetchone()[0] or 0) for key, sql in counts.items()}
+    values["graph_revision"] = int(rk._job(conn, job_id)["graph_revision"])
+    return values
 
 
 def _event_counts(conn: sqlite3.Connection, job_id: str) -> dict[str, int]:

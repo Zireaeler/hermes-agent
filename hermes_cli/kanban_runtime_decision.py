@@ -37,6 +37,7 @@ DEFAULT_COMPACTION_POLICY = {
     "max_tail_entries": 8,
     "max_tail_tokens": 2000,
     "default_profile": "token_budget_compaction",
+    "fallback_degraded_threshold": 2,
 }
 CHECKPOINT_FACT_SOURCE_REF_TYPES = {
     "satisfied_goal_items": {"goal_item_key", "evidence_ref"},
@@ -268,13 +269,232 @@ def latest_decision_session(conn: sqlite3.Connection, job_id: str) -> dict[str, 
 def latest_decision_checkpoint(conn: sqlite3.Connection, job_id: str) -> Optional[dict[str, Any]]:
     ensure_decision_schema(conn)
     row = conn.execute(
-        "SELECT * FROM decision_checkpoints WHERE job_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+        "SELECT * FROM decision_checkpoints WHERE job_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
         (job_id,),
     ).fetchone()
     data = _row(row)
     if data is not None:
         data["checkpoint"] = _loads(data.get("payload_json") or data.get("checkpoint_json") or data.get("checkpoint"))
     return data
+
+
+def _decision_checkpoint_rows(conn: sqlite3.Connection, job_id: str) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM decision_checkpoints WHERE job_id = ? ORDER BY created_at DESC, rowid DESC",
+        (job_id,),
+    ).fetchall()
+    checkpoints: list[dict[str, Any]] = []
+    for row in rows:
+        data = _row(row) or {}
+        data["checkpoint"] = _loads(data.get("payload_json") or data.get("checkpoint_json"))
+        checkpoints.append(data)
+    return checkpoints
+
+
+def _validate_context_checkpoint_row(
+    conn: sqlite3.Connection,
+    job_id: str,
+    checkpoint: dict[str, Any],
+    active_segment: dict[str, Any],
+) -> list[str]:
+    errors: list[str] = []
+    checkpoint_id = checkpoint.get("id")
+    payload = checkpoint.get("checkpoint")
+    if checkpoint.get("validator_status") != "accepted":
+        errors.append("checkpoint validator status is not accepted")
+    if not isinstance(payload, dict):
+        return [*errors, "checkpoint payload is not an object"]
+    required = {
+        "objective_summary",
+        "goal_contract_revision",
+        "satisfied_goal_items",
+        "open_goal_gaps",
+        "open_blockers",
+        "graph_frontier",
+        "metadata",
+    }
+    missing = sorted(key for key in required if key not in payload)
+    if missing:
+        errors.append(f"checkpoint payload missing fields: {', '.join(missing)}")
+    else:
+        facts = _validate_checkpoint_fact_payload(conn, job_id, payload)
+        if facts["status"] != "accepted":
+            errors.append(str(facts["reason"]))
+
+    source_segment_id = checkpoint.get("source_segment_id")
+    source_segment = _row(
+        conn.execute(
+            "SELECT * FROM decision_session_segments WHERE job_id = ? AND id = ?",
+            (job_id, source_segment_id),
+        ).fetchone()
+    )
+    if source_segment is None:
+        errors.append("checkpoint source segment is missing")
+    else:
+        if source_segment.get("decision_session_id") != checkpoint.get("decision_session_id"):
+            errors.append("checkpoint and source segment decision sessions do not match")
+        if source_segment.get("state") != "compacted":
+            errors.append("checkpoint source segment is not compacted")
+        if source_segment.get("compacted_checkpoint_id") != checkpoint_id:
+            errors.append("source segment compacted checkpoint does not match")
+        if int(active_segment.get("segment_index") or 0) <= int(source_segment.get("segment_index") or 0):
+            errors.append("active segment does not follow checkpoint source segment")
+
+    current_revision = int(
+        conn.execute("SELECT graph_revision FROM runtime_jobs WHERE id = ?", (job_id,)).fetchone()[0]
+    )
+    checkpoint_revision = checkpoint.get("graph_revision")
+    if checkpoint_revision is not None and int(checkpoint_revision) > current_revision:
+        errors.append("checkpoint graph revision is in the future")
+
+    covered_start = checkpoint.get("covered_entry_start")
+    covered_end = checkpoint.get("covered_entry_end")
+    if covered_start is None or covered_end is None or int(covered_start) > int(covered_end):
+        errors.append("checkpoint covered entry range is invalid")
+    elif source_segment is not None:
+        covered_endpoints = conn.execute(
+            """
+            SELECT COUNT(*) FROM decision_segment_entries
+             WHERE segment_id = ? AND id IN (?, ?)
+            """,
+            (source_segment_id, int(covered_start), int(covered_end)),
+        ).fetchone()[0]
+        expected_endpoints = 1 if int(covered_start) == int(covered_end) else 2
+        if int(covered_endpoints) != expected_endpoints:
+            errors.append("checkpoint covered entry range endpoints are not in source segment")
+
+    supersedes = checkpoint.get("supersedes_checkpoint_id")
+    if supersedes and conn.execute(
+        "SELECT 1 FROM decision_checkpoints WHERE job_id = ? AND id = ?",
+        (job_id, supersedes),
+    ).fetchone() is None:
+        errors.append("checkpoint supersedes reference is missing")
+    checkpoint_text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    if "selected_hints" in checkpoint_text or "non_authoritative_notice" in checkpoint_text:
+        errors.append("checkpoint contains runtime memory hint content")
+    return errors
+
+
+def validate_decision_context_chain(
+    conn: sqlite3.Connection,
+    job_id: str,
+    *,
+    emit_event: bool = False,
+) -> dict[str, Any]:
+    """Validate and select checkpoint context without restoring runtime truth."""
+
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    rk.ensure_runtime_schema(conn)
+    session = latest_decision_session(conn, job_id)
+    active_rows = [
+        _row(row) or {}
+        for row in conn.execute(
+            "SELECT * FROM decision_session_segments WHERE job_id = ? AND state = 'active' ORDER BY segment_index",
+            (job_id,),
+        ).fetchall()
+    ]
+    chain_errors: list[str] = []
+    if len(active_rows) != 1:
+        chain_errors.append(f"expected one active decision segment, found {len(active_rows)}")
+    if not active_rows:
+        return {
+            "status": "invalid",
+            "selection_mode": "db_derived",
+            "latest_checkpoint_id": session.get("latest_checkpoint_id"),
+            "selected_checkpoint_id": None,
+            "checked_checkpoint_count": 0,
+            "errors": chain_errors,
+        }
+    active = active_rows[-1]
+    if session.get("active_segment_id") != active.get("id"):
+        chain_errors.append("decision session active segment pointer does not match")
+    if active.get("decision_session_id") != session.get("id"):
+        chain_errors.append("active segment belongs to a different decision session")
+
+    checkpoints = _decision_checkpoint_rows(conn, job_id)
+    if not checkpoints:
+        if session.get("latest_checkpoint_id"):
+            chain_errors.append("decision session points to a missing latest checkpoint")
+        return {
+            "status": "valid" if not chain_errors else "invalid",
+            "selection_mode": "db_derived",
+            "latest_checkpoint_id": None,
+            "selected_checkpoint_id": None,
+            "checked_checkpoint_count": 0,
+            "errors": chain_errors,
+        }
+
+    latest_id = checkpoints[0]["id"]
+    if session.get("latest_checkpoint_id") != latest_id:
+        chain_errors.append("decision session latest checkpoint pointer does not match")
+    checked: list[dict[str, Any]] = []
+    selected: Optional[dict[str, Any]] = None
+    for checkpoint in checkpoints:
+        errors = _validate_context_checkpoint_row(conn, job_id, checkpoint, active)
+        if checkpoint.get("decision_session_id") != session.get("id"):
+            errors.append("checkpoint belongs to a different decision session")
+        checked.append({"checkpoint_id": checkpoint["id"], "errors": errors})
+        if not errors and selected is None:
+            selected = checkpoint
+
+    latest_errors = checked[0]["errors"]
+    if chain_errors:
+        selected = None
+        status = "invalid"
+        selection_mode = "db_derived"
+    elif selected is None:
+        status = "invalid"
+        selection_mode = "db_derived"
+    elif selected["id"] == latest_id and not chain_errors:
+        status = "valid"
+        selection_mode = "latest_checkpoint"
+    else:
+        status = "degraded"
+        selection_mode = "prior_checkpoint" if selected["id"] != latest_id else "latest_checkpoint"
+
+    errors = [*chain_errors, *latest_errors]
+    if emit_event and status != "valid":
+        key = f"{latest_id}:{status}:{selection_mode}"
+        existing = conn.execute(
+            "SELECT payload_json FROM execution_events WHERE job_id = ? AND event_type = 'decision_context_checkpoint_invalid'",
+            (job_id,),
+        ).fetchall()
+        if not any(_loads(row["payload_json"]).get("key") == key for row in existing):
+            rk._event(
+                conn,
+                job_id,
+                "decision_context_checkpoint_invalid",
+                {
+                    "key": key,
+                    "latest_checkpoint_id": latest_id,
+                    "selected_checkpoint_id": (selected or {}).get("id"),
+                    "selection_mode": selection_mode,
+                    "errors": errors[:20],
+                },
+                source="runtime_compaction",
+            )
+    return {
+        "status": status,
+        "selection_mode": selection_mode,
+        "latest_checkpoint_id": latest_id,
+        "selected_checkpoint_id": (selected or {}).get("id"),
+        "selected_checkpoint": selected,
+        "active_segment_id": active.get("id"),
+        "checked_checkpoint_count": len(checked),
+        "errors": errors,
+        "checks": checked[:20],
+    }
+
+
+def select_decision_context_checkpoint(
+    conn: sqlite3.Connection,
+    job_id: str,
+    *,
+    emit_event: bool = True,
+) -> tuple[Optional[dict[str, Any]], dict[str, Any]]:
+    validation = validate_decision_context_chain(conn, job_id, emit_event=emit_event)
+    return validation.get("selected_checkpoint"), validation
 
 
 def load_compaction_profile(profile_name: str) -> dict[str, Any]:
@@ -478,6 +698,24 @@ def validate_decision_checkpoint(conn: sqlite3.Connection, job_id: str, checkpoi
         if int(metadata.get(rev_key, current_revision)) != current_revision:
             return {"status": "rejected", "reason": f"checkpoint {rev_key} conflicts with current revision"}
 
+    fact_validation = _validate_checkpoint_fact_payload(conn, job_id, checkpoint_payload)
+    if fact_validation["status"] != "accepted":
+        return fact_validation
+
+    current_open_human = conn.execute(
+        "SELECT COUNT(*) FROM execution_nodes WHERE job_id = ? AND state = 'waiting_human'",
+        (job_id,),
+    ).fetchone()[0]
+    if current_open_human and not checkpoint_payload.get("open_blockers"):
+        return {"status": "rejected", "reason": "checkpoint omits active human gate blocker"}
+    return {"status": "accepted"}
+
+
+def _validate_checkpoint_fact_payload(
+    conn: sqlite3.Connection,
+    job_id: str,
+    checkpoint_payload: dict[str, Any],
+) -> dict[str, Any]:
     goal_keys = {
         row["item_key"]
         for row in conn.execute(
@@ -594,12 +832,6 @@ def validate_decision_checkpoint(conn: sqlite3.Connection, job_id: str, checkpoi
                 if item.get("verification_state") not in {"verified", "waived"}:
                     return {"status": "rejected", "reason": "satisfied goal item must be verified or waived"}
 
-    current_open_human = conn.execute(
-        "SELECT COUNT(*) FROM execution_nodes WHERE job_id = ? AND state = 'waiting_human'",
-        (job_id,),
-    ).fetchone()[0]
-    if current_open_human and not checkpoint_payload.get("open_blockers"):
-        return {"status": "rejected", "reason": "checkpoint omits active human gate blocker"}
     return {"status": "accepted"}
 
 
@@ -1409,14 +1641,17 @@ def compact_decision_session(
             """,
             (profile_name, _now(), _now(), session["id"]),
         )
+        health = _sync_compaction_health_events(conn, job_id)
         return {
             "status": "rejected",
             "reason": validation["reason"],
             "source_segment_id": source_segment["id"],
+            "profile_name": profile_name,
             "active_segment_preserved": True,
             "provider_result": provider_result.to_dict(),
             "provider_validation": provider_validation,
             "fallback_used": fallback_used,
+            "compaction_health": health,
         }
 
     profile = _profile_metadata(profile_name)
@@ -1555,6 +1790,7 @@ def compact_decision_session(
         ref_type="decision_checkpoint",
         ref_id=checkpoint_id,
     )
+    health = _sync_compaction_health_events(conn, job_id)
     return {
         "status": "compacted",
         "job_id": job_id,
@@ -1572,7 +1808,145 @@ def compact_decision_session(
         "parse_status": provider_result.parse_status,
         "provider_validation": provider_validation,
         "fallback_used": fallback_used or provider_result.fallback_used,
+        "compaction_health": health,
     }
+
+
+def summarize_compaction_health(
+    conn: sqlite3.Connection,
+    job_id: str,
+    policy: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Derive provider compaction health from persisted decision entries."""
+
+    resolved_policy = _job_compaction_policy(conn, job_id, policy)
+    threshold = max(1, int(resolved_policy.get("fallback_degraded_threshold") or 2))
+    rows = conn.execute(
+        """
+        SELECT id, entry_type, payload_json
+          FROM decision_segment_entries
+         WHERE job_id = ?
+           AND entry_type IN (
+               'compaction_requested', 'compaction_provider_output', 'compaction_fallback',
+               'checkpoint_created', 'checkpoint_rejected'
+           )
+         ORDER BY id
+        """,
+        (job_id,),
+    ).fetchall()
+    attempts: list[dict[str, Any]] = []
+    current: Optional[dict[str, Any]] = None
+    for row in rows:
+        entry_type = row["entry_type"]
+        payload = _loads(row["payload_json"])
+        if entry_type == "compaction_requested":
+            current = {
+                "entry_id": int(row["id"]),
+                "provider_mode": payload.get("provider_mode") or "unknown",
+                "profile_name": payload.get("profile_name"),
+                "fallback_used": False,
+                "parse_status": None,
+                "provider_validation": None,
+                "outcome": "pending",
+            }
+            attempts.append(current)
+            continue
+        if current is None:
+            continue
+        if entry_type == "compaction_provider_output":
+            provider_name = payload.get("provider_name")
+            if provider_name != "deterministic" and current.get("parse_status") is None:
+                current["parse_status"] = payload.get("parse_status")
+        elif entry_type == "compaction_fallback":
+            current["fallback_used"] = True
+            provider_result = payload.get("provider_result") or {}
+            current["parse_status"] = current.get("parse_status") or provider_result.get("parse_status")
+            current["provider_validation"] = {"status": "rejected", "reason": payload.get("reason")}
+        elif entry_type == "checkpoint_created":
+            audit = payload.get("provider_audit") or {}
+            current["fallback_used"] = bool(audit.get("fallback_used") or current.get("fallback_used"))
+            current["parse_status"] = current.get("parse_status") or audit.get("parse_status")
+            current["provider_validation"] = audit.get("provider_validation")
+            current["outcome"] = "fallback" if current["fallback_used"] else "accepted"
+            current["checkpoint_id"] = payload.get("checkpoint_id")
+            current = None
+        elif entry_type == "checkpoint_rejected":
+            provider_result = payload.get("provider_result") or {}
+            current["parse_status"] = current.get("parse_status") or provider_result.get("parse_status")
+            current["provider_validation"] = payload.get("provider_validation") or payload.get("validation")
+            current["outcome"] = "rejected"
+            current = None
+
+    provider_attempts = [item for item in attempts if item.get("provider_mode") != "deterministic"]
+    fallback_count = sum(item.get("outcome") == "fallback" for item in provider_attempts)
+    success_count = sum(item.get("outcome") == "accepted" for item in provider_attempts)
+    rejection_count = sum(
+        item.get("outcome") == "rejected"
+        or (item.get("provider_validation") or {}).get("status") == "rejected"
+        for item in provider_attempts
+    )
+    provider_error_count = sum(item.get("parse_status") == "provider_error" for item in provider_attempts)
+    fallback_streak = 0
+    for item in provider_attempts:
+        if item.get("outcome") == "fallback":
+            fallback_streak += 1
+        elif item.get("outcome") == "accepted":
+            fallback_streak = 0
+    last_result = provider_attempts[-1].get("outcome") if provider_attempts else "not_run"
+    if last_result in {"rejected", "pending"}:
+        status = "unavailable"
+    elif fallback_streak >= threshold:
+        status = "degraded"
+    else:
+        status = "healthy"
+    return {
+        "status": status,
+        "provider_attempt_count": len(provider_attempts),
+        "provider_success_count": success_count,
+        "fallback_count": fallback_count,
+        "fallback_streak": fallback_streak,
+        "rejection_count": rejection_count,
+        "provider_error_count": provider_error_count,
+        "last_result": last_result,
+        "degraded_threshold": threshold,
+        "operator_attention_required": status in {"degraded", "unavailable"},
+        "recent_attempts": provider_attempts[-10:],
+    }
+
+
+def _sync_compaction_health_events(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    health = summarize_compaction_health(conn, job_id)
+    latest = conn.execute(
+        """
+        SELECT event_type, payload_json
+          FROM execution_events
+         WHERE job_id = ?
+           AND event_type IN ('compaction_quality_degraded', 'compaction_quality_recovered')
+         ORDER BY id DESC LIMIT 1
+        """,
+        (job_id,),
+    ).fetchone()
+    latest_type = latest["event_type"] if latest else None
+    payload = {
+        key: health[key]
+        for key in (
+            "status",
+            "provider_attempt_count",
+            "provider_success_count",
+            "fallback_count",
+            "fallback_streak",
+            "last_result",
+            "degraded_threshold",
+            "operator_attention_required",
+        )
+    }
+    if health["status"] == "degraded" and latest_type != "compaction_quality_degraded":
+        rk._event(conn, job_id, "compaction_quality_degraded", payload, source="runtime_compaction")
+    elif health["status"] == "healthy" and latest_type == "compaction_quality_degraded":
+        rk._event(conn, job_id, "compaction_quality_recovered", payload, source="runtime_compaction")
+    return health
 
 
 def _short_tail_entries(
@@ -1619,16 +1993,20 @@ def decision_context_status(conn: sqlite3.Connection, job_id: str) -> dict[str, 
 
     rk.ensure_runtime_schema(conn)
     active = rk.ensure_decision_segment(conn, job_id)
-    checkpoint = latest_decision_checkpoint(conn, job_id)
+    latest_checkpoint = latest_decision_checkpoint(conn, job_id)
+    checkpoint, context_validation = select_decision_context_checkpoint(conn, job_id, emit_event=False)
     policy_result = should_compact_decision_session(conn, job_id)
     return {
         "job_id": job_id,
         "active_segment": _row(
             conn.execute("SELECT * FROM decision_session_segments WHERE id = ?", (active["id"],)).fetchone()
         ),
-        "latest_checkpoint": checkpoint,
+        "latest_checkpoint": latest_checkpoint,
+        "selected_checkpoint": checkpoint,
+        "context_chain_validation": context_validation,
         "active_segment_tokens": int(active.get("active_segment_tokens") or 0),
         "compaction_policy": policy_result,
+        "compaction_health": summarize_compaction_health(conn, job_id),
         "provider_input_composition": [
             "stable_runtime_contract",
             "current_goal_contract",
@@ -1719,9 +2097,9 @@ def runtime_observability_snapshot(
                graph_revision, ledger_revision, validator_status, reject_reason,
                covered_entry_start, covered_entry_end, metadata_json, created_at,
                supersedes_checkpoint_id
-          FROM decision_checkpoints
+         FROM decision_checkpoints
          WHERE job_id = ?
-         ORDER BY created_at DESC, id DESC
+         ORDER BY created_at DESC, rowid DESC
          LIMIT ?
         """,
         (job_id, bounded),
@@ -1792,6 +2170,8 @@ def runtime_observability_snapshot(
         "compactions": {
             "latest_status": context["active_segment"].get("state"),
             "policy": context["compaction_policy"],
+            "health": context["compaction_health"],
+            "context_chain_validation": context["context_chain_validation"],
             "entries": compaction_entries,
             "checkpoints": checkpoints,
         },
@@ -1843,7 +2223,7 @@ def build_decision_provider_request(
 
     rk.ensure_decision_segment(conn, job_id)
     session = latest_decision_session(conn, job_id)
-    checkpoint_row = latest_decision_checkpoint(conn, job_id)
+    checkpoint_row, _context_validation = select_decision_context_checkpoint(conn, job_id, emit_event=True)
     if checkpoint_row is None:
         checkpoint = build_checkpoint_payload(conn, job_id)
         short_tail: list[dict[str, Any]] = []
