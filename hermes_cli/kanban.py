@@ -2276,12 +2276,15 @@ def _runtime_model_source_from_codex_config(args: argparse.Namespace) -> dict[st
     import tomllib
     from pathlib import Path
 
-    config_path = Path.home() / ".codex" / "config.toml"
-    auth_path = Path.home() / ".codex" / "auth.json"
+    configured_home = os.getenv("CODEX_HOME", "").strip()
+    codex_home = Path(configured_home).expanduser() if configured_home else Path.home() / ".codex"
+    config_path = codex_home / "config.toml"
+    auth_path = codex_home / "auth.json"
+    source_label = "$CODEX_HOME" if configured_home else "~/.codex"
     if not config_path.exists():
-        raise ValueError("missing ~/.codex/config.toml")
+        raise ValueError(f"missing {source_label}/config.toml")
     if not auth_path.exists():
-        raise ValueError("missing ~/.codex/auth.json")
+        raise ValueError(f"missing {source_label}/auth.json")
     try:
         config = tomllib.loads(config_path.read_text(encoding="utf-8"))
         auth = json.loads(auth_path.read_text(encoding="utf-8"))

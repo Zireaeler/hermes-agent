@@ -52,7 +52,7 @@ Phase 4 的第一版生产化硬化实现已经落地在：
 - runtime capability policy，以及 destructive action / external cost / credential / workspace boundary 的完整安全策略；
 - dashboard 前端 UI 页面；
 - event replay consistency checker；
-- 真实模型 compaction smoke、provider-specific prompt behavior 验证和长任务 soak 测试。
+- 真实模型多轮 compaction、provider-specific prompt behavior 稳定性和长任务 soak 测试。
 
 因此当前状态应表述为：Phase 4 文档主干已经实现，Phase 4 MVP 已完成；严格
 production complete 仍需要后续运行化、UI 和安全策略补强。
@@ -150,10 +150,11 @@ hermes kanban runtime compact <job_id> --provider real --no-fallback --json
 - `--no-fallback` 时 rejected checkpoint 只写审计 entry，不关闭 source segment；
 - 成功后旧 segment 标记 `compacted`，新 active segment 使用 checkpoint，不带旧 transcript 原文。
 
-注意：当前实现证明的是 real compaction provider 的调用路径、解析、validator、
-fallback 和审计闭环已经存在；它不等于真实模型 compaction 质量已经被证明。
-真实模型的 checkpoint 质量、长任务上下文稳定性、provider-specific prompt
-behavior 和多轮 compaction 后的策略连续性，仍需要后续 smoke / soak 测试验证。
+注意：调用路径实现、单次真实 candidate 质量和长任务稳定性是三个不同结论。Phase 4A
+首先证明 real compaction provider 的调用、解析、validator、fallback 和审计闭环；
+Phase 4G5 已进一步证明至少一次真实 no-fallback candidate 自带合法 provenance 并通过
+validator。长任务上下文稳定性、provider-specific prompt behavior 和多轮 compaction 后的
+策略连续性，仍需要后续 soak 验证。
 
 自动 supervisor 使用真实 compaction provider 时还需要额外质量保护：如果同一
 job 连续多次 provider_error、parse_failed 或 validator rejected 后被
@@ -163,13 +164,14 @@ deterministic fallback 接管，系统不应静默认为质量正常。后续应
 
 ### 真实集成验证状态
 
-截至 2026-07-10，隔离真实模型源 smoke 已验证真实 compaction provider 的 transport、
-parse、checkpoint validator、deterministic fallback 和 segment rollover 路径。真实
-candidate 因 `open_goal_gaps` 缺 provenance 被 validator 拒绝，fallback 创建了 accepted
-checkpoint。
+截至 2026-07-10，Phase 4G1 隔离 smoke 先验证了 transport、parse、checkpoint validator、
+deterministic fallback 和 segment rollover；当时真实 candidate 因 `open_goal_gaps` 缺
+provenance 被拒绝。Phase 4G5 随后加入 provenance catalog 和 checkpoint fact schema，真实
+provider 首次 no-fallback candidate 即通过 validator，旧 segment compacted、新 segment
+active，consistency 0/0。
 
-因此当前只能标记“真实 compaction fallback safety 已验证”，不能标记“真实 compaction
-candidate quality 已通过”。完整脱敏记录和 L3 门槛见
+因此当前可以标记“真实 compaction fallback safety”和“单次真实 compaction candidate
+quality L3”均已验证，但不能标记多轮长任务 compaction 稳定性已完成。完整脱敏记录见
 `docs/kanban-runtime-kernel-real-integration-validation.md`。
 
 ## Phase 4B: Runtime Observability / Dashboard API

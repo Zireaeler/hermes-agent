@@ -333,7 +333,9 @@ def test_checkpoint_validator_rejects_unknown_node_reference(conn):
     payload["graph_frontier"].append(
         {
             "node_key": "missing",
+            "node_type": "implementation",
             "state": "ready",
+            "summary": "missing node",
             "source_refs": [{"node_key": "missing"}],
         }
     )
@@ -342,6 +344,47 @@ def test_checkpoint_validator_rejects_unknown_node_reference(conn):
 
     assert result["status"] == "rejected"
     assert "unknown node_key" in result["reason"]
+
+
+def test_checkpoint_validator_rejects_unknown_gap_reference(conn):
+    job_id = _job(conn)
+    segment = rk.ensure_decision_segment(conn, job_id)
+    payload = rd.build_deterministic_checkpoint(conn, job_id, segment["id"])
+    payload["open_goal_gaps"][0]["source_refs"] = [{"gap_key": "invented-gap"}]
+
+    result = rd.validate_decision_checkpoint(conn, job_id, payload)
+
+    assert result == {"status": "rejected", "reason": "unknown gap_key 'invented-gap'"}
+
+
+def test_checkpoint_validator_rejects_mismatched_existing_gap_reference(conn):
+    job_id = _job(conn)
+    segment = rk.ensure_decision_segment(conn, job_id)
+    payload = rd.build_deterministic_checkpoint(conn, job_id, segment["id"])
+    assert len(payload["open_goal_gaps"]) >= 2
+    first, second = payload["open_goal_gaps"][:2]
+    first["source_refs"] = [{"gap_key": second["gap_key"]}]
+
+    result = rd.validate_decision_checkpoint(conn, job_id, payload)
+
+    assert result == {
+        "status": "rejected",
+        "reason": "open_goal_gaps gap_key does not match its provenance",
+    }
+
+
+def test_checkpoint_validator_enforces_fact_item_schema(conn):
+    job_id = _job(conn)
+    segment = rk.ensure_decision_segment(conn, job_id)
+    payload = rd.build_deterministic_checkpoint(conn, job_id, segment["id"])
+    del payload["open_goal_gaps"][0]["gap_type"]
+
+    result = rd.validate_decision_checkpoint(conn, job_id, payload)
+
+    assert result == {
+        "status": "rejected",
+        "reason": "open_goal_gaps item missing required fields: gap_type",
+    }
 
 
 def test_checkpoint_validator_rejects_failed_verifier_as_confirmed(conn):
@@ -486,6 +529,109 @@ def test_runtime_compaction_provider_is_no_tools_checkpoint_only(conn):
     assert "tools" not in call
     assert "tool_choice" not in call
     assert "web_search" not in call
+    assert "Every non-empty checkpoint fact item" in call["messages"][0]["content"]
+
+
+def test_compaction_request_exposes_bounded_provenance_contract(conn):
+    job_id = _job(conn)
+    request = rd.build_compaction_provider_request(conn, job_id)
+    rendered = rd.render_compaction_prompt(request)
+
+    assert request.provenance_catalog["goal_items"] == [
+        {"goal_item_key": "a-item", "verified_evidence_refs": []},
+        {"goal_item_key": "b-item", "verified_evidence_refs": []},
+    ]
+    assert {item["gap_key"] for item in request.provenance_catalog["goal_gaps"]} == {
+        item["gap_key"] for item in request.db_state["open_gaps"]
+    }
+    assert {item["node_key"] for item in request.provenance_catalog["execution_nodes"]} == {
+        item["node_key"] for item in request.db_state["frontier_nodes"]
+    }
+    assert request.provenance_catalog["artifacts"] == []
+    assert request.provenance_catalog["validator_revisions"] == []
+    source_contract = request.checkpoint_fact_schema["source_ref_contract"]
+    assert source_contract["required_for_every_non_empty_fact_item"] is True
+    assert source_contract["invented_references_forbidden"] is True
+    assert rendered["provenance_catalog"] == request.provenance_catalog
+    assert rendered["checkpoint_fact_schema"] == request.checkpoint_fact_schema
+    assert rendered["stable_compaction_contract"]["inventing_source_refs_is_forbidden"] is True
+    assert rendered["stable_compaction_contract"]["omit_a_fact_item_when_no_catalog_reference_exists"] is True
+
+
+def test_compaction_parser_does_not_repair_missing_provenance(conn):
+    job_id = _job(conn)
+    request = rd.build_compaction_provider_request(conn, job_id)
+    gap = request.db_state["open_gaps"][0]
+    checkpoint = {
+        "objective_summary": request.db_state["job"]["objective"],
+        "goal_contract_revision": request.db_state["goal_contract"]["version"],
+        "satisfied_goal_items": [],
+        "open_goal_gaps": [
+            {
+                "gap_key": gap["gap_key"],
+                "gap_type": gap["gap_type"],
+                "summary": gap["summary"],
+            }
+        ],
+        "open_blockers": [],
+        "graph_frontier": [],
+        "metadata": {},
+    }
+
+    parsed = rd.parse_compaction_checkpoint(json.dumps(checkpoint), request)
+    validation = rd.validate_decision_checkpoint(conn, job_id, parsed)
+
+    assert "source_refs" not in parsed["open_goal_gaps"][0]
+    assert validation == {"status": "rejected", "reason": "open_goal_gaps item lacks provenance"}
+
+
+def test_provider_candidate_with_catalog_refs_compacts_without_fallback(conn):
+    job_id = _job(conn)
+    old_segment = rk.ensure_decision_segment(conn, job_id)
+
+    def candidate(request):
+        return {
+            "objective_summary": request.db_state["job"]["objective"],
+            "goal_contract_revision": request.db_state["goal_contract"]["version"],
+            "satisfied_goal_items": [],
+            "open_goal_gaps": [
+                {
+                    **gap,
+                    "source_refs": [{"gap_key": gap["gap_key"]}],
+                }
+                for gap in request.db_state["open_gaps"]
+            ],
+            "open_blockers": [],
+            "graph_frontier": [
+                {
+                    **node,
+                    "source_refs": [{"node_key": node["node_key"]}],
+                }
+                for node in request.db_state["frontier_nodes"]
+            ],
+            "metadata": {
+                "source_segment_id": request.source_segment["id"],
+                "db_revision": request.db_state["job"]["graph_revision"],
+                "graph_revision": request.db_state["job"]["graph_revision"],
+                "ledger_revision": request.db_state["job"]["graph_revision"],
+            },
+        }
+
+    result = rd.compact_decision_session(
+        conn,
+        job_id,
+        compaction_provider=_StaticCompactionProvider(conn, checkpoint_factory=candidate),
+        fallback_to_deterministic=False,
+    )
+
+    assert result["status"] == "compacted"
+    assert result["fallback_used"] is False
+    assert result["provider_name"] == "fake-compactor"
+    assert result["parse_status"] == "parsed"
+    assert result["provider_validation"] == {"status": "accepted"}
+    assert conn.execute(
+        "SELECT state FROM decision_session_segments WHERE id = ?", (old_segment["id"],)
+    ).fetchone()[0] == "compacted"
 
 
 def test_compaction_provider_rejects_graph_patch_output(conn):

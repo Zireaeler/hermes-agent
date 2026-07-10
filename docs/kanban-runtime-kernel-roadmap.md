@@ -92,15 +92,18 @@ Phase 3D Long Running Autonomous Task Runtime
 Phase 4  Production Hardening
 ```
 
-当前代码已经推进到 Phase 4G3 MVP：Phase 2D 本地 compaction 闭环、Phase 3 real
+当前代码已经推进到 Phase 4G5 MVP：Phase 2D 本地 compaction 闭环、Phase 3 real
 decision provider、Phase 4 production hardening、Phase 4E recovery、Phase 4F capability
 policy、Phase 4G deterministic soak、Phase 4G0 memory lifecycle、Phase 4G1 real-smoke、
-Phase 4G2 real-provider bounded loop 和 Phase 4G3 real worker lane smoke 均已实现。
+Phase 4G2 real-provider bounded loop、Phase 4G3 real worker lane smoke、Phase 4G4 worker
+execution continuity 和 Phase 4G5 real compaction candidate quality 均已实现。
 
 隔离真实验证已经覆盖 decision execute/apply/reject、compaction fallback safety、3-tick
 real-provider loop，以及真实 provider -> validator -> Kanban dispatcher -> Codex worker ->
-runtime receipt -> verified ledger 的 L5 路径。真实 compaction candidate quality 仍未通过
-L3。详见 `docs/kanban-runtime-kernel-real-integration-validation.md`。
+runtime receipt -> verified ledger 的 L5 路径。Phase 4G5 又通过 provenance catalog 和
+checkpoint fact schema，使真实 compaction candidate 在无 fallback 时通过 checkpoint
+validator 并完成 segment rollover，L3 已通过。详见
+`docs/kanban-runtime-kernel-real-integration-validation.md`。
 
 Worker delegation policy enforcement MVP 已完成：Decision Profile v2 使用
 primary-node-first 规则；patch validator 条件要求 decomposition；typed node contract 暂存于
@@ -564,6 +567,8 @@ Phase 4G Synthetic Long-Run Soak and Runtime Consistency Baseline
 Phase 4G1 Real Model Provider Smoke
 Phase 4G2 Real Provider Bounded Loop with Synthetic Worker Evidence
 Phase 4G3 Real Worker Lane Smoke
+Phase 4G4 Worker Execution Continuity
+Phase 4G5 Real Compaction Candidate Quality
 Phase 4H Dashboard Runtime UI
 ```
 
@@ -609,9 +614,9 @@ Phase 4G1 专门做真实模型源 smoke。它验证 real decision provider 和 
 provider 的 no-tools single-shot 调用、解析、validator、fallback、审计和隔离行为。
 它不接真实 worker，也不跑真实长任务。
 
-当前已有一次隔离真实 smoke：decision execute 和 one-step apply 已验证；real compaction
-fallback safety 已验证，但真实 checkpoint candidate 因 provenance 缺失未通过质量门槛。
-真实运行事实和后续门槛统一记录在
+隔离真实 smoke 已验证 decision execute、one-step apply 和 real compaction fallback
+safety。Phase 4G5 进一步修复 provenance 输入契约，并完成真实 no-fallback candidate
+accepted 验证。真实运行事实和后续门槛统一记录在
 `docs/kanban-runtime-kernel-real-integration-validation.md`。
 
 Phase 4G2 专门做真实 decision provider 的 bounded loop，但 worker evidence 仍使用
@@ -622,6 +627,11 @@ synthetic receipt。目标是验证真实 provider 能在多轮 validator / ledg
 Phase 4G3 再接真实 worker lane smoke，验证真实 provider proposal、Kanban
 materialization、真实 worker evidence 和 runtime ingest 的端到端边界。具体 receipt
 contract、隔离规则和验收见 `docs/kanban-runtime-kernel-phase4g3.md`。
+
+Phase 4G4 补齐 timeout/crash 后的 backend session continuity，具体见
+`docs/kanban-runtime-kernel-worker-execution-continuity.md`。Phase 4G5 补齐真实 compaction
+candidate 的 provenance contract 和 L3 no-fallback 质量门槛，具体见
+`docs/kanban-runtime-kernel-phase4g5.md`。
 
 真实 compaction/provider/worker smoke 和 soak 都应复用 Phase 4G 的 report 和
 consistency checker。
@@ -661,7 +671,10 @@ Phase 4G3 real worker lane smoke
 Phase 4G4 worker execution continuity and Codex session resume
       |
       v
-Real compaction candidate L3 quality
+Phase 4G5 real compaction candidate L3 quality
+      |
+      v
+Real compaction multi-cycle soak
       |
       v
 Phase 4H dashboard runtime UI
@@ -675,8 +688,8 @@ dashboard/API 已有读面，但还没有前端 UI。
 
 supervisor tick 和 lease 已有，但还不是 packaged daemon。
 
-compaction provider 边界已接入，真实 fallback smoke 已验证；真实模型 candidate quality
-和 long-run soak 仍需要继续验证。
+compaction provider 边界已接入，真实 fallback smoke 和单次 no-fallback candidate L3
+均已验证；真实多轮 compaction 的 long-run soak 仍需要继续验证。
 
 并发和 idempotency 已有关键测试，但 destructive action、external cost、
 credential、workspace boundary、network、git write、database migration 和

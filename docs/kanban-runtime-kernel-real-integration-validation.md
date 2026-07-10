@@ -13,7 +13,8 @@
 
 - 默认 pytest 保持离线、deterministic，使用 fake provider、synthetic receipt 或 fixture；
 - 真实验证必须显式 opt-in，使用隔离 `HERMES_HOME` 和隔离 Kanban DB；
-- `.codex` 只允许读取，不能修改 `config.toml` 或 `auth.json`；
+- 主 `.codex` 只允许读取，真实运行优先使用隔离 `CODEX_HOME` 副本，不能修改主
+  `config.toml` 或 `auth.json`；
 - 文档、DB event summary、CLI output 和日志不得记录 API key、credential、完整 prompt 或完整 raw response；
 - decision segment 的 provider raw output 仅作为隔离 DB 内的审计归档；它仍不得包含 credential，且不能作为默认 CLI 或文档内容展示；
 - 每次运行必须记录代码 commit、provider alias、model、场景、结果、fallback、consistency 和结论；
@@ -71,7 +72,7 @@ hermes kanban runtime real-smoke <job_id> --compact --codex-config --json
 | real decision execute | Phase 3 / 4G1 | 已验证 | parsed 或明确 provider/parse error；validator dry-run 不 apply | 通过 |
 | real decision one-step apply | Phase 3B / 4G1 | 已验证 | patch 只能经 validator apply/reject；完整 audit | 通过，包含一次 rejected 和一次 applied |
 | real compaction transport + fallback | Phase 4A / 4G1 | 已验证 | candidate 经 validator；拒绝不污染 active segment；fallback 可审计 | 通过 |
-| real compaction candidate quality | Phase 4A / 4G1 | 未通过 | 至少一次真实 candidate 无 fallback 通过 checkpoint validator | 未通过，当前 candidate 缺 provenance |
+| real compaction candidate quality | Phase 4G5 | 已验证 | 至少一次真实 candidate 无 fallback 通过 checkpoint validator | 通过：真实 candidate 自带 gap provenance，validator accepted，segment rollover |
 | real provider bounded loop | Phase 4G2 | 已验证 | 3-5 decision ticks + synthetic worker evidence + consistency passed | 通过：3 ticks、2 applied、1 rejected、synthetic receipt `failed -> succeeded`、最终 done |
 | real worker lane smoke | Phase 4G3 | 已验证 | 真实 worker receipt 进入 runtime ingest，端到端 consistency passed | 通过：两个 dispatcher-started Codex worker receipt 写入 verified ledger，job done |
 | delegation Profile v2 | Delegation Policy MVP | 已验证 | 单 coherent primary node、typed contract、无无理由 decomposition、validator dry-run | 通过：1 个 immediate `create_node`、contract 1/1、accepted、未 apply |
@@ -79,6 +80,9 @@ hermes kanban runtime real-smoke <job_id> --compact --codex-config --json
 
 “real compaction transport + fallback 通过”不等于“真实 compaction 质量通过”。如果模型
 candidate 被 validator 拒绝，fallback 成功只能证明安全边界和恢复路径正确。
+
+Phase 4G5 已补齐单次真实 candidate L3，但这仍不等于多轮长任务 compaction 稳定性通过。
+后者必须由多 segment、stale rejection、fallback degradation 和恢复组合的 soak 单独证明。
 
 ## 5. 当前真实运行记录
 
@@ -130,7 +134,8 @@ lane。
 
 本次 L4 证明多轮真实 decision provider 与 synthetic evidence 的 runtime 闭环可用，并同时
 保留 rejected patch 的审计事实。它不证明真实 worker lane L5，也不证明真实 compaction
-candidate quality L3；后者仍受 `open_goal_gaps` provenance 缺失限制。
+candidate quality L3；在本次运行时，后者仍受 `open_goal_gaps` provenance 缺失限制，随后
+由 Phase 4G5 补齐并验证。
 
 ### 2026-07-10 Phase 4G3 isolated real worker lane smoke
 
@@ -156,7 +161,8 @@ materialization 修复。
 
 本次 L5 证明单 worker 的真实 provider -> validator -> materialization -> dispatcher ->
 Codex wrapper -> runtime receipt -> ingest -> ledger 路径可用。它不证明多 worker 并发、
-review/test workflow、worker crash long-run recovery 或真实 compaction candidate quality。
+review/test workflow 或 worker crash long-run recovery；真实 compaction candidate quality
+后续由 Phase 4G5 单独验证。
 
 ### 2026-07-10 Delegation Policy Profile v2 isolated smoke
 
@@ -234,7 +240,7 @@ worker 使用隔离 `CODEX_HOME` 配置与认证副本；主 `.codex` 仅由 Dec
 
 本次结果证明 provider-first initialization 与单 coherent worker 的真实闭环成立。它仍不
 证明多 worker 并发、persistent worker session、长任务 checkpoint/crash resume、backend
-路径级 sandbox 或真实 compaction L3 quality。
+路径级 sandbox；真实 compaction L3 quality 后续由 Phase 4G5 单独验证。
 
 ### 2026-07-10 Phase 4G4 isolated worker continuity smoke
 
@@ -268,7 +274,37 @@ terminal event 后提供有界退出宽限，并增加 deterministic regression�
 
 本次结果证明单 node、单 backend session、两次 materialization 的 timeout/resume L5 路径。
 它仍不证明 paused worker、跨机器 session migration、internal subagent session 观测、任意
-长任务多次 resume soak、路径级 sandbox 或真实 compaction L3 quality。
+长任务多次 resume soak 或路径级 sandbox；真实 compaction L3 quality 后续由 Phase 4G5
+单独验证。
+
+### 2026-07-10 Phase 4G5 isolated real compaction candidate quality
+
+运行代码：Phase 4G5 实现提交（本记录随提交落地）。
+
+环境：全新隔离 `HERMES_HOME`、独立 Git workspace、隔离 `CODEX_HOME` 配置与认证副本；
+未启动 worker。主 `.codex` 只用于生成只读副本和前后哈希校验。
+
+脱敏模型标识：`codex:MySub2api` / `gpt-5.6-sol`。
+
+测试 job 使用 production 初始化，状态为 `waiting_decision`，包含一个 required goal item、
+两个 open gap 和空 graph。真实 compaction 使用 `max_retries=0`、180 秒 timeout 和
+`fallback_to_deterministic=false`。
+
+| 步骤 | 结果 | 事实 |
+| --- | --- | --- |
+| provider input | 通过 | 含 bounded provenance catalog、checkpoint fact schema 和逐项 `source_refs` 约束 |
+| provider output | 通过 | 首次 response parsed；未进入 parse retry 或 validator-aware repair |
+| provenance | 通过 | 2 个 `open_goal_gaps` 和 1 个 `open_blocker` 均自带 catalog 中存在的 `gap_key` 引用 |
+| checkpoint validator | 通过 | `provider_validation.status=accepted`，checkpoint `validator_status=accepted` |
+| fallback | 未使用 | `fallback_used=false`，没有 deterministic provider 接管 |
+| segment lifecycle | 通过 | source segment=`compacted`；新 segment=`active`；checkpoint ref 一致 |
+| consistency | 通过 | 0 violations、0 warnings |
+| isolation | 通过 | runtime DB/workspace credential scan 0 命中；主与隔离 `.codex` 文件哈希一致 |
+| offline regression | 通过 | Runtime Kernel / CLI 239 项通过；Runtime observability API 定向测试 1 项通过 |
+
+本次结果证明真实 compaction candidate 在 parser 不补 provenance、fallback 禁用的条件下达到
+L3。该结论限于单 provider、单 profile、单次 compaction，不覆盖真实多轮长任务 compaction
+soak。
 
 ## 6. 结果记录模板
 
@@ -295,7 +331,7 @@ credential scan：passed / failed
 完整 raw response、私有 artifact 内容。隔离 DB 中的 decision segment 归档遵循上一节
 的 credential scan 和访问边界。
 
-## 7. Phase 4G2 进入门槛
+## 7. Phase 4G2 当时进入门槛
 
 进入真实 provider bounded loop 前，至少需要：
 
@@ -304,11 +340,11 @@ credential scan：passed / failed
 - 真实 compaction fallback 路径通过；
 - consistency checker 无未解释 violation；
 - credential scan 通过；
-- 当前已知的 compaction provenance 缺口被记录为风险，而不是误标为 L3 通过。
+- 当时已知的 compaction provenance 缺口被记录为风险，而不是误标为 L3 通过。
 
-Phase 4G2 的目标不是立刻要求 L3。它可以先使用 deterministic compaction fallback，
-同时收集真实 compaction candidate 的失败类型。达到 L3 前，不应把真实 compaction
-质量作为生产可靠能力宣称。
+Phase 4G2 的目标不是立刻要求 L3，因此当时允许使用 deterministic compaction fallback，
+同时收集真实 compaction candidate 的失败类型。该历史进入策略没有把 fallback 误写成
+candidate quality；Phase 4G5 后续已独立达到单次 candidate L3。
 
 ## 8. Phase 4G3 进入门槛
 
@@ -330,4 +366,5 @@ process，不能影响用户自己的 Codex 会话。
 - `docs/kanban-runtime-kernel-phase4g1.md`：真实模型源 smoke runbook；
 - `docs/kanban-runtime-kernel-phase4g2.md`：真实 decision provider bounded loop；
 - `docs/kanban-runtime-kernel-worker-execution-continuity.md`：Phase 4G4 worker session resume；
-- `docs/kanban-runtime-kernel-roadmap.md`：4G1 / 4G2 / 4G3 / 4G4 演进顺序。
+- `docs/kanban-runtime-kernel-phase4g5.md`：真实 compaction candidate provenance 与 L3；
+- `docs/kanban-runtime-kernel-roadmap.md`：4G1 至 4G5 演进顺序。

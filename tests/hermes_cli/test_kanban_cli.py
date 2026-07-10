@@ -73,6 +73,26 @@ def test_parse_branch_flag_rejects_empty_and_option_like():
         kc._parse_branch_flag("bad branch")
 
 
+def test_runtime_codex_model_source_prefers_isolated_codex_home(tmp_path, monkeypatch):
+    isolated = tmp_path / "isolated-codex"
+    isolated.mkdir()
+    (isolated / "config.toml").write_text(
+        'model = "test-model"\nmodel_provider = "test-source"\n'
+        '[model_providers.test-source]\nbase_url = "https://model.example.test/v1"\n',
+        encoding="utf-8",
+    )
+    (isolated / "auth.json").write_text('{"OPENAI_API_KEY":"test-secret"}', encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(isolated))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home-without-codex")
+
+    source = kc._runtime_model_source_from_codex_config(argparse.Namespace(model=None))
+
+    assert source["display_provider"] == "codex:test-source"
+    assert source["model"] == "test-model"
+    assert source["explicit_base_url"] == "https://model.example.test/v1"
+    assert source["explicit_api_key"] == "test-secret"
+
+
 # ---------------------------------------------------------------------------
 # run_slash smoke tests (end-to-end via the same entry both CLI and gateway use)
 # ---------------------------------------------------------------------------

@@ -38,6 +38,20 @@ DEFAULT_COMPACTION_POLICY = {
     "max_tail_tokens": 2000,
     "default_profile": "token_budget_compaction",
 }
+CHECKPOINT_FACT_SOURCE_REF_TYPES = {
+    "satisfied_goal_items": {"goal_item_key", "evidence_ref"},
+    "open_goal_gaps": {"gap_key"},
+    "open_blockers": {"gap_key", "node_key", "event_id"},
+    "key_decisions": {"decision_id", "event_id", "patch_id"},
+    "rejected_approaches": {"decision_id", "event_id", "patch_id", "patch_base_revision"},
+    "known_failure_boundaries": {"node_key", "event_id", "patch_id"},
+    "validator_rejection_lessons": {"patch_id", "patch_base_revision"},
+    "human_decisions": {"decision_id", "event_id"},
+    "artifact_index": {"artifact_ref"},
+    "graph_frontier": {"node_key"},
+    "do_not_repeat": {"patch_id", "patch_base_revision"},
+    "next_strategy_constraints": {"goal_item_key", "gap_key", "node_key", "decision_id", "event_id"},
+}
 
 
 class ProviderPatchParseError(ValueError):
@@ -115,6 +129,8 @@ class CompactionProviderRequest:
     profile: dict[str, Any]
     budget: dict[str, Any]
     db_state: dict[str, Any]
+    provenance_catalog: dict[str, Any]
+    checkpoint_fact_schema: dict[str, Any]
     segment_entries: list[dict[str, Any]]
 
     def to_dict(self) -> dict[str, Any]:
@@ -124,6 +140,8 @@ class CompactionProviderRequest:
             "profile": {key: self.profile.get(key) for key in ("profile_name", "profile_version", "profile_hash", "profile_path")},
             "budget": self.budget,
             "db_state": self.db_state,
+            "provenance_catalog": self.provenance_catalog,
+            "checkpoint_fact_schema": self.checkpoint_fact_schema,
             "segment_entries": self.segment_entries,
         }
 
@@ -480,21 +498,98 @@ def validate_decision_checkpoint(conn: sqlite3.Connection, job_id: str, checkpoi
         row["path_or_ref"]
         for row in conn.execute("SELECT path_or_ref FROM node_artifacts WHERE job_id = ?", (job_id,)).fetchall()
     }
-    if not artifacts:
-        artifacts = set()
+    gap_keys = {
+        row["gap_key"]
+        for row in conn.execute("SELECT gap_key FROM goal_gaps WHERE job_id = ?", (job_id,)).fetchall()
+    }
+    evidence_refs = {
+        row["evidence_ref"]
+        for row in conn.execute(
+            "SELECT evidence_ref FROM progress_ledger WHERE job_id = ? AND evidence_ref IS NOT NULL",
+            (job_id,),
+        ).fetchall()
+    }
+    patch_base_revisions = {
+        int(row["base_revision"])
+        for row in conn.execute("SELECT base_revision FROM graph_patches WHERE job_id = ?", (job_id,)).fetchall()
+    }
+    event_ids = {
+        int(row["id"])
+        for row in conn.execute("SELECT id FROM execution_events WHERE job_id = ?", (job_id,)).fetchall()
+    }
+    decision_ids = {
+        row["id"]
+        for row in conn.execute("SELECT id FROM kernel_decisions WHERE job_id = ?", (job_id,)).fetchall()
+    }
+    patch_ids = {
+        row["id"]
+        for row in conn.execute("SELECT id FROM graph_patches WHERE job_id = ?", (job_id,)).fetchall()
+    }
+    reference_sets = {
+        "node_key": node_keys,
+        "goal_item_key": goal_keys,
+        "gap_key": gap_keys,
+        "evidence_ref": evidence_refs,
+        "artifact_ref": artifacts,
+        "patch_base_revision": patch_base_revisions,
+        "event_id": event_ids,
+        "decision_id": decision_ids,
+        "patch_id": patch_ids,
+    }
+    fact_schemas = _compaction_checkpoint_fact_schema()["fact_lists"]
 
     for key, items in _checkpoint_fact_lists(checkpoint_payload):
         for item in items:
+            if not isinstance(item, dict):
+                return {"status": "rejected", "reason": f"{key} item must be an object"}
+            missing_fields = [
+                field
+                for field in fact_schemas[key]["required_fields"]
+                if field != "source_refs" and field not in item
+            ]
+            if missing_fields:
+                return {
+                    "status": "rejected",
+                    "reason": f"{key} item missing required fields: {', '.join(missing_fields)}",
+                }
             refs = item.get("source_refs") or []
-            if not refs:
+            if not isinstance(refs, list) or not refs:
                 return {"status": "rejected", "reason": f"{key} item lacks provenance"}
             for ref in refs:
-                if "node_key" in ref and ref["node_key"] not in node_keys:
-                    return {"status": "rejected", "reason": f"unknown node_key {ref['node_key']!r}"}
-                if "goal_item_key" in ref and ref["goal_item_key"] not in goal_keys:
-                    return {"status": "rejected", "reason": f"unknown goal_item_key {ref['goal_item_key']!r}"}
-                if "artifact_ref" in ref and artifacts and ref["artifact_ref"] not in artifacts:
-                    return {"status": "rejected", "reason": f"unknown artifact_ref {ref['artifact_ref']!r}"}
+                if not isinstance(ref, dict) or len(ref) != 1:
+                    return {"status": "rejected", "reason": "checkpoint source_ref must contain exactly one reference"}
+                ref_type, ref_value = next(iter(ref.items()))
+                if ref_type not in reference_sets:
+                    return {"status": "rejected", "reason": f"unsupported checkpoint source_ref {ref_type!r}"}
+                if ref_type not in CHECKPOINT_FACT_SOURCE_REF_TYPES[key]:
+                    return {"status": "rejected", "reason": f"{key} does not allow {ref_type} provenance"}
+                comparable = ref_value
+                if ref_type in {"patch_base_revision", "event_id"}:
+                    try:
+                        comparable = int(ref_value)
+                    except (TypeError, ValueError):
+                        return {"status": "rejected", "reason": f"invalid {ref_type} {ref_value!r}"}
+                if comparable not in reference_sets[ref_type]:
+                    return {"status": "rejected", "reason": f"unknown {ref_type} {ref_value!r}"}
+            identity_ref = {
+                "satisfied_goal_items": ("goal_item_key", "goal_item_key"),
+                "open_goal_gaps": ("gap_key", "gap_key"),
+                "graph_frontier": ("node_key", "node_key"),
+                "artifact_index": ("path_or_ref", "artifact_ref"),
+                "validator_rejection_lessons": ("base_revision", "patch_base_revision"),
+            }.get(key)
+            if identity_ref and item.get(identity_ref[0]) is not None:
+                expected_value = item[identity_ref[0]]
+                if identity_ref[1] in {"patch_base_revision", "event_id"}:
+                    try:
+                        expected_value = int(expected_value)
+                    except (TypeError, ValueError):
+                        return {"status": "rejected", "reason": f"invalid {identity_ref[0]} {expected_value!r}"}
+                if not any(ref.get(identity_ref[1]) == expected_value for ref in refs):
+                    return {
+                        "status": "rejected",
+                        "reason": f"{key} {identity_ref[0]} does not match its provenance",
+                    }
             if key == "satisfied_goal_items":
                 if item.get("verification_state") not in {"verified", "waived"}:
                     return {"status": "rejected", "reason": "satisfied goal item must be verified or waived"}
@@ -797,6 +892,12 @@ def build_compaction_provider_request(
         **(budget or {}),
         "active_segment_tokens": metrics["active_segment_tokens"],
     }
+    db_state = build_checkpoint_payload(conn, job_id)
+    segment_entries = _segment_entries_for_compaction(
+        conn,
+        source_segment["id"],
+        max_entries=int(resolved_budget["max_segment_entries"]),
+    )
     return CompactionProviderRequest(
         job_id=job_id,
         source_segment={
@@ -807,13 +908,135 @@ def build_compaction_provider_request(
         },
         profile=profile,
         budget=resolved_budget,
-        db_state=build_checkpoint_payload(conn, job_id),
-        segment_entries=_segment_entries_for_compaction(
-            conn,
-            source_segment["id"],
-            max_entries=int(resolved_budget["max_segment_entries"]),
-        ),
+        db_state=db_state,
+        provenance_catalog=_build_compaction_provenance_catalog(db_state, segment_entries),
+        checkpoint_fact_schema=_compaction_checkpoint_fact_schema(),
+        segment_entries=segment_entries,
     )
+
+
+def _build_compaction_provenance_catalog(
+    db_state: dict[str, Any],
+    segment_entries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    verified_evidence: dict[str, list[str]] = {}
+    for entry in db_state.get("progress_ledger") or []:
+        if entry.get("satisfaction") != "full" or entry.get("verification_state") not in {"verified", "waived"}:
+            continue
+        evidence_ref = entry.get("evidence_ref")
+        if evidence_ref:
+            verified_evidence.setdefault(str(entry.get("item_key")), []).append(str(evidence_ref))
+
+    def _entry_refs(key: str) -> list[Any]:
+        values: list[Any] = []
+        for entry in segment_entries:
+            value = entry.get(key)
+            if value is not None and value not in values:
+                values.append(value)
+        return values
+
+    return {
+        "goal_items": [
+            {
+                "goal_item_key": item["item_key"],
+                "verified_evidence_refs": sorted(set(verified_evidence.get(str(item["item_key"]), []))),
+            }
+            for item in db_state.get("goal_items") or []
+        ],
+        "goal_gaps": [
+            {"gap_key": item["gap_key"]}
+            for item in db_state.get("open_gaps") or []
+        ],
+        "execution_nodes": [
+            {"node_key": item["node_key"]}
+            for item in db_state.get("frontier_nodes") or []
+        ],
+        "artifacts": [
+            {"artifact_ref": item["path_or_ref"]}
+            for item in db_state.get("artifact_index") or []
+        ],
+        "validator_revisions": [
+            {"patch_base_revision": int(item["base_revision"])}
+            for item in db_state.get("recent_validator_rejections") or []
+        ],
+        "segment_events": [{"event_id": value} for value in _entry_refs("event_id")],
+        "segment_decisions": [{"decision_id": value} for value in _entry_refs("decision_id")],
+        "segment_patches": [{"patch_id": value} for value in _entry_refs("patch_id")],
+    }
+
+
+def _compaction_checkpoint_fact_schema() -> dict[str, Any]:
+    return {
+        "source_ref_contract": {
+            "required_for_every_non_empty_fact_item": True,
+            "one_reference_key_per_source_ref_object": True,
+            "copy_values_exactly_from_provenance_catalog": True,
+            "invented_references_forbidden": True,
+            "supported_reference_keys": [
+                "goal_item_key",
+                "evidence_ref",
+                "gap_key",
+                "node_key",
+                "artifact_ref",
+                "patch_base_revision",
+                "event_id",
+                "decision_id",
+                "patch_id",
+            ],
+            "example": {"source_refs": [{"gap_key": "copy-exact-gap-key-from-catalog"}]},
+        },
+        "fact_lists": {
+            "satisfied_goal_items": {
+                "required_fields": ["goal_item_key", "state", "summary", "verification_state", "source_refs"],
+                "allowed_source_refs": ["goal_item_key", "evidence_ref"],
+                "verification_state": ["verified", "waived"],
+            },
+            "open_goal_gaps": {
+                "required_fields": ["gap_key", "gap_type", "summary", "source_refs"],
+                "allowed_source_refs": ["gap_key"],
+            },
+            "open_blockers": {
+                "required_fields": ["summary", "source_refs"],
+                "allowed_source_refs": ["gap_key", "node_key", "event_id"],
+            },
+            "graph_frontier": {
+                "required_fields": ["node_key", "node_type", "state", "summary", "source_refs"],
+                "allowed_source_refs": ["node_key"],
+            },
+            "artifact_index": {
+                "required_fields": ["artifact_type", "path_or_ref", "summary", "source_refs"],
+                "allowed_source_refs": ["artifact_ref"],
+            },
+            "validator_rejection_lessons": {
+                "required_fields": ["summary", "base_revision", "source_refs"],
+                "allowed_source_refs": ["patch_base_revision", "patch_id"],
+            },
+            "do_not_repeat": {
+                "required_fields": ["summary", "source_refs"],
+                "allowed_source_refs": ["patch_base_revision", "patch_id"],
+            },
+            "key_decisions": {
+                "required_fields": ["summary", "source_refs"],
+                "allowed_source_refs": sorted(CHECKPOINT_FACT_SOURCE_REF_TYPES["key_decisions"]),
+            },
+            "rejected_approaches": {
+                "required_fields": ["summary", "source_refs"],
+                "allowed_source_refs": sorted(CHECKPOINT_FACT_SOURCE_REF_TYPES["rejected_approaches"]),
+            },
+            "known_failure_boundaries": {
+                "required_fields": ["summary", "source_refs"],
+                "allowed_source_refs": sorted(CHECKPOINT_FACT_SOURCE_REF_TYPES["known_failure_boundaries"]),
+            },
+            "human_decisions": {
+                "required_fields": ["summary", "source_refs"],
+                "allowed_source_refs": sorted(CHECKPOINT_FACT_SOURCE_REF_TYPES["human_decisions"]),
+            },
+            "next_strategy_constraints": {
+                "required_fields": ["summary", "source_refs"],
+                "allowed_source_refs": sorted(CHECKPOINT_FACT_SOURCE_REF_TYPES["next_strategy_constraints"]),
+            },
+        },
+    }
 
 
 def render_compaction_prompt(request: CompactionProviderRequest) -> dict[str, Any]:
@@ -823,6 +1046,10 @@ def render_compaction_prompt(request: CompactionProviderRequest) -> dict[str, An
             "checkpoint_is_non_authoritative_context": True,
             "output": "return exactly one JSON checkpoint candidate object",
             "must_include_provenance": True,
+            "every_non_empty_fact_item_requires_non_empty_source_refs": True,
+            "source_ref_values_must_be_copied_exactly_from_provenance_catalog": True,
+            "inventing_source_refs_is_forbidden": True,
+            "omit_a_fact_item_when_no_catalog_reference_exists": True,
             "must_not_output_graph_patch": True,
             "must_not_mark_unverified_as_satisfied": True,
             "old_segment_excluded_after_success": True,
@@ -831,6 +1058,8 @@ def render_compaction_prompt(request: CompactionProviderRequest) -> dict[str, An
         "budget": request.budget,
         "source_segment": request.source_segment,
         "db_state": request.db_state,
+        "provenance_catalog": request.provenance_catalog,
+        "checkpoint_fact_schema": request.checkpoint_fact_schema,
         "segment_entries": request.segment_entries,
         "provider_instruction": {
             "no_markdown": True,
@@ -844,6 +1073,8 @@ def render_compaction_prompt(request: CompactionProviderRequest) -> dict[str, An
                 "graph_frontier",
                 "metadata",
             ],
+            "all_fact_lists_not_used_must_be_empty_arrays": True,
+            "source_refs_example": [{"gap_key": "copy-exact-gap-key-from-provenance-catalog"}],
         },
     }
 
@@ -853,7 +1084,9 @@ def render_compaction_messages(request: CompactionProviderRequest) -> tuple[list
     system = (
         "You are the Hermes RuntimeCompactionProvider. You are not an execution agent. "
         "You may not call tools, web_search, write files, create Kanban tasks, write the database, "
-        "or propose graph patches. Return exactly one JSON checkpoint candidate object.\n\n"
+        "or propose graph patches. Return exactly one JSON checkpoint candidate object. "
+        "Every non-empty checkpoint fact item must include non-empty source_refs whose values are copied "
+        "exactly from provenance_catalog; omit facts that have no catalog reference and never invent refs.\n\n"
         f"{request.profile['content']}"
     )
     user = json.dumps(rendered, ensure_ascii=False, sort_keys=True)
@@ -1336,6 +1569,8 @@ def compact_decision_session(
         "provider_model": provider_result.model,
         "request_ref": provider_result.request_ref,
         "response_ref": provider_result.response_ref,
+        "parse_status": provider_result.parse_status,
+        "provider_validation": provider_validation,
         "fallback_used": fallback_used or provider_result.fallback_used,
     }
 

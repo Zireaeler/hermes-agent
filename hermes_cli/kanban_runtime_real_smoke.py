@@ -140,6 +140,7 @@ def run_real_model_smoke(
             "fallback_used": bool(result.get("fallback_used")),
             "provider_name": result.get("provider_name") or (result.get("provider_result") or {}).get("provider_name"),
             "parse_status": result.get("parse_status") or (result.get("provider_result") or {}).get("parse_status"),
+            "provider_validation": result.get("provider_validation") or (result.get("provider_result") or {}).get("provider_validation"),
             "checkpoint_id": result.get("checkpoint_id"),
             "source_segment_id": result.get("source_segment_id"),
             "new_segment_id": result.get("new_segment_id"),

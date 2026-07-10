@@ -355,13 +355,15 @@ node 文本或 raw response，用于验证 delegation policy 的真实模型行�
 
 ### 当前真实运行状态
 
-2026-07-10 已在隔离 `HERMES_HOME` 使用当前 `.codex` 模型源完成一次真实 smoke：
+2026-07-10 已在隔离 `HERMES_HOME` 使用当前 `.codex` 模型源完成首次真实 smoke：
 decision execute 的 validator dry-run accepted；one-step apply 经一次 schema rejection
 后 accepted；real compaction candidate 被 provenance validator 拒绝后安全 fallback。
 最终 consistency passed，隔离 DB credential scan passed。
 
-这次运行说明 4G1 的真实调用边界可用，但 real compaction candidate quality 尚未通过。
-完整脱敏事实、矩阵和 4G2 进入门槛见
+这次运行说明 4G1 的真实调用边界可用，但它当时没有证明 real compaction candidate
+quality。后续 Phase 4G5 已通过显式 provenance catalog 和 checkpoint fact schema 补齐输入
+契约，并在隔离 `CODEX_HOME` 完成真实 no-fallback candidate accepted、segment rollover、
+consistency 0/0 和 credential scan 0 命中，L3 已通过。完整脱敏事实和矩阵见
 `docs/kanban-runtime-kernel-real-integration-validation.md`。
 
 同日基于 Profile v2 完成 delegation smoke：真实 provider 返回一个带 typed contract 的
@@ -380,11 +382,18 @@ Phase 4G2 Real Provider Bounded Loop with Synthetic Worker Evidence
 Phase 4G3 Real Worker Lane Smoke
       |
       v
+Phase 4G4 Worker Execution Continuity
+      |
+      v
+Phase 4G5 Real Compaction Candidate Quality
+      |
+      v
 Phase 4H Dashboard Runtime UI
 ```
 
-Phase 4G1 只证明真实模型源能通过 runtime 边界。它不证明真实 worker 稳定，也不证明真实
-长任务质量。真实 worker 和真实长任务必须在 provider smoke 稳定后再接入。
+Phase 4G1 本身只证明真实模型源能通过 runtime 边界。真实 worker、worker continuity 和
+compaction candidate quality 分别由后续 4G3、4G4 和 4G5 验证；真实长任务质量仍需单独
+soak。
 
 ## 12. 总结
 
