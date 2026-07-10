@@ -42,6 +42,7 @@ def _job(conn) -> str:
                 "verifier_required": True,
             }
         ],
+        initialization_mode="fixture",
     )
 
 

@@ -169,6 +169,7 @@ def run_runtime_soak(
                 "verifier_required": True,
             },
         ],
+        initialization_mode="fixture",
     )
     provider = Phase4GScriptedDecisionProvider()
     ticks: list[dict[str, Any]] = []

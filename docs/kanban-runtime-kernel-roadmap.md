@@ -110,6 +110,12 @@ coherent primary node、typed contract 和 validate-without-apply。尚未完成
 替换、persistent worker session、internal subagent 观测和大 primary node 长期真实执行。详细约束见
 `docs/kanban-runtime-kernel-delegation-policy.md`。
 
+下一项 delegation 收尾是 Delegation Initialization：production runtime create/promote 不再
+预建 `understand-scope` fixture，而是进入可审计 `waiting_decision`，由 Decision Provider
+提出第一个 coherent primary node；同时修正 waiting-decision liveness 和 nonterminal graph
+expansion predicate。实现边界见
+`docs/kanban-runtime-kernel-delegation-initialization.md`。
+
 ## 4. Phase 0: Architecture Contract
 
 ### 目标

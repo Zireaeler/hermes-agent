@@ -52,6 +52,7 @@ def _job(conn, *, goal_key: str = "initial-runtime-result") -> str:
                 "verifier_required": True,
             }
         ],
+        initialization_mode="fixture",
     )
 
 
@@ -184,6 +185,107 @@ def test_create_runtime_job_creates_contract_session_and_initial_node(conn):
     assert len(status["goal_gaps"]) == 1
     assert status["goal_gaps"][0]["gap_type"] == "missing_evidence"
     assert conn.execute("SELECT COUNT(*) FROM decision_sessions WHERE job_id = ?", (job_id,)).fetchone()[0] == 1
+
+
+def test_create_runtime_job_defaults_to_provider_first_waiting_decision(conn):
+    job_id = rk.create_runtime_job(
+        conn,
+        _root_task(conn),
+        "implement and verify one coherent runtime result",
+        goal_items=[{
+            "item_key": "coherent-result",
+            "description": "coherent result is verified",
+            "required": True,
+            "verifier_required": True,
+        }],
+    )
+
+    status = rk.status_runtime_job(conn, job_id)
+    assert status["job"]["state"] == "waiting_decision"
+    assert status["job"]["decision_profile"] == "graph_patch_decision"
+    assert status["job"]["metadata"]["initialization_mode"] == "provider_first"
+    assert status["nodes"] == []
+    assert status["frontier_summary"]["has_legal_wait"] is True
+    assert status["liveness"]["legal_wait"] is True
+    assert status["liveness"]["illegal_idle"] is False
+    assert status["liveness"]["pending_decision"] is False
+    assert status["liveness"]["decision_requested"] is True
+    assert rk.runtime_legal_waiting_reason(conn, job_id) == "waiting_decision"
+    event = conn.execute(
+        "SELECT payload_json FROM execution_events WHERE job_id = ? AND event_type = 'decision_requested'",
+        (job_id,),
+    ).fetchone()
+    assert json.loads(event["payload_json"])["reason"] == "initial_graph_required"
+    consistency = rk.check_runtime_consistency(conn, job_id, write_events=False)
+    assert consistency["status"] == "passed"
+    assert consistency["warnings"] == []
+
+
+def test_provider_first_job_requires_typed_node_contract(conn):
+    job_id = rk.create_runtime_job(conn, _root_task(conn), "typed primary node")
+    op = {
+        "op": "create_node",
+        "node_key": "primary",
+        "node_type": "implementation",
+        "title": "Primary worker",
+        "description": "Own the complete runtime result.",
+        "goal_item_keys": ["initial-runtime-result"],
+    }
+
+    rejected = rk.apply_graph_patch(conn, job_id, _patch(job_id, 0, op))
+    assert rejected["status"] == "rejected"
+    assert "requires typed contract" in rejected["reason"]
+
+    op["contract"] = _contract("src/**", "tests/**")
+    accepted = rk.apply_graph_patch(conn, job_id, _patch(job_id, 0, op))
+    assert accepted["status"] == "applied"
+    assert _node(conn, job_id, "primary")["state"] == "ready"
+
+
+@pytest.mark.parametrize("existing_state", sorted(rk.NONTERMINAL_EXECUTION_STATES))
+def test_provider_first_job_requires_decomposition_for_existing_nonterminal_node(
+    conn,
+    existing_state,
+):
+    job_id = rk.create_runtime_job(conn, _root_task(conn), "nonterminal expansion")
+    primary = {
+        "op": "create_node",
+        "node_key": "primary",
+        "node_type": "implementation",
+        "title": "Primary worker",
+        "description": "Own the first coherent result.",
+        "goal_item_keys": ["initial-runtime-result"],
+        "contract": _contract("src/primary/**"),
+    }
+    assert rk.apply_graph_patch(conn, job_id, _patch(job_id, 0, primary))["status"] == "applied"
+    conn.execute(
+        "UPDATE execution_nodes SET state = ? WHERE job_id = ? AND node_key = 'primary'",
+        (existing_state, job_id),
+    )
+    parallel = {
+        "op": "create_node",
+        "node_key": "parallel",
+        "node_type": "implementation",
+        "title": "Parallel worker",
+        "description": "Attempt an unjustified parallel responsibility.",
+        "goal_item_keys": ["initial-runtime-result"],
+        "contract": _contract("src/parallel/**"),
+    }
+
+    result = rk.apply_graph_patch(conn, job_id, _patch(job_id, 1, parallel))
+
+    assert result["status"] == "rejected"
+    assert "requires decomposition" in result["reason"]
+
+
+def test_create_runtime_job_rejects_unknown_initialization_mode(conn):
+    with pytest.raises(ValueError, match="unknown runtime initialization mode"):
+        rk.create_runtime_job(
+            conn,
+            _root_task(conn),
+            "invalid initialization mode",
+            initialization_mode="legacy",
+        )
 
 
 def test_patch_rejects_release_node_and_direct_complete(conn):
@@ -1178,14 +1280,16 @@ def test_contradicted_ledger_blocks_completion(conn):
     assert any(gap["gap_type"] == "contradicted_evidence" for gap in status["goal_gaps"] if gap["state"] == "open")
 
 
-def test_no_runnable_unmet_goal_records_liveness_violation(conn):
+def test_no_runnable_unmet_goal_requests_decision_without_liveness_violation(conn):
     job_id = _job(conn)
     conn.execute("UPDATE execution_nodes SET state = 'failed' WHERE job_id = ? AND node_key = 'understand-scope'", (job_id,))
     reduction = rk.reduce_runtime_job(conn, job_id)
     assert reduction["state"] == "waiting_decision"
     assert any(gap["gap_type"] == "no_runnable_for_open_goal" for gap in reduction["gaps"])
     events = [row["event_type"] for row in conn.execute("SELECT event_type FROM execution_events WHERE job_id = ?", (job_id,))]
-    assert "liveness_violation" in events
+    assert "decision_requested" in events
+    assert "liveness_violation" not in events
+    assert rk.summarize_liveness(conn, job_id)["illegal_idle"] is False
 
 
 def test_done_requires_required_goal_items_satisfied(conn):
@@ -1572,6 +1676,7 @@ def test_runtime_materialized_task_dispatch_and_ingest_fixture_lane(conn, monkey
             }
         ],
         initial_assignee="runtime-fixture",
+        initialization_mode="fixture",
     )
     assert rk.advance_runtime_job(conn, job_id, create_tasks=True).materialized_nodes == ["understand-scope"]
     node = _node(conn, job_id, "understand-scope")
@@ -1604,6 +1709,7 @@ def test_materialization_uses_job_default_worker_lane_when_node_is_unassigned(co
         "default lane materialization",
         initial_assignee="runtime-default",
         goal_items=[{"item_key": "runtime-result", "description": "result", "required": True}],
+        initialization_mode="fixture",
     )
     assert rk.apply_graph_patch(
         conn,

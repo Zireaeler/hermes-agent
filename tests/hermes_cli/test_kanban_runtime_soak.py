@@ -45,6 +45,7 @@ def _job(conn, workspace: Path | None = None) -> str:
                 "verifier_required": True,
             }
         ],
+        initialization_mode="fixture",
     )
 
 

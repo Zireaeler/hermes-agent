@@ -69,6 +69,7 @@ DECOMPOSITION_EVIDENCE_REQUIRED = {
 }
 EXECUTION_NODE_OPS = {"create_node", "insert_verifier", "strategy_update"}
 NONTERMINAL_EXECUTION_STATES = {"planned", "waiting_dependency", "ready", "running"}
+RUNTIME_INITIALIZATION_MODES = {"provider_first", "fixture"}
 VERIFIER_TARGET_FIELDS = {
     "target_evidence_ref",
     "target_materialization_attempt",
@@ -1143,25 +1144,31 @@ def create_runtime_job(
     workspace_path: Optional[str] = None,
     goal_items: Optional[list[dict[str, Any]]] = None,
     initial_assignee: Optional[str] = None,
+    initialization_mode: str = "provider_first",
 ) -> str:
-    """Create a runtime job, goal contract, decision session, and first node."""
+    """Create a runtime job and its authoritative goal/decision state."""
 
     ensure_runtime_schema(conn)
     if not objective or not objective.strip():
         raise ValueError("objective is required")
+    initialization_mode = str(initialization_mode or "").strip()
+    if initialization_mode not in RUNTIME_INITIALIZATION_MODES:
+        raise ValueError(f"unknown runtime initialization mode {initialization_mode!r}")
 
     now = _now()
     job_id = _id("rjob")
     contract_id = _id("gcon")
     session_id = _id("dses")
     segment_id = _id("dseg")
-    node_id = _id("rnode")
+    node_id = _id("rnode") if initialization_mode == "fixture" else None
     initial_goal_items = goal_items or [
         {
             "item_key": "initial-runtime-result",
             "description": "produce verified evidence for the requested objective",
             "required": True,
-            "acceptance_criteria": {"kind": "phase1-fixture"},
+            "acceptance_criteria": {
+                "kind": "phase1-fixture" if initialization_mode == "fixture" else "runtime-objective"
+            },
             "evidence_requirements": {"requires_verification": True},
             "verifier_required": True,
         }
@@ -1170,21 +1177,28 @@ def create_runtime_job(
         f"{PATCH_SCHEMA}:{objective.strip()}:{json.dumps(initial_goal_items, sort_keys=True)}".encode("utf-8")
     ).hexdigest()
 
+    initial_state = "active" if initialization_mode == "fixture" else "waiting_decision"
+    decision_profile = "fixture" if initialization_mode == "fixture" else "graph_patch_decision"
+    job_metadata = {"initialization_mode": initialization_mode}
+    if initial_assignee:
+        job_metadata["default_worker_lane"] = initial_assignee
     conn.execute(
         """
         INSERT INTO runtime_jobs (
             id, root_task_id, board, state, objective, workspace_path,
             decision_profile, active_milestone_key, graph_revision,
             metadata_json, created_at, updated_at
-        ) VALUES (?, ?, ?, 'active', ?, ?, 'fixture', NULL, 0, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?)
         """,
         (
             job_id,
             root_task_id,
             board,
+            initial_state,
             objective.strip(),
             workspace_path,
-            _json({"default_worker_lane": initial_assignee} if initial_assignee else {}),
+            decision_profile,
+            _json(job_metadata),
             now,
             now,
         ),
@@ -1236,11 +1250,14 @@ def create_runtime_job(
         INSERT INTO decision_sessions (
             id, job_id, profile, provider, model, state, stable_prefix_hash,
             active_segment_id, context_state_json, metadata_json, created_at, updated_at
-        ) VALUES (?, ?, 'fixture', 'local', 'deterministic', 'active', ?, ?, ?, '{}', ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)
         """,
         (
             session_id,
             job_id,
+            decision_profile,
+            "local" if initialization_mode == "fixture" else "unconfigured",
+            "deterministic" if initialization_mode == "fixture" else "unconfigured",
             prefix_hash,
             segment_id,
             _json(
@@ -1249,6 +1266,7 @@ def create_runtime_job(
                     "active_segment_id": segment_id,
                 }
             ),
+            _json({"initialization_mode": initialization_mode}),
             now,
             now,
         ),
@@ -1262,30 +1280,53 @@ def create_runtime_job(
         """,
         (segment_id, job_id, session_id, now),
     )
-    conn.execute(
-        """
-        INSERT INTO execution_nodes (
-            id, job_id, node_key, node_type, state, title, description,
-            assignee, input_summary, assumptions_json, constraints_json, metadata_json,
-            created_at, updated_at
-        ) VALUES (?, ?, 'understand-scope', 'analysis', 'ready', ?, ?, ?, ?, '{}', '{}', ?, ?, ?)
-        """,
-        (
-            node_id,
-            job_id,
-            "Establish executable understanding",
-            "Analyze the objective enough to produce structured evidence for the first runtime gap.",
-            initial_assignee,
-            objective.strip(),
-            _json({"goal_item_keys": [initial_goal_items[0]["item_key"]], "gap_keys": []}),
-            now,
-            now,
-        ),
+    if initialization_mode == "fixture":
+        conn.execute(
+            """
+            INSERT INTO execution_nodes (
+                id, job_id, node_key, node_type, state, title, description,
+                assignee, input_summary, assumptions_json, constraints_json, metadata_json,
+                created_at, updated_at
+            ) VALUES (?, ?, 'understand-scope', 'analysis', 'ready', ?, ?, ?, ?, '{}', '{}', ?, ?, ?)
+            """,
+            (
+                node_id,
+                job_id,
+                "Establish executable understanding",
+                "Analyze the objective enough to produce structured evidence for the first runtime gap.",
+                initial_assignee,
+                objective.strip(),
+                _json({"goal_item_keys": [initial_goal_items[0]["item_key"]], "gap_keys": []}),
+                now,
+                now,
+            ),
+        )
+    _event(
+        conn,
+        job_id,
+        "job_created",
+        {
+            "objective": objective.strip(),
+            "root_task_id": root_task_id,
+            "initialization_mode": initialization_mode,
+        },
     )
-    _event(conn, job_id, "job_created", {"objective": objective.strip(), "root_task_id": root_task_id})
     _event(conn, job_id, "goal_contract_created", {"contract_id": contract_id})
-    _event(conn, job_id, "node_created", {"node_key": "understand-scope", "node_type": "analysis"}, node_id=node_id)
+    if initialization_mode == "fixture":
+        _event(conn, job_id, "node_created", {"node_key": "understand-scope", "node_type": "analysis"}, node_id=node_id)
     detect_goal_gaps(conn, job_id)
+    if initialization_mode == "provider_first":
+        _event_once(
+            conn,
+            job_id,
+            "decision_requested",
+            "initial_graph_required",
+            {
+                "reason": "initial_graph_required",
+                "goal_item_keys": [item["item_key"] for item in initial_goal_items],
+                "graph_revision": 0,
+            },
+        )
     return job_id
 
 
@@ -1325,6 +1366,7 @@ def create_runtime_job_from_objective(
         workspace_path=workspace_path,
         goal_items=goal_items,
         initial_assignee=assignee,
+        initialization_mode="provider_first",
     )
 
 
@@ -1355,6 +1397,7 @@ def promote_runtime_job(
         workspace_path=workspace_path or task.workspace_path,
         goal_items=goal_items,
         initial_assignee=initial_assignee,
+        initialization_mode="provider_first",
     )
 
 
@@ -1545,9 +1588,11 @@ def _validate_goal_or_gap_linkage(op: dict[str, Any], op_name: str) -> None:
     raise PatchValidationError(f"{op_name} requires goal_item_keys, gap_keys, or human_gate_reason")
 
 
-def _validate_node_contract(op: dict[str, Any]) -> None:
+def _validate_node_contract(op: dict[str, Any], *, required: bool = False) -> None:
     contract = op.get("contract")
     if contract is None:
+        if required:
+            raise PatchValidationError(f"{op.get('op')} requires typed contract for provider-first jobs")
         return
     if not isinstance(contract, dict):
         raise PatchValidationError("create_node contract must be an object")
@@ -1616,9 +1661,12 @@ def _patch_requires_decomposition(conn: sqlite3.Connection, job_id: str, ops: li
     if len(execution_ops) >= 2 or any(op.get("op") == "insert_verifier" for op in execution_ops):
         return True
     immediate = [op for op in execution_ops if op.get("op") in {"create_node", "strategy_update"} and not (op.get("depends_on") or [])]
+    initialization_mode = _loads(_job(conn, job_id).get("metadata_json")).get("initialization_mode")
+    states = NONTERMINAL_EXECUTION_STATES if initialization_mode == "provider_first" else {"running"}
+    placeholders = ",".join("?" for _ in states)
     if immediate and conn.execute(
-        "SELECT 1 FROM execution_nodes WHERE job_id = ? AND state = 'running' LIMIT 1",
-        (job_id,),
+        f"SELECT 1 FROM execution_nodes WHERE job_id = ? AND state IN ({placeholders}) LIMIT 1",
+        (job_id, *sorted(states)),
     ).fetchone() is not None:
         return True
     return False
@@ -1690,6 +1738,9 @@ def _validate_decomposition(conn: sqlite3.Connection, job_id: str, patch: dict[s
 
 def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]) -> None:
     job = _job(conn, job_id)
+    typed_contract_required = (
+        _loads(job.get("metadata_json")).get("initialization_mode") == "provider_first"
+    )
     if not isinstance(patch, dict):
         raise PatchValidationError("patch must be a JSON object")
     if patch.get("schema") != PATCH_SCHEMA:
@@ -1708,7 +1759,7 @@ def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]
         if name == "create_node":
             _validate_goal_linkage(op)
             _node_capability_metadata(op)
-            _validate_node_contract(op)
+            _validate_node_contract(op, required=typed_contract_required)
             node_key = str(op.get("node_key") or "").strip()
             node_type = str(op.get("node_type") or "").strip()
             if not node_key or not str(op.get("title") or "").strip() or not str(op.get("description") or "").strip():
@@ -1771,7 +1822,7 @@ def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]
             if not (op.get("goal_item_keys") or op.get("gap_keys")):
                 raise PatchValidationError("insert_verifier requires goal_item_keys or gap_keys")
             _node_capability_metadata(op)
-            _validate_node_contract(op)
+            _validate_node_contract(op, required=typed_contract_required)
             for key in op.get("goal_item_keys") or []:
                 _goal_item_by_key(conn, job_id, key)
 
@@ -1800,7 +1851,7 @@ def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]
         elif name == "strategy_update":
             _validate_goal_or_gap_linkage(op, "strategy_update")
             _node_capability_metadata(op)
-            _validate_node_contract(op)
+            _validate_node_contract(op, required=typed_contract_required)
             node_key = str(op.get("node_key") or "").strip()
             if not node_key or not str(op.get("title") or "").strip() or not str(op.get("description") or "").strip():
                 raise PatchValidationError("strategy_update requires node_key, title, and description")
@@ -2117,10 +2168,16 @@ def summarize_active_frontier(conn: sqlite3.Connection, job_id: str) -> dict[str
             )
     for items in buckets.values():
         items.sort(key=lambda item: item["node_key"])
+    waiting_decision = _job(conn, job_id)["state"] == "waiting_decision"
     return {
         **buckets,
         "has_runnable": bool(buckets["ready"] or buckets["running"]),
-        "has_legal_wait": bool(buckets["running"] or buckets["waiting_human"] or _has_pending_decision(conn, job_id)),
+        "has_legal_wait": bool(
+            buckets["running"]
+            or buckets["waiting_human"]
+            or _has_pending_decision(conn, job_id)
+            or waiting_decision
+        ),
     }
 
 
@@ -2154,7 +2211,14 @@ def summarize_liveness(conn: sqlite3.Connection, job_id: str, frontier: Optional
         (job_id,),
     ).fetchall()
     job = _job(conn, job_id)
-    legal_wait = bool(frontier["running"] or frontier["waiting_human"] or _has_pending_decision(conn, job_id))
+    pending_decision = _has_pending_decision(conn, job_id)
+    decision_requested = job["state"] == "waiting_decision"
+    legal_wait = bool(
+        frontier["running"]
+        or frontier["waiting_human"]
+        or pending_decision
+        or decision_requested
+    )
     illegal_idle = (
         job["state"] != "done"
         and bool(open_gaps)
@@ -2169,7 +2233,8 @@ def summarize_liveness(conn: sqlite3.Connection, job_id: str, frontier: Optional
         "ready_count": len(frontier["ready"]),
         "running_count": len(frontier["running"]),
         "waiting_human_count": len(frontier["waiting_human"]),
-        "pending_decision": _has_pending_decision(conn, job_id),
+        "pending_decision": pending_decision,
+        "decision_requested": decision_requested,
     }
 
 
@@ -2850,7 +2915,7 @@ def runtime_legal_waiting_reason(conn: sqlite3.Connection, job_id: str) -> str:
         return "blocked_by_policy"
     if frontier["waiting_human"]:
         return "waiting_human"
-    if _has_pending_decision(conn, job_id):
+    if _has_pending_decision(conn, job_id) or job["state"] == "waiting_decision":
         return "waiting_decision"
     if frontier["ready"]:
         return "ready_to_materialize"
@@ -3283,7 +3348,6 @@ def reduce_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
     has_human = counts.get("waiting_human", 0) > 0
     has_running = counts.get("running", 0) > 0
     has_ready = counts.get("ready", 0) > 0
-    has_pending_decision = _has_pending_decision(conn, job_id)
     complete = _completion_satisfied(conn, job_id)
     capability_summary = summarize_runtime_capabilities(conn, job_id, limit=5)
     has_pending_capability_authorization = bool(capability_summary["pending_authorizations"])
@@ -3312,14 +3376,6 @@ def reduce_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
             "open_goal_gaps",
             {"gap_count": len(gaps), "gap_keys": [gap["gap_key"] for gap in gaps]},
         )
-        if not has_pending_decision and any(gap["gap_type"] == "no_runnable_for_open_goal" for gap in gaps):
-            _event_once(
-                conn,
-                job_id,
-                "liveness_violation",
-                "no_runnable_for_open_goal",
-                {"reason": "no runnable node while goal gaps remain", "frontier": frontier},
-            )
     else:
         state = "active"
     for event in stagnation_events:
@@ -4835,6 +4891,13 @@ def fixture_decision_provider(session: dict[str, Any], delta: dict[str, Any]) ->
     """Deterministic provider used by tests; not a default workflow."""
 
     revision = int(delta["job"]["graph_revision"])
+    contract = {
+        "outcome": "Produce verified evidence for the linked runtime goal item.",
+        "acceptance_criteria": ["The linked goal outcome exists", "Required verification passes"],
+        "success_evidence": ["changed_files", "verification", "worker_summary"],
+        "declared_write_scope": [],
+        "prohibited_actions": ["production_deployment"],
+    }
     gaps = delta.get("goal_gaps") or []
     if not gaps:
         return {"schema": PATCH_SCHEMA, "expected_revision": revision, "rationale_summary": "no structural gap", "ops": []}
@@ -4858,6 +4921,7 @@ def fixture_decision_provider(session: dict[str, Any], delta: dict[str, Any]) ->
                     "description": f"Execute work that can satisfy goal item {goal_key}.",
                     "goal_item_keys": [goal_key],
                     "gap_keys": [gap_key],
+                    "contract": contract,
                 }
             ],
         }
@@ -4899,6 +4963,7 @@ def fixture_decision_provider(session: dict[str, Any], delta: dict[str, Any]) ->
                     "title": f"Verify {goal_key}",
                     "goal_item_keys": [goal_key],
                     "gap_keys": [gap_key],
+                    "contract": contract,
                 }
             ],
         }
@@ -4915,6 +4980,7 @@ def fixture_decision_provider(session: dict[str, Any], delta: dict[str, Any]) ->
                 "description": f"Investigate failed verifier for {goal_key}.",
                 "goal_item_keys": [goal_key],
                 "gap_keys": [gap_key],
+                "contract": contract,
             }
         ],
     }

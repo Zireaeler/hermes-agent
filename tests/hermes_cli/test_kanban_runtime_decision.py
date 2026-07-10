@@ -49,11 +49,22 @@ def _job(conn) -> str:
                 "verifier_required": True,
             },
         ],
+        initialization_mode="fixture",
     )
 
 
 def _revision(conn, job_id: str) -> int:
     return int(conn.execute("SELECT graph_revision FROM runtime_jobs WHERE id = ?", (job_id,)).fetchone()[0])
+
+
+def _contract() -> dict:
+    return {
+        "outcome": "Produce the complete verified runtime result.",
+        "acceptance_criteria": ["The result exists", "Verification passes"],
+        "success_evidence": ["changed_files", "verification", "worker_summary"],
+        "declared_write_scope": [],
+        "prohibited_actions": ["production_deployment"],
+    }
 
 
 class _FakeCompletions:
@@ -161,8 +172,8 @@ def test_decision_delta_and_patch_entries_preserve_order(conn):
         "expected_revision": before,
         "rationale_summary": "create implementation",
         "ops": [
-            {
-                "op": "create_node",
+                        {
+                            "op": "create_node",
                 "node_key": "implement-a",
                 "node_type": "implementation",
                 "title": "Implement A",
@@ -950,9 +961,10 @@ def test_runtime_provider_smoke_validator_recovery_retries_without_apply(kanban_
                         "node_key": "implement-recovered-runtime-result",
                         "node_type": "implementation",
                         "title": "Implement recovered runtime result",
-                        "description": "Create evidence for the initial runtime result.",
-                        "goal_item_keys": ["initial-runtime-result"],
-                    }
+                            "description": "Create evidence for the initial runtime result.",
+                            "goal_item_keys": ["initial-runtime-result"],
+                            "contract": _contract(),
+                        }
                 ],
             }
             return rd.DecisionProviderResult(
@@ -1062,18 +1074,19 @@ def test_runtime_complete_node_records_kanban_evidence_without_ingest(kanban_hom
     job_id = created["id"]
     first = json.loads(kc.run_slash(f"runtime advance {job_id} --loop --fake-provider --json"))
     assert first["state"] == "waiting_worker"
-    assert first["steps"][0]["materialized_nodes"] == ["understand-scope"]
+    assert any(step["patch_status"] == "applied" for step in first["steps"])
+    assert any("implement-initial-runtime-result" in step["materialized_nodes"] for step in first["steps"])
 
     evidence = {
         "verdict": "succeeded",
-        "summary": "analysis found remaining implementation work",
+        "summary": "primary worker found remaining implementation work",
         "unmet_goal_items": ["initial-runtime-result"],
         "verification": {"passed": False},
     }
     payload = json.loads(
         kc.run_slash(
-            f"runtime complete-node {job_id} understand-scope "
-            "--summary 'analysis found remaining implementation work' "
+            f"runtime complete-node {job_id} implement-initial-runtime-result "
+            "--summary 'primary worker found remaining implementation work' "
             f"--metadata '{_runtime_metadata_arg(evidence)}' --json"
         )
     )
@@ -1083,7 +1096,7 @@ def test_runtime_complete_node_records_kanban_evidence_without_ingest(kanban_hom
     assert payload["ledger_count_after"] == 0
 
     status = json.loads(kc.run_slash(f"runtime status {job_id} --json"))
-    node = next(item for item in status["nodes"] if item["node_key"] == "understand-scope")
+    node = next(item for item in status["nodes"] if item["node_key"] == "implement-initial-runtime-result")
     assert node["state"] == "running"
     assert status["progress_ledger"] == []
 
@@ -1094,26 +1107,8 @@ def test_runtime_cli_drives_multiround_goal_loop_with_evidence_bridge(kanban_hom
 
     first = json.loads(kc.run_slash(f"runtime advance {job_id} --loop --fake-provider --json"))
     assert first["state"] == "waiting_worker"
-    assert first["steps"][0]["materialized_nodes"] == ["understand-scope"]
-
-    analysis_evidence = {
-        "verdict": "succeeded",
-        "summary": "analysis found the goal still needs implementation",
-        "unmet_goal_items": ["initial-runtime-result"],
-        "verification": {"passed": False},
-    }
-    json.loads(
-        kc.run_slash(
-            f"runtime complete-node {job_id} understand-scope "
-            "--summary 'analysis found the goal still needs implementation' "
-            f"--metadata '{_runtime_metadata_arg(analysis_evidence)}' --json"
-        )
-    )
-    second = json.loads(kc.run_slash(f"runtime advance {job_id} --loop --fake-provider --json"))
-    assert second["state"] == "waiting_worker"
-    assert any("understand-scope" in step["ingested_nodes"] for step in second["steps"])
-    assert any(step["patch_status"] == "applied" for step in second["steps"])
-    assert any("implement-initial-runtime-result" in step["materialized_nodes"] for step in second["steps"])
+    assert any(step["patch_status"] == "applied" for step in first["steps"])
+    assert any("implement-initial-runtime-result" in step["materialized_nodes"] for step in first["steps"])
 
     implementation_evidence = {
         "verdict": "succeeded",
@@ -1128,11 +1123,11 @@ def test_runtime_cli_drives_multiround_goal_loop_with_evidence_bridge(kanban_hom
             f"--metadata '{_runtime_metadata_arg(implementation_evidence)}' --json"
         )
     )
-    third = json.loads(kc.run_slash(f"runtime advance {job_id} --loop --fake-provider --json"))
-    assert third["state"] == "waiting_worker"
-    assert any("implement-initial-runtime-result" in step["ingested_nodes"] for step in third["steps"])
-    assert any(step["patch_status"] == "applied" for step in third["steps"])
-    assert any("verify-initial-runtime-result" in step["materialized_nodes"] for step in third["steps"])
+    second = json.loads(kc.run_slash(f"runtime advance {job_id} --loop --fake-provider --json"))
+    assert second["state"] == "waiting_worker"
+    assert any("implement-initial-runtime-result" in step["ingested_nodes"] for step in second["steps"])
+    assert any(step["patch_status"] == "applied" for step in second["steps"])
+    assert any("verify-initial-runtime-result" in step["materialized_nodes"] for step in second["steps"])
 
     verifier_evidence = {
         "verdict": "succeeded",
@@ -1155,7 +1150,7 @@ def test_runtime_cli_drives_multiround_goal_loop_with_evidence_bridge(kanban_hom
     assert status["job"]["state"] == "done"
     assert status["goal_items"][0]["state"] == "satisfied"
     assert any(row["verification_state"] == "verified" for row in status["progress_ledger"])
-    assert len(status["materializations"]) == 3
+    assert len(status["materializations"]) == 2
 
     decisions = json.loads(kc.run_slash(f"runtime decision {job_id} --json"))
     assert len(decisions) >= 2
@@ -1173,7 +1168,7 @@ def test_runtime_cli_resumes_and_completes_after_goal_waiver(kanban_home):
     job_id = created["id"]
     first = json.loads(kc.run_slash(f"runtime advance {job_id} --loop --fake-provider --json"))
     assert first["state"] == "waiting_worker"
-    assert first["steps"][0]["materialized_nodes"] == ["understand-scope"]
+    assert any("implement-core-result" in step["materialized_nodes"] for step in first["steps"])
 
     core_evidence = {
         "verdict": "succeeded",
@@ -1183,14 +1178,14 @@ def test_runtime_cli_resumes_and_completes_after_goal_waiver(kanban_home):
     }
     json.loads(
         kc.run_slash(
-            f"runtime complete-node {job_id} understand-scope "
+            f"runtime complete-node {job_id} implement-core-result "
             "--summary 'core result verified' "
             f"--metadata '{_runtime_metadata_arg(core_evidence)}' --json"
         )
     )
     resumed = json.loads(kc.run_slash(f"runtime advance {job_id} --loop --provider none --json"))
     assert resumed["state"] == "waiting_decision"
-    assert any("understand-scope" in step["ingested_nodes"] for step in resumed["steps"])
+    assert any("implement-core-result" in step["ingested_nodes"] for step in resumed["steps"])
 
     waived = json.loads(
         kc.run_slash(
@@ -1278,8 +1273,11 @@ def test_runtime_supervise_cli_runs_leased_tick(kanban_home):
 
     assert payload["status"] == "advanced"
     assert payload["lock"]["owner"] == "test-supervisor"
-    assert payload["result"]["materialized_nodes"] == ["understand-scope"]
+    assert payload["result"]["materialized_nodes"] == []
+    assert payload["result"]["decision_requested"] is True
     status = json.loads(kc.run_slash(f"runtime status {created['id']} --json"))
+    assert status["job"]["state"] == "waiting_decision"
+    assert status["liveness"]["legal_wait"] is True
     assert status["job"]["advance_lock"] is None
 
 

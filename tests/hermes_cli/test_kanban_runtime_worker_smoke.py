@@ -61,6 +61,13 @@ class Provider:
                 "assignee": "codex-runtime-smoke",
                 "goal_item_keys": ["worker-smoke-result"],
                 "gap_keys": ["worker-smoke-result:missing_evidence"],
+                "contract": {
+                    "outcome": "Implement and verify the complete bounded worker smoke result.",
+                    "acceptance_criteria": ["The result exists", "Local verification passes"],
+                    "success_evidence": ["changed_files", "verification", "worker_summary"],
+                    "declared_write_scope": [],
+                    "prohibited_actions": ["production_deployment"],
+                },
             }],
         }
         return rd.DecisionProviderResult(
@@ -83,7 +90,7 @@ def _fake_codex(tmp_path: Path) -> Path:
         "#!/usr/bin/env python3\n"
         "import json, sys\n"
         "prompt = sys.stdin.read()\n"
-        "goal = 'scope-understood' if 'Goal items: scope-understood' in prompt else 'worker-smoke-result'\n"
+        "goal = 'worker-smoke-result'\n"
         "print('Progress:')\n"
         "print('- [x] completed bounded worker smoke')\n"
         "print('\\nChanged files:')\nprint('- none')\n"
@@ -119,14 +126,17 @@ def test_worker_smoke_uses_dispatcher_wrapper_and_runtime_receipt(kanban_home, t
         job_id = rk.create_runtime_job(
             conn,
             root,
-            "Use lane codex-runtime-smoke. First establish scope, then create a lane-assigned node for worker-smoke-result.",
+            "Use one coherent worker to implement and verify the bounded worker smoke result.",
             workspace_path=str(tmp_path),
             initial_assignee="codex-runtime-smoke",
             goal_items=[
-                {"item_key": "scope-understood", "description": "scope evidence", "required": True, "verifier_required": True},
                 {"item_key": "worker-smoke-result", "description": "worker evidence", "required": True, "verifier_required": True},
             ],
         )
+        assert conn.execute(
+            "SELECT COUNT(*) FROM execution_nodes WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()[0] == 0
         report = ws.run_real_worker_lane_smoke(
             conn,
             job_id,
@@ -145,7 +155,9 @@ def test_worker_smoke_uses_dispatcher_wrapper_and_runtime_receipt(kanban_home, t
 
     assert report["accepted_patch_count"] == 1
     assert report["final_state"] == "done"
-    assert {item["node_key"] for item in report["terminal_receipts"]} == {"understand-scope", "worker-smoke-result"}
+    assert report["decision_tick_count"] == 1
+    assert len(report["dispatches"]) == 1
+    assert {item["node_key"] for item in report["terminal_receipts"]} == {"worker-smoke-result"}
     assert report["consistency"]["status"] == "passed"
     assert report["secrets_leaked"] is False
     assert "node_completed" in events

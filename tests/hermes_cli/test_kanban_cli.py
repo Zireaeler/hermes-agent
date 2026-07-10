@@ -176,13 +176,17 @@ def test_run_slash_dispatch_dry_run_counts(kanban_home):
 
 def test_run_slash_runtime_create_status_and_list_json(kanban_home):
     created = json.loads(kc.run_slash("runtime create 'ship runtime control plane' --json"))
-    assert created["state"] == "active"
+    assert created["state"] == "waiting_decision"
     assert created["root_task_id"].startswith("t_")
     assert created["goal_items"][0]["item_key"] == "initial-runtime-result"
+    assert created["frontier"] == []
+    assert created["liveness"]["legal_wait"] is True
+    assert created["liveness"]["decision_requested"] is True
 
     status = json.loads(kc.run_slash(f"runtime status {created['id']} --json"))
     assert status["job"]["id"] == created["id"]
-    assert status["nodes"][0]["node_key"] == "understand-scope"
+    assert status["job"]["metadata"]["initialization_mode"] == "provider_first"
+    assert status["nodes"] == []
 
     jobs = json.loads(kc.run_slash("runtime list --json"))
     assert [job["id"] for job in jobs] == [created["id"]]
@@ -193,25 +197,28 @@ def test_run_slash_runtime_promote_existing_root_task(kanban_home):
     promoted = json.loads(kc.run_slash(f"runtime promote {root['id']} --json"))
     assert promoted["root_task_id"] == root["id"]
     assert promoted["objective"] == "runtime objective"
-    assert promoted["frontier"][0]["node_key"] == "understand-scope"
+    assert promoted["state"] == "waiting_decision"
+    assert promoted["frontier"] == []
 
 
-def test_run_slash_runtime_advance_materializes_initial_node(kanban_home):
+def test_run_slash_runtime_advance_without_provider_preserves_initial_decision_wait(kanban_home):
     created = json.loads(kc.run_slash("runtime create 'advance runtime' --json"))
     first = json.loads(kc.run_slash(f"runtime advance {created['id']} --json"))
     second = json.loads(kc.run_slash(f"runtime advance {created['id']} --json"))
 
-    assert first["step"]["materialized_nodes"] == ["understand-scope"]
+    assert first["state"] == "waiting_decision"
+    assert first["step"]["decision_requested"] is True
+    assert first["step"]["materialized_nodes"] == []
     assert second["step"]["materialized_nodes"] == []
 
 
 def test_run_slash_runtime_reconcile_and_consistency_json(kanban_home):
     created = json.loads(kc.run_slash("runtime create 'reconcile runtime' --json"))
-    first = json.loads(kc.run_slash(f"runtime advance {created['id']} --json"))
-    task_id = first["frontier"][0]["task_id"] if "frontier" in first else None
-    if task_id is None:
-        status = json.loads(kc.run_slash(f"runtime status {created['id']} --json"))
-        task_id = next(node["latest_task_id"] for node in status["nodes"] if node["node_key"] == "understand-scope")
+    first = json.loads(kc.run_slash(f"runtime advance {created['id']} --loop --fake-provider --json"))
+    assert first["state"] == "waiting_worker"
+    status = json.loads(kc.run_slash(f"runtime status {created['id']} --json"))
+    node = next(node for node in status["nodes"] if node["node_key"] == "implement-initial-runtime-result")
+    task_id = node["latest_task_id"]
     with kb.connect() as conn:
         conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
 
@@ -220,7 +227,7 @@ def test_run_slash_runtime_reconcile_and_consistency_json(kanban_home):
     inspected = json.loads(kc.run_slash(f"runtime inspect {created['id']} --json"))
 
     assert reconciled["events"] == ["materialization_lost"]
-    assert reconciled["scheduled_retries"] == ["understand-scope"]
+    assert reconciled["scheduled_retries"] == ["implement-initial-runtime-result"]
     assert consistency["status"] == "failed"
     assert inspected["legal_waiting_reason"] == "ready_to_materialize"
     assert inspected["recovery"]["open_recovery_events"]

@@ -198,7 +198,12 @@ class TestWebServerEndpoints:
         kb.init_db()
         with kb.connect() as conn:
             root = kb.create_task(conn, title="runtime api root", initial_status="running")
-            job_id = rk.create_runtime_job(conn, root, "runtime api observability")
+            job_id = rk.create_runtime_job(
+                conn,
+                root,
+                "runtime api observability",
+                initialization_mode="fixture",
+            )
 
         listing = self.client.get("/api/runtime/jobs")
         assert listing.status_code == 200
