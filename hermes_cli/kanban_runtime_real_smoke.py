@@ -75,6 +75,7 @@ def run_real_model_smoke(
             "called_model": True,
             "applied": False,
             "provider_result": _provider_result_summary(provider_result),
+            "delegation": _delegation_summary(provider_result.patch),
             "validation": validation,
             "graph_revision_after": int(rk._job(conn, job_id)["graph_revision"]),
             "graph_patches_after": _count(conn, "graph_patches", job_id),
@@ -233,6 +234,40 @@ def _provider_result_summary(result: rd.DecisionProviderResult) -> dict[str, Any
         "output_token_estimate": result.output_token_estimate,
         "error": result.error,
         "has_patch": result.patch is not None,
+    }
+
+
+def _delegation_summary(patch: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Return bounded delegation metrics without exposing provider-authored text."""
+
+    if patch is None:
+        return None
+    ops = patch.get("ops") if isinstance(patch.get("ops"), list) else []
+    execution_ops = [
+        op for op in ops
+        if isinstance(op, dict) and op.get("op") in rk.EXECUTION_NODE_OPS
+    ]
+    immediate_ops = [op for op in execution_ops if not (op.get("depends_on") or [])]
+    contracted_ops = [op for op in execution_ops if isinstance(op.get("contract"), dict)]
+    decomposition = patch.get("decomposition")
+    justifications = (
+        decomposition.get("justifications")
+        if isinstance(decomposition, dict) and isinstance(decomposition.get("justifications"), list)
+        else []
+    )
+    return {
+        "operation_count": len(ops),
+        "operation_types": [str(op.get("op") or "") for op in ops if isinstance(op, dict)],
+        "execution_node_count": len(execution_ops),
+        "immediate_execution_node_count": len(immediate_ops),
+        "typed_contract_count": len(contracted_ops),
+        "all_execution_nodes_have_typed_contract": bool(execution_ops) and len(contracted_ops) == len(execution_ops),
+        "decomposition_present": isinstance(decomposition, dict),
+        "decomposition_reason_types": [
+            str(item.get("type") or "")
+            for item in justifications
+            if isinstance(item, dict)
+        ],
     }
 
 

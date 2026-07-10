@@ -139,3 +139,54 @@ class TestApplyProfileOverrideHermesHomeGuard:
         _apply_profile_override()
 
         assert os.environ.get("HERMES_HOME") is None
+
+    def test_runtime_decision_profile_is_not_treated_as_global_profile(
+        self, tmp_path, monkeypatch
+    ):
+        hermes_home = tmp_path / "isolated-runtime"
+        hermes_home.mkdir()
+        argv = [
+            "hermes",
+            "kanban",
+            "runtime",
+            "real-smoke",
+            "rjob_test",
+            "--profile",
+            "graph_patch_decision",
+        ]
+
+        result = _run_apply_profile_override(
+            tmp_path,
+            monkeypatch,
+            hermes_home=str(hermes_home),
+            active_profile=None,
+            argv=argv,
+        )
+
+        assert result == str(hermes_home)
+        assert sys.argv == argv
+
+    def test_global_profile_before_runtime_command_remains_supported(
+        self, tmp_path, monkeypatch
+    ):
+        argv = [
+            "hermes",
+            "--profile",
+            "coder",
+            "kanban",
+            "runtime",
+            "status",
+            "rjob_test",
+        ]
+
+        result = _run_apply_profile_override(
+            tmp_path,
+            monkeypatch,
+            hermes_home=None,
+            active_profile="coder",
+            argv=argv,
+        )
+
+        assert result is not None
+        assert result.endswith("profiles/coder")
+        assert sys.argv == ["hermes", "kanban", "runtime", "status", "rjob_test"]

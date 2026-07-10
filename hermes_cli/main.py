@@ -122,13 +122,27 @@ def _apply_profile_override() -> None:
     profile_name = None
     consume = 0
 
+    def runtime_owns_profile_flag(flag_index: int) -> bool:
+        """Keep runtime decision-profile flags for the kanban subparser."""
+
+        try:
+            kanban_index = argv.index("kanban")
+            runtime_index = argv.index("runtime", kanban_index + 1)
+        except ValueError:
+            return False
+        return kanban_index < runtime_index < flag_index
+
     # 1. Check for explicit -p / --profile flag
     for i, arg in enumerate(argv):
         if arg in {"--profile", "-p"} and i + 1 < len(argv):
+            if runtime_owns_profile_flag(i):
+                continue
             profile_name = argv[i + 1]
             consume = 2
             break
         elif arg.startswith("--profile="):
+            if runtime_owns_profile_flag(i):
+                continue
             profile_name = arg.split("=", 1)[1]
             consume = 1
             break

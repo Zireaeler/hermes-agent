@@ -84,6 +84,13 @@ class AcceptingDecisionProvider:
                     "description": "Create a linked runtime node from fake real provider.",
                     "goal_item_keys": ["runtime-result"],
                     "gap_keys": ["runtime-result:missing_evidence"],
+                    "contract": {
+                        "outcome": "Produce the verified runtime smoke result.",
+                        "acceptance_criteria": ["The linked runtime result is complete."],
+                        "success_evidence": ["worker receipt", "verification result"],
+                        "declared_write_scope": [],
+                        "prohibited_actions": [],
+                    },
                 }
             ],
         }
@@ -222,6 +229,16 @@ def test_real_smoke_execute_validates_without_apply_and_redacts_secret(conn, mon
     assert report["decision_execute"]["called_model"] is True
     assert report["decision_execute"]["provider_result"]["parse_status"] == "parsed"
     assert report["decision_execute"]["validation"]["status"] == "accepted"
+    assert report["decision_execute"]["delegation"] == {
+        "operation_count": 1,
+        "operation_types": ["create_node"],
+        "execution_node_count": 1,
+        "immediate_execution_node_count": 1,
+        "typed_contract_count": 1,
+        "all_execution_nodes_have_typed_contract": True,
+        "decomposition_present": False,
+        "decomposition_reason_types": [],
+    }
     assert report["decision_execute"]["applied"] is False
     assert report["decision_execute"]["graph_patches_after"] == 0
     assert report["decision_execute"]["kernel_decisions_after"] == 0
