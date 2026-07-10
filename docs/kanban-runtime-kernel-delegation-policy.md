@@ -330,12 +330,13 @@ Decision Provider when structure is needed
   waiting-decision liveness，并将 expansion predicate 扩展到全部 nonterminal node；
 - 隔离真实 worker smoke 已证明一个 primary node 可以在单一 materialization attempt 中完成
   inspection、implementation、testing、debugging 和 local verification。
+- Phase 4G4 已持久化 Codex backend session，并通过隔离真实 smoke 证明 timeout 后可以在
+  新 materialization attempt 中 resume 同一 session，且 ledger/job/consistency 正常完成。
 
 当前仍未完成：
 
 - backend internal subagent policy 下发、继承检查与观测；
-- persistent worker session checkpoint 与跨 session resume；
-- 更大 primary worker node 的长时间 session、checkpoint 和 crash resume smoke；
+- 任意长时间 primary worker node 的多次 checkpoint/resume soak；
 - backend sandbox/worktree 对 `declared_write_scope` 的执行前强制隔离。
 
 因此当前可以称为 policy enforcement MVP，不能称为长期 delegation production complete。

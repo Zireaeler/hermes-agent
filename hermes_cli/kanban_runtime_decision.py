@@ -1521,6 +1521,9 @@ def runtime_observability_snapshot(
         "job": status["job"],
         "legal_waiting_reason": legal_waiting_reason,
         "recovery": recovery,
+        "worker_execution_continuity": rk.summarize_worker_execution_continuity(
+            conn, job_id, limit=bounded
+        ),
         "capabilities": status.get("capabilities") or rk.summarize_runtime_capabilities(conn, job_id, limit=bounded),
         "memory": rm.summarize_runtime_memory(conn, job_id, limit=bounded),
         "consistency": {
@@ -1542,6 +1545,7 @@ def runtime_observability_snapshot(
             "dependencies": status["dependencies"],
             "relations": status["relations"],
             "materializations": status["materializations"],
+            "backend_worker_sessions": status.get("backend_worker_sessions") or [],
             "frontier": status["frontier_summary"],
         },
         "events": status["recent_events"][:bounded],

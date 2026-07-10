@@ -159,6 +159,7 @@ def test_schema_initializes_runtime_tables(conn):
         "execution_dependencies",
         "node_relations",
         "node_materializations",
+        "backend_worker_sessions",
         "progress_ledger",
         "goal_gaps",
         "execution_events",
@@ -835,6 +836,205 @@ def test_reconcile_worker_run_crashed_schedules_retry(conn):
     assert result["scheduled_retries"] == ["understand-scope"]
     mat = conn.execute("SELECT status FROM node_materializations WHERE node_id = ? AND attempt = 1", (node["id"],)).fetchone()
     assert mat["status"] == "crashed"
+
+
+def test_crashed_materialization_resumes_discovered_backend_session(conn, tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "partial.txt").write_text("partial\n", encoding="utf-8")
+    job_id = rk.create_runtime_job(
+        conn,
+        _root_task(conn),
+        "finish one resumable runtime node",
+        workspace_path=str(workspace),
+        goal_items=[{
+            "item_key": "resumable-result",
+            "description": "resumable result exists",
+            "required": True,
+            "verifier_required": True,
+        }],
+        initialization_mode="fixture",
+    )
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = _node(conn, job_id, "understand-scope")
+    materialization = conn.execute(
+        "SELECT * FROM node_materializations WHERE node_id = ?",
+        (node["id"],),
+    ).fetchone()
+    kb.record_task_event(
+        conn,
+        node["latest_task_id"],
+        "worker_backend_session_started",
+        {
+            "worker_lane": materialization["worker_lane"],
+            "worker_kind": "codex_cli",
+            "backend_session_id": "019f0000-0000-7000-8000-000000000002",
+            "execution_mode": "fresh",
+        },
+        run_id=node["latest_run_id"],
+    )
+    run_id = _install_task_run(
+        conn,
+        node["latest_task_id"],
+        status="crashed",
+        outcome="crashed",
+        started_at=100,
+        ended_at=120,
+    )
+    conn.execute(
+        "UPDATE node_materializations SET run_id = ? WHERE id = ?",
+        (run_id, materialization["id"]),
+    )
+
+    reconciled = rk.reconcile_runtime_materializations(conn, job_id, now=200)
+    assert reconciled["scheduled_retries"] == ["understand-scope"]
+    session = conn.execute(
+        "SELECT * FROM backend_worker_sessions WHERE node_id = ?",
+        (node["id"],),
+    ).fetchone()
+    assert session["status"] == "interrupted"
+    assert session["backend_session_key"].endswith("0002")
+
+    advanced = rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    assert advanced.materialized_nodes == ["understand-scope"]
+    attempt = conn.execute(
+        "SELECT * FROM node_materializations WHERE node_id = ? AND attempt = 2",
+        (node["id"],),
+    ).fetchone()
+    continuity = json.loads(attempt["metadata_json"])["execution_continuity"]
+    assert continuity["mode"] == "resume", continuity.get("rejection_reasons")
+    assert continuity["resume_session_id"].endswith("0002")
+    assert continuity["resume_from_materialization_id"] == materialization["id"]
+    assert continuity["context_reacquisition"] is False
+    session = conn.execute(
+        "SELECT * FROM backend_worker_sessions WHERE id = ?",
+        (session["id"],),
+    ).fetchone()
+    assert session["status"] == "resume_pending"
+    assert session["resume_count"] == 1
+    synced = rk.sync_runtime_backend_sessions(conn, job_id)
+    assert synced["discovered"] == []
+    assert conn.execute(
+        "SELECT COUNT(*) FROM backend_worker_sessions WHERE node_id = ?",
+        (node["id"],),
+    ).fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT status FROM backend_worker_sessions WHERE id = ?",
+        (session["id"],),
+    ).fetchone()[0] == "resume_pending"
+    observability = rd.runtime_observability_snapshot(conn, job_id)
+    continuity_status = observability["worker_execution_continuity"]
+    assert continuity_status["session_count"] == 1
+    assert continuity_status["materialization_modes"] == {"fresh": 1, "resume": 1}
+    assert rk.check_runtime_consistency(conn, job_id, write_events=False)["status"] == "passed"
+
+    kb.record_task_event(
+        conn,
+        attempt["task_id"],
+        "worker_backend_session_resume_failed",
+        {
+            "worker_lane": attempt["worker_lane"],
+            "backend_session_id": continuity["resume_session_id"],
+            "reason": "fake backend session unavailable",
+        },
+        run_id=attempt["run_id"],
+    )
+    assert kb.block_task(
+        conn,
+        attempt["task_id"],
+        reason="codex-resume-failed: fake backend session unavailable",
+        expected_run_id=attempt["run_id"],
+    )
+    recovered = rk.reconcile_runtime_materializations(
+        conn,
+        job_id,
+        policy={"receipt_recovery_limit": 3},
+    )
+    assert recovered["scheduled_retries"] == ["understand-scope"]
+    assert conn.execute(
+        "SELECT status FROM backend_worker_sessions WHERE id = ?",
+        (session["id"],),
+    ).fetchone()[0] == "resume_failed"
+
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    fallback = conn.execute(
+        "SELECT * FROM node_materializations WHERE node_id = ? AND attempt = 3",
+        (node["id"],),
+    ).fetchone()
+    fallback_continuity = json.loads(fallback["metadata_json"])["execution_continuity"]
+    assert fallback_continuity["mode"] == "fallback_fresh"
+    assert "session_status_resume_failed" in fallback_continuity["rejection_reasons"]
+    assert fallback_continuity["context_reacquisition"] is True
+
+
+def test_workspace_revision_change_falls_back_to_fresh_attempt(conn, tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    tracked = workspace / "state.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    job_id = rk.create_runtime_job(
+        conn,
+        _root_task(conn),
+        "finish one resumable runtime node",
+        workspace_path=str(workspace),
+        goal_items=[{
+            "item_key": "resumable-result",
+            "description": "resumable result exists",
+            "required": True,
+            "verifier_required": True,
+        }],
+        initialization_mode="fixture",
+    )
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = _node(conn, job_id, "understand-scope")
+    materialization = conn.execute(
+        "SELECT * FROM node_materializations WHERE node_id = ?",
+        (node["id"],),
+    ).fetchone()
+    kb.record_task_event(
+        conn,
+        node["latest_task_id"],
+        "worker_backend_session_started",
+        {
+            "worker_lane": materialization["worker_lane"],
+            "worker_kind": "codex_cli",
+            "backend_session_id": "019f0000-0000-7000-8000-000000000003",
+        },
+        run_id=node["latest_run_id"],
+    )
+    run_id = _install_task_run(
+        conn,
+        node["latest_task_id"],
+        status="crashed",
+        outcome="crashed",
+        started_at=100,
+        ended_at=120,
+    )
+    conn.execute(
+        "UPDATE node_materializations SET run_id = ? WHERE id = ?",
+        (run_id, materialization["id"]),
+    )
+    rk.reconcile_runtime_materializations(conn, job_id, now=200)
+    tracked.write_text("after with external change\n", encoding="utf-8")
+
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    attempt = conn.execute(
+        "SELECT * FROM node_materializations WHERE node_id = ? AND attempt = 2",
+        (node["id"],),
+    ).fetchone()
+    continuity = json.loads(attempt["metadata_json"])["execution_continuity"]
+    assert continuity["mode"] == "fallback_fresh"
+    assert "workspace_revision_mismatch" in continuity["rejection_reasons"]
+    assert continuity["context_reacquisition"] is True
+    events = {
+        row["event_type"]
+        for row in conn.execute(
+            "SELECT event_type FROM execution_events WHERE job_id = ?",
+            (job_id,),
+        ).fetchall()
+    }
+    assert "worker_session_fallback_fresh" in events
+    assert "worker_context_reacquired" in events
 
 
 def test_reconcile_retry_limit_marks_node_not_retryable(conn):

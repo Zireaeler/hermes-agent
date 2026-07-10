@@ -107,8 +107,9 @@ primary-node-first 规则；patch validator 条件要求 decomposition；typed n
 `constraints_json`；terminal `structure_request` 进入 event/delta；独立 verifier 固定目标证据；
 `declared_write_scope` 支持 post-run verification；隔离真实 Profile v2 smoke 已验证单一
 coherent primary node、typed contract 和 validate-without-apply。initial fixture 替换已由
-Delegation Initialization 完成；尚未完成 persistent worker session、internal subagent 观测和
-大 primary node 长期真实执行。详细约束见
+Delegation Initialization 完成；Phase 4G4 又补齐了 timeout/crash 后的 Codex backend
+session 持久化与跨 materialization resume。尚未完成 internal subagent 观测、任意长时间
+primary node soak 和执行前路径级 sandbox。详细约束见
 `docs/kanban-runtime-kernel-delegation-policy.md`。
 
 Delegation Initialization MVP 已完成：production runtime create/promote 不再
@@ -117,6 +118,12 @@ Delegation Initialization MVP 已完成：production runtime create/promote 不�
 expansion predicate。隔离真实运行已由一个 primary node 和一个 worker attempt 完成中性文本
 统计 CLI，job 为 `done`。实现边界见
 `docs/kanban-runtime-kernel-delegation-initialization.md`。
+
+Phase 4G4 Worker 执行连续性 MVP 已完成。它在不改变 node、materialization 和 DB 权威边界
+的前提下，持久化 Codex backend session，并在 timeout/crash 后通过本地 eligibility validator
+优先恢复同一 worker session；不支持或不符合条件时显式降级为 fresh attempt。隔离真实
+Codex smoke 已验证 `fresh/timed_out -> resume/succeeded -> job done`。详细实现与限制见
+`docs/kanban-runtime-kernel-worker-execution-continuity.md`。
 
 ## 4. Phase 0: Architecture Contract
 
@@ -649,6 +656,12 @@ Phase 4G2 real provider bounded loop with synthetic worker evidence
       |
       v
 Phase 4G3 real worker lane smoke
+      |
+      v
+Phase 4G4 worker execution continuity and Codex session resume
+      |
+      v
+Real compaction candidate L3 quality
       |
       v
 Phase 4H dashboard runtime UI

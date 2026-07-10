@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from hermes_cli import kanban_db as kb
+from hermes_cli import codex_worker as cw
 from hermes_cli.codex_worker import (
     CodexLaneConfig,
     build_codex_argv,
@@ -490,6 +491,34 @@ def test_codex_argv_json_events():
         "gpt-5.4-mini",
         "exec",
         "--json",
+        "-",
+    ]
+
+
+def test_codex_argv_resume_preserves_execution_envelope():
+    argv = build_codex_argv(
+        binary="/usr/bin/codex",
+        workspace="/tmp/ws",
+        sandbox="workspace-write",
+        approval="never",
+        model="gpt-5.5",
+        json_events=True,
+        resume_session_id="019f-session",
+    )
+    assert argv == [
+        "/usr/bin/codex",
+        "--cd",
+        "/tmp/ws",
+        "--sandbox",
+        "workspace-write",
+        "--ask-for-approval",
+        "never",
+        "--model",
+        "gpt-5.5",
+        "exec",
+        "resume",
+        "--json",
+        "019f-session",
         "-",
     ]
 
@@ -1102,6 +1131,9 @@ def test_codex_json_events_write_task_events_and_feed_progress_metadata(
     assert run.metadata["verification"]["commands"] == ["pytest json-events"]
     assert "hermes_cli/codex_worker.py" in run.metadata["worker_lane"]["output_tail"]
     assert '"type": "thread.started"' in log
+    session_events = [event for event in events if event.kind == "worker_backend_session_started"]
+    assert len(session_events) == 1
+    assert session_events[0].payload["backend_session_id"] == "thread-json-test"
 
     progress = [event for event in events if event.kind == "worker_progress"]
     assert progress
@@ -1155,6 +1187,128 @@ def test_codex_json_events_write_task_events_and_feed_progress_metadata(
     assert snapshot_events[2]["payload"]["item"]["changes"][0]["path"].endswith("smoke.txt")
     assert snapshot_events[3]["payload"]["item"]["command"] == "pytest json-events"
     assert "ignored_future_field" not in snapshot_events[4]["payload"]["usage"]
+
+
+def test_codex_resume_records_resumed_session_and_receipt(
+    kanban_home, tmp_path, monkeypatch,
+):
+    old_path = os.environ.get("PATH", "")
+    argv_path = tmp_path / "resume-argv.json"
+    session_id = "019f0000-0000-7000-8000-000000000001"
+    receipt = (
+        "Progress:\n- [x] resumed original work\n\n"
+        "Changed files:\n- none\n\n"
+        "Verification:\n- command: python3 -c pass\n  result: passed\n\n"
+        "Remaining risks:\n- none\n\n"
+        "Recommended reviewer action:\n- inspect\n\n"
+        "Verdict: pass\n"
+        "```json\n"
+        '{"schema":"runtime_worker_receipt_v1","verdict":"pass","summary":"resumed",'
+        '"claimed_goal_items":[],"verification":{"passed":true},"artifacts":[]}\n'
+        "```\n"
+    )
+    body = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": session_id}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"id": "item-msg", "type": "agent_message", "text": receipt},
+                }
+            ),
+            json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1}}),
+        ]
+    ) + "\n"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    script = bin_dir / "codex"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, pathlib, sys\n"
+        f"pathlib.Path({str(argv_path)!r}).write_text(json.dumps(sys.argv), encoding='utf-8')\n"
+        "_ = sys.stdin.read()\n"
+        f"sys.stdout.write({body!r})\n",
+        encoding="utf-8",
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + old_path)
+    monkeypatch.setattr(
+        cw,
+        "_runtime_execution_continuity",
+        lambda task_id: {
+            "mode": "resume",
+            "eligibility": "accepted",
+            "resume_session_id": session_id,
+            "resume_from_materialization_id": "mat-prior",
+            "workspace_revision": "git:test",
+        },
+    )
+    with kb.connect() as conn:
+        tid, task = _claim_for_codex(conn)
+        run_id = task.current_run_id
+
+    assert run_codex_worker(
+        task_id=tid,
+        lane="codex-deep",
+        workspace=os.getcwd(),
+        sandbox="workspace-write",
+        approval="never",
+        run_id=run_id,
+        claim_lock=task.claim_lock,
+        heartbeat_interval=0.01,
+    ) == 0
+
+    argv = json.loads(argv_path.read_text(encoding="utf-8"))
+    assert argv[-5:] == ["exec", "resume", "--json", session_id, "-"]
+    with kb.connect() as conn:
+        run = kb.latest_run(conn, tid)
+        events = kb.list_events(conn, tid)
+    assert run.metadata["worker_instance"]["execution_mode"] == "resume"
+    assert run.metadata["worker_instance"]["backend_session_id"] == session_id
+    assert run.metadata["worker_instance"]["resume_status"] == "resumed"
+    assert run.metadata["runtime_receipt"]["summary"] == "resumed"
+    assert any(event.kind == "worker_backend_session_resumed" for event in events)
+
+
+def test_codex_terminal_event_gets_process_exit_grace(
+    kanban_home, tmp_path, monkeypatch,
+):
+    old_path = os.environ.get("PATH", "")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    script = bin_dir / "codex"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys, time\n"
+        "_ = sys.stdin.read()\n"
+        "print(json.dumps({'type':'thread.started','thread_id':'thread-grace'}), flush=True)\n"
+        "print(json.dumps({'type':'turn.completed','usage':{'input_tokens':1}}), flush=True)\n"
+        "time.sleep(0.35)\n",
+        encoding="utf-8",
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + old_path)
+    with kb.connect() as conn:
+        tid, task = _claim_for_codex(conn)
+        run_id = task.current_run_id
+
+    assert run_codex_worker(
+        task_id=tid,
+        lane="codex-deep",
+        workspace=os.getcwd(),
+        sandbox="workspace-write",
+        approval="never",
+        run_id=run_id,
+        claim_lock=task.claim_lock,
+        timeout_seconds=0.1,
+        heartbeat_interval=0.01,
+        json_events=True,
+    ) == 0
+    with kb.connect() as conn:
+        run = kb.latest_run(conn, tid)
+        events = kb.list_events(conn, tid)
+    assert run.metadata["worker_lane"]["timed_out"] is False
+    assert not any(event.kind == "worker_timed_out" for event in events)
 
 
 def test_codex_metadata_ignores_prompt_template_verification(

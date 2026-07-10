@@ -1576,6 +1576,26 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     rt_worker_smoke.add_argument("--timeout", type=float, default=None)
     rt_worker_smoke.add_argument("--json", action="store_true")
 
+    rt_continuity_smoke = runtime_sub.add_parser(
+        "continuity-smoke",
+        help="Run one interrupted Codex worker attempt followed by session resume",
+    )
+    rt_continuity_smoke.add_argument("job_id")
+    rt_continuity_smoke.add_argument("--lane", required=True)
+    rt_continuity_smoke.add_argument(
+        "--execute-real-worker",
+        action="store_true",
+        help="Required opt-in because this dispatches real worker processes",
+    )
+    rt_continuity_smoke.add_argument("--worker-wait", type=float, default=180.0)
+    rt_continuity_smoke.add_argument("--resume-timeout", type=float, default=None)
+    rt_continuity_smoke.add_argument("--poll-interval", type=float, default=0.25)
+    rt_continuity_smoke.add_argument(
+        "--continuation-signal",
+        default=".git/hermes-runtime-resume-ready",
+    )
+    rt_continuity_smoke.add_argument("--json", action="store_true")
+
     rt_list = runtime_sub.add_parser("list", aliases=["ls"], help="List runtime jobs")
     rt_list.add_argument("--state", default=None)
     rt_list.add_argument("--limit", type=int, default=50)
@@ -2181,6 +2201,8 @@ def _dispatch_runtime(args: argparse.Namespace) -> int:
         return _cmd_runtime_bounded_loop(args)
     if sub == "worker-smoke":
         return _cmd_runtime_worker_smoke(args)
+    if sub == "continuity-smoke":
+        return _cmd_runtime_continuity_smoke(args)
     if sub == "advance":
         return _cmd_runtime_advance(args)
     if sub == "supervise":
@@ -2610,6 +2632,32 @@ def _cmd_runtime_worker_smoke(args: argparse.Namespace) -> int:
         f"Runtime worker-smoke {args.job_id}: decisions={result['decision_tick_count']} "
         f"receipts={len(result['terminal_receipts'])} state={result['final_state']} "
         f"consistency={result['consistency']['status']}"
+    )
+    return 0
+
+
+def _cmd_runtime_continuity_smoke(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_continuity_smoke as continuity_smoke
+
+    if not args.execute_real_worker:
+        raise ValueError("continuity-smoke requires --execute-real-worker")
+    with kb.connect() as conn:
+        result = continuity_smoke.run_worker_continuity_smoke(
+            conn,
+            args.job_id,
+            lane_name=args.lane,
+            worker_wait_seconds=args.worker_wait,
+            poll_interval_seconds=args.poll_interval,
+            continuation_signal=args.continuation_signal,
+            resume_timeout_seconds=args.resume_timeout,
+        )
+    if getattr(args, "json", False):
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+    print(
+        f"Runtime continuity-smoke {args.job_id}: attempts={len(result['attempts'])} "
+        f"resumed={result['resumed']} state={result['final_state']} "
+        f"consistency={result['consistency']['status']} reason={result['reason']}"
     )
     return 0
 

@@ -236,6 +236,40 @@ worker 使用隔离 `CODEX_HOME` 配置与认证副本；主 `.codex` 仅由 Dec
 证明多 worker 并发、persistent worker session、长任务 checkpoint/crash resume、backend
 路径级 sandbox 或真实 compaction L3 quality。
 
+### 2026-07-10 Phase 4G4 isolated worker continuity smoke
+
+环境：全新隔离 `HERMES_HOME`、独立 Git workspace、隔离 `CODEX_HOME` 配置与认证副本；
+专属 `codex-continuity-real` lane，`max_concurrency=1`。测试没有调用 Decision Provider，
+而是通过 local validator apply 一个明确的单 primary node，用于只验证 worker execution
+continuity，不把 delegation/model decomposition 质量混入本次结果。
+
+真实任务先创建并精确验证 `partial.txt`，然后等待 runtime 在 `.git` 内创建 continuation
+signal；attempt-1 由 30 秒 lane timeout 正常结束。runtime reconcile 将 task/run timeout
+投影为 materialization 与 backend session 的 interrupted fact。attempt-2 在相同 workspace、
+lane、capability fingerprint 和 node-contract fingerprint 下，通过
+`codex exec resume <session-id>` 恢复同一 session，创建并精确验证两行 `result.txt`，最后
+输出合法 `runtime_worker_receipt_v1`。
+
+| 步骤 | 结果 | 事实 |
+| --- | --- | --- |
+| attempt-1 | 通过 | mode=`fresh`；status=`timed_out`；session ID 已从 `thread.started` 投影 |
+| recovery | 通过 | `worker_run_timeout`；node 回到 ready；旧 task/run/materialization terminal fact 保留 |
+| eligibility | 通过 | workspace/lane/capability/contract/revision 全部匹配；未发生权限扩大 |
+| attempt-2 | 通过 | mode=`resume`；同一 backend session；status=`succeeded`；`resume_count=1` |
+| context reuse | 通过 | context reacquisition=0；成功 resume turn 有显著 cached input |
+| receipt / ledger | 通过 | receipt verdict=`pass`；ledger=`full/verified`；confidence=1.0 |
+| completion | 通过 | node=`succeeded`；job=`done` |
+| consistency | 通过 | 0 violations、0 warnings |
+| isolation | 通过 | 主 `.codex/config.toml`、`auth.json` 哈希不变；credential scan 0 命中 |
+
+首次真实尝试还暴露了一个有价值的本地 race：resume turn 已经输出完整 artifact、verification、
+receipt 和 `turn.completed`，wrapper 却在 Codex 进程正常退出前先触发 wall timeout。实现现已在
+terminal event 后提供有界退出宽限，并增加 deterministic regression；最终隔离运行通过。
+
+本次结果证明单 node、单 backend session、两次 materialization 的 timeout/resume L5 路径。
+它仍不证明 paused worker、跨机器 session migration、internal subagent session 观测、任意
+长任务多次 resume soak、路径级 sandbox 或真实 compaction L3 quality。
+
 ## 6. 结果记录模板
 
 每次新运行追加一条记录，格式如下：
@@ -295,4 +329,5 @@ process，不能影响用户自己的 Codex 会话。
 - `docs/kanban-runtime-kernel-phase4g.md`：deterministic synthetic long-run baseline；
 - `docs/kanban-runtime-kernel-phase4g1.md`：真实模型源 smoke runbook；
 - `docs/kanban-runtime-kernel-phase4g2.md`：真实 decision provider bounded loop；
-- `docs/kanban-runtime-kernel-roadmap.md`：4G1 / 4G2 / 4G3 演进顺序。
+- `docs/kanban-runtime-kernel-worker-execution-continuity.md`：Phase 4G4 worker session resume；
+- `docs/kanban-runtime-kernel-roadmap.md`：4G1 / 4G2 / 4G3 / 4G4 演进顺序。

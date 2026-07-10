@@ -30,6 +30,7 @@ CODEX_EVENT_FIELD_MAX_BYTES = 2048
 CODEX_PROGRESS_MAX_ITEMS = 50
 CODEX_REVIEW_OUTPUT_TAIL_LINES = 80
 DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30.0
+CODEX_TERMINAL_EVENT_EXIT_GRACE_SECONDS = 5.0
 
 _CHECKBOX_RE = re.compile(r"^\s*[-*]\s*\[([ xX])\]\s+(.+?)\s*$")
 _ORDINAL_RE = re.compile(r"^\s*([oxOX])\s*\((\d+)\)\s+(.+?)\s*$")
@@ -346,6 +347,7 @@ def build_codex_argv(
     approval: str,
     model: Optional[str] = None,
     json_events: bool = False,
+    resume_session_id: Optional[str] = None,
 ) -> list[str]:
     argv = [
         binary,
@@ -359,8 +361,12 @@ def build_codex_argv(
     if model:
         argv.extend(["--model", model])
     argv.append("exec")
+    if resume_session_id:
+        argv.append("resume")
     if json_events:
         argv.append("--json")
+    if resume_session_id:
+        argv.append(str(resume_session_id))
     argv.append("-")
     return argv
 
@@ -561,21 +567,30 @@ def _handle_codex_json_line(
     task_id: str,
     lane: str,
     run_id: Optional[int],
-) -> tuple[bool, str]:
+) -> tuple[bool, str, Optional[str], Optional[str]]:
     try:
         event = json.loads(line)
     except json.JSONDecodeError:
-        return False, line
-    if not isinstance(event, dict):
-        return False, line
+        return False, line, None, None
+    if not isinstance(event, dict) or not isinstance(event.get("type"), str):
+        return False, line, None, None
     payload = _codex_json_event_payload(event, lane=lane, run_id=run_id)
     _record_event(task_id, "worker_codex_event", payload, run_id=run_id)
     text = _codex_json_event_text(event)
     text += _codex_json_event_progress_text(event)
-    return True, text
+    thread_id = str(event["thread_id"]) if event.get("thread_id") else None
+    return True, text, thread_id, str(event["type"])
 
 
-def _heartbeat(task_id: str, *, run_id: Optional[int], claim_lock: Optional[str], lane: str) -> None:
+def _heartbeat(
+    task_id: str,
+    *,
+    run_id: Optional[int],
+    claim_lock: Optional[str],
+    lane: str,
+    execution_mode: str = "fresh",
+    backend_session_id: Optional[str] = None,
+) -> None:
     from hermes_cli import kanban_db as kb
 
     try:
@@ -600,6 +615,8 @@ def _heartbeat(task_id: str, *, run_id: Optional[int], claim_lock: Optional[str]
                     "worker_kind": "codex_cli",
                     "run_id": run_id,
                     "claim_lock": claim_lock,
+                    "execution_mode": execution_mode,
+                    "backend_session_id": backend_session_id,
                 },
                 run_id=run_id,
             )
@@ -948,6 +965,9 @@ def _metadata(
     output_tail: str,
     binary_missing: bool = False,
     json_events: bool = False,
+    execution_mode: str = "fresh",
+    backend_session_id: Optional[str] = None,
+    resume_status: Optional[str] = None,
 ) -> dict[str, Any]:
     succeeded = (exit_code == 0 and not timed_out and not binary_missing)
     receipt = _extract_worker_receipt(output_tail)
@@ -967,6 +987,9 @@ def _metadata(
             "workspace": workspace,
             "model": model,
             "json_events": json_events,
+            "execution_mode": execution_mode,
+            "backend_session_id": backend_session_id,
+            "resume_status": resume_status,
         },
         "worker_lane": {
             "name": lane,
@@ -980,6 +1003,9 @@ def _metadata(
             "receipt": receipt,
             "verdict": receipt.get("verdict"),
             "json_events": json_events,
+            "execution_mode": execution_mode,
+            "backend_session_id": backend_session_id,
+            "resume_status": resume_status,
         },
         "git": collect_git_evidence(workspace),
         "verification": verification,
@@ -994,6 +1020,36 @@ def _metadata(
             ),
         },
     }
+
+
+def _runtime_execution_continuity(task_id: str) -> dict[str, Any]:
+    from hermes_cli import kanban_db as kb
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    try:
+        with kb.connect() as conn:
+            return rk.runtime_worker_continuity_for_task(conn, task_id)
+    except Exception:
+        return {"mode": "fresh", "eligibility": "unavailable"}
+
+
+def build_codex_resume_prompt(
+    *,
+    task_id: str,
+    lane: str,
+    continuity: dict[str, Any],
+) -> str:
+    return (
+        f"Continue the same Hermes Runtime Kernel worker responsibility for task `{task_id}` "
+        f"on lane `{lane}`. The prior materialization ended because of infrastructure failure.\n\n"
+        f"Previous materialization: {continuity.get('resume_from_materialization_id') or '-'}\n"
+        f"Workspace revision: {continuity.get('workspace_revision') or '-'}\n\n"
+        "Resume from the existing workspace and session context. Re-check the original node "
+        "acceptance criteria, complete any unfinished implementation and verification, and do "
+        "not treat partial prior progress as terminal success. Finish with the full Markdown "
+        "receipt and final `runtime_worker_receipt_v1` fenced JSON object required by the original "
+        "task. Do not create or complete runtime nodes directly."
+    )
 
 
 def _finish_blocked(
@@ -1136,6 +1192,20 @@ def run_codex_worker(
     worker_pid = os.getpid()
     tail = _TailBuffer()
     last_progress_json = ""
+    continuity = _runtime_execution_continuity(task_id)
+    execution_mode = str(continuity.get("mode") or "fresh")
+    resume_session_id = (
+        str(continuity.get("resume_session_id"))
+        if execution_mode == "resume" and continuity.get("resume_session_id")
+        else None
+    )
+    is_runtime_materialization = continuity.get("eligibility") not in {
+        "not_runtime_materialization",
+        "unavailable",
+    }
+    effective_json_events = bool(json_events or is_runtime_materialization or resume_session_id)
+    backend_session_id = resume_session_id
+    resume_status = "pending" if resume_session_id else None
 
     with open(log_path, "a", encoding="utf-8", errors="replace") as log_f:
         header = {
@@ -1147,11 +1217,20 @@ def run_codex_worker(
             "claim_lock": claim_lock,
             "workspace": workspace,
             "model": model,
-            "json_events": json_events,
+            "json_events": effective_json_events,
+            "execution_mode": execution_mode,
+            "backend_session_id": backend_session_id,
         }
         _write_log(log_f, "[codex-worker] " + json.dumps(header, ensure_ascii=False) + "\n")
         _record_event(task_id, "worker_started", header, run_id=run_id)
-        _heartbeat(task_id, run_id=run_id, claim_lock=claim_lock, lane=lane)
+        _heartbeat(
+            task_id,
+            run_id=run_id,
+            claim_lock=claim_lock,
+            lane=lane,
+            execution_mode=execution_mode,
+            backend_session_id=backend_session_id,
+        )
 
         codex_bin = shutil.which("codex")
         if not codex_bin:
@@ -1169,7 +1248,10 @@ def run_codex_worker(
                 timed_out=False,
                 output_tail=msg,
                 binary_missing=True,
-                json_events=json_events,
+                json_events=effective_json_events,
+                execution_mode=execution_mode,
+                backend_session_id=backend_session_id,
+                resume_status=resume_status,
             )
             _record_event(task_id, "worker_failed", meta["worker_lane"], run_id=run_id)
             _finish_blocked(
@@ -1182,14 +1264,19 @@ def run_codex_worker(
 
         with kb.connect() as conn:
             task_context = kb.build_worker_context(conn, task_id)
-        prompt = build_codex_prompt(task_context, lane=lane, model=model)
+        prompt = (
+            build_codex_resume_prompt(task_id=task_id, lane=lane, continuity=continuity)
+            if resume_session_id
+            else build_codex_prompt(task_context, lane=lane, model=model)
+        )
         argv = build_codex_argv(
             binary=codex_bin,
             workspace=workspace,
             sandbox=sandbox,
             approval=approval,
             model=model,
-            json_events=json_events,
+            json_events=effective_json_events,
+            resume_session_id=resume_session_id,
         )
         _write_log(log_f, "[codex-worker] exec " + json.dumps(argv, ensure_ascii=False) + "\n")
 
@@ -1219,8 +1306,22 @@ def run_codex_worker(
                 exit_code=None,
                 timed_out=False,
                 output_tail=msg,
-                json_events=json_events,
+                json_events=effective_json_events,
+                execution_mode=execution_mode,
+                backend_session_id=backend_session_id,
+                resume_status="failed" if resume_session_id else resume_status,
             )
+            if resume_session_id:
+                _record_event(
+                    task_id,
+                    "worker_backend_session_resume_failed",
+                    {
+                        "worker_lane": lane,
+                        "backend_session_id": resume_session_id,
+                        "reason": str(exc),
+                    },
+                    run_id=run_id,
+                )
             _record_event(task_id, "worker_failed", meta["worker_lane"], run_id=run_id)
             _finish_blocked(
                 task_id=task_id,
@@ -1238,6 +1339,8 @@ def run_codex_worker(
                 "run_id": run_id,
                 "pid": proc.pid,
                 "model": model,
+                "execution_mode": execution_mode,
+                "backend_session_id": backend_session_id,
             },
             run_id=run_id,
         )
@@ -1263,6 +1366,9 @@ def run_codex_worker(
         next_heartbeat = time.monotonic() + max(1.0, float(heartbeat_interval))
         timed_out = False
         reader_done = False
+        resume_identity_mismatch = False
+        session_event_recorded = False
+        terminal_event_at: Optional[float] = None
         while True:
             try:
                 item = q.get(timeout=0.1)
@@ -1274,13 +1380,56 @@ def run_codex_worker(
                 _write_log(log_f, item)
                 parsed_json_event = False
                 progress_source = item
-                if json_events:
-                    parsed_json_event, progress_source = _handle_codex_json_line(
+                observed_session_id: Optional[str] = None
+                observed_event_type: Optional[str] = None
+                if effective_json_events:
+                    (
+                        parsed_json_event,
+                        progress_source,
+                        observed_session_id,
+                        observed_event_type,
+                    ) = _handle_codex_json_line(
                         item,
                         task_id=task_id,
                         lane=lane,
                         run_id=run_id,
                     )
+                if observed_event_type in {"turn.completed", "turn.failed"}:
+                    terminal_event_at = time.monotonic()
+                if observed_session_id and not session_event_recorded:
+                    if resume_session_id and observed_session_id != resume_session_id:
+                        resume_identity_mismatch = True
+                        _record_event(
+                            task_id,
+                            "worker_backend_session_resume_failed",
+                            {
+                                "worker_lane": lane,
+                                "backend_session_id": resume_session_id,
+                                "observed_session_id": observed_session_id,
+                                "reason": "resumed session identity mismatch",
+                            },
+                            run_id=run_id,
+                        )
+                        try:
+                            proc.terminate()
+                        except OSError:
+                            pass
+                    else:
+                        backend_session_id = observed_session_id
+                        resume_status = "resumed" if resume_session_id else "started"
+                        _record_event(
+                            task_id,
+                            "worker_backend_session_resumed" if resume_session_id else "worker_backend_session_started",
+                            {
+                                "worker_lane": lane,
+                                "worker_kind": "codex_cli",
+                                "backend_session_id": observed_session_id,
+                                "execution_mode": execution_mode,
+                                "resume_from_materialization_id": continuity.get("resume_from_materialization_id"),
+                            },
+                            run_id=run_id,
+                        )
+                        session_event_recorded = True
                 if progress_source:
                     tail.append(progress_source)
                 elif not parsed_json_event:
@@ -1306,10 +1455,25 @@ def run_codex_worker(
 
             now = time.monotonic()
             if now >= next_heartbeat:
-                _heartbeat(task_id, run_id=run_id, claim_lock=claim_lock, lane=lane)
+                _heartbeat(
+                    task_id,
+                    run_id=run_id,
+                    claim_lock=claim_lock,
+                    lane=lane,
+                    execution_mode=execution_mode,
+                    backend_session_id=backend_session_id,
+                )
                 next_heartbeat = now + max(1.0, float(heartbeat_interval))
 
-            if timeout_seconds is not None and now - started > float(timeout_seconds):
+            terminal_grace_active = bool(
+                terminal_event_at is not None
+                and now - terminal_event_at < CODEX_TERMINAL_EVENT_EXIT_GRACE_SECONDS
+            )
+            if (
+                timeout_seconds is not None
+                and now - started > float(timeout_seconds)
+                and not terminal_grace_active
+            ):
                 timed_out = True
                 _write_log(log_f, "[codex-worker] timeout exceeded; terminating codex\n")
                 try:
@@ -1348,7 +1512,10 @@ def run_codex_worker(
             exit_code=exit_code,
             timed_out=timed_out,
             output_tail=output_tail,
-            json_events=json_events,
+            json_events=effective_json_events,
+            execution_mode=execution_mode,
+            backend_session_id=backend_session_id,
+            resume_status=resume_status,
         )
         if timed_out:
             _record_event(task_id, "worker_timed_out", meta["worker_lane"], run_id=run_id)
@@ -1356,6 +1523,39 @@ def run_codex_worker(
                 task_id=task_id,
                 run_id=run_id,
                 reason=f"codex-timeout: exceeded {timeout_seconds}s",
+                metadata=meta,
+            )
+            return 0
+        if resume_session_id and (
+            resume_identity_mismatch
+            or exit_code != 0
+            or not session_event_recorded
+            or backend_session_id != resume_session_id
+        ):
+            reason = (
+                "resumed session identity mismatch"
+                if resume_identity_mismatch
+                else f"codex resume exited with code {exit_code}"
+                if exit_code != 0
+                else "codex resume did not emit the expected thread id"
+            )
+            _record_event(
+                task_id,
+                "worker_backend_session_resume_failed",
+                {
+                    "worker_lane": lane,
+                    "backend_session_id": resume_session_id,
+                    "observed_session_id": backend_session_id,
+                    "reason": reason,
+                },
+                run_id=run_id,
+            )
+            meta["worker_instance"]["resume_status"] = "failed"
+            meta["worker_lane"]["resume_status"] = "failed"
+            _finish_blocked(
+                task_id=task_id,
+                run_id=run_id,
+                reason=f"codex-resume-failed: {reason}",
                 metadata=meta,
             )
             return 0

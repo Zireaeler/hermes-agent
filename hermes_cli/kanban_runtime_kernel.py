@@ -11,7 +11,10 @@ from dataclasses import dataclass, field
 import fnmatch
 import hashlib
 import json
+import os
+from pathlib import Path
 import sqlite3
+import subprocess
 import time
 import uuid
 from typing import Any, Callable, Iterable, Optional
@@ -139,7 +142,28 @@ RECOVERY_EVENT_TYPES = {
     "consistency_violation",
     "consistency_check_passed",
     "legal_waiting_reason_updated",
+    "worker_session_discovered",
+    "worker_session_interrupted",
+    "worker_session_resume_scheduled",
+    "worker_session_resumed",
+    "worker_session_resume_failed",
+    "worker_session_fallback_fresh",
+    "worker_context_reacquired",
+    "worker_session_identity_conflict",
 }
+
+WORKER_SESSION_EVENT_TYPES = {
+    "worker_session_discovered",
+    "worker_session_interrupted",
+    "worker_session_resume_scheduled",
+    "worker_session_resumed",
+    "worker_session_resume_failed",
+    "worker_session_fallback_fresh",
+    "worker_context_reacquired",
+    "worker_session_identity_conflict",
+}
+
+WORKER_SESSION_RESUME_LIMIT = 2
 
 RUNTIME_CAPABILITIES = {
     "filesystem_read",
@@ -416,6 +440,30 @@ def ensure_runtime_schema(conn: sqlite3.Connection) -> None:
             UNIQUE(task_id)
         );
 
+        CREATE TABLE IF NOT EXISTS backend_worker_sessions (
+            id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            backend_kind TEXT NOT NULL,
+            backend_session_key TEXT NOT NULL,
+            status TEXT NOT NULL,
+            initial_materialization_id TEXT NOT NULL,
+            latest_materialization_id TEXT NOT NULL,
+            worker_lane TEXT,
+            workspace_path TEXT,
+            workspace_revision TEXT,
+            capability_fingerprint TEXT NOT NULL,
+            node_contract_fingerprint TEXT NOT NULL,
+            checkpoint_json TEXT NOT NULL DEFAULT '{}',
+            resume_count INTEGER NOT NULL DEFAULT 0,
+            last_heartbeat_at INTEGER,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            completed_at INTEGER,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            UNIQUE(backend_kind, backend_session_key)
+        );
+
         CREATE TABLE IF NOT EXISTS progress_ledger (
             id TEXT PRIMARY KEY,
             job_id TEXT NOT NULL,
@@ -618,6 +666,7 @@ def ensure_runtime_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_decision_entries_job_order ON decision_segment_entries(job_id, id);
         CREATE INDEX IF NOT EXISTS idx_runtime_capability_policies_job ON runtime_capability_policies(job_id, scope_type, scope_ref);
         CREATE INDEX IF NOT EXISTS idx_runtime_capability_authorizations_job ON runtime_capability_authorizations(job_id, status, scope_type, scope_ref);
+        CREATE INDEX IF NOT EXISTS idx_backend_worker_sessions_job ON backend_worker_sessions(job_id, node_id, updated_at);
         """
     )
     _ensure_column(conn, "decision_sessions", "active_segment_id", "TEXT")
@@ -1550,6 +1599,7 @@ def status_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
         "dependencies": _rows(conn, "SELECT * FROM execution_dependencies WHERE job_id = ? ORDER BY created_at, id", (job_id,)),
         "relations": _rows(conn, "SELECT * FROM node_relations WHERE job_id = ? ORDER BY created_at, id", (job_id,)),
         "materializations": _rows(conn, "SELECT * FROM node_materializations WHERE job_id = ? ORDER BY created_at, attempt", (job_id,)),
+        "backend_worker_sessions": _rows(conn, "SELECT * FROM backend_worker_sessions WHERE job_id = ? ORDER BY created_at, id", (job_id,)),
         "recent_events": _rows(conn, "SELECT * FROM execution_events WHERE job_id = ? ORDER BY id DESC LIMIT 50", (job_id,)),
         "decisions": _rows(conn, "SELECT * FROM kernel_decisions WHERE job_id = ? ORDER BY created_at, id", (job_id,)),
         "patches": _rows(conn, "SELECT * FROM graph_patches WHERE job_id = ? ORDER BY created_at, id", (job_id,)),
@@ -2403,6 +2453,545 @@ def _active_materialization(conn: sqlite3.Connection, node_id: str) -> Optional[
     return dict(row) if row else None
 
 
+def _stable_fingerprint(value: Any) -> str:
+    return hashlib.sha256(_json(value).encode("utf-8")).hexdigest()
+
+
+def _canonical_workspace_path(path: Optional[str]) -> str:
+    return os.path.realpath(os.path.abspath(os.path.expanduser(path or ""))) if path else ""
+
+
+def _workspace_revision(path: Optional[str]) -> str:
+    workspace = _canonical_workspace_path(path)
+    if not workspace or not os.path.isdir(workspace):
+        return "missing"
+    try:
+        head = subprocess.run(
+            ["git", "-C", workspace, "rev-parse", "HEAD"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if head.returncode == 0 and head.stdout.strip():
+            status = subprocess.run(
+                ["git", "-C", workspace, "status", "--porcelain=v1", "-z"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                check=False,
+            )
+            dirty = hashlib.sha256(status.stdout or b"").hexdigest()
+            return f"git:{head.stdout.strip()}:dirty:{dirty}"
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    marker = hashlib.sha256()
+    seen = 0
+    for root, dirs, files in os.walk(workspace):
+        dirs[:] = sorted(name for name in dirs if name != ".git")
+        for name in sorted(files):
+            full = os.path.join(root, name)
+            try:
+                stat = os.stat(full)
+            except OSError:
+                continue
+            rel = os.path.relpath(full, workspace)
+            marker.update(f"{rel}\0{stat.st_size}\0{stat.st_mtime_ns}\n".encode("utf-8", errors="replace"))
+            seen += 1
+            if seen >= 500:
+                return f"fs:{marker.hexdigest()}:truncated"
+    return f"fs:{marker.hexdigest()}"
+
+
+def _node_contract_fingerprint(node: dict[str, Any]) -> str:
+    constraints = _loads(node.get("constraints_json"))
+    return _stable_fingerprint(constraints.get("contract") or {})
+
+
+def _node_capability_fingerprint(node: dict[str, Any]) -> str:
+    metadata = _loads(node.get("metadata_json"))
+    policy = metadata.get("capability_policy")
+    return _stable_fingerprint(policy if isinstance(policy, dict) else {})
+
+
+def _task_event_rows(conn: sqlite3.Connection, task_id: str) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT id, run_id, kind, payload, created_at FROM task_events "
+        "WHERE task_id = ? ORDER BY created_at, id",
+        (task_id,),
+    ).fetchall()
+    return [
+        {
+            "id": int(row["id"]),
+            "run_id": int(row["run_id"]) if row["run_id"] is not None else None,
+            "kind": row["kind"],
+            "payload": _loads(row["payload"]),
+            "created_at": int(row["created_at"]),
+        }
+        for row in rows
+    ]
+
+
+def _backend_session_event(events: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    for event in reversed(events):
+        payload = event["payload"] if isinstance(event.get("payload"), dict) else {}
+        session_id = payload.get("backend_session_id") or payload.get("thread_id")
+        if session_id and event["kind"] in {
+            "worker_backend_session_started",
+            "worker_backend_session_resumed",
+            "worker_codex_event",
+        }:
+            return {**event, "backend_session_id": str(session_id)}
+    return None
+
+
+def sync_runtime_backend_sessions(
+    conn: sqlite3.Connection,
+    job_id: str,
+    *,
+    board: Optional[str] = None,
+) -> dict[str, Any]:
+    """Project backend worker session task events into runtime-owned facts."""
+
+    del board  # Runtime and Kanban tables share the selected connection.
+    ensure_runtime_schema(conn)
+    summary = {
+        "job_id": job_id,
+        "discovered": [],
+        "updated": [],
+        "resumed": [],
+        "resume_failed": [],
+        "identity_conflicts": [],
+    }
+    rows = conn.execute(
+        """
+        SELECT m.*, n.node_key, n.constraints_json, n.metadata_json AS node_metadata_json,
+               j.workspace_path
+          FROM node_materializations m
+          JOIN execution_nodes n ON n.id = m.node_id
+          JOIN runtime_jobs j ON j.id = m.job_id
+         WHERE m.job_id = ?
+         ORDER BY m.attempt, m.created_at
+        """,
+        (job_id,),
+    ).fetchall()
+    for raw in rows:
+        materialization = dict(raw)
+        events = _task_event_rows(conn, materialization["task_id"])
+        continuity = _loads(materialization.get("metadata_json")).get("execution_continuity") or {}
+        session_event = _backend_session_event(events)
+        referenced_session = None
+        if continuity.get("backend_session_record_id"):
+            referenced_session = conn.execute(
+                "SELECT * FROM backend_worker_sessions WHERE id = ? AND node_id = ?",
+                (continuity["backend_session_record_id"], materialization["node_id"]),
+            ).fetchone()
+        if session_event is None and referenced_session is not None:
+            resume_failed_event = next(
+                (
+                    event
+                    for event in reversed(events)
+                    if event["kind"] == "worker_backend_session_resume_failed"
+                ),
+                None,
+            )
+            if resume_failed_event is not None:
+                session_event = {
+                    **resume_failed_event,
+                    "backend_session_id": referenced_session["backend_session_key"],
+                }
+        if session_event is None:
+            continue
+        session_key = session_event["backend_session_id"]
+        node = {
+            "constraints_json": materialization.get("constraints_json"),
+            "metadata_json": materialization.get("node_metadata_json"),
+        }
+        latest_progress = next(
+            (event for event in reversed(events) if event["kind"] == "worker_progress"),
+            None,
+        )
+        latest_heartbeat = next(
+            (event for event in reversed(events) if event["kind"] == "worker_heartbeat"),
+            None,
+        )
+        latest_codex = next(
+            (event for event in reversed(events) if event["kind"] == "worker_codex_event"),
+            None,
+        )
+        failure_event = next(
+            (
+                event
+                for event in reversed(events)
+                if event["kind"]
+                in {
+                    "worker_timed_out",
+                    "worker_failed",
+                    "crashed",
+                    "timed_out",
+                    "worker_backend_session_resume_failed",
+                }
+            ),
+            None,
+        )
+        completed_event = next(
+            (event for event in reversed(events) if event["kind"] == "worker_review_required"),
+            None,
+        )
+        if failure_event and failure_event["kind"] == "worker_backend_session_resume_failed":
+            status = "resume_failed"
+        elif failure_event:
+            status = "interrupted"
+        elif materialization["status"] in RECOVERY_FAILURE_STATUSES:
+            status = "interrupted"
+        elif materialization["status"] in {"succeeded", "failed", "blocked", "waiting_human"} or completed_event:
+            status = "completed"
+        else:
+            status = "active"
+        checkpoint = {
+            "materialization_id": materialization["id"],
+            "attempt": int(materialization["attempt"]),
+            "task_id": materialization["task_id"],
+            "run_id": materialization.get("run_id"),
+            "latest_progress": latest_progress["payload"] if latest_progress else None,
+            "latest_codex_event_type": (
+                latest_codex["payload"].get("event_type") if latest_codex else None
+            ),
+            "failure_event": failure_event["kind"] if failure_event else None,
+        }
+        now = _now()
+        existing = conn.execute(
+            "SELECT * FROM backend_worker_sessions WHERE backend_kind = 'codex_cli' AND backend_session_key = ?",
+            (session_key,),
+        ).fetchone()
+        if existing is not None and existing["node_id"] != materialization["node_id"]:
+            _, created = _recovery_event_once(
+                conn,
+                job_id,
+                "worker_session_identity_conflict",
+                f"worker-session:{existing['id']}:node-conflict:{materialization['node_id']}",
+                {
+                    "backend_session_record_id": existing["id"],
+                    "existing_node_id": existing["node_id"],
+                    "observed_node_id": materialization["node_id"],
+                    "materialization_id": materialization["id"],
+                },
+                node_id=materialization["node_id"],
+                task_id=materialization["task_id"],
+                run_id=materialization.get("run_id"),
+            )
+            if created:
+                summary["identity_conflicts"].append(existing["id"])
+            continue
+        stale_projection = bool(
+            existing is not None
+            and existing["latest_materialization_id"] != materialization["id"]
+        )
+        if stale_projection:
+            status = existing["status"]
+        preserve_interruption_revision = bool(
+            existing is not None
+            and existing["status"] in {"interrupted", "resume_failed"}
+            and existing["latest_materialization_id"] == materialization["id"]
+        )
+        workspace_revision = (
+            existing["workspace_revision"]
+            if preserve_interruption_revision
+            else _workspace_revision(materialization.get("workspace_path"))
+            if status in {"interrupted", "resume_failed", "completed"}
+            else (existing["workspace_revision"] if existing is not None else None)
+        )
+        if existing is None:
+            session_record_id = _id("bws")
+            conn.execute(
+                """
+                INSERT INTO backend_worker_sessions (
+                    id, job_id, node_id, backend_kind, backend_session_key, status,
+                    initial_materialization_id, latest_materialization_id, worker_lane,
+                    workspace_path, workspace_revision, capability_fingerprint,
+                    node_contract_fingerprint, checkpoint_json, resume_count,
+                    last_heartbeat_at, created_at, updated_at, completed_at, metadata_json
+                ) VALUES (?, ?, ?, 'codex_cli', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_record_id,
+                    job_id,
+                    materialization["node_id"],
+                    session_key,
+                    status,
+                    materialization["id"],
+                    materialization["id"],
+                    materialization.get("worker_lane"),
+                    _canonical_workspace_path(materialization.get("workspace_path")),
+                    workspace_revision,
+                    _node_capability_fingerprint(node),
+                    _node_contract_fingerprint(node),
+                    _json(checkpoint),
+                    latest_heartbeat["created_at"] if latest_heartbeat else None,
+                    session_event["created_at"],
+                    now,
+                    now if status == "completed" else None,
+                    _json({"latest_task_event_id": session_event["id"]}),
+                ),
+            )
+            summary["discovered"].append(session_record_id)
+            _recovery_event_once(
+                conn,
+                job_id,
+                "worker_session_discovered",
+                f"worker-session:{session_record_id}:discovered",
+                {
+                    "backend_session_record_id": session_record_id,
+                    "node_key": materialization["node_key"],
+                    "materialization_id": materialization["id"],
+                    "attempt": int(materialization["attempt"]),
+                    "execution_mode": continuity.get("mode") or "fresh",
+                },
+                node_id=materialization["node_id"],
+                task_id=materialization["task_id"],
+                run_id=materialization.get("run_id"),
+            )
+        else:
+            session_record_id = existing["id"]
+            conn.execute(
+                """
+                UPDATE backend_worker_sessions
+                   SET status = ?, latest_materialization_id = ?, worker_lane = ?,
+                       workspace_revision = COALESCE(?, workspace_revision),
+                       checkpoint_json = ?, last_heartbeat_at = COALESCE(?, last_heartbeat_at),
+                       updated_at = ?, completed_at = CASE WHEN ? = 'completed' THEN COALESCE(completed_at, ?) ELSE completed_at END
+                 WHERE id = ?
+                """,
+                (
+                    status,
+                    existing["latest_materialization_id"] if stale_projection else materialization["id"],
+                    materialization.get("worker_lane"),
+                    workspace_revision,
+                    _json(checkpoint),
+                    latest_heartbeat["created_at"] if latest_heartbeat else None,
+                    now,
+                    status,
+                    now,
+                    session_record_id,
+                ),
+            )
+            summary["updated"].append(session_record_id)
+
+        mat_metadata = _loads(materialization.get("metadata_json"))
+        mat_continuity = mat_metadata.setdefault("execution_continuity", {})
+        mat_continuity["backend_session_record_id"] = session_record_id
+        mat_continuity["observed_session_id"] = session_key
+        mat_continuity["session_status"] = status
+        conn.execute(
+            "UPDATE node_materializations SET metadata_json = ? WHERE id = ?",
+            (_json(mat_metadata), materialization["id"]),
+        )
+        resumed_event = next(
+            (event for event in events if event["kind"] == "worker_backend_session_resumed"),
+            None,
+        )
+        if resumed_event:
+            _, created = _recovery_event_once(
+                conn,
+                job_id,
+                "worker_session_resumed",
+                f"worker-session:{session_record_id}:resumed:{materialization['id']}",
+                {
+                    "backend_session_record_id": session_record_id,
+                    "materialization_id": materialization["id"],
+                    "attempt": int(materialization["attempt"]),
+                },
+                node_id=materialization["node_id"],
+                task_id=materialization["task_id"],
+                run_id=materialization.get("run_id"),
+            )
+            if created:
+                summary["resumed"].append(session_record_id)
+        if failure_event and failure_event["kind"] == "worker_backend_session_resume_failed":
+            _, created = _recovery_event_once(
+                conn,
+                job_id,
+                "worker_session_resume_failed",
+                f"worker-session:{session_record_id}:resume-failed:{materialization['id']}",
+                {
+                    "backend_session_record_id": session_record_id,
+                    "materialization_id": materialization["id"],
+                    "attempt": int(materialization["attempt"]),
+                    "reason": failure_event["payload"].get("reason"),
+                },
+                node_id=materialization["node_id"],
+                task_id=materialization["task_id"],
+                run_id=materialization.get("run_id"),
+            )
+            if created:
+                summary["resume_failed"].append(session_record_id)
+    return summary
+
+
+def _latest_backend_worker_session(conn: sqlite3.Connection, node_id: str) -> Optional[dict[str, Any]]:
+    row = conn.execute(
+        "SELECT * FROM backend_worker_sessions WHERE node_id = ? ORDER BY updated_at DESC, created_at DESC LIMIT 1",
+        (node_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _mark_backend_worker_session_interrupted(
+    conn: sqlite3.Connection,
+    node: dict[str, Any],
+    materialization: Optional[dict[str, Any]],
+    failure_type: str,
+    *,
+    now: int,
+) -> None:
+    session = _latest_backend_worker_session(conn, node["id"])
+    if session is None or session["status"] in {"completed", "resume_failed"}:
+        return
+    job = _job(conn, node["job_id"])
+    checkpoint = _loads(session.get("checkpoint_json"))
+    checkpoint["failure_type"] = failure_type
+    checkpoint["interrupted_materialization_id"] = materialization["id"] if materialization else None
+    revision = _workspace_revision(job.get("workspace_path"))
+    conn.execute(
+        """
+        UPDATE backend_worker_sessions
+           SET status = 'interrupted', workspace_revision = ?, checkpoint_json = ?, updated_at = ?
+         WHERE id = ?
+        """,
+        (revision, _json(checkpoint), now, session["id"]),
+    )
+    _recovery_event_once(
+        conn,
+        node["job_id"],
+        "worker_session_interrupted",
+        f"worker-session:{session['id']}:interrupted:{(materialization or {}).get('id')}:{failure_type}",
+        {
+            "backend_session_record_id": session["id"],
+            "materialization_id": (materialization or {}).get("id"),
+            "attempt": (materialization or {}).get("attempt"),
+            "failure_type": failure_type,
+            "workspace_revision": revision,
+        },
+        node_id=node["id"],
+        task_id=(materialization or {}).get("task_id"),
+        run_id=(materialization or {}).get("run_id"),
+    )
+
+
+def _plan_worker_execution_continuity(
+    conn: sqlite3.Connection,
+    job: dict[str, Any],
+    node: dict[str, Any],
+    *,
+    assignee: Optional[str],
+) -> dict[str, Any]:
+    session = _latest_backend_worker_session(conn, node["id"])
+    if session is None:
+        return {"mode": "fresh", "eligibility": "no_prior_session", "context_reacquisition": False}
+
+    reasons: list[str] = []
+    current_workspace = _canonical_workspace_path(job.get("workspace_path"))
+    current_revision = _workspace_revision(job.get("workspace_path"))
+    if session["status"] != "interrupted":
+        reasons.append(f"session_status_{session['status']}")
+    if session["backend_kind"] != "codex_cli":
+        reasons.append("backend_resume_unsupported")
+    if _canonical_workspace_path(session.get("workspace_path")) != current_workspace:
+        reasons.append("workspace_path_mismatch")
+    if session.get("workspace_revision") != current_revision:
+        reasons.append("workspace_revision_mismatch")
+    if (session.get("worker_lane") or "") != (assignee or ""):
+        reasons.append("worker_lane_mismatch")
+    if session.get("capability_fingerprint") != _node_capability_fingerprint(node):
+        reasons.append("capability_fingerprint_mismatch")
+    if session.get("node_contract_fingerprint") != _node_contract_fingerprint(node):
+        reasons.append("node_contract_fingerprint_mismatch")
+    if int(session.get("resume_count") or 0) >= WORKER_SESSION_RESUME_LIMIT:
+        reasons.append("resume_limit_exhausted")
+
+    common = {
+        "backend_session_record_id": session["id"],
+        "resume_session_id": session["backend_session_key"],
+        "resume_from_materialization_id": session["latest_materialization_id"],
+        "workspace_revision": current_revision,
+        "workspace_path": current_workspace,
+        "worker_lane": assignee,
+        "capability_fingerprint": _node_capability_fingerprint(node),
+        "node_contract_fingerprint": _node_contract_fingerprint(node),
+    }
+    if not reasons:
+        return {
+            "mode": "resume",
+            "eligibility": "accepted",
+            "context_reacquisition": False,
+            **common,
+        }
+    return {
+        "mode": "fallback_fresh",
+        "eligibility": "rejected",
+        "rejection_reasons": reasons,
+        "context_reacquisition": True,
+        **common,
+    }
+
+
+def runtime_worker_continuity_for_task(conn: sqlite3.Connection, task_id: str) -> dict[str, Any]:
+    """Return the bounded, read-only continuity decision for a worker task."""
+
+    ensure_runtime_schema(conn)
+    row = conn.execute(
+        "SELECT metadata_json FROM node_materializations WHERE task_id = ?",
+        (task_id,),
+    ).fetchone()
+    if row is None:
+        return {"mode": "fresh", "eligibility": "not_runtime_materialization"}
+    continuity = _loads(row["metadata_json"]).get("execution_continuity")
+    return dict(continuity) if isinstance(continuity, dict) else {"mode": "fresh", "eligibility": "legacy"}
+
+
+def summarize_worker_execution_continuity(
+    conn: sqlite3.Connection,
+    job_id: str,
+    *,
+    limit: int = 50,
+) -> dict[str, Any]:
+    ensure_runtime_schema(conn)
+    sessions = _rows(
+        conn,
+        "SELECT * FROM backend_worker_sessions WHERE job_id = ? ORDER BY updated_at DESC LIMIT ?",
+        (job_id, max(1, int(limit))),
+    )
+    materializations = _rows(
+        conn,
+        "SELECT id, node_id, attempt, task_id, status, metadata_json FROM node_materializations WHERE job_id = ? ORDER BY created_at, attempt",
+        (job_id,),
+    )
+    modes: dict[str, int] = {}
+    reacquisitions = 0
+    for materialization in materializations:
+        continuity = materialization.get("metadata") or {}
+        continuity = continuity.get("execution_continuity") if isinstance(continuity, dict) else {}
+        mode = str((continuity or {}).get("mode") or "legacy")
+        modes[mode] = modes.get(mode, 0) + 1
+        if (continuity or {}).get("context_reacquisition"):
+            reacquisitions += 1
+    recent_events = _rows(
+        conn,
+        "SELECT * FROM execution_events WHERE job_id = ? AND event_type IN (%s) ORDER BY id DESC LIMIT ?"
+        % ",".join("?" for _ in WORKER_SESSION_EVENT_TYPES),
+        (job_id, *sorted(WORKER_SESSION_EVENT_TYPES), max(1, int(limit))),
+    )
+    return {
+        "sessions": sessions,
+        "session_count": len(sessions),
+        "materialization_modes": modes,
+        "context_reacquisition_count": reacquisitions,
+        "recent_events": recent_events,
+    }
+
+
 def _update_materialization_recovery_status(
     conn: sqlite3.Connection,
     materialization: Optional[dict[str, Any]],
@@ -2553,6 +3142,13 @@ def _schedule_recovery_retry_or_fail(
     task_id: Optional[str] = None,
     run_id: Optional[int] = None,
 ) -> None:
+    _mark_backend_worker_session_interrupted(
+        conn,
+        node,
+        materialization,
+        failure_type,
+        now=now,
+    )
     retryable_types = {str(item) for item in policy.get("retryable_failure_types") or []}
     retry_limit_key = "receipt_recovery_limit" if failure_type in {"receipt_missing", "receipt_invalid"} else "infra_retry_limit"
     retry_limit = int(policy.get(retry_limit_key) or 0)
@@ -2627,6 +3223,12 @@ def _run_failure_type(snapshot: kb.TaskProgressSnapshot, *, now: int, policy: di
     run = snapshot.run
     run_status = str(run.status if run else "").strip().lower()
     outcome = str(run.outcome if run and run.outcome else "").strip().lower()
+    evidence = snapshot.evidence if isinstance(snapshot.evidence, dict) else {}
+    worker_lane = evidence.get("worker_lane") if isinstance(evidence.get("worker_lane"), dict) else {}
+    if worker_lane.get("timed_out") is True:
+        return "worker_run_timeout"
+    if worker_lane.get("binary_missing") is True:
+        return "worker_run_crashed"
     if run_status == "timed_out" or outcome == "timed_out":
         return "worker_run_timeout"
     if run_status == "crashed" or outcome == "crashed":
@@ -2678,6 +3280,7 @@ def reconcile_runtime_materializations(
     ensure_runtime_schema(conn)
     current = int(now if now is not None else _now())
     effective_policy = _runtime_recovery_policy(policy)
+    worker_sessions = sync_runtime_backend_sessions(conn, job_id, board=board)
     summary: dict[str, Any] = {
         "job_id": job_id,
         "checked_nodes": 0,
@@ -2685,6 +3288,7 @@ def reconcile_runtime_materializations(
         "scheduled_retries": [],
         "failed_nodes": [],
         "materializations_updated": [],
+        "worker_sessions": worker_sessions,
         "policy": {
             "infra_retry_limit": effective_policy["infra_retry_limit"],
             "receipt_recovery_limit": effective_policy["receipt_recovery_limit"],
@@ -3102,6 +3706,121 @@ def check_runtime_consistency(
             violations.append({"type": "materialization_node_missing", "materialization_id": mat["id"], "node_id": mat["node_id"]})
         if kb.get_task(conn, mat["task_id"]) is None:
             violations.append({"type": "materialization_task_missing", "materialization_id": mat["id"], "task_id": mat["task_id"]})
+        continuity = _loads(mat["metadata_json"]).get("execution_continuity") or {}
+        mode = continuity.get("mode")
+        if mode == "resume":
+            session_id = continuity.get("backend_session_record_id")
+            session = conn.execute(
+                "SELECT * FROM backend_worker_sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            if session is None:
+                violations.append(
+                    {
+                        "type": "resume_materialization_session_missing",
+                        "materialization_id": mat["id"],
+                        "backend_session_record_id": session_id,
+                    }
+                )
+            else:
+                fingerprint_fields = {
+                    "workspace_path": session["workspace_path"],
+                    "worker_lane": session["worker_lane"],
+                    "capability_fingerprint": session["capability_fingerprint"],
+                    "node_contract_fingerprint": session["node_contract_fingerprint"],
+                }
+                mismatched = sorted(
+                    field
+                    for field, expected in fingerprint_fields.items()
+                    if continuity.get(field) != expected
+                )
+                if mismatched:
+                    violations.append(
+                        {
+                            "type": "resume_materialization_fingerprint_mismatch",
+                            "materialization_id": mat["id"],
+                            "backend_session_record_id": session_id,
+                            "fields": mismatched,
+                        }
+                    )
+            prior_id = continuity.get("resume_from_materialization_id")
+            if not prior_id or conn.execute(
+                "SELECT 1 FROM node_materializations WHERE id = ? AND node_id = ?",
+                (prior_id, mat["node_id"]),
+            ).fetchone() is None:
+                violations.append(
+                    {
+                        "type": "resume_materialization_prior_attempt_missing",
+                        "materialization_id": mat["id"],
+                        "resume_from_materialization_id": prior_id,
+                    }
+                )
+            if continuity.get("context_reacquisition") is True:
+                violations.append(
+                    {
+                        "type": "resume_materialization_reacquires_context",
+                        "materialization_id": mat["id"],
+                    }
+                )
+        elif continuity.get("context_reacquisition") is False and mode not in {"fresh", None}:
+            violations.append(
+                {
+                    "type": "non_resume_materialization_without_reacquisition",
+                    "materialization_id": mat["id"],
+                    "mode": mode,
+                }
+            )
+    for session in conn.execute("SELECT * FROM backend_worker_sessions WHERE job_id = ?", (job_id,)).fetchall():
+        node = conn.execute("SELECT * FROM execution_nodes WHERE id = ?", (session["node_id"],)).fetchone()
+        if node is None:
+            violations.append(
+                {
+                    "type": "backend_session_node_missing",
+                    "backend_session_record_id": session["id"],
+                    "node_id": session["node_id"],
+                }
+            )
+            continue
+        for field in ("initial_materialization_id", "latest_materialization_id"):
+            if conn.execute(
+                "SELECT 1 FROM node_materializations WHERE id = ? AND node_id = ?",
+                (session[field], session["node_id"]),
+            ).fetchone() is None:
+                violations.append(
+                    {
+                        "type": "backend_session_materialization_missing",
+                        "backend_session_record_id": session["id"],
+                        "field": field,
+                        "materialization_id": session[field],
+                    }
+                )
+        if node["state"] in TERMINAL_NODE_STATES and session["status"] in {
+            "active",
+            "resume_pending",
+            "resuming",
+        }:
+            violations.append(
+                {
+                    "type": "terminal_node_has_active_backend_session",
+                    "node_key": node["node_key"],
+                    "backend_session_record_id": session["id"],
+                    "session_status": session["status"],
+                }
+            )
+    for conflict in conn.execute(
+        "SELECT id, payload_json FROM execution_events WHERE job_id = ? AND event_type = 'worker_session_identity_conflict'",
+        (job_id,),
+    ).fetchall():
+        payload = _loads(conflict["payload_json"])
+        violations.append(
+            {
+                "type": "backend_session_identity_conflict",
+                "event_id": int(conflict["id"]),
+                "backend_session_record_id": payload.get("backend_session_record_id"),
+                "existing_node_id": payload.get("existing_node_id"),
+                "observed_node_id": payload.get("observed_node_id"),
+            }
+        )
     for row in conn.execute("SELECT * FROM progress_ledger WHERE job_id = ?", (job_id,)).fetchall():
         if row["node_id"] and conn.execute("SELECT 1 FROM execution_nodes WHERE id = ?", (row["node_id"],)).fetchone() is None:
             violations.append({"type": "ledger_node_missing", "ledger_id": row["id"], "node_id": row["node_id"]})
@@ -4409,7 +5128,13 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
     ).fetchone()
     attempt = int(attempts["max_attempt"] or 0) + 1
     materialization_id = _id("mat")
-    body = _worker_context(conn, job, node, materialization_id)
+    continuity = _plan_worker_execution_continuity(
+        conn,
+        job,
+        node,
+        assignee=assignee,
+    )
+    body = _worker_context(conn, job, node, materialization_id, continuity=continuity)
     task_id = kb.create_task(
         conn,
         title=f"[runtime] {node['title']}",
@@ -4431,10 +5156,76 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
         INSERT OR IGNORE INTO node_materializations (
             id, job_id, node_id, attempt, task_id, run_id, worker_lane,
             status, created_at, started_at, metadata_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, '{}')
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)
         """,
-        (materialization_id, job["id"], node["id"], attempt, task_id, run_id, assignee, now, now),
+        (
+            materialization_id,
+            job["id"],
+            node["id"],
+            attempt,
+            task_id,
+            run_id,
+            assignee,
+            now,
+            now,
+            _json({"execution_continuity": continuity}),
+        ),
     )
+    if continuity["mode"] == "resume":
+        conn.execute(
+            """
+            UPDATE backend_worker_sessions
+               SET status = 'resume_pending', latest_materialization_id = ?,
+                   resume_count = resume_count + 1, updated_at = ?
+             WHERE id = ? AND status = 'interrupted'
+            """,
+            (materialization_id, now, continuity["backend_session_record_id"]),
+        )
+        _event(
+            conn,
+            job["id"],
+            "worker_session_resume_scheduled",
+            {
+                "node_key": node["node_key"],
+                "backend_session_record_id": continuity["backend_session_record_id"],
+                "materialization_id": materialization_id,
+                "resume_from_materialization_id": continuity["resume_from_materialization_id"],
+                "attempt": attempt,
+            },
+            node_id=node["id"],
+            task_id=task_id,
+            run_id=run_id,
+        )
+    elif continuity["mode"] == "fallback_fresh":
+        _event(
+            conn,
+            job["id"],
+            "worker_session_fallback_fresh",
+            {
+                "node_key": node["node_key"],
+                "backend_session_record_id": continuity.get("backend_session_record_id"),
+                "materialization_id": materialization_id,
+                "attempt": attempt,
+                "rejection_reasons": continuity.get("rejection_reasons") or [],
+            },
+            node_id=node["id"],
+            task_id=task_id,
+            run_id=run_id,
+        )
+        _event(
+            conn,
+            job["id"],
+            "worker_context_reacquired",
+            {
+                "node_key": node["node_key"],
+                "materialization_id": materialization_id,
+                "attempt": attempt,
+                "reason": "resume_ineligible",
+            },
+            node_id=node["id"],
+            task_id=task_id,
+            run_id=run_id,
+        )
     conn.execute(
         """
         UPDATE execution_nodes
@@ -4449,7 +5240,14 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
     return task_id
 
 
-def _worker_context(conn: sqlite3.Connection, job: dict[str, Any], node: dict[str, Any], materialization_id: str) -> str:
+def _worker_context(
+    conn: sqlite3.Connection,
+    job: dict[str, Any],
+    node: dict[str, Any],
+    materialization_id: str,
+    *,
+    continuity: Optional[dict[str, Any]] = None,
+) -> str:
     metadata = _loads(node.get("metadata_json"))
     constraints = _loads(node.get("constraints_json"))
     capability_policy = metadata.get("capability_policy")
@@ -4489,6 +5287,12 @@ def _worker_context(conn: sqlite3.Connection, job: dict[str, Any], node: dict[st
             ),
             "on_denied": "return receipt with verdict=blocked and blocked_reason=policy_blocked",
             "on_requires_human": "return receipt with human_required=true",
+        },
+        "worker_execution_continuity": {
+            "mode": (continuity or {}).get("mode") or "fresh",
+            "eligibility": (continuity or {}).get("eligibility") or "not_evaluated",
+            "resume_from_materialization_id": (continuity or {}).get("resume_from_materialization_id"),
+            "context_reacquisition": bool((continuity or {}).get("context_reacquisition")),
         },
     }
     return (
