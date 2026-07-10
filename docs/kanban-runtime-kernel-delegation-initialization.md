@@ -171,3 +171,30 @@ session 内完成仓库检查、实现、测试、必要 debug 和最终 receipt
 - deterministic tests 覆盖初始化、兼容、liveness、validator 和 CLI；
 - 一次隔离真实 provider + 单 worker 中性功能 smoke 通过；
 - roadmap 和真实验证台账记录准确，改动已提交并推送。
+
+## 11. 当前实现与验证结果
+
+截至 2026-07-10，本阶段 MVP 已完成：
+
+- `create_runtime_job()` 默认使用 `provider_first`；production create/promote 不创建
+  `understand-scope`；deterministic fixture 必须显式声明 `fixture`；
+- 初始 job 写入 `initial_graph_required` decision request，并以 `waiting_decision`、
+  `legal_wait=true`、`decision_requested=true` 暴露；
+- 正常 waiting decision 不再写入矛盾的 `liveness_violation`；
+- provider-first job 强制 typed node contract；
+- nonterminal expansion predicate 已覆盖 `planned`、`waiting_dependency`、`ready` 和
+  `running`；
+- write scope 已强制使用 canonical workspace-relative glob；
+- worker-smoke report 已一等记录 materialization attempts、single primary node 和 single
+  worker attempt；
+- runtime receipt parser 已修复 8 KB tail 从旧 closing fence 中间截断时无法识别最终
+  `json` envelope 的问题。
+
+Deterministic runtime 组合回归为 `284 passed, 1 deselected`；runtime observability API 定向
+测试为 `1 passed`。被排除项仍是既有 live-system guard 对 fake timeout `SIGTERM` 的拦截。
+
+最终隔离真实运行使用中性文本统计 CLI：1 次真实 decision、1 个 accepted patch、1 个
+`implementation` primary node、1 次 materialization、1 个真实 Codex worker receipt；临时
+workspace 的 6 项 unittest 通过，ledger 为 full/verified，job 为 `done`，consistency 为
+0 violations / 0 warnings。完整脱敏事实见
+`docs/kanban-runtime-kernel-real-integration-validation.md`。

@@ -162,3 +162,16 @@ capability 检查。第二个真实 worker 在隔离 workspace 写入并验证
 通过。此结果是单 worker L5 smoke，不等价于多 worker 长任务、review/test 交接或真实
 compaction quality 的生产验证。完整脱敏记录见
 `docs/kanban-runtime-kernel-real-integration-validation.md`。
+
+## 9. Delegation Initialization 后续验证
+
+2026-07-10 的后续 smoke 已移除旧 `understand-scope -> implementation` 两节点路径。
+Production job 从空 graph 进入 `waiting_decision`，真实 provider 创建一个带 typed contract 的
+`implementation` primary node；dispatcher 只 materialize attempt-1，一个真实 Codex worker
+在同一 session 内完成文本统计 CLI 的 inspection、implementation、unittest、debug 和 local
+verification。
+
+最终 1 次 decision、1 个 patch、1 个 node、1 个 materialization attempt、1 个 runtime
+receipt；ledger full/verified，job `done`，consistency 0/0。worker 使用隔离 `CODEX_HOME`，
+主 `.codex` 哈希保持不变。该 follow-up 取代旧两节点 fixture 作为当前 delegation worker
+smoke 基线，但仍不是长任务或 persistent session 验收。

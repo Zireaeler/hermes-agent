@@ -75,6 +75,7 @@ hermes kanban runtime real-smoke <job_id> --compact --codex-config --json
 | real provider bounded loop | Phase 4G2 | 已验证 | 3-5 decision ticks + synthetic worker evidence + consistency passed | 通过：3 ticks、2 applied、1 rejected、synthetic receipt `failed -> succeeded`、最终 done |
 | real worker lane smoke | Phase 4G3 | 已验证 | 真实 worker receipt 进入 runtime ingest，端到端 consistency passed | 通过：两个 dispatcher-started Codex worker receipt 写入 verified ledger，job done |
 | delegation Profile v2 | Delegation Policy MVP | 已验证 | 单 coherent primary node、typed contract、无无理由 decomposition、validator dry-run | 通过：1 个 immediate `create_node`、contract 1/1、accepted、未 apply |
+| delegation initialization | Delegation Initialization MVP | 已验证 | provider-first 空 graph、单 primary node、单 worker attempt、真实 receipt、job done | 通过：1 decision、1 patch、1 node、1 attempt、ledger full/verified、consistency 0/0 |
 
 “real compaction transport + fallback 通过”不等于“真实 compaction 质量通过”。如果模型
 candidate 被 validator 拒绝，fallback 成功只能证明安全边界和恢复路径正确。
@@ -188,6 +189,52 @@ worker；只执行 validate-without-apply。
 证明 OAuth 功能被实现，不启动真实 worker，也不证明大 primary node 的长期执行、checkpoint
 或 crash recovery。`illegal_idle` warning 暴露的是 execute-only smoke 的非持久化等待语义，
 不应被误写成零 warning；后续应在 liveness/observability 语义中单独处理。
+
+其中 OAuth 只是历史 validate-without-apply 的假想任务文本，从未 apply、从未启动 worker、
+从未实现任何 OAuth 代码。后续真实 worker 验证已改用下节的中性文本统计 CLI。
+
+### 2026-07-10 Delegation Initialization isolated single-worker smoke
+
+运行代码：
+
+- `6313a58 feat(kanban): initialize runtime through decision provider`；
+- `1f21e5c fix(kanban): validate canonical worker write scopes`；
+- `5e4c2df test(kanban): report worker materialization attempts`；
+- `286c5cb fix(kanban): extract runtime receipt from truncated tails`。
+
+环境：全新隔离 `HERMES_HOME`、独立 Git workspace、专属 `codex-delegation-init` lane；
+worker 使用隔离 `CODEX_HOME` 配置与认证副本；主 `.codex` 仅由 Decision Provider bridge
+读取。脱敏模型标识为 `codex:MySub2api` / `gpt-5.6-sol`。
+
+真实任务是在临时 Python 仓库中由一个连续 worker 实现文本统计 CLI，覆盖文件输入、标准
+输入、unittest 和必要 debug。该任务不涉及 OAuth、网络、外部账户、凭证、部署或 Git
+提交。
+
+最终通过结果：
+
+| 步骤 | 结果 | 事实 |
+| --- | --- | --- |
+| initialization | 通过 | state=`waiting_decision`；graph revision=0；0 nodes；`legal_wait=true`；`decision_requested=true` |
+| real decision | 通过 | 1 tick；1 accepted patch；0 rejected patch；Profile v2 创建 `implement-text-stats-cli` |
+| node contract | 通过 | 1 个 `implementation` node；typed contract；`declared_write_scope=["**"]`；无 decomposition |
+| materialization | 通过 | 1 个 node、attempt-1、1 个 dispatcher-started Codex worker；`single_worker_attempt=true` |
+| worker result | 通过 | receipt verdict=`pass`；临时 workspace 独立复跑 6 项 unittest 全部通过 |
+| ledger / completion | 通过 | satisfaction=`full`、verification=`verified`、confidence=1.0；job=`done` |
+| consistency | 通过 | 0 violations、0 warnings |
+| credential/config | 通过 | HERMES_HOME/workspace 11 个文件 credential scan 0 命中；最终 run 前后主 `config.toml` / `auth.json` 哈希不变；Codex CLI 只改写隔离 `CODEX_HOME` 副本 |
+
+达到最终结果前的隔离运行保留了三类有效失败证据：
+
+- provider 曾用 `repository/**` 表示 whole workspace，worker 成功后被 scope check 正确标为
+  failed；因此 validator 和 Profile 现在要求使用 canonical `**`；
+- 180 秒 lane timeout 曾触发 `worker_timed_out -> receipt_invalid -> retry`，证明 recovery
+  attempt history 生效，但该 run 不计入单 attempt 验收；
+- 一个 exit-0 worker 输出包含合法 runtime envelope，却因 8 KB tail 中残留旧 closing fence
+  被 parser 漏掉；修复后最终 run 在 attempt-1 正确提取 receipt。
+
+本次结果证明 provider-first initialization 与单 coherent worker 的真实闭环成立。它仍不
+证明多 worker 并发、persistent worker session、长任务 checkpoint/crash resume、backend
+路径级 sandbox 或真实 compaction L3 quality。
 
 ## 6. 结果记录模板
 

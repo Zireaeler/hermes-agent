@@ -106,14 +106,16 @@ Worker delegation policy enforcement MVP 已完成：Decision Profile v2 使用
 primary-node-first 规则；patch validator 条件要求 decomposition；typed node contract 暂存于
 `constraints_json`；terminal `structure_request` 进入 event/delta；独立 verifier 固定目标证据；
 `declared_write_scope` 支持 post-run verification；隔离真实 Profile v2 smoke 已验证单一
-coherent primary node、typed contract 和 validate-without-apply。尚未完成 initial fixture
-替换、persistent worker session、internal subagent 观测和大 primary node 长期真实执行。详细约束见
+coherent primary node、typed contract 和 validate-without-apply。initial fixture 替换已由
+Delegation Initialization 完成；尚未完成 persistent worker session、internal subagent 观测和
+大 primary node 长期真实执行。详细约束见
 `docs/kanban-runtime-kernel-delegation-policy.md`。
 
-下一项 delegation 收尾是 Delegation Initialization：production runtime create/promote 不再
+Delegation Initialization MVP 已完成：production runtime create/promote 不再
 预建 `understand-scope` fixture，而是进入可审计 `waiting_decision`，由 Decision Provider
 提出第一个 coherent primary node；同时修正 waiting-decision liveness 和 nonterminal graph
-expansion predicate。实现边界见
+expansion predicate。隔离真实运行已由一个 primary node 和一个 worker attempt 完成中性文本
+统计 CLI，job 为 `done`。实现边界见
 `docs/kanban-runtime-kernel-delegation-initialization.md`。
 
 ## 4. Phase 0: Architecture Contract

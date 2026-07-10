@@ -326,16 +326,16 @@ Decision Provider when structure is needed
   verifier target、structure request 和 scope violation；
 - 隔离真实 Profile v2 smoke 已证明模型能返回一个带 typed contract 的 coherent primary
   node，并通过 validator dry-run。
+- Delegation Initialization 已把 production create/promote 改为 provider-first，修正
+  waiting-decision liveness，并将 expansion predicate 扩展到全部 nonterminal node；
+- 隔离真实 worker smoke 已证明一个 primary node 可以在单一 materialization attempt 中完成
+  inspection、implementation、testing、debugging 和 local verification。
 
 当前仍未完成：
 
-- 用 primary-node-first production policy 替换现有 `understand-scope` 初始 fixture；
-- 将并行扩展 predicate 从已有 `running` primary node 安全扩展到更完整的
-  `ready/planned/waiting_dependency` graph 语义；
 - backend internal subagent policy 下发、继承检查与观测；
 - persistent worker session checkpoint 与跨 session resume；
-- 一个真实大 primary worker node 连续完成 inspection、implementation、testing、debugging
-  和 verification 的长期 smoke；
+- 更大 primary worker node 的长时间 session、checkpoint 和 crash resume smoke；
 - backend sandbox/worktree 对 `declared_write_scope` 的执行前强制隔离。
 
 因此当前可以称为 policy enforcement MVP，不能称为长期 delegation production complete。
