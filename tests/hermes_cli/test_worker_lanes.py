@@ -530,6 +530,21 @@ def test_codex_runtime_receipt_extracts_only_explicit_json_envelope():
     assert _extract_runtime_receipt("runtime_worker_receipt_v1 in prose") is None
 
 
+def test_codex_runtime_receipt_ignores_truncated_prior_closing_fence():
+    receipt = _extract_runtime_receipt(
+        "truncated output from an earlier code block\n"
+        "```\n"
+        "Progress:\n- [x] complete\n\n"
+        "```json\n"
+        '{"schema":"runtime_worker_receipt_v1","verdict":"pass","summary":"verified",'
+        '"claimed_goal_items":["runtime-result"],"verification":{"passed":true}}\n'
+        "```\n"
+    )
+
+    assert receipt is not None
+    assert receipt["verdict"] == "pass"
+
+
 def test_codex_metadata_output_tail_excludes_echoed_prompt_prefix():
     meta = _metadata(
         lane="codex-deep",

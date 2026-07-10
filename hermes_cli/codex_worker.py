@@ -38,7 +38,7 @@ _RECEIPT_SECTION_RE = re.compile(r"^\s*([A-Za-z][A-Za-z ]{0,60})\s*:\s*$")
 _VERDICT_LINE_RE = re.compile(r"(?i)^\s*verdict\s*:\s*(?:[-*]\s*)?([a-z][a-z_-]*)\s*$")
 _VERDICT_HEADER_RE = re.compile(r"(?i)^\s*verdict\s*:\s*$")
 _VERDICT_BULLET_RE = re.compile(r"^\s*[-*]?\s*([a-z][a-z_-]*)\s*$")
-_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+_JSON_FENCE_RE = re.compile(r"```json[ \t]*\r?\n(.*?)```", re.DOTALL | re.IGNORECASE)
 _ALLOWED_STRUCTURED_VERDICTS = {
     "approve",
     "approved",
