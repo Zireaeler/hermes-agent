@@ -92,15 +92,21 @@ Phase 3D Long Running Autonomous Task Runtime
 Phase 4  Production Hardening
 ```
 
-当前代码已经推进到 Phase 4G1 MVP：Phase 2D 本地 compaction 闭环、Phase 3 real
+当前代码已经推进到 Phase 4G3 MVP：Phase 2D 本地 compaction 闭环、Phase 3 real
 decision provider、Phase 4 production hardening、Phase 4E recovery、Phase 4F capability
-policy、Phase 4G deterministic soak、Phase 4G0 memory lifecycle 和 Phase 4G1 real-smoke
-入口均已实现。
+policy、Phase 4G deterministic soak、Phase 4G0 memory lifecycle、Phase 4G1 real-smoke、
+Phase 4G2 real-provider bounded loop 和 Phase 4G3 real worker lane smoke 均已实现。
 
-隔离真实模型源已验证 decision execute、一次 rejected patch、一次 accepted apply，以及
-real compaction 的 validator/fallback/segment rollover 安全路径。真实 compaction candidate
-quality 尚未通过，Phase 4G2 bounded loop 和 Phase 4G3 real worker lane smoke 仍属于后续
-阶段。详见 `docs/kanban-runtime-kernel-real-integration-validation.md`。
+隔离真实验证已经覆盖 decision execute/apply/reject、compaction fallback safety、3-tick
+real-provider loop，以及真实 provider -> validator -> Kanban dispatcher -> Codex worker ->
+runtime receipt -> verified ledger 的 L5 路径。真实 compaction candidate quality 仍未通过
+L3。详见 `docs/kanban-runtime-kernel-real-integration-validation.md`。
+
+Worker delegation policy enforcement MVP 已开始实施：Decision Profile v2 使用
+primary-node-first 规则；patch validator 条件要求 decomposition；typed node contract 暂存于
+`constraints_json`；terminal `structure_request` 进入 event/delta；独立 verifier 固定目标证据；
+`declared_write_scope` 支持 post-run verification。详细约束见
+`docs/kanban-runtime-kernel-delegation-policy.md`。
 
 ## 4. Phase 0: Architecture Contract
 

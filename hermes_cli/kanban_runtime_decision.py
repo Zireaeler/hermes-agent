@@ -1629,6 +1629,37 @@ def build_decision_provider_request(
             "new_node_requires_goal_gap_or_human_linkage": True,
             "no_direct_db_writes": True,
         },
+        "delegation_policy": {
+            "role": "structure_upgrade_controller_not_task_decomposer",
+            "minimum_runtime_nodes": True,
+            "prefer_one_coherent_primary_node": True,
+            "primary_node_may_include": [
+                "inspection",
+                "research",
+                "planning",
+                "implementation",
+                "testing",
+                "debugging",
+                "local_verification",
+            ],
+            "forbidden_split_reasons": [
+                "different_phase",
+                "different_role",
+                "cleaner_plan",
+                "task_is_complex",
+                "could_be_parallelized",
+            ],
+            "allowed_decomposition_reasons": [
+                "independent_verification",
+                "capability_boundary",
+                "human_authority_boundary",
+                "workspace_isolation",
+                "durable_parallelism",
+                "context_or_runtime_limit",
+                "execution_discovered_gap",
+            ],
+            "without_decomposition_max_new_runnable_worker_nodes": 1,
+        },
     }
     memory = rm.select_runtime_memory_hints(conn, job_id, delta)
     if memory.get("guidance", {}).get("loaded"):

@@ -1,4 +1,4 @@
-Profile-Version: 1
+Profile-Version: 2
 
 # Graph Patch Decision Profile
 
@@ -18,8 +18,15 @@ The provider receives only the runtime-rendered decision request:
 - current decision delta.
 
 The provider must not request hidden context, read worker logs, call tools, or
-perform web search. If external research is required, return a graph patch that
-creates a `research` node linked to the relevant goal item or gap.
+perform web search.
+
+External research does not by itself justify a separate runtime node. When
+research, implementation, testing, and debugging share the same workspace,
+capability envelope, accountable outcome, and feedback loop, include them in
+one coherent primary worker node. Create a separate research node only when a
+durable structural boundary exists, such as capability isolation, independent
+deliverable ownership, workspace isolation, or execution-discovered inability
+of the primary worker to continue.
 
 ## Output
 
@@ -51,16 +58,31 @@ Every new node must link to at least one goal item, gap, or human gate reason.
 If the current graph is exhausted while goals remain unmet, create nodes that
 address the unmet goal gaps instead of returning blocked.
 
+Use the minimum number of runtime nodes necessary. Prefer one primary node that
+owns a complete outcome and may inspect, plan, modify, test, debug, and verify
+within one continuous worker session. Do not split by phase, role, file, tool
+call, or technical discipline. When uncertain, do not split initially.
+
+Without a valid `decomposition`, create at most one new runnable worker node.
+Multiple durable nodes, an independent verifier, parallel writers, or different
+capability envelopes require a versioned `decomposition` with an allowed
+structural reason and evidence where required.
+
 Use exactly these field names for patch ops:
 
 - `create_node`: `node_key`, `node_type`, `title`, `description`, and
   `goal_item_keys` or `gap_keys` or `human_gate_reason`; optional
-  `depends_on` may list existing node keys.
+  `depends_on` may list existing node keys. Include `contract` with `outcome`,
+  `acceptance_criteria`, `success_evidence`, `declared_write_scope`, and
+  `prohibited_actions`.
 - `add_dependency`: `from_node_key` is the prerequisite node and `to_node_key`
   is the dependent node; optional `dependency_type` defaults to `depends_on`.
 - `insert_verifier`: `verifier_node_key`, `title`, either
   `target_node_key` or `target_goal_item_key`, and `goal_item_keys` or
-  `gap_keys` for the verifier node's own goal/gap linkage.
+  `gap_keys` for the verifier node's own goal/gap linkage. Also fix at least
+  one immutable target reference: `target_evidence_ref`,
+  `target_materialization_attempt`, `target_artifact_ref`, or
+  `target_workspace_revision`.
 - `request_human`: include `decision_type`, `question`,
   `default_recommendation`, `why_user_required`, and affected goal/gap keys.
 - `strategy_update`: include `node_key`, `title`, `description`,
@@ -96,7 +118,14 @@ stale gaps require a changed approach. It creates a materialized
       "node_type": "implementation",
       "title": "Write usage documentation",
       "description": "Document how to run and verify the implemented feature.",
-      "goal_item_keys": ["usage_doc"]
+      "goal_item_keys": ["usage_doc"],
+      "contract": {
+        "outcome": "Deliver verified usage documentation for the implemented feature.",
+        "acceptance_criteria": ["Run instructions are complete", "Verification steps are executable"],
+        "success_evidence": ["changed_files", "verification", "worker_summary"],
+        "declared_write_scope": ["docs/**"],
+        "prohibited_actions": ["production_deployment"]
+      }
     }
   ]
 }

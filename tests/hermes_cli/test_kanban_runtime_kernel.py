@@ -75,6 +75,16 @@ def _patch(job_id: str, revision: int, *ops):
     }
 
 
+def _contract(*scopes: str):
+    return {
+        "outcome": "Produce a coherent verified runtime result.",
+        "acceptance_criteria": ["Result exists", "Verification passes"],
+        "success_evidence": ["changed_files", "verification"],
+        "declared_write_scope": list(scopes),
+        "prohibited_actions": ["production_deployment"],
+    }
+
+
 def _complete_node(conn, node, evidence: dict):
     assert node["latest_task_id"]
     assert kb.complete_task(
@@ -788,18 +798,31 @@ def test_failed_verifier_does_not_rewrite_implementation_success(conn):
     verify_result = rk.apply_graph_patch(
         conn,
         job_id,
-        _patch(
+        {
+            **_patch(
             job_id,
             _revision(conn, job_id),
             {
                 "op": "insert_verifier",
                 "target_node_key": "implement-runtime",
+                "target_materialization_attempt": 1,
                 "verifier_node_key": "verify-runtime",
                 "title": "Verify runtime",
                 "goal_item_keys": ["initial-runtime-result"],
                 "gap_keys": ["initial-runtime-result:needs_verification"],
             },
-        ),
+            ),
+            "decomposition": {
+                "policy_version": "1",
+                "mode": "multiple_runtime_nodes",
+                "justifications": [{
+                    "type": "independent_verification",
+                    "nodes": ["implement-runtime", "verify-runtime"],
+                    "explanation": "Verifier must not inherit implementation assumptions.",
+                    "evidence_refs": [],
+                }],
+            },
+        },
     )
     assert verify_result["status"] == "applied"
     verifier = _node(conn, job_id, "verify-runtime")
@@ -1088,18 +1111,31 @@ def test_failed_verifier_creates_verification_failed_gap(conn):
     assert rk.apply_graph_patch(
         conn,
         job_id,
-        _patch(
+        {
+            **_patch(
             job_id,
             _revision(conn, job_id),
             {
                 "op": "insert_verifier",
                 "target_goal_item_key": "initial-runtime-result",
+                "target_workspace_revision": "fixture:goal-evidence-revision-1",
                 "verifier_node_key": "verify-runtime",
                 "title": "Verify runtime",
                 "goal_item_keys": ["initial-runtime-result"],
                 "gap_keys": ["initial-runtime-result:needs_verification"],
             },
-        ),
+            ),
+            "decomposition": {
+                "policy_version": "1",
+                "mode": "multiple_runtime_nodes",
+                "justifications": [{
+                    "type": "independent_verification",
+                    "nodes": ["verify-runtime"],
+                    "explanation": "Goal verification is an independent responsibility.",
+                    "evidence_refs": [],
+                }],
+            },
+        },
     )["status"] == "applied"
     verifier = _node(conn, job_id, "verify-runtime")
     rk.materialize_runtime_node(conn, dict(verifier))
@@ -1640,3 +1676,180 @@ def test_codex_runtime_receipt_rejects_goal_item_outside_node_linkage(conn):
     reconciled = rk.reconcile_runtime_materializations(conn, job_id)
     assert reconciled["events"] == ["receipt_invalid"]
     assert _node(conn, job_id, "understand-scope")["state"] == "ready"
+
+
+def test_delegation_policy_rejects_multiple_worker_nodes_without_decomposition(conn):
+    job_id = _job(conn)
+    patch = _patch(
+        job_id,
+        _revision(conn, job_id),
+        {
+            "op": "create_node",
+            "node_key": "backend",
+            "node_type": "implementation",
+            "title": "Backend",
+            "description": "Implement backend work.",
+            "goal_item_keys": ["initial-runtime-result"],
+            "contract": _contract("src/backend/**"),
+        },
+        {
+            "op": "create_node",
+            "node_key": "docs-site",
+            "node_type": "implementation",
+            "title": "Docs site",
+            "description": "Implement independent docs work.",
+            "goal_item_keys": ["initial-runtime-result"],
+            "contract": _contract("docs/site/**"),
+        },
+    )
+
+    result = rk.apply_graph_patch(conn, job_id, patch)
+
+    assert result["status"] == "rejected"
+    assert "requires decomposition" in result["reason"]
+
+
+def test_delegation_policy_allows_nonoverlapping_durable_parallelism(conn):
+    job_id = _job(conn)
+    patch = _patch(
+        job_id,
+        _revision(conn, job_id),
+        {
+            "op": "create_node",
+            "node_key": "backend",
+            "node_type": "implementation",
+            "title": "Backend",
+            "description": "Implement backend work.",
+            "goal_item_keys": ["initial-runtime-result"],
+            "contract": _contract("src/backend/**"),
+        },
+        {
+            "op": "create_node",
+            "node_key": "docs-site",
+            "node_type": "implementation",
+            "title": "Docs site",
+            "description": "Implement independent docs work.",
+            "goal_item_keys": ["initial-runtime-result"],
+            "contract": _contract("docs/site/**"),
+        },
+    )
+    patch["decomposition"] = {
+        "policy_version": "1",
+        "mode": "multiple_runtime_nodes",
+        "justifications": [{
+            "type": "durable_parallelism",
+            "nodes": ["backend", "docs-site"],
+            "explanation": "Outputs are independently owned and integrated by backend.",
+            "evidence_refs": [],
+            "declared_write_scopes": {
+                "backend": ["src/backend/**"],
+                "docs-site": ["docs/site/**"],
+            },
+            "integration_owner_node_key": "backend",
+        }],
+    }
+
+    result = rk.apply_graph_patch(conn, job_id, patch)
+
+    assert result["status"] == "applied"
+    constraints = json.loads(_node(conn, job_id, "backend")["constraints_json"])
+    assert constraints["contract"]["declared_write_scope"] == ["src/backend/**"]
+
+
+def test_delegation_policy_rejects_overlapping_parallel_write_scopes(conn):
+    job_id = _job(conn)
+    patch = _patch(
+        job_id,
+        _revision(conn, job_id),
+        {
+            "op": "create_node", "node_key": "one", "node_type": "implementation",
+            "title": "One", "description": "First writer.",
+            "goal_item_keys": ["initial-runtime-result"], "contract": _contract("src/**"),
+        },
+        {
+            "op": "create_node", "node_key": "two", "node_type": "implementation",
+            "title": "Two", "description": "Second writer.",
+            "goal_item_keys": ["initial-runtime-result"], "contract": _contract("src/auth/**"),
+        },
+    )
+    patch["decomposition"] = {
+        "policy_version": "1", "mode": "multiple_runtime_nodes",
+        "justifications": [{
+            "type": "durable_parallelism", "nodes": ["one", "two"],
+            "explanation": "Attempt parallel writes.", "evidence_refs": [],
+            "declared_write_scopes": {"one": ["src/**"], "two": ["src/auth/**"]},
+            "integration_owner_node_key": "one",
+        }],
+    }
+
+    result = rk.apply_graph_patch(conn, job_id, patch)
+
+    assert result["status"] == "rejected"
+    assert "write scopes overlap" in result["reason"]
+
+
+def test_terminal_structure_request_is_evented_and_projected_to_decision_delta(conn):
+    job_id = _job(conn)
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = _node(conn, job_id, "understand-scope")
+    structure_request = {
+        "required": True,
+        "blocking": True,
+        "reason_type": "capability_boundary",
+        "completed_scope": ["local adapter implemented"],
+        "discovered_gaps": [{
+            "gap_key": "verify-staging-contract",
+            "description": "Staging credentials are required.",
+            "evidence_refs": ["artifact:adapter-test-report"],
+        }],
+        "suggested_nodes": [{"objective": "Verify the staging contract."}],
+    }
+    _complete_node(conn, node, {
+        "verdict": "blocked",
+        "summary": "Local work completed; staging verification is blocked.",
+        "claimed_goal_items": [],
+        "unmet_goal_items": ["initial-runtime-result"],
+        "verification": {"passed": True},
+        "structure_request": structure_request,
+    })
+
+    assert rk.ingest_runtime_node_evidence(conn, node["id"])
+    event = conn.execute(
+        "SELECT id, payload_json FROM execution_events WHERE job_id = ? AND event_type = 'worker_structure_requested'",
+        (job_id,),
+    ).fetchone()
+    assert event is not None
+    delta = rk.build_decision_delta(conn, job_id)
+    assert delta["structure_requests"][0]["event_id"] == event["id"]
+    assert delta["structure_requests"][0]["structure_request"] == structure_request
+
+
+def test_declared_write_scope_violation_prevents_goal_satisfaction(conn):
+    job_id = _job(conn)
+    assert rk.apply_graph_patch(conn, job_id, _patch(
+        job_id,
+        _revision(conn, job_id),
+        {
+            "op": "create_node", "node_key": "scoped-writer", "node_type": "implementation",
+            "title": "Scoped writer", "description": "Write only auth files.",
+            "goal_item_keys": ["initial-runtime-result"], "contract": _contract("src/auth/**"),
+        },
+    ))["status"] == "applied"
+    node = _node(conn, job_id, "scoped-writer")
+    rk.materialize_runtime_node(conn, dict(node))
+    node = _node(conn, job_id, "scoped-writer")
+    _complete_node(conn, node, {
+        "verdict": "succeeded",
+        "summary": "Changed an out-of-scope file.",
+        "claimed_goal_items": ["initial-runtime-result"],
+        "changed_files": ["src/payments/api.py"],
+        "verification": {"passed": True},
+    })
+
+    assert rk.ingest_runtime_node_evidence(conn, node["id"])
+    assert _node(conn, job_id, "scoped-writer")["state"] == "failed"
+    assert rk.status_runtime_job(conn, job_id)["goal_items"][0]["state"] != "satisfied"
+    assert conn.execute(
+        "SELECT 1 FROM execution_events WHERE job_id = ? AND event_type = 'write_scope_violation'",
+        (job_id,),
+    ).fetchone() is not None

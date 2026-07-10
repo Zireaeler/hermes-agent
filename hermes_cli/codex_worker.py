@@ -1059,6 +1059,7 @@ final fenced JSON object and no prose after it:
   "claimed_goal_items": ["only keys listed under Goal items"],
   "partial_goal_items": [],
   "unmet_goal_items": [],
+  "changed_files": ["workspace-relative/path"],
   "verification": {"passed": true, "summary": "command and result"},
   "artifacts": []
 }
@@ -1066,7 +1067,10 @@ final fenced JSON object and no prose after it:
 
 Use only goal keys listed in the task context. Do not claim success merely
 because the process exits successfully. If verification did not pass, use an
-appropriate non-pass verdict and list unmet goal items.
+appropriate non-pass verdict and list unmet goal items. `changed_files` must be
+a JSON array of workspace-relative paths. If terminal evidence reveals a
+durable structural boundary, keep the normal verdict and add a separate
+`structure_request`; do not use it as a new verdict or create runtime nodes.
 """
     return f"""{task_context.rstrip()}
 

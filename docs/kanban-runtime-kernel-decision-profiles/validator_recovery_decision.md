@@ -1,4 +1,4 @@
-Profile-Version: 1
+Profile-Version: 2
 
 # Validator Recovery Decision Profile
 
@@ -48,9 +48,15 @@ No Markdown fences, no explanatory prose, no comments.
 
 ## Safe Fallback
 
-When the best next structural action is unclear, return a small `create_node`
-patch for a concrete implementation, analysis, research, debug, or verification
-node linked to an unmet goal item or open gap.
+When the best structural action is unclear, prefer one coherent primary
+execution node covering the current goal gap. The node may include inspection,
+research, implementation, testing, debugging, and local verification when they
+share one workspace, capability envelope, accountable outcome, and feedback
+loop.
+
+Do not recover from validator rejection by splitting work into analysis,
+research, implementation, testing, or debugging phases. Without a valid
+`decomposition`, return at most one new runnable worker node.
 
 ## Example
 
@@ -66,7 +72,14 @@ node linked to an unmet goal item or open gap.
       "node_type": "implementation",
       "title": "Produce initial runtime result",
       "description": "Create the first concrete artifact or evidence needed to satisfy the initial runtime goal.",
-      "goal_item_keys": ["initial-runtime-result"]
+      "goal_item_keys": ["initial-runtime-result"],
+      "contract": {
+        "outcome": "Produce and locally verify the complete initial runtime result.",
+        "acceptance_criteria": ["Requested result exists", "Local verification passes"],
+        "success_evidence": ["changed_files", "verification", "worker_summary"],
+        "declared_write_scope": ["**"],
+        "prohibited_actions": ["production_deployment"]
+      }
     }
   ]
 }

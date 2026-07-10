@@ -8,6 +8,7 @@ graph patches and never own state or scheduling.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import fnmatch
 import hashlib
 import json
 import sqlite3
@@ -52,6 +53,27 @@ PATCH_OPS = {
     "request_human",
     "propose_blocked",
     "strategy_update",
+}
+DECOMPOSITION_REASON_TYPES = {
+    "independent_verification",
+    "capability_boundary",
+    "human_authority_boundary",
+    "workspace_isolation",
+    "durable_parallelism",
+    "context_or_runtime_limit",
+    "execution_discovered_gap",
+}
+DECOMPOSITION_EVIDENCE_REQUIRED = {
+    "context_or_runtime_limit",
+    "execution_discovered_gap",
+}
+EXECUTION_NODE_OPS = {"create_node", "insert_verifier", "strategy_update"}
+NONTERMINAL_EXECUTION_STATES = {"planned", "waiting_dependency", "ready", "running"}
+VERIFIER_TARGET_FIELDS = {
+    "target_evidence_ref",
+    "target_materialization_attempt",
+    "target_artifact_ref",
+    "target_workspace_revision",
 }
 BLOCKER_TYPES = {
     "missing_secret",
@@ -1523,6 +1545,149 @@ def _validate_goal_or_gap_linkage(op: dict[str, Any], op_name: str) -> None:
     raise PatchValidationError(f"{op_name} requires goal_item_keys, gap_keys, or human_gate_reason")
 
 
+def _validate_node_contract(op: dict[str, Any]) -> None:
+    contract = op.get("contract")
+    if contract is None:
+        return
+    if not isinstance(contract, dict):
+        raise PatchValidationError("create_node contract must be an object")
+    if not str(contract.get("outcome") or "").strip():
+        raise PatchValidationError("create_node contract requires outcome")
+    for key in ("acceptance_criteria", "success_evidence"):
+        values = contract.get(key)
+        if not isinstance(values, list) or not [str(value).strip() for value in values if str(value).strip()]:
+            raise PatchValidationError(f"create_node contract requires non-empty {key}")
+    for key in ("declared_write_scope", "prohibited_actions"):
+        values = contract.get(key, [])
+        if not isinstance(values, list) or any(not isinstance(value, str) or not value.strip() for value in values):
+            raise PatchValidationError(f"create_node contract {key} must be a string list")
+
+
+def _scope_prefix(scope: str) -> str:
+    clean = str(scope).strip().replace("\\", "/")
+    wildcard = min([index for index in (clean.find("*"), clean.find("?")) if index >= 0] or [len(clean)])
+    return clean[:wildcard].rstrip("/")
+
+
+def _scopes_obviously_overlap(left: list[str], right: list[str]) -> bool:
+    for first in left:
+        for second in right:
+            a = _scope_prefix(first)
+            b = _scope_prefix(second)
+            if not a or not b or a == b or a.startswith(b + "/") or b.startswith(a + "/"):
+                return True
+    return False
+
+
+def _validate_evidence_ref(conn: sqlite3.Connection, job_id: str, ref: str) -> None:
+    value = str(ref or "").strip()
+    if not value:
+        raise PatchValidationError("decomposition evidence_refs must not be empty")
+    if value.startswith("event:"):
+        try:
+            event_id = int(value.split(":", 1)[1])
+        except ValueError as exc:
+            raise PatchValidationError(f"invalid event evidence_ref {value!r}") from exc
+        if conn.execute("SELECT 1 FROM execution_events WHERE job_id = ? AND id = ?", (job_id, event_id)).fetchone() is None:
+            raise PatchValidationError(f"unknown evidence_ref {value!r}")
+        return
+    if value.startswith("artifact:"):
+        artifact_ref = value.split(":", 1)[1]
+        if conn.execute("SELECT 1 FROM node_artifacts WHERE job_id = ? AND (id = ? OR path_or_ref = ?)", (job_id, artifact_ref, artifact_ref)).fetchone() is None:
+            raise PatchValidationError(f"unknown evidence_ref {value!r}")
+        return
+    if value.startswith("receipt:"):
+        parts = value.split(":")
+        if len(parts) != 3 or not parts[2].startswith("attempt-"):
+            raise PatchValidationError(f"invalid receipt evidence_ref {value!r}")
+        node = _node_by_key(conn, job_id, parts[1])
+        try:
+            attempt = int(parts[2][len("attempt-"):])
+        except ValueError as exc:
+            raise PatchValidationError(f"invalid receipt evidence_ref {value!r}") from exc
+        if conn.execute("SELECT 1 FROM node_materializations WHERE node_id = ? AND attempt = ? AND status IN ('succeeded', 'failed', 'blocked', 'waiting_human')", (node["id"], attempt)).fetchone() is None:
+            raise PatchValidationError(f"unknown evidence_ref {value!r}")
+        return
+    raise PatchValidationError(f"unsupported evidence_ref {value!r}")
+
+
+def _patch_requires_decomposition(conn: sqlite3.Connection, job_id: str, ops: list[dict[str, Any]]) -> bool:
+    execution_ops = [op for op in ops if op.get("op") in EXECUTION_NODE_OPS]
+    if len(execution_ops) >= 2 or any(op.get("op") == "insert_verifier" for op in execution_ops):
+        return True
+    immediate = [op for op in execution_ops if op.get("op") in {"create_node", "strategy_update"} and not (op.get("depends_on") or [])]
+    if immediate and conn.execute(
+        "SELECT 1 FROM execution_nodes WHERE job_id = ? AND state = 'running' LIMIT 1",
+        (job_id,),
+    ).fetchone() is not None:
+        return True
+    return False
+
+
+def _validate_decomposition(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any], ops: list[dict[str, Any]]) -> None:
+    decomposition = patch.get("decomposition")
+    required = _patch_requires_decomposition(conn, job_id, ops)
+    if decomposition is None:
+        if required:
+            raise PatchValidationError("graph expansion requires decomposition")
+        if len([op for op in ops if op.get("op") in EXECUTION_NODE_OPS and not (op.get("depends_on") or [])]) > 1:
+            raise PatchValidationError("patch without decomposition may create at most one runnable worker node")
+        return
+    if not isinstance(decomposition, dict):
+        raise PatchValidationError("decomposition must be an object")
+    if str(decomposition.get("policy_version") or "") != "1":
+        raise PatchValidationError("decomposition policy_version must be '1'")
+    if decomposition.get("mode") != "multiple_runtime_nodes":
+        raise PatchValidationError("decomposition mode must be 'multiple_runtime_nodes'")
+    justifications = decomposition.get("justifications")
+    if not isinstance(justifications, list) or not justifications:
+        raise PatchValidationError("decomposition requires justifications")
+    patch_node_keys = {
+        str(op.get("node_key") or op.get("verifier_node_key") or "").strip()
+        for op in ops if op.get("op") in EXECUTION_NODE_OPS
+    }
+    known_node_keys = {row["node_key"] for row in conn.execute("SELECT node_key FROM execution_nodes WHERE job_id = ?", (job_id,))}
+    covered: set[str] = set()
+    for item in justifications:
+        if not isinstance(item, dict):
+            raise PatchValidationError("decomposition justification must be an object")
+        reason = str(item.get("type") or "")
+        if reason not in DECOMPOSITION_REASON_TYPES:
+            raise PatchValidationError(f"unsupported decomposition reason {reason!r}")
+        nodes = item.get("nodes")
+        if not isinstance(nodes, list) or not nodes or any(not str(node).strip() for node in nodes):
+            raise PatchValidationError("decomposition justification requires nodes")
+        nodes = [str(node).strip() for node in nodes]
+        unknown = set(nodes) - patch_node_keys - known_node_keys
+        if unknown:
+            raise PatchValidationError(f"decomposition references unknown nodes {sorted(unknown)!r}")
+        if not str(item.get("explanation") or "").strip():
+            raise PatchValidationError("decomposition justification requires explanation")
+        refs = item.get("evidence_refs") or []
+        if not isinstance(refs, list):
+            raise PatchValidationError("decomposition evidence_refs must be a list")
+        if reason in DECOMPOSITION_EVIDENCE_REQUIRED and not refs:
+            raise PatchValidationError(f"decomposition reason {reason!r} requires evidence_refs")
+        for ref in refs:
+            _validate_evidence_ref(conn, job_id, str(ref))
+        if reason == "durable_parallelism":
+            scopes = item.get("declared_write_scopes")
+            if not isinstance(scopes, dict) or any(node not in scopes for node in nodes):
+                raise PatchValidationError("durable_parallelism requires declared_write_scopes for every node")
+            if not str(item.get("integration_owner_node_key") or "").strip():
+                raise PatchValidationError("durable_parallelism requires integration_owner_node_key")
+            for index, node_key in enumerate(nodes):
+                node_scopes = scopes.get(node_key)
+                if not isinstance(node_scopes, list):
+                    raise PatchValidationError("declared_write_scopes values must be lists")
+                for other_key in nodes[index + 1:]:
+                    if _scopes_obviously_overlap(node_scopes, scopes.get(other_key) or []):
+                        raise PatchValidationError(f"durable_parallelism write scopes overlap for {node_key!r} and {other_key!r}")
+        covered.update(set(nodes) & patch_node_keys)
+    if required and not patch_node_keys.issubset(covered):
+        raise PatchValidationError("decomposition must justify every new execution node")
+
+
 def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]) -> None:
     job = _job(conn, job_id)
     if not isinstance(patch, dict):
@@ -1543,6 +1708,7 @@ def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]
         if name == "create_node":
             _validate_goal_linkage(op)
             _node_capability_metadata(op)
+            _validate_node_contract(op)
             node_key = str(op.get("node_key") or "").strip()
             node_type = str(op.get("node_type") or "").strip()
             if not node_key or not str(op.get("title") or "").strip() or not str(op.get("description") or "").strip():
@@ -1579,6 +1745,24 @@ def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]
                 _goal_item_by_key(conn, job_id, str(goal_key))
             if not target_key and not goal_key:
                 raise PatchValidationError("insert_verifier requires target_node_key or target_goal_item_key")
+            if not any(op.get(field) not in {None, ""} for field in VERIFIER_TARGET_FIELDS):
+                raise PatchValidationError("insert_verifier requires a fixed target evidence/materialization/artifact/workspace reference")
+            if op.get("target_evidence_ref"):
+                _validate_evidence_ref(conn, job_id, str(op["target_evidence_ref"]))
+            if op.get("target_materialization_attempt") is not None:
+                if not target_key:
+                    raise PatchValidationError("target_materialization_attempt requires target_node_key")
+                try:
+                    attempt = int(op["target_materialization_attempt"])
+                except (TypeError, ValueError) as exc:
+                    raise PatchValidationError("target_materialization_attempt must be an integer") from exc
+                target = _node_by_key(conn, job_id, str(target_key))
+                if conn.execute("SELECT 1 FROM node_materializations WHERE node_id = ? AND attempt = ?", (target["id"], attempt)).fetchone() is None:
+                    raise PatchValidationError("insert_verifier target materialization does not exist")
+            if op.get("target_artifact_ref"):
+                artifact_ref = str(op["target_artifact_ref"])
+                if conn.execute("SELECT 1 FROM node_artifacts WHERE job_id = ? AND (id = ? OR path_or_ref = ?)", (job_id, artifact_ref, artifact_ref)).fetchone() is None:
+                    raise PatchValidationError("insert_verifier target artifact does not exist")
             verifier_key = str(op.get("verifier_node_key") or "").strip()
             if not verifier_key or not str(op.get("title") or "").strip():
                 raise PatchValidationError("insert_verifier requires verifier_node_key and title")
@@ -1587,8 +1771,10 @@ def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]
             if not (op.get("goal_item_keys") or op.get("gap_keys")):
                 raise PatchValidationError("insert_verifier requires goal_item_keys or gap_keys")
             _node_capability_metadata(op)
+            _validate_node_contract(op)
             for key in op.get("goal_item_keys") or []:
                 _goal_item_by_key(conn, job_id, key)
+
         elif name == "request_human":
             _validate_goal_linkage(op)
             if str(op.get("decision_type") or "") not in HUMAN_DECISION_TYPES:
@@ -1614,6 +1800,7 @@ def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]
         elif name == "strategy_update":
             _validate_goal_or_gap_linkage(op, "strategy_update")
             _node_capability_metadata(op)
+            _validate_node_contract(op)
             node_key = str(op.get("node_key") or "").strip()
             if not node_key or not str(op.get("title") or "").strip() or not str(op.get("description") or "").strip():
                 raise PatchValidationError("strategy_update requires node_key, title, and description")
@@ -1626,6 +1813,8 @@ def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]
                 raise PatchValidationError("strategy_update requires changes_from_previous_attempts")
             for key in op.get("goal_item_keys") or []:
                 _goal_item_by_key(conn, job_id, key)
+
+    _validate_decomposition(conn, job_id, patch, ops)
 
 
 def _would_create_dependency_cycle(conn: sqlite3.Connection, job_id: str, from_id: str, to_id: str) -> bool:
@@ -1722,6 +1911,9 @@ def _apply_op(conn: sqlite3.Connection, job_id: str, op: dict[str, Any]) -> None
         }
         depends_on = op.get("depends_on") or []
         state = "waiting_dependency" if depends_on else "planned"
+        constraints = dict(op.get("constraints") or {})
+        if op.get("contract") is not None:
+            constraints["contract"] = op["contract"]
         conn.execute(
             """
             INSERT INTO execution_nodes (
@@ -1740,7 +1932,7 @@ def _apply_op(conn: sqlite3.Connection, job_id: str, op: dict[str, Any]) -> None
                 str(op["description"]).strip(),
                 op.get("assignee"),
                 str(op.get("input_summary") or op["description"]).strip(),
-                _json(op.get("constraints") or {}),
+                _json(constraints),
                 _json(metadata),
                 now,
                 now,
@@ -1767,12 +1959,20 @@ def _apply_op(conn: sqlite3.Connection, job_id: str, op: dict[str, Any]) -> None
             "assignee": op.get("assignee"),
             "depends_on": [op["target_node_key"]] if op.get("target_node_key") else [],
             "requested_capabilities": op.get("requested_capabilities") or [],
+            "contract": op.get("contract"),
         }
         _apply_op(conn, job_id, verifier_op)
         verifier = _node_by_key(conn, job_id, str(op["verifier_node_key"]))
         if op.get("target_node_key"):
             target = _node_by_key(conn, job_id, str(op["target_node_key"]))
-            _insert_relation(conn, job_id, verifier["id"], target["id"], "verifies")
+            _insert_relation(
+                conn,
+                job_id,
+                verifier["id"],
+                target["id"],
+                "verifies",
+                metadata={field: op.get(field) for field in VERIFIER_TARGET_FIELDS if op.get(field) is not None},
+            )
     elif name == "request_human":
         node_id = _id("rnode")
         conn.execute(
@@ -1806,6 +2006,9 @@ def _apply_op(conn: sqlite3.Connection, job_id: str, op: dict[str, Any]) -> None
             "changes_from_previous_attempts": op.get("changes_from_previous_attempts") or [],
             **_node_capability_metadata(op),
         }
+        constraints = dict(op.get("constraints") or {})
+        if op.get("contract") is not None:
+            constraints["contract"] = op["contract"]
         conn.execute(
             """
             INSERT INTO execution_nodes (
@@ -1822,7 +2025,7 @@ def _apply_op(conn: sqlite3.Connection, job_id: str, op: dict[str, Any]) -> None
                 str(op["description"]).strip(),
                 op.get("assignee"),
                 str(op.get("input_summary") or op["description"]).strip(),
-                _json(op.get("constraints") or {}),
+                _json(constraints),
                 _json(metadata),
                 now,
                 now,
@@ -1843,7 +2046,15 @@ def _insert_dependency(conn: sqlite3.Connection, job_id: str, from_node_id: str,
     )
 
 
-def _insert_relation(conn: sqlite3.Connection, job_id: str, from_node_id: str, to_node_id: str, relation_type: str) -> None:
+def _insert_relation(
+    conn: sqlite3.Connection,
+    job_id: str,
+    from_node_id: str,
+    to_node_id: str,
+    relation_type: str,
+    *,
+    metadata: Optional[dict[str, Any]] = None,
+) -> None:
     if relation_type not in RELATION_TYPES:
         raise PatchValidationError(f"unknown relation_type {relation_type!r}")
     conn.execute(
@@ -1851,9 +2062,9 @@ def _insert_relation(conn: sqlite3.Connection, job_id: str, from_node_id: str, t
         INSERT OR IGNORE INTO node_relations (
             id, job_id, from_node_id, to_node_id, relation_type,
             metadata_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, '{}', ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (_id("nrel"), job_id, from_node_id, to_node_id, relation_type, _now()),
+        (_id("nrel"), job_id, from_node_id, to_node_id, relation_type, _json(metadata or {}), _now()),
     )
 
 
@@ -2159,6 +2370,32 @@ def _is_codex_lane_evidence(evidence: Any) -> bool:
     return isinstance(lane, dict) and lane.get("kind") == "codex_cli"
 
 
+def _structure_request_valid(structure_request: Any) -> bool:
+    if not isinstance(structure_request, dict):
+        return False
+    if structure_request.get("required") is not True or not isinstance(structure_request.get("blocking"), bool):
+        return False
+    if structure_request.get("reason_type") not in DECOMPOSITION_REASON_TYPES:
+        return False
+    completed_scope = structure_request.get("completed_scope") or []
+    if not isinstance(completed_scope, list) or any(not isinstance(value, str) or not value.strip() for value in completed_scope):
+        return False
+    gaps = structure_request.get("discovered_gaps") or []
+    if not isinstance(gaps, list):
+        return False
+    for gap in gaps:
+        if not isinstance(gap, dict) or not str(gap.get("description") or "").strip():
+            return False
+        refs = gap.get("evidence_refs") or []
+        if not isinstance(refs, list) or any(not isinstance(ref, str) or not ref.strip() for ref in refs):
+            return False
+    suggested = structure_request.get("suggested_nodes") or []
+    return isinstance(suggested, list) and not any(
+        not isinstance(item, dict) or not str(item.get("objective") or "").strip()
+        for item in suggested
+    )
+
+
 def _runtime_receipt_from_evidence(evidence: Any, node: Optional[dict[str, Any]] = None) -> Optional[dict[str, Any]]:
     """Validate a Codex runtime receipt before allowing it into the ledger."""
     if not isinstance(evidence, dict):
@@ -2180,6 +2417,13 @@ def _runtime_receipt_from_evidence(evidence: Any, node: Optional[dict[str, Any]]
         if not isinstance(values, list) or any(not isinstance(value, str) or not value.strip() for value in values):
             return None
         result[key] = [value.strip() for value in values]
+    changed_files = result.get("changed_files", [])
+    if not isinstance(changed_files, list) or any(not isinstance(value, str) or not value.strip() for value in changed_files):
+        return None
+    result["changed_files"] = [value.strip().replace("\\", "/") for value in changed_files]
+    structure_request = result.get("structure_request")
+    if structure_request is not None and not _structure_request_valid(structure_request):
+        return None
     if node is not None:
         metadata = _loads(node.get("metadata_json"))
         allowed = {str(value) for value in metadata.get("goal_item_keys") or []}
@@ -3244,6 +3488,17 @@ def _upsert_gap(conn: sqlite3.Connection, job_id: str, goal_item_id: Optional[st
 def build_decision_delta(conn: sqlite3.Connection, job_id: str, trigger_event_id: Optional[int] = None) -> dict[str, Any]:
     reduce_runtime_job(conn, job_id)
     status = status_runtime_job(conn, job_id)
+    structure_requests = [
+        {
+            "event_id": row["id"],
+            "node_key": (_loads(row["payload_json"]).get("node_key")),
+            "structure_request": (_loads(row["payload_json"]).get("structure_request")),
+        }
+        for row in conn.execute(
+            "SELECT id, payload_json FROM execution_events WHERE job_id = ? AND event_type = 'worker_structure_requested' ORDER BY id DESC LIMIT 10",
+            (job_id,),
+        ).fetchall()
+    ]
     return {
         "job": {
             "id": job_id,
@@ -3279,6 +3534,7 @@ def build_decision_delta(conn: sqlite3.Connection, job_id: str, trigger_event_id
             for node in status["nodes"]
             if node["state"] in {"ready", "running", "succeeded", "failed", "waiting_human"}
         ],
+        "structure_requests": structure_requests,
         "available_actions": sorted(PATCH_OPS),
         "policy": {
             "no_release_node": True,
@@ -4121,6 +4377,7 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
 
 def _worker_context(conn: sqlite3.Connection, job: dict[str, Any], node: dict[str, Any], materialization_id: str) -> str:
     metadata = _loads(node.get("metadata_json"))
+    constraints = _loads(node.get("constraints_json"))
     capability_policy = metadata.get("capability_policy")
     if not isinstance(capability_policy, dict):
         capability_policy = evaluate_node_capability_policy(conn, job["id"], node)
@@ -4167,6 +4424,7 @@ def _worker_context(conn: sqlite3.Connection, job: dict[str, Any], node: dict[st
         f"{node['description']}\n\n"
         f"Goal items: {', '.join(metadata.get('goal_item_keys') or []) or '-'}\n"
         f"Gaps: {', '.join(metadata.get('gap_keys') or []) or '-'}\n\n"
+        f"Node contract: {json.dumps(constraints.get('contract') or {}, sort_keys=True)}\n\n"
         f"Dependencies:\n{deps}\n\n"
         "Expected receipt fields: verdict, summary, claimed_goal_items, "
         "partial_goal_items, unmet_goal_items, verification, artifacts, "
@@ -4175,6 +4433,38 @@ def _worker_context(conn: sqlite3.Connection, job: dict[str, Any], node: dict[st
         "Do not perform denied actions; return blocked or human_required instead.\n\n"
         f"Runtime footer: {json.dumps(footer, sort_keys=True)}"
     )
+
+
+def _apply_declared_write_scope_check(node: dict[str, Any], evidence: dict[str, Any]) -> tuple[dict[str, Any], list[str], bool]:
+    constraints = _loads(node.get("constraints_json"))
+    contract = constraints.get("contract") if isinstance(constraints.get("contract"), dict) else {}
+    scopes = contract.get("declared_write_scope") or []
+    if not scopes:
+        return evidence, [], False
+    changed_files = evidence.get("changed_files")
+    if not isinstance(changed_files, list):
+        return evidence, [], True
+    violations = [
+        path
+        for path in changed_files
+        if not any(
+            fnmatch.fnmatch(path, scope)
+            or (scope.endswith("/**") and (path == scope[:-3] or path.startswith(scope[:-3] + "/")))
+            for scope in scopes
+        )
+    ]
+    if not violations:
+        return evidence, [], False
+    result = dict(evidence)
+    claimed = list(result.get("claimed_goal_items") or [])
+    result["claimed_goal_items"] = []
+    result["unmet_goal_items"] = sorted(set(result.get("unmet_goal_items") or []) | set(claimed))
+    result["verdict"] = "failed"
+    verification = dict(result.get("verification") or {})
+    verification["passed"] = False
+    verification["summary"] = "declared write scope violated: " + ", ".join(violations)
+    result["verification"] = verification
+    return result, violations, False
 
 
 def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: Optional[str] = None) -> bool:
@@ -4194,6 +4484,9 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
     )
     if metadata is None:
         return False
+    if metadata.get("structure_request") is not None and not _structure_request_valid(metadata["structure_request"]):
+        return False
+    metadata, scope_violations, scope_unverified = _apply_declared_write_scope_check(dict(node), metadata)
     snapshot_run_id = snapshot.run.id if snapshot.run else node["latest_run_id"]
     verdict = _normalize_verdict(metadata.get("verdict") or snapshot.task.status)
     if node["state"] in TERMINAL_NODE_STATES:
@@ -4281,6 +4574,39 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
                     now,
                 ),
             )
+    if scope_violations:
+        _event(
+            conn,
+            node["job_id"],
+            "write_scope_violation",
+            {"node_key": node["node_key"], "changed_files": scope_violations},
+            node_id=node_id,
+            task_id=node["latest_task_id"],
+            run_id=snapshot_run_id,
+            source="kanban_task",
+        )
+    elif scope_unverified:
+        _event(
+            conn,
+            node["job_id"],
+            "write_scope_unverified",
+            {"node_key": node["node_key"], "reason": "receipt missing structured changed_files"},
+            node_id=node_id,
+            task_id=node["latest_task_id"],
+            run_id=snapshot_run_id,
+            source="kanban_task",
+        )
+    if metadata.get("structure_request") is not None:
+        _event(
+            conn,
+            node["job_id"],
+            "worker_structure_requested",
+            {"node_key": node["node_key"], "verdict": verdict, "structure_request": metadata["structure_request"]},
+            node_id=node_id,
+            task_id=node["latest_task_id"],
+            run_id=snapshot_run_id,
+            source="kanban_task",
+        )
     _event(conn, node["job_id"], event_type, {"node_key": node["node_key"], "verdict": verdict}, node_id=node_id, task_id=node["latest_task_id"], run_id=snapshot_run_id, source="kanban_task")
     reduce_runtime_job(conn, node["job_id"])
     return True
@@ -4552,10 +4878,23 @@ def fixture_decision_provider(session: dict[str, Any], delta: dict[str, Any]) ->
             "schema": PATCH_SCHEMA,
             "expected_revision": revision,
             "rationale_summary": f"insert verifier for {gap_key}",
+            "decomposition": {
+                "policy_version": "1",
+                "mode": "multiple_runtime_nodes",
+                "justifications": [
+                    {
+                        "type": "independent_verification",
+                        "nodes": [target, f"verify-{goal_key}".replace(":", "-")],
+                        "explanation": "Verification must use an independent worker responsibility.",
+                        "evidence_refs": [],
+                    }
+                ],
+            },
             "ops": [
                 {
                     "op": "insert_verifier",
                     "target_node_key": target,
+                    "target_workspace_revision": f"node:{target}:latest-terminal",
                     "verifier_node_key": f"verify-{goal_key}".replace(":", "-"),
                     "title": f"Verify {goal_key}",
                     "goal_item_keys": [goal_key],

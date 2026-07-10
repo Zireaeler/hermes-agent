@@ -39,6 +39,21 @@
 例如，实现并验证 OAuth 登录通常应是一个 node，而不是按 `inspect`、`research`、
 `design`、`backend`、`frontend`、`test`、`fix` 切分为多个 runtime worker。
 
+### 2.1 Coherent Responsibility Test
+
+一组活动同时满足以下条件时，默认属于同一个 node：
+
+1. 共享同一主要 workspace；
+2. 使用同一 capability envelope；
+3. 对同一完整 outcome 负责；
+4. 共享同一验收边界；
+5. inspection、修改、测试和 debug 之间存在连续反馈循环；
+6. 不要求独立、无偏的外部 evidence；
+7. 不跨越 human authority、credential 或其他安全边界。
+
+活动数量、涉及文件数量、技术领域数量和传统开发阶段数量，都不是拆分 runtime node 的
+充分理由。
+
 ## 3. Decision Provider 的职责
 
 Decision Provider 是结构升级控制器，不是传统任务拆分器。
@@ -125,11 +140,7 @@ checkpoint 或 blocker event，供 Kanban lifecycle、recovery 和 observability
 
 单个 worker 的可靠 session、时间、恢复或失败重做边界已被证据证明不足。
 
-### 5.7 `distinct_deliverables`
-
-存在可独立验收、可独立恢复且不共享主要上下文的多个交付责任。
-
-### 5.8 `execution_discovered_gap`
+### 5.7 `execution_discovered_gap`
 
 worker execution receipt 发现其无法继续覆盖的 gap，例如缺少受限凭证、外部契约不明或
 需要独立 verifier。此时由 Decision Provider 根据已入库 evidence 扩展 graph。
@@ -160,43 +171,69 @@ lane 的既有事实。
 
 ## 7. 结构升级 Receipt
 
-worker receipt 后续应支持可选结构升级字段：
+worker receipt 后续应支持与现有 terminal verdict 正交的可选 `structure_request`：
 
 ```json
 {
-  "needs_structure": true,
-  "completed_scope": ["repository inspected", "authentication flow understood"],
-  "discovered_gaps": [
-    {
-      "description": "身份提供方契约需要 staging credential 验证",
-      "reason_separate_node_needed": "capability_boundary"
-    }
-  ],
-  "recommended_structure": [
-    {
-      "reason": "capability_boundary",
-      "objective": "使用 staging credential 验证身份提供方契约"
-    }
-  ]
+  "verdict": "blocked",
+  "summary": "本地实现已完成，但当前权限不能验证 staging 契约",
+  "structure_request": {
+    "required": true,
+    "blocking": true,
+    "reason_type": "capability_boundary",
+    "completed_scope": ["local adapter implemented", "unit tests passed"],
+    "discovered_gaps": [
+      {
+        "gap_key": "verify-staging-contract",
+        "description": "需要 staging credential 验证外部契约",
+        "evidence_refs": ["artifact:adapter-test-report"]
+      }
+    ],
+    "suggested_nodes": [
+      {
+        "objective": "使用 staging credential 验证身份提供方契约",
+        "requested_capabilities": ["staging_credentials", "network_access"]
+      }
+    ]
+  }
 }
 ```
 
-这些字段是 evidence，不是 graph mutation 指令。Runtime ingest 将其持久化；Decision Provider
-只在后续结构事件中读取它们并提出 patch；validator 仍决定 patch 是否可落库。
+`structure_request` 不是新的 verdict 或 node state。它可以与 `succeeded` 配合表达当前责任
+已完成但整个 goal 仍需要独立 verifier，也可以与 `blocked` 配合表达当前责任无法在现有
+权限下继续。
+
+这些字段是 evidence，不是 graph mutation 指令。MVP 只接受 terminal receipt 中的
+`structure_request`，不增加 paused worker 或同一 backend session 的中途恢复协议。Runtime
+ingest 将其持久化；Decision Provider 只在 reducer 确认仍需结构变更后读取并提出 patch；
+validator 仍决定 patch 是否可落库。
 
 ## 8. Graph Patch Decomposition Contract
 
-当一个 patch 创建多个 execution node，或创建与当前 primary responsibility 平行的 node 时，
-后续 patch schema 应增加可选但受策略要求的 `decomposition`：
+`decomposition` 在 JSON schema 中允许缺省，但满足 graph expansion predicate 时由 validator
+条件性强制要求。以下任一情况成立时必须存在：
+
+1. 一个 patch 创建两个或更多非 human execution node；
+2. 新 node 将与现有 nonterminal primary node 并行 runnable；
+3. patch 插入独立 verifier；
+4. patch 将同一 goal gap 分配给多个 durable worker；
+5. patch 创建不同 capability 或 credential envelope 的执行责任；
+6. patch 拆分已有 node 或建立新的并行写 lane。
+
+没有 `decomposition` 时，一个 patch 最多创建一个新的 runnable worker execution node。
+`strategy_update` 也会 materialize 为 durable worker node，因此计入预算。Verifier 可以提前
+声明，但必须依赖固定 target，不能与仍在变化的 implementation 并行 runnable。
 
 ```json
 {
+  "policy_version": "1",
   "mode": "multiple_runtime_nodes",
   "justifications": [
     {
       "type": "independent_verification",
       "nodes": ["implementation", "security-verifier"],
-      "explanation": "验证不得继承实现者的安全假设"
+      "explanation": "验证不得继承实现者的安全假设",
+      "evidence_refs": ["receipt:implementation:attempt-1"]
     }
   ]
 }
@@ -211,16 +248,38 @@ Validator 的可检查职责包括：
 - 初始 patch 是否超过 primary execution node 预算；
 - node 是否仍关联 goal/gap/human reason、outcome 与验证预期。
 
+理由的附加约束：
+
+- `context_or_runtime_limit` 必须引用已有 timeout、checkpoint、失败或 receipt evidence；
+- `execution_discovered_gap` 必须引用 worker receipt/event；
+- `durable_parallelism` 必须声明 write scope、依赖边界和 integration owner；
+- `task_is_complex`、`different_phase`、`different_role`、`cleaner_plan` 和
+  `could_be_parallelized` 必须拒绝。
+
 Validator 不应伪装为语义工作量评估器。它不能证明单一 worker 一定能完成工作，只能拒绝
 无结构理由、无目标关联或明显违反隔离约束的 graph expansion。
 
 ## 9. Decision Provider 调用时机
 
-Decision Provider 应低频处理结构事件，而非 worker 的局部步骤。典型触发点：
+Decision Provider 应低频处理结构事件，而非 worker 的局部步骤。worker terminal receipt
+本身不是 trigger。正确顺序是：
+
+```text
+ingest terminal receipt
+      -> ledger / evidence
+      -> readiness / capability
+      -> completion / liveness
+      -> structural decision request only when structure remains unknown
+```
+
+以下情况不应调用 Decision Provider：goal 已满足；已有 dependent node 自动变为 ready；
+已有 graph 已覆盖新 gap；receipt 只更新已知 evidence。
+
+真正的典型触发点：
 
 - job 初始化；
-- worker terminal receipt；
-- worker `needs_structure`；
+- terminal receipt 经 reducer 后仍产生结构性未知；
+- terminal `structure_request` 经 reducer 确认需要 graph expansion；
 - capability/human authorization 变化；
 - independent verifier 失败；
 - anti-stuck 或重复失败；
@@ -254,7 +313,7 @@ worker receipt、capability policy、真实 provider 和真实 worker smoke。�
 
 - primary-node-first initial graph policy；
 - `decomposition` patch schema 与 validator；
-- `needs_structure` receipt 字段的持久化和 provider request projection；
+- terminal `structure_request` receipt 字段的持久化和 provider request projection；
 - node-level write scope / acceptance criteria 的统一 schema；
 - backend internal subagent policy 下发或观测；
 - persistent worker session checkpoint 与跨 session resume。
@@ -263,3 +322,20 @@ worker receipt、capability policy、真实 provider 和真实 worker smoke。�
 policy 进入 Decision Provider stable prefix 和 deterministic eval；再扩展 patch/receipt schema
 与 validator；最后验证真实 worker 在大 primary node 的连续执行和 evidence-driven graph
 expansion。
+
+### 10.1 Typed Node Contract 与 Write Scope
+
+MVP 的 `create_node.contract` 至少包含 `outcome`、`acceptance_criteria`、
+`success_evidence`、`declared_write_scope` 和 `prohibited_actions`。它可以先持久化到
+`constraints_json`，无需立即迁移独立表。
+
+`declared_write_scope` 只是可验证声明，不是 sandbox。Validator 检查明显重叠和过宽声明；
+worker 完成后必须基于结构化 `changed_files` 做 post-run 检查，并在越界时产生
+`write_scope_violation`。在 backend 真正强制路径隔离前，不得声称该字段是安全边界。
+
+### 10.2 Verifier 固定目标
+
+独立 verifier 不能只引用可变的 `target_node_key`。至少还应固定
+`target_evidence_ref`、`target_materialization_attempt`、`target_artifact_ref` 或
+`target_workspace_revision` 之一。Verifier 必须使用新的 backend session/context，不能继承
+implementation worker 的隐藏推理上下文。
