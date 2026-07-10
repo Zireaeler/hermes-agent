@@ -132,6 +132,8 @@ def run_real_worker_lane_smoke(
 
     final = rk.status_runtime_job(conn, job_id)
     consistency = rk.check_runtime_consistency(conn, job_id, write_events=False)
+    attempts = _materialization_attempts(conn, job_id)
+    materialized_node_keys = sorted({item["node_key"] for item in attempts})
     report = {
         "job_id": job_id,
         "provider": _source_summary(provider_source),
@@ -140,6 +142,11 @@ def run_real_worker_lane_smoke(
         "accepted_patch_count": len([item for item in decisions if item["patch_status"] == "applied"]),
         "rejected_patch_count": len([item for item in decisions if item["patch_status"] == "rejected"]),
         "dispatches": dispatches,
+        "materialization_attempts": attempts,
+        "materialization_attempt_count": len(attempts),
+        "materialized_node_keys": materialized_node_keys,
+        "single_primary_node": len(materialized_node_keys) == 1,
+        "single_worker_attempt": len(attempts) == 1,
         "terminal_receipts": _dedupe_receipts(terminal_receipts),
         "final_state": final["job"]["state"],
         "goal_items": [{"item_key": item["item_key"], "state": item["state"]} for item in final["goal_items"]],
@@ -216,6 +223,20 @@ def _terminal_receipt_summaries(conn: sqlite3.Connection, job_id: str) -> list[d
 def _counts(conn: sqlite3.Connection, job_id: str) -> dict[str, int]:
     job = rk._job(conn, job_id)
     return {"graph_revision": int(job["graph_revision"])}
+
+
+def _materialization_attempts(conn: sqlite3.Connection, job_id: str) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT n.node_key, m.attempt, m.task_id, m.run_id, m.worker_lane, m.status
+          FROM node_materializations m
+          JOIN execution_nodes n ON n.id = m.node_id
+         WHERE m.job_id = ?
+         ORDER BY m.created_at, m.attempt
+        """,
+        (job_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def _dedupe_receipts(items: list[dict[str, Any]]) -> list[dict[str, Any]]:

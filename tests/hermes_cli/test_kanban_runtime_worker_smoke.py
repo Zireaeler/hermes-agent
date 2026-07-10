@@ -157,6 +157,11 @@ def test_worker_smoke_uses_dispatcher_wrapper_and_runtime_receipt(kanban_home, t
     assert report["final_state"] == "done"
     assert report["decision_tick_count"] == 1
     assert len(report["dispatches"]) == 1
+    assert report["materialization_attempt_count"] == 1
+    assert report["materialized_node_keys"] == ["worker-smoke-result"]
+    assert report["single_primary_node"] is True
+    assert report["single_worker_attempt"] is True
+    assert report["materialization_attempts"][0]["status"] == "succeeded"
     assert {item["node_key"] for item in report["terminal_receipts"]} == {"worker-smoke-result"}
     assert report["consistency"]["status"] == "passed"
     assert report["secrets_leaked"] is False
