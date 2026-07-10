@@ -163,4 +163,5 @@ process，不能影响用户自己的 Codex 会话。
 - `docs/kanban-runtime-kernel-phase4.md`：真实 compaction provider 与 fallback 边界；
 - `docs/kanban-runtime-kernel-phase4g.md`：deterministic synthetic long-run baseline；
 - `docs/kanban-runtime-kernel-phase4g1.md`：真实模型源 smoke runbook；
+- `docs/kanban-runtime-kernel-phase4g2.md`：真实 decision provider bounded loop；
 - `docs/kanban-runtime-kernel-roadmap.md`：4G1 / 4G2 / 4G3 演进顺序。

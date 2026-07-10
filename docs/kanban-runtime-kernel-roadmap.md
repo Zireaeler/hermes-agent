@@ -590,7 +590,8 @@ fallback safety 已验证，但真实 checkpoint candidate 因 provenance 缺失
 
 Phase 4G2 专门做真实 decision provider 的 bounded loop，但 worker evidence 仍使用
 synthetic receipt。目标是验证真实 provider 能在多轮 validator / ledger / gap feedback
-中保持 runtime 边界。
+中保持 runtime 边界。具体实现和验收见
+`docs/kanban-runtime-kernel-phase4g2.md`。
 
 Phase 4G3 再接真实 worker lane smoke，验证真实 provider proposal、Kanban
 materialization、真实 worker evidence 和 runtime ingest 的端到端边界。

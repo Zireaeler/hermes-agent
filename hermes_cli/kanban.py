@@ -1541,6 +1541,22 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     rt_real_smoke.add_argument("--no-fallback", action="store_true")
     rt_real_smoke.add_argument("--json", action="store_true")
 
+    rt_bounded_loop = runtime_sub.add_parser(
+        "bounded-loop",
+        help="Run a bounded real decision-provider loop with synthetic worker evidence",
+    )
+    rt_bounded_loop.add_argument("job_id")
+    rt_bounded_loop.add_argument("--model-provider", default=None)
+    rt_bounded_loop.add_argument("--model", default=None)
+    rt_bounded_loop.add_argument("--codex-config", action="store_true",
+                                 help="Use ~/.codex config.toml/auth.json model source")
+    rt_bounded_loop.add_argument("--profile", default="graph_patch_decision")
+    rt_bounded_loop.add_argument("--max-decision-ticks", type=int, default=3)
+    rt_bounded_loop.add_argument("--max-steps", type=int, default=16)
+    rt_bounded_loop.add_argument("--max-retries", type=int, default=1)
+    rt_bounded_loop.add_argument("--timeout", type=float, default=None)
+    rt_bounded_loop.add_argument("--json", action="store_true")
+
     rt_list = runtime_sub.add_parser("list", aliases=["ls"], help="List runtime jobs")
     rt_list.add_argument("--state", default=None)
     rt_list.add_argument("--limit", type=int, default=50)
@@ -2142,6 +2158,8 @@ def _dispatch_runtime(args: argparse.Namespace) -> int:
         return _cmd_runtime_soak(args)
     if sub == "real-smoke":
         return _cmd_runtime_real_smoke(args)
+    if sub == "bounded-loop":
+        return _cmd_runtime_bounded_loop(args)
     if sub == "advance":
         return _cmd_runtime_advance(args)
     if sub == "supervise":
@@ -2516,6 +2534,32 @@ def _cmd_runtime_real_smoke(args: argparse.Namespace) -> int:
         f"apply={(result.get('one_step_advance') or {}).get('patch_status') or 'skipped'} "
         f"compact={(result.get('real_compaction') or {}).get('status') or 'skipped'} "
         f"consistency={result['consistency']['status']}"
+    )
+    return 0
+
+
+def _cmd_runtime_bounded_loop(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_bounded_loop as bounded_loop
+
+    source = _runtime_model_source_from_args(args, require_for_real=True)
+    with kb.connect() as conn:
+        result = bounded_loop.run_real_provider_bounded_loop(
+            conn,
+            args.job_id,
+            provider_source=source,
+            max_decision_ticks=args.max_decision_ticks,
+            max_steps=args.max_steps,
+            profile_name=args.profile,
+            max_retries=args.max_retries,
+            timeout_seconds=args.timeout,
+        )
+    if getattr(args, "json", False):
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+    print(
+        f"Runtime bounded-loop {args.job_id}: decisions={result['decision_tick_count']} "
+        f"accepted={result['accepted_patch_count']} rejected={result['rejected_patch_count']} "
+        f"state={result['final_state']} consistency={result['consistency']['status']}"
     )
     return 0
 

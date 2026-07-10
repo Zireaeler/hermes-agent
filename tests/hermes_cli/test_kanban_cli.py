@@ -271,6 +271,14 @@ def test_run_slash_runtime_real_smoke_dry_run_json(kanban_home):
     assert payload["consistency"]["status"] == "passed"
 
 
+def test_run_slash_runtime_bounded_loop_requires_explicit_model_source(kanban_home):
+    created = json.loads(kc.run_slash("runtime create 'phase4g2 bounded loop args' --json"))
+
+    out = kc.run_slash(f"runtime bounded-loop {created['id']} --json")
+
+    assert "--provider real requires --model-provider and --model" in out
+
+
 def test_run_slash_context_output_format(kanban_home):
     out = kc.run_slash("create 'tech spec' --assignee alice --body 'write an RFC'")
     import re
