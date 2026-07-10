@@ -161,6 +161,17 @@ deterministic fallback 接管，系统不应静默认为质量正常。后续应
 `fallback_count` / `fallback_streak`，超过阈值时产生
 `compaction_quality_degraded` 或 `operator_attention_required` synthetic event。
 
+### 真实集成验证状态
+
+截至 2026-07-10，隔离真实模型源 smoke 已验证真实 compaction provider 的 transport、
+parse、checkpoint validator、deterministic fallback 和 segment rollover 路径。真实
+candidate 因 `open_goal_gaps` 缺 provenance 被 validator 拒绝，fallback 创建了 accepted
+checkpoint。
+
+因此当前只能标记“真实 compaction fallback safety 已验证”，不能标记“真实 compaction
+candidate quality 已通过”。完整脱敏记录和 L3 门槛见
+`docs/kanban-runtime-kernel-real-integration-validation.md`。
+
 ## Phase 4B: Runtime Observability / Dashboard API
 
 ### 目标

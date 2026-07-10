@@ -349,6 +349,17 @@ hermes kanban runtime real-smoke <job_id> \
 当前测试使用 fake-real provider class 覆盖 success、provider_error、validate-no-apply、
 one-step apply、real compaction smoke 和 secret redaction。默认 pytest 不触网。
 
+### 当前真实运行状态
+
+2026-07-10 已在隔离 `HERMES_HOME` 使用当前 `.codex` 模型源完成一次真实 smoke：
+decision execute 的 validator dry-run accepted；one-step apply 经一次 schema rejection
+后 accepted；real compaction candidate 被 provenance validator 拒绝后安全 fallback。
+最终 consistency passed，隔离 DB credential scan passed。
+
+这次运行说明 4G1 的真实调用边界可用，但 real compaction candidate quality 尚未通过。
+完整脱敏事实、矩阵和 4G2 进入门槛见
+`docs/kanban-runtime-kernel-real-integration-validation.md`。
+
 ## 11. 与后续阶段的关系
 
 Phase 4G1 通过后，再进入：

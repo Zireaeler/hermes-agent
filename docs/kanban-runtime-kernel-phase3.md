@@ -409,3 +409,13 @@ Phase 3 第一批完成必须满足：
 第十一，AGENTS.md 必须把 Phase 3 provider substrate 复用边界、no-tools/single-shot 和 no-live-network unit test 约束写成实现约束。
 
 Phase 3 第一批结束后，runtime 才适合进入真实 long-running autonomous task loop。否则真实模型接入会放大隐式上下文、不可审计 prompt 和失败不可恢复的问题。
+
+## 真实集成验证状态
+
+截至 2026-07-10，隔离真实模型源验证已确认：`--codex-config` 的 real decision
+execute 可 parsed 且 validator dry-run accepted；production one-step apply 经过一次
+validator rejection 后成功 apply，并保留完整 decision / patch audit。
+
+这只证明当前 provider/model 能通过单次 decision runtime boundary，不等于多轮真实
+provider loop 或真实 worker 已验证。脱敏运行证据、通过门槛和后续场景见
+`docs/kanban-runtime-kernel-real-integration-validation.md`。
