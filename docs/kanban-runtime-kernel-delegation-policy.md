@@ -1,0 +1,265 @@
+# Hermes Kanban Runtime Kernel Worker Delegation Policy
+
+## 1. 目的
+
+本文定义 Hermes Runtime Kernel 的 worker 委派与 execution graph 扩展原则。
+
+它解决的不是“如何把计划拆得更细”，而是“何时值得创建 durable runtime node”。默认目标是
+在不损害安全、可恢复性、独立验证和证据充分性的前提下，使用最少必要的 runtime node
+完成当前 goal gap。
+
+本文是 `docs/kanban-runtime-kernel-design.md` 的补充约束。若本文与早期
+`analysis -> implementation -> verification` fixture 表述冲突，以本文为准；该 fixture
+只能用于 deterministic 测试，不能成为生产默认 workflow。
+
+## 2. 核心规则
+
+任何能够由一个具备适当能力的 Codex、Claude Code 或其他 worker 的连续 session
+可靠完成的工作，默认都应是一个 execution node。
+
+一个 node 表示一项完整、可验收、可恢复的工作责任，而不是：
+
+- 一个开发阶段；
+- 一个角色；
+- 一个文件；
+- 一次工具调用；
+- 一次模型调用；
+- 一个传统项目计划步骤。
+
+一个 primary worker node 可以包含共享同一 workspace、同一责任和同一验收边界的：
+
+- inspection；
+- local research；
+- local planning；
+- implementation；
+- testing；
+- debugging；
+- local verification。
+
+例如，实现并验证 OAuth 登录通常应是一个 node，而不是按 `inspect`、`research`、
+`design`、`backend`、`frontend`、`test`、`fix` 切分为多个 runtime worker。
+
+## 3. Decision Provider 的职责
+
+Decision Provider 是结构升级控制器，不是传统任务拆分器。
+
+它的优化目标是最小化：
+
+- runtime worker 数量；
+- workspace/context 的重复获取；
+- worker handoff 数量；
+- 重叠的 workspace ownership；
+- graph coordination 和 decision round 成本；
+- 不必要的 materialization、receipt 和恢复边界。
+
+同时必须满足：
+
+- capability 和 human authorization 边界；
+- goal evidence 的充分性；
+- terminal fact 的可恢复性；
+- 必要的独立验证；
+- 有真实收益的 durable 并行。
+
+当不确定是否拆分时，默认不拆分。先创建一个足够完整的 primary node，让 worker 的
+执行证据暴露实际边界；不能根据抽象阶段名称预先制造 graph。
+
+Decision Provider 只能输出 graph patch proposal。它不能直接创建 task、启动 worker、
+改变 readiness、完成 job、授予 capability 或覆盖本地 validator。
+
+## 4. 默认执行图
+
+初始执行图应倾向一个 primary execution node：
+
+```text
+Goal Contract
+      |
+      v
+Primary Worker Node
+      |
+      v
+terminal evidence / structural receipt
+```
+
+初始 node 的目标应描述完整交付责任，例如：
+
+```text
+在当前仓库实现并验证 OAuth 登录，包括必要接口、前端接入、错误处理、
+测试和本地验证；不部署生产环境。
+```
+
+node contract 应能够表达：目标关联、workspace scope、允许能力、成功 evidence、验证要求、
+禁止边界和最终 receipt，而不是列出强制执行步骤。
+
+一个 node 不等于黑盒。worker 应持续写入 heartbeat、progress、artifact、test result、
+checkpoint 或 blocker event，供 Kanban lifecycle、recovery 和 observability 使用。这些局部
+事件不应自动触发 Decision Provider 重规划。
+
+## 5. 允许创建额外 Runtime Node 的条件
+
+创建多个 durable runtime node 时，至少必须存在下列一种结构性理由。
+
+### 5.1 `independent_verification`
+
+需要不继承实现者假设的独立验证，例如安全审计、兼容性验证或高风险验证。此类 verifier
+应具有独立责任与 evidence，不应仅作为 implementation worker 的内部 subagent。
+
+### 5.2 `capability_boundary`
+
+工作需要不同权限、凭证或安全 profile，例如普通代码修改与带凭证的部署验证。上下文复用
+不能覆盖 capability policy。
+
+### 5.3 `human_authority_boundary`
+
+工作跨越产品选择、费用、凭证、破坏性操作或其他合法 human gate。
+
+### 5.4 `workspace_isolation`
+
+需要独立 worktree、互斥写范围或不应共享未验证 workspace 状态。
+
+### 5.5 `durable_parallelism`
+
+多个工作输出低耦合、写范围不重叠、集成边界明确，且并行收益超过 context acquisition 和
+协调成本。仅仅“理论上可以并行”不是理由。
+
+### 5.6 `context_or_runtime_limit`
+
+单个 worker 的可靠 session、时间、恢复或失败重做边界已被证据证明不足。
+
+### 5.7 `distinct_deliverables`
+
+存在可独立验收、可独立恢复且不共享主要上下文的多个交付责任。
+
+### 5.8 `execution_discovered_gap`
+
+worker execution receipt 发现其无法继续覆盖的 gap，例如缺少受限凭证、外部契约不明或
+需要独立 verifier。此时由 Decision Provider 根据已入库 evidence 扩展 graph。
+
+以下理由无效：`different_phase`、`different_role`、`cleaner_plan`、`task_is_complex`、
+`could_be_parallelized`。
+
+## 6. Worker 内部 Subagent
+
+Worker 不得创建 durable runtime node，也不得直接修改 execution graph。
+
+若 backend 自身支持，worker 可以在 node 内使用 ephemeral internal subagent，例如并行
+阅读局部代码、搜索文档或分析测试失败。Kernel 只看到一个 node、一个 capability envelope
+和一个最终 accountable parent worker。
+
+internal subagent 必须：
+
+- 不进入 execution graph；
+- 不拥有独立 lease、goal completion 或 durable recovery 权限；
+- 不得扩大父 worker capability、workspace scope 或 credential access；
+- 不得申请 capability 或 human authorization；
+- 由父 worker 整合结果并对最终 receipt 负责；
+- 不得替代需要独立验证、权限隔离、长期并行或独立审计的 runtime node。
+
+是否支持 internal subagent、并发上限和内部 context compaction 由 backend 决定。当前
+Runtime Kernel 不管理 worker 内部 subagent 生命周期，也不能把该能力假定为所有 Codex/CC
+lane 的既有事实。
+
+## 7. 结构升级 Receipt
+
+worker receipt 后续应支持可选结构升级字段：
+
+```json
+{
+  "needs_structure": true,
+  "completed_scope": ["repository inspected", "authentication flow understood"],
+  "discovered_gaps": [
+    {
+      "description": "身份提供方契约需要 staging credential 验证",
+      "reason_separate_node_needed": "capability_boundary"
+    }
+  ],
+  "recommended_structure": [
+    {
+      "reason": "capability_boundary",
+      "objective": "使用 staging credential 验证身份提供方契约"
+    }
+  ]
+}
+```
+
+这些字段是 evidence，不是 graph mutation 指令。Runtime ingest 将其持久化；Decision Provider
+只在后续结构事件中读取它们并提出 patch；validator 仍决定 patch 是否可落库。
+
+## 8. Graph Patch Decomposition Contract
+
+当一个 patch 创建多个 execution node，或创建与当前 primary responsibility 平行的 node 时，
+后续 patch schema 应增加可选但受策略要求的 `decomposition`：
+
+```json
+{
+  "mode": "multiple_runtime_nodes",
+  "justifications": [
+    {
+      "type": "independent_verification",
+      "nodes": ["implementation", "security-verifier"],
+      "explanation": "验证不得继承实现者的安全假设"
+    }
+  ]
+}
+```
+
+Validator 的可检查职责包括：
+
+- 多 node patch 是否存在允许的理由枚举；
+- 理由引用的 node 是否存在于同一 patch 或当前 graph；
+- 并行写 node 是否声明重叠 scope；
+- verifier 是否具有可追溯的 implementation target；
+- 初始 patch 是否超过 primary execution node 预算；
+- node 是否仍关联 goal/gap/human reason、outcome 与验证预期。
+
+Validator 不应伪装为语义工作量评估器。它不能证明单一 worker 一定能完成工作，只能拒绝
+无结构理由、无目标关联或明显违反隔离约束的 graph expansion。
+
+## 9. Decision Provider 调用时机
+
+Decision Provider 应低频处理结构事件，而非 worker 的局部步骤。典型触发点：
+
+- job 初始化；
+- worker terminal receipt；
+- worker `needs_structure`；
+- capability/human authorization 变化；
+- independent verifier 失败；
+- anti-stuck 或重复失败；
+- goal gap 没有 active coverage；
+- 用户目标变更。
+
+正常路径应是：
+
+```text
+Decision Provider
+      |
+      v
+Primary Worker Session
+      |
+      v
+local execution loop, events, tests, debugging
+      |
+      v
+terminal or structural receipt
+      |
+      v
+Decision Provider when structure is needed
+```
+
+不是每一个 local action 后都执行 `Decision -> Worker -> Decision`。
+
+## 10. 当前实现与后续计划
+
+当前 Runtime Kernel 已具备 DB-authoritative graph、goal/ledger completion、local validator、
+worker receipt、capability policy、真实 provider 和真实 worker smoke。它尚未实现本文要求的：
+
+- primary-node-first initial graph policy；
+- `decomposition` patch schema 与 validator；
+- `needs_structure` receipt 字段的持久化和 provider request projection；
+- node-level write scope / acceptance criteria 的统一 schema；
+- backend internal subagent policy 下发或观测；
+- persistent worker session checkpoint 与跨 session resume。
+
+这些应作为一个独立后续阶段实现，不能仅通过 prompt 文本声称已完成。实施顺序建议为：先将
+policy 进入 Decision Provider stable prefix 和 deterministic eval；再扩展 patch/receipt schema
+与 validator；最后验证真实 worker 在大 primary node 的连续执行和 evidence-driven graph
+expansion。

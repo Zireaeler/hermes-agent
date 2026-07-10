@@ -41,6 +41,9 @@ Execution graph 表示当前为了完成目标而生成的工作结构。
 
 Node type 只表示执行意图，例如 `analysis`、`implementation`、`verification`、`debug`、`research`、`human_gate`。
 
+Runtime node 的默认粒度、结构升级理由和 worker internal subagent 边界以
+`docs/kanban-runtime-kernel-delegation-policy.md` 为准。
+
 ### 2.3 Worker 不是 Manager
 
 Codex、Claude Code 或其他 worker 是 execution unit。

@@ -23,6 +23,15 @@ When working on branch `feature-kanban-runtime-kernel`, treat
 background reading. If implementation details conflict with those documents,
 update the relevant design document first or stop and ask for direction.
 
+`docs/kanban-runtime-kernel-delegation-policy.md` is also binding. Default to
+one coherent primary execution node for work a capable continuous worker
+session can complete. Do not decompose by role, phase, file, or local tool
+step; durable graph expansion requires a documented structural reason such as
+independent verification, capability boundary, workspace isolation, durable
+parallelism, context/runtime limit, distinct deliverables, or execution-
+discovered gap. Workers may not create durable runtime nodes, though a backend
+may use ephemeral internal subagents within its inherited capability envelope.
+
 Runtime kernel design and roadmap documents must use Chinese as the normative
 narrative language. English is acceptable for stable technical names such as
 function names, class names, schema fields, event_type values, CLI commands,
