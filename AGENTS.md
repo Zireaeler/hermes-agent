@@ -19,7 +19,8 @@ When working on branch `feature-kanban-runtime-kernel`, treat
 `docs/kanban-runtime-kernel-phase4.md` and
 `docs/kanban-runtime-kernel-phase4e.md` and
 `docs/kanban-runtime-kernel-phase4f.md` and
-`docs/kanban-runtime-kernel-phase4g0.md` as binding design constraints, not
+`docs/kanban-runtime-kernel-phase4g0.md` and
+`docs/kanban-runtime-kernel-phase4g7.md` as binding design constraints, not
 background reading. If implementation details conflict with those documents,
 update the relevant design document first or stop and ask for direction.
 
@@ -165,6 +166,15 @@ not be injected by default, accepted memory must be scope-filtered, deprecated
 memory must not be injected, and memory hints must never affect readiness,
 completion, blocked state, capability policy, worker recovery, or graph patch
 validation.
+
+Phase 4G7 is the packaged runtime supervisor daemon stage. The daemon must
+wrap the existing production supervisor tick and per-job DB lease; it must not
+duplicate reducers or keep correctness-required job state in process memory,
+PID files, health state, or operational state files. Each process start must
+use a unique lease owner, real providers must remain explicit and bounded by a
+timeout smaller than the configured lease TTL, health endpoints must be
+loopback-only and read-only, and restart/crash takeover must preserve
+materialization and decision idempotency.
 
 For this branch, do not routinely rebase `main`, and do not restore the old
 oversized session `019e497b-56e0-7bb0-a357-0db06954ae4d` as implementation

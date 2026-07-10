@@ -1,0 +1,17 @@
+[Unit]
+Description=Hermes Kanban Runtime Kernel supervisor
+Documentation=https://github.com/NousResearch/hermes-agent
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env hermes kanban runtime daemon --interval 5 --limit 10 --lock-ttl 60 --health-host 127.0.0.1 --health-port 8791 --pidfile %t/hermes-kanban-runtime-supervisor.pid --state-file %t/hermes-kanban-runtime-supervisor.json
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=90
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

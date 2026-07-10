@@ -221,6 +221,7 @@ plugins = [
   "*/dashboard/manifest.json",
   "*/dashboard/dist/*",
   "*/dashboard/dist/**/*",
+  "*/systemd/*.service",
 ]
 
 [tool.setuptools.packages.find]

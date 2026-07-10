@@ -1655,6 +1655,34 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     rt_supervise.add_argument("--timeout", type=float, default=None)
     rt_supervise.add_argument("--json", action="store_true")
 
+    rt_daemon = runtime_sub.add_parser(
+        "daemon",
+        help="Run the packaged runtime supervisor daemon",
+    )
+    rt_daemon.add_argument("--interval", type=float, default=5.0)
+    rt_daemon.add_argument("--limit", type=int, default=10)
+    rt_daemon.add_argument("--lock-ttl", type=int, default=60)
+    rt_daemon.add_argument("--max-consecutive-errors", type=int, default=5)
+    rt_daemon.add_argument("--error-backoff-max", type=float, default=60.0)
+    rt_daemon.add_argument("--max-polls", type=int, default=0,
+                           help="Stop after this many poll attempts; 0 runs until signalled")
+    rt_daemon.add_argument("--pidfile", default=None)
+    rt_daemon.add_argument("--state-file", default=None)
+    rt_daemon.add_argument("--health-host", default="127.0.0.1")
+    rt_daemon.add_argument("--health-port", type=int, default=None)
+    rt_daemon.add_argument("--readiness-timeout", type=float, default=None)
+    rt_daemon.add_argument("--no-create-tasks", action="store_true")
+    rt_daemon.add_argument("--provider", choices=["none", "fake", "real"], default="none",
+                           help="Decision provider mode used during supervisor ticks")
+    rt_daemon.add_argument("--model-provider", default=None)
+    rt_daemon.add_argument("--model", default=None)
+    rt_daemon.add_argument("--codex-config", action="store_true")
+    rt_daemon.add_argument("--profile", default="graph_patch_decision")
+    rt_daemon.add_argument("--max-retries", type=int, default=1)
+    rt_daemon.add_argument("--timeout", type=float, default=None)
+    rt_daemon.add_argument("--verbose", action="store_true")
+    rt_daemon.add_argument("--json", action="store_true")
+
     rt_complete_node = runtime_sub.add_parser(
         "complete-node",
         help="Complete the latest materialized Kanban task for a runtime node with structured evidence",
@@ -2224,6 +2252,8 @@ def _dispatch_runtime(args: argparse.Namespace) -> int:
         return _cmd_runtime_advance(args)
     if sub == "supervise":
         return _cmd_runtime_supervise(args)
+    if sub == "daemon":
+        return _cmd_runtime_daemon(args)
     if sub == "complete-node":
         return _cmd_runtime_complete_node(args)
     if sub == "waive-goal":
@@ -2829,6 +2859,80 @@ def _cmd_runtime_supervise(args: argparse.Namespace) -> int:
     else:
         print(f"Supervisor tick {result['job_id']}: {result['status']} ({result.get('reason') or 'ok'})")
     return 0
+
+
+def _cmd_runtime_daemon(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_supervisor as rs
+
+    try:
+        provider = _runtime_decision_provider_from_args(args)
+        if getattr(args, "provider", "none") == "real":
+            timeout = getattr(args, "timeout", None)
+            if timeout is None or timeout <= 0:
+                raise ValueError("runtime daemon with --provider real requires a positive --timeout")
+            retries = max(0, int(getattr(args, "max_retries", 1)))
+            margin = max(5.0, float(getattr(args, "interval", 5.0)))
+            required_ttl = timeout * (retries + 1) + margin
+            if int(getattr(args, "lock_ttl", 60)) <= required_ttl:
+                raise ValueError(
+                    "--lock-ttl must exceed the real provider timeout across all retries "
+                    f"plus reducer margin ({required_ttl:.1f}s)"
+                )
+        board = kb.get_current_board()
+        config = rs.RuntimeSupervisorDaemonConfig(
+            board=board,
+            interval_seconds=getattr(args, "interval", 5.0),
+            limit=getattr(args, "limit", 10),
+            lock_ttl_seconds=getattr(args, "lock_ttl", 60),
+            create_tasks=not getattr(args, "no_create_tasks", False),
+            max_consecutive_errors=getattr(args, "max_consecutive_errors", 5),
+            error_backoff_max_seconds=getattr(args, "error_backoff_max", 60.0),
+            max_polls=getattr(args, "max_polls", 0),
+            pidfile=Path(args.pidfile).expanduser() if getattr(args, "pidfile", None) else None,
+            state_file=Path(args.state_file).expanduser() if getattr(args, "state_file", None) else None,
+            health_host=getattr(args, "health_host", "127.0.0.1"),
+            health_port=getattr(args, "health_port", None),
+            readiness_timeout_seconds=getattr(args, "readiness_timeout", None),
+        )
+
+        def on_poll(result: dict[str, Any]) -> None:
+            if not getattr(args, "verbose", False):
+                return
+            print(
+                "runtime supervisor poll: "
+                f"jobs={int(result.get('job_count') or 0)} "
+                f"advanced={int(result.get('advanced_count') or 0)}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+        pidfile, state_file = rs.default_runtime_supervisor_paths(board)
+        if not getattr(args, "json", False):
+            print(
+                "Runtime supervisor daemon starting "
+                f"(board={board}, interval={config.interval_seconds}s, "
+                f"pidfile={config.pidfile or pidfile}, state={config.state_file or state_file}).",
+                file=sys.stderr,
+                flush=True,
+            )
+        report = rs.run_runtime_supervisor_daemon(
+            config,
+            decision_provider=provider,
+            on_poll=on_poll,
+        )
+    except (ValueError, OSError, rs.SupervisorAlreadyRunningError) as exc:
+        print(f"kanban runtime daemon: {exc}", file=sys.stderr)
+        return 2
+
+    if getattr(args, "json", False):
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+    else:
+        print(
+            f"Runtime supervisor daemon stopped ({report['exit_reason']}, "
+            f"polls={report['state']['poll_count']}).",
+            file=sys.stderr,
+        )
+    return 1 if report["status"] == "failed" else 0
 
 
 def _cmd_runtime_complete_node(args: argparse.Namespace) -> int:

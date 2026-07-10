@@ -688,7 +688,7 @@ Phase 4G5 real compaction candidate L3 quality
 Phase 4G6 active long-run and real compaction multi-cycle soak
       |
       v
-Packaged supervisor daemon/service
+Phase 4G7 packaged supervisor daemon/service
       |
       v
 Phase 4H dashboard runtime UI
@@ -700,7 +700,8 @@ Phase 4 MVP 已经补齐 runtime 的核心生产化边界，但还没有完整�
 
 dashboard/API 已有读面，但还没有前端 UI。
 
-supervisor tick 和 lease 已有，但还不是 packaged daemon。
+Phase 4G7 已把 supervisor tick 和 lease 包装成 packaged daemon，并补齐 graceful shutdown、
+PID/state、loopback health/readiness、systemd packaging 和 restart idempotency soak。
 
 compaction provider 边界、真实 fallback safety、单次 candidate L3 和三轮真实 no-fallback
 compaction 均已验证；更长时间、多 provider 和真实 worker 组合 soak 仍属于 production final
@@ -720,5 +721,15 @@ materialization、Kanban task/run、receipt、node state 和 progress ledger 之
 状态脏、supervisor recovery 有 bug、compaction 降级，还是模型决策差。
 
 Phase 4G6 已完成 50+ active tick 的 synthetic long-run baseline，不再使用 terminal no-op
-充数。Production complete 前的下一项工程重点是把 supervisor tick/lease 包装成可部署 daemon
-或 service，并保留更长时间真实 worker soak 作为发布门槛。
+充数。Phase 4G7 已完成可部署 daemon/service baseline；下一项产品工程重点进入 Phase 4H
+Dashboard Runtime UI，并保留更长时间真实 worker soak 作为 production final 发布门槛。
+
+Phase 4G7 负责把该重点落成 packaged runtime supervisor daemon：复用现有 production tick
+和 per-job DB lease，增加 bounded polling、graceful shutdown、每进程唯一 owner、PID/state、
+loopback health/readiness、systemd user service 和 restart idempotency soak。Daemon 的内存与
+state 文件只属于运维面，不得成为 runtime correctness 或恢复所需的事实源。
+
+2026-07-11，Phase 4G7 MVP 已完成。隔离三进程 restart soak 证明每次启动 owner 唯一、过期
+lease 可接管，最终仅有 1 个 applied patch、1 个 decision 和 1 个 materialization，consistency
+为 0 violations / 0 warnings。默认离线 Runtime/CLI 回归为 263 passed，Runtime observability
+API 定向测试为 1 passed。
