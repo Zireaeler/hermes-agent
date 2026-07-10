@@ -127,3 +127,23 @@ Phase 4G2 成功后，再进入 Phase 4G3：真实 worker lane smoke。
 Phase 4G3 必须把 synthetic receipt 替换为由 Kanban 启动的真实 worker receipt，并验证
 node -> task -> run -> evidence -> runtime ingest 的端到端路径。Phase 4G2 的通过不能替代
 这个验证。
+
+## 8. 当前真实验证结果
+
+2026-07-10 已在一次性隔离 `HERMES_HOME` 中完成一轮 L4 验证，运行代码为
+`17df67a feat(kanban): add real provider bounded loop`。当前 `.codex` 模型源仅被读取，
+未启动真实 worker lane。
+
+脱敏模型标识为 `codex:MySub2api` / `gpt-5.6-terra`。在进入 bounded loop 前，独立 G1
+repeat 的 decision execute 解析成功但 validator 拒绝；one-step apply 也被拒绝，graph
+revision 保持不变。这证明真实模型输出仍只能作为 proposal，不能绕过 validator。
+
+随后 G2 bounded loop 完成 3 个真实 decision tick：2 个 patch 被 apply、1 个 patch 被
+拒绝；两个 synthetic receipt 按 `failed -> succeeded` 经 Kanban task 和 runtime ingest
+进入 ledger，job 最终 `done`。最终 consistency 为 `passed`，0 violations、0 warnings；
+report 和全隔离 DB credential scan 均未发现 API key。
+
+本结果证明 L4 的 transport、parser、validator、patch audit、synthetic evidence ingest 和
+ledger completion 路径可以协同工作。它不构成真实 worker lane 的 L5 证据，也不改变真实
+compaction candidate 仍缺 provenance、尚未达到 L3 的结论。完整脱敏台账见
+`docs/kanban-runtime-kernel-real-integration-validation.md`。

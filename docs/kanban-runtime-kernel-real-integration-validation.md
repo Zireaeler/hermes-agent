@@ -72,7 +72,7 @@ hermes kanban runtime real-smoke <job_id> --compact --codex-config --json
 | real decision one-step apply | Phase 3B / 4G1 | 已验证 | patch 只能经 validator apply/reject；完整 audit | 通过，包含一次 rejected 和一次 applied |
 | real compaction transport + fallback | Phase 4A / 4G1 | 已验证 | candidate 经 validator；拒绝不污染 active segment；fallback 可审计 | 通过 |
 | real compaction candidate quality | Phase 4A / 4G1 | 未通过 | 至少一次真实 candidate 无 fallback 通过 checkpoint validator | 未通过，当前 candidate 缺 provenance |
-| real provider bounded loop | Phase 4G2 | 未开始 | 3-5 decision ticks + synthetic worker evidence + consistency passed | 未开始 |
+| real provider bounded loop | Phase 4G2 | 已验证 | 3-5 decision ticks + synthetic worker evidence + consistency passed | 通过：3 ticks、2 applied、1 rejected、synthetic receipt `failed -> succeeded`、最终 done |
 | real worker lane smoke | Phase 4G3 | 未开始 | 真实 worker receipt 进入 runtime ingest，端到端 consistency passed | 未开始 |
 
 “real compaction transport + fallback 通过”不等于“真实 compaction 质量通过”。如果模型
@@ -104,6 +104,31 @@ lane。
 本次结果证明真实模型源可通过 decision 和 compaction 的 runtime 边界，但不证明真实
 checkpoint candidate 已具备稳定质量。compaction provenance 是当前最明确的模型输出质量
 缺口。
+
+### 2026-07-10 Phase 4G1 repeat 与 Phase 4G2 isolated bounded loop
+
+运行代码：`17df67a feat(kanban): add real provider bounded loop`
+
+环境：新的隔离 `HERMES_HOME` 和 Kanban DB；当前 `.codex` 模型源只读；未启动真实 worker
+lane。
+
+脱敏模型标识：`codex:MySub2api` / `gpt-5.6-terra`。
+
+结果：
+
+| 步骤 | 结果 | 事实 |
+| --- | --- | --- |
+| G1 repeat decision execute | 安全拒绝 | response parsed；validator dry-run rejected；未 apply，consistency passed |
+| G1 repeat one-step apply | 安全拒绝 | response 只经 production advance；patch rejected；graph revision 保持 0，consistency passed |
+| G2 bounded loop | 通过 | 3 个真实 decision tick；2 个 patch applied、1 个 rejected；每次图变更均经过 parser、validator 和 patch audit |
+| synthetic evidence | 通过 | 两个 synthetic receipt 按 `failed -> succeeded` 经 Kanban task / runtime ingest 写入 ledger；不是真实 worker evidence |
+| final state | 通过 | required goal 由 ledger 满足，job 为 `done` |
+| consistency | 通过 | 0 violations、0 warnings |
+| credential scan | 通过 | report 和完整隔离 DB 均未发现 API key |
+
+本次 L4 证明多轮真实 decision provider 与 synthetic evidence 的 runtime 闭环可用，并同时
+保留 rejected patch 的审计事实。它不证明真实 worker lane L5，也不证明真实 compaction
+candidate quality L3；后者仍受 `open_goal_gaps` provenance 缺失限制。
 
 ## 6. 结果记录模板
 
