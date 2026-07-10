@@ -1560,6 +1560,37 @@ def test_runtime_materialized_task_dispatch_and_ingest_fixture_lane(conn, monkey
     assert rk.status_runtime_job(conn, job_id)["job"]["state"] == "done"
 
 
+def test_materialization_uses_job_default_worker_lane_when_node_is_unassigned(conn):
+    root = kb.create_task(conn, title="default lane root", initial_status="running")
+    job_id = rk.create_runtime_job(
+        conn,
+        root,
+        "default lane materialization",
+        initial_assignee="runtime-default",
+        goal_items=[{"item_key": "runtime-result", "description": "result", "required": True}],
+    )
+    assert rk.apply_graph_patch(
+        conn,
+        job_id,
+        _patch(
+            job_id,
+            _revision(conn, job_id),
+            {
+                "op": "create_node",
+                "node_key": "unassigned-followup",
+                "node_type": "implementation",
+                "title": "Unassigned follow-up",
+                "description": "Uses the job execution default.",
+                "goal_item_keys": ["runtime-result"],
+            },
+        ),
+    )["status"] == "applied"
+    node = _node(conn, job_id, "unassigned-followup")
+    assert rk.materialize_runtime_node(conn, dict(node))
+    node = _node(conn, job_id, "unassigned-followup")
+    assert node["assignee"] == "runtime-default"
+
+
 def test_codex_runtime_receipt_is_required_for_runtime_goal_evidence(conn):
     job_id = _job(conn)
     rk.advance_runtime_job(conn, job_id, create_tasks=True)

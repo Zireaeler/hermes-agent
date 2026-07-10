@@ -73,7 +73,7 @@ hermes kanban runtime real-smoke <job_id> --compact --codex-config --json
 | real compaction transport + fallback | Phase 4A / 4G1 | 已验证 | candidate 经 validator；拒绝不污染 active segment；fallback 可审计 | 通过 |
 | real compaction candidate quality | Phase 4A / 4G1 | 未通过 | 至少一次真实 candidate 无 fallback 通过 checkpoint validator | 未通过，当前 candidate 缺 provenance |
 | real provider bounded loop | Phase 4G2 | 已验证 | 3-5 decision ticks + synthetic worker evidence + consistency passed | 通过：3 ticks、2 applied、1 rejected、synthetic receipt `failed -> succeeded`、最终 done |
-| real worker lane smoke | Phase 4G3 | 未开始 | 真实 worker receipt 进入 runtime ingest，端到端 consistency passed | 未开始 |
+| real worker lane smoke | Phase 4G3 | 已验证 | 真实 worker receipt 进入 runtime ingest，端到端 consistency passed | 通过：两个 dispatcher-started Codex worker receipt 写入 verified ledger，job done |
 
 “real compaction transport + fallback 通过”不等于“真实 compaction 质量通过”。如果模型
 candidate 被 validator 拒绝，fallback 成功只能证明安全边界和恢复路径正确。
@@ -129,6 +129,32 @@ lane。
 本次 L4 证明多轮真实 decision provider 与 synthetic evidence 的 runtime 闭环可用，并同时
 保留 rejected patch 的审计事实。它不证明真实 worker lane L5，也不证明真实 compaction
 candidate quality L3；后者仍受 `open_goal_gaps` provenance 缺失限制。
+
+### 2026-07-10 Phase 4G3 isolated real worker lane smoke
+
+运行代码：`70a422c feat(kanban): add runtime worker lane smoke`，并包含默认 worker lane
+materialization 修复。
+
+环境：新的隔离 `HERMES_HOME`、Kanban DB 和 Git workspace；当前 `.codex` 模型源只读；
+专属 `codex-runtime-smoke` lane 的 `max_concurrency=1`。
+
+脱敏模型标识：`codex:MySub2api` / `gpt-5.6-terra`。
+
+结果：
+
+| 步骤 | 结果 | 事实 |
+| --- | --- | --- |
+| initial worker node | 通过 | dispatcher 启动 Hermes Codex worker wrapper；`understand-scope` receipt 经 parser/ingest 满足 `scope-understood` |
+| real decision proposal | 通过 | provider patch 经 validator apply，创建 goal-linked `worker-smoke-result` node |
+| default worker lane | 通过 | proposal 未显式 assignee 时，materialization 使用 job 保存的 `codex-runtime-smoke` 默认 lane；lane/capability 检查仍生效 |
+| implementation worker node | 通过 | dispatcher 启动第二个真实 worker；receipt 声明并本地字节验证 `runtime_worker_smoke.txt` |
+| ledger / completion | 通过 | 两个 required goal item 均为 full + verified，job 为 `done` |
+| consistency | 通过 | 0 violations、0 warnings |
+| credential scan | 通过 | 完整隔离 DB 未发现 API key |
+
+本次 L5 证明单 worker 的真实 provider -> validator -> materialization -> dispatcher ->
+Codex wrapper -> runtime receipt -> ingest -> ledger 路径可用。它不证明多 worker 并发、
+review/test workflow、worker crash long-run recovery 或真实 compaction candidate quality。
 
 ## 6. 结果记录模板
 

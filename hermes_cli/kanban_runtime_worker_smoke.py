@@ -75,7 +75,10 @@ def run_real_worker_lane_smoke(
         materialized: list[str] = []
         unassigned: list[str] = []
         for node in ready:
-            if node.get("assignee") != lane_name:
+            # An absent assignee may be filled by the job's local default lane
+            # inside materialize_runtime_node(). Only an explicit different
+            # lane is outside this smoke run's ownership.
+            if node.get("assignee") and node["assignee"] != lane_name:
                 unassigned.append(node["node_key"])
                 continue
             if rk.materialize_runtime_node(conn, node):

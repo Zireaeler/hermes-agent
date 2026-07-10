@@ -1154,9 +1154,18 @@ def create_runtime_job(
             id, root_task_id, board, state, objective, workspace_path,
             decision_profile, active_milestone_key, graph_revision,
             metadata_json, created_at, updated_at
-        ) VALUES (?, ?, ?, 'active', ?, ?, 'fixture', NULL, 0, '{}', ?, ?)
+        ) VALUES (?, ?, ?, 'active', ?, ?, 'fixture', NULL, 0, ?, ?, ?)
         """,
-        (job_id, root_task_id, board, objective.strip(), workspace_path, now, now),
+        (
+            job_id,
+            root_task_id,
+            board,
+            objective.strip(),
+            workspace_path,
+            _json({"default_worker_lane": initial_assignee} if initial_assignee else {}),
+            now,
+            now,
+        ),
     )
     conn.execute(
         """
@@ -3977,6 +3986,14 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
     if existing:
         return str(existing["task_id"])
     job = _job(conn, node["job_id"])
+    job_metadata = _loads(job.get("metadata_json"))
+    assignee = node.get("assignee") or job_metadata.get("default_worker_lane")
+    if assignee and not node.get("assignee"):
+        conn.execute(
+            "UPDATE execution_nodes SET assignee = ?, updated_at = ? WHERE id = ?",
+            (assignee, _now(), node["id"]),
+        )
+        node["assignee"] = assignee
     evaluation = evaluate_node_capability_policy(conn, job["id"], node)
     _store_node_capability_evaluation(conn, node, evaluation)
     metadata = _loads(node.get("metadata_json"))
@@ -4067,7 +4084,7 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
         conn,
         title=f"[runtime] {node['title']}",
         body=body,
-        assignee=node.get("assignee"),
+        assignee=assignee,
         created_by="runtime_kernel",
         workspace_kind="worktree" if job.get("workspace_path") else "scratch",
         workspace_path=job.get("workspace_path"),
@@ -4086,7 +4103,7 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
             status, created_at, started_at, metadata_json
         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, '{}')
         """,
-        (materialization_id, job["id"], node["id"], attempt, task_id, run_id, node.get("assignee"), now, now),
+        (materialization_id, job["id"], node["id"], attempt, task_id, run_id, assignee, now, now),
     )
     conn.execute(
         """

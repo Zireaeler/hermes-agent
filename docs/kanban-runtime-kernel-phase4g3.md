@@ -144,3 +144,21 @@ Phase 4G3 MVP 完成时：
 
 G3 通过只证明单 worker 的真实端到端边界，不证明多 worker、review/test 交接或长期恢复。
 后续 worker long-run/soak 应在本阶段的 receipt contract 和隔离规则之上扩展。
+
+## 8. 当前真实验证结果
+
+2026-07-10 已在新的隔离 `HERMES_HOME`、独立 Git workspace 和专属
+`codex-runtime-smoke` lane 中完成 L5。运行使用当前 `.codex` 模型源，只启动由该
+smoke task materialize 后经 dispatcher 创建的 Codex worker wrapper。
+
+第一个真实 worker 返回 `scope-understood` 的 `runtime_worker_receipt_v1`；真实 decision
+provider 的 proposal 经 validator apply 后创建 `worker-smoke-result`。provider 没有显式
+填写 assignee 时，materialization 使用 job 创建时保存的默认 worker lane，仍经过 lane 与
+capability 检查。第二个真实 worker 在隔离 workspace 写入并验证
+`runtime_worker_smoke.txt`，其 receipt 满足 `worker-smoke-result`。
+
+最终两个 node 均为 `succeeded`，required goal items 均由 verified ledger evidence 满足，job
+为 `done`；consistency 为 `passed`，0 violations、0 warnings；完整隔离 DB credential scan
+通过。此结果是单 worker L5 smoke，不等价于多 worker 长任务、review/test 交接或真实
+compaction quality 的生产验证。完整脱敏记录见
+`docs/kanban-runtime-kernel-real-integration-validation.md`。
