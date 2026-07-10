@@ -349,6 +349,10 @@ hermes kanban runtime real-smoke <job_id> \
 当前测试使用 fake-real provider class 覆盖 success、provider_error、validate-no-apply、
 one-step apply、real compaction smoke 和 secret redaction。默认 pytest 不触网。
 
+`decision_execute.delegation` 只输出脱敏结构指标，包括 operation type、execution node 数、
+immediate node 数、typed contract 覆盖和 decomposition reason。它不输出 provider-authored
+node 文本或 raw response，用于验证 delegation policy 的真实模型行为。
+
 ### 当前真实运行状态
 
 2026-07-10 已在隔离 `HERMES_HOME` 使用当前 `.codex` 模型源完成一次真实 smoke：
@@ -359,6 +363,11 @@ decision execute 的 validator dry-run accepted；one-step apply 经一次 schem
 这次运行说明 4G1 的真实调用边界可用，但 real compaction candidate quality 尚未通过。
 完整脱敏事实、矩阵和 4G2 进入门槛见
 `docs/kanban-runtime-kernel-real-integration-validation.md`。
+
+同日基于 Profile v2 完成 delegation smoke：真实 provider 返回一个带 typed contract 的
+immediate `create_node`，没有 speculative decomposition，validator dry-run accepted，且未
+apply。CLI 也已修复 `kanban runtime ... --profile` 与全局 Hermes profile override 的参数
+归属冲突。
 
 ## 11. 与后续阶段的关系
 

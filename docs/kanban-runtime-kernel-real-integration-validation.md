@@ -74,6 +74,7 @@ hermes kanban runtime real-smoke <job_id> --compact --codex-config --json
 | real compaction candidate quality | Phase 4A / 4G1 | 未通过 | 至少一次真实 candidate 无 fallback 通过 checkpoint validator | 未通过，当前 candidate 缺 provenance |
 | real provider bounded loop | Phase 4G2 | 已验证 | 3-5 decision ticks + synthetic worker evidence + consistency passed | 通过：3 ticks、2 applied、1 rejected、synthetic receipt `failed -> succeeded`、最终 done |
 | real worker lane smoke | Phase 4G3 | 已验证 | 真实 worker receipt 进入 runtime ingest，端到端 consistency passed | 通过：两个 dispatcher-started Codex worker receipt 写入 verified ledger，job done |
+| delegation Profile v2 | Delegation Policy MVP | 已验证 | 单 coherent primary node、typed contract、无无理由 decomposition、validator dry-run | 通过：1 个 immediate `create_node`、contract 1/1、accepted、未 apply |
 
 “real compaction transport + fallback 通过”不等于“真实 compaction 质量通过”。如果模型
 candidate 被 validator 拒绝，fallback 成功只能证明安全边界和恢复路径正确。
@@ -155,6 +156,38 @@ materialization 修复。
 本次 L5 证明单 worker 的真实 provider -> validator -> materialization -> dispatcher ->
 Codex wrapper -> runtime receipt -> ingest -> ledger 路径可用。它不证明多 worker 并发、
 review/test workflow、worker crash long-run recovery 或真实 compaction candidate quality。
+
+### 2026-07-10 Delegation Policy Profile v2 isolated smoke
+
+运行代码：`a95e128 feat(kanban): enforce worker delegation policy`，以及
+`a344b15 fix(kanban): harden delegation provider smoke`。
+
+环境：一次性隔离 `HERMES_HOME` 和 Kanban DB；当前 `.codex` 模型源只读；未启动真实
+worker；只执行 validate-without-apply。
+
+脱敏模型标识：`codex:MySub2api` / `gpt-5.6-sol`。
+
+测试目标刻意把同一仓库内的代码调研、必要外部文档查阅、前后端实现、测试、debug 和最终
+验证放入一个完整 OAuth 交付责任，用于检查 provider 是否仍按传统阶段拆分。
+
+结果：
+
+| 步骤 | 结果 | 事实 |
+| --- | --- | --- |
+| Profile load | 通过 | `graph_patch_decision` v2；profile hash 已进入 bounded report |
+| real decision execute | 通过 | parsed；最终运行 `retry_count=0`；no-tools、single-shot |
+| delegation shape | 通过 | 1 个 operation，类型为 `create_node`；execution node=1，immediate node=1 |
+| typed contract | 通过 | contract 覆盖 1/1 |
+| decomposition | 通过 | 未提供 decomposition；单 primary node 不需要拆分理由 |
+| validator | 通过 | `accepted`、`would_apply=true` |
+| no-apply boundary | 通过 | graph revision=0；graph patches=0；kernel decisions=0 |
+| consistency | 带 warning 通过 | 0 violations、1 个 `illegal_idle` warning；execute-only smoke 不持久化 pending decision，job 仍等待实际 apply/operator action |
+| credential/config | 通过 | 隔离目录 credential scan 0 命中；最终真实调用前后 `.codex/config.toml` 与 `auth.json` 哈希不变 |
+
+本次结果证明 Profile v2 和 local validator 能在真实模型输出上实现 primary-node-first。它不
+证明 OAuth 功能被实现，不启动真实 worker，也不证明大 primary node 的长期执行、checkpoint
+或 crash recovery。`illegal_idle` warning 暴露的是 execute-only smoke 的非持久化等待语义，
+不应被误写成零 warning；后续应在 liveness/observability 语义中单独处理。
 
 ## 6. 结果记录模板
 

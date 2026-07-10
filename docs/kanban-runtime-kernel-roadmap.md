@@ -102,10 +102,12 @@ real-provider loop，以及真实 provider -> validator -> Kanban dispatcher -> 
 runtime receipt -> verified ledger 的 L5 路径。真实 compaction candidate quality 仍未通过
 L3。详见 `docs/kanban-runtime-kernel-real-integration-validation.md`。
 
-Worker delegation policy enforcement MVP 已开始实施：Decision Profile v2 使用
+Worker delegation policy enforcement MVP 已完成：Decision Profile v2 使用
 primary-node-first 规则；patch validator 条件要求 decomposition；typed node contract 暂存于
 `constraints_json`；terminal `structure_request` 进入 event/delta；独立 verifier 固定目标证据；
-`declared_write_scope` 支持 post-run verification。详细约束见
+`declared_write_scope` 支持 post-run verification；隔离真实 Profile v2 smoke 已验证单一
+coherent primary node、typed contract 和 validate-without-apply。尚未完成 initial fixture
+替换、persistent worker session、internal subagent 观测和大 primary node 长期真实执行。详细约束见
 `docs/kanban-runtime-kernel-delegation-policy.md`。
 
 ## 4. Phase 0: Architecture Contract

@@ -308,20 +308,37 @@ Decision Provider when structure is needed
 
 ## 10. 当前实现与后续计划
 
-当前 Runtime Kernel 已具备 DB-authoritative graph、goal/ledger completion、local validator、
-worker receipt、capability policy、真实 provider 和真实 worker smoke。它尚未实现本文要求的：
+截至 2026-07-10，Delegation Policy Enforcement MVP 已实现：
 
-- primary-node-first initial graph policy；
-- `decomposition` patch schema 与 validator；
-- terminal `structure_request` receipt 字段的持久化和 provider request projection；
-- node-level write scope / acceptance criteria 的统一 schema；
-- backend internal subagent policy 下发或观测；
-- persistent worker session checkpoint 与跨 session resume。
+- `graph_patch_decision` 和 `validator_recovery_decision` 已升级为 Profile v2，不再鼓励按
+  analysis、research、implementation、testing 或 debugging 阶段拆分；
+- stable prefix 已把 Decision Provider 定义为结构升级控制器，并声明 primary-node-first、
+  合法拆分理由和单 runnable worker node 预算；
+- `decomposition` 保持 schema 向后兼容，但在多 execution node、独立 verifier 或与已有
+  running primary node 并行扩展时由 validator 条件性强制要求；
+- typed node contract 已进入 patch validator，并持久化到 `constraints_json`；
+- terminal `structure_request` 已校验、写入 `worker_structure_requested` event，并投影到
+  后续 decision delta；
+- verifier 必须固定 evidence、materialization、artifact 或 workspace revision；
+- `declared_write_scope` 已支持 post-run `changed_files` verification，越界会产生
+  `write_scope_violation` 并阻止 goal 被错误满足；
+- deterministic eval 已覆盖单 node budget、多 node decomposition、并行 scope overlap、
+  verifier target、structure request 和 scope violation；
+- 隔离真实 Profile v2 smoke 已证明模型能返回一个带 typed contract 的 coherent primary
+  node，并通过 validator dry-run。
 
-这些应作为一个独立后续阶段实现，不能仅通过 prompt 文本声称已完成。实施顺序建议为：先将
-policy 进入 Decision Provider stable prefix 和 deterministic eval；再扩展 patch/receipt schema
-与 validator；最后验证真实 worker 在大 primary node 的连续执行和 evidence-driven graph
-expansion。
+当前仍未完成：
+
+- 用 primary-node-first production policy 替换现有 `understand-scope` 初始 fixture；
+- 将并行扩展 predicate 从已有 `running` primary node 安全扩展到更完整的
+  `ready/planned/waiting_dependency` graph 语义；
+- backend internal subagent policy 下发、继承检查与观测；
+- persistent worker session checkpoint 与跨 session resume；
+- 一个真实大 primary worker node 连续完成 inspection、implementation、testing、debugging
+  和 verification 的长期 smoke；
+- backend sandbox/worktree 对 `declared_write_scope` 的执行前强制隔离。
+
+因此当前可以称为 policy enforcement MVP，不能称为长期 delegation production complete。
 
 ### 10.1 Typed Node Contract 与 Write Scope
 
@@ -339,3 +356,22 @@ worker 完成后必须基于结构化 `changed_files` 做 post-run 检查，并�
 `target_evidence_ref`、`target_materialization_attempt`、`target_artifact_ref` 或
 `target_workspace_revision` 之一。Verifier 必须使用新的 backend session/context，不能继承
 implementation worker 的隐藏推理上下文。
+
+### 10.3 真实 Profile v2 验证
+
+2026-07-10 基于实现提交 `a95e128` 和 smoke hardening 提交 `a344b15`，在一次性
+`HERMES_HOME` 中使用当前 `.codex` 模型源完成 L1 validate-without-apply：
+
+- Profile 为 `graph_patch_decision` v2；
+- 模型输出 parsed，最终验证运行 `retry_count=0`；
+- patch 只有一个 `create_node` operation；
+- `execution_node_count=1`，`immediate_execution_node_count=1`；
+- typed contract 覆盖 `1/1`；
+- 没有 `decomposition`，符合单 primary node 默认路径；
+- validator 为 `accepted` / `would_apply=true`；
+- smoke 未 apply，graph revision、graph patch 和 kernel decision 均保持不变；
+- credential scan 通过，最终调用前后 `.codex` 配置与认证文件哈希保持一致。
+
+该结果证明真实 provider 能遵守当前 delegation contract，不证明真实 worker 已完成 OAuth
+实现，也不证明长期 primary worker session 的稳定性。完整脱敏事实见
+`docs/kanban-runtime-kernel-real-integration-validation.md`。
