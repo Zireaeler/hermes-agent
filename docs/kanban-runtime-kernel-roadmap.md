@@ -647,7 +647,8 @@ multi-cycle compaction。具体见 `docs/kanban-runtime-kernel-phase4g6.md`。
 真实 compaction/provider/worker smoke 和 soak 都应复用 Phase 4G 的 report 和
 consistency checker。
 
-Phase 4H 再做 dashboard runtime UI。UI 应消费前面阶段形成的稳定
+Phase 4G8 先用 SWE-EVO 三项长期任务验证真实 provider/worker/compaction/daemon/evaluator
+闭环。Phase 4H 再做 dashboard runtime UI；UI 应消费已经经过真实长期任务证明的稳定
 observability API，而不是提前展示一个 recovery 和 consistency 尚未稳定的系统。
 
 ## 15. 当前实现优先级
@@ -691,6 +692,9 @@ Phase 4G6 active long-run and real compaction multi-cycle soak
 Phase 4G7 packaged supervisor daemon/service
       |
       v
+Phase 4G8 SWE-EVO real long-horizon validation
+      |
+      v
 Phase 4H dashboard runtime UI
 ```
 
@@ -721,8 +725,10 @@ materialization、Kanban task/run、receipt、node state 和 progress ledger 之
 状态脏、supervisor recovery 有 bug、compaction 降级，还是模型决策差。
 
 Phase 4G6 已完成 50+ active tick 的 synthetic long-run baseline，不再使用 terminal no-op
-充数。Phase 4G7 已完成可部署 daemon/service baseline；下一项产品工程重点进入 Phase 4H
-Dashboard Runtime UI，并保留更长时间真实 worker soak 作为 production final 发布门槛。
+充数。Phase 4G7 已完成可部署 daemon/service baseline，但该 daemon 的 restart soak 使用 fake
+decision provider，尚未把真实 decision、真实 worker、真实 compaction、worker resume、daemon
+restart 和 independent hidden evaluator 放进同一个长期任务。下一项工程重点因此是 Phase 4G8，
+而不是直接进入 Phase 4H Dashboard Runtime UI。
 
 Phase 4G7 负责把该重点落成 packaged runtime supervisor daemon：复用现有 production tick
 和 per-job DB lease，增加 bounded polling、graceful shutdown、每进程唯一 owner、PID/state、
@@ -733,3 +739,9 @@ state 文件只属于运维面，不得成为 runtime correctness 或恢复所�
 lease 可接管，最终仅有 1 个 applied patch、1 个 decision 和 1 个 materialization，consistency
 为 0 violations / 0 warnings。默认离线 Runtime/CLI 回归为 263 passed，Runtime observability
 API 定向测试为 1 passed。
+
+Phase 4G8 使用 SWE-EVO 的 small/medium/large 三项真实版本演进任务建立 production validation
+gate。任务复杂度本身不能证明单 worker session 不足，因此测试协议必须主动制造 daemon restart、
+worker interruption/resume、compaction 后新进程继续、receipt-before-ingest restart 和独立
+evaluator 边界。三项 official evaluator 必须全部 resolved；runtime-correct 但 task-failed 只能
+作为准确失败分类，不能算阶段完成。

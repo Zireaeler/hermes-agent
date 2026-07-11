@@ -20,7 +20,8 @@ When working on branch `feature-kanban-runtime-kernel`, treat
 `docs/kanban-runtime-kernel-phase4e.md` and
 `docs/kanban-runtime-kernel-phase4f.md` and
 `docs/kanban-runtime-kernel-phase4g0.md` and
-`docs/kanban-runtime-kernel-phase4g7.md` as binding design constraints, not
+`docs/kanban-runtime-kernel-phase4g7.md` and
+`docs/kanban-runtime-kernel-phase4g8.md` as binding design constraints, not
 background reading. If implementation details conflict with those documents,
 update the relevant design document first or stop and ask for direction.
 
@@ -175,6 +176,17 @@ use a unique lease owner, real providers must remain explicit and bounded by a
 timeout smaller than the configured lease TTL, health endpoints must be
 loopback-only and read-only, and restart/crash takeover must preserve
 materialization and decision idempotency.
+
+Phase 4G8 is the real long-horizon production validation gate. Use qualified
+SWE-EVO-style software evolution tasks, not isolated single-issue patches, and
+force observable process boundaries so completion cannot depend on one
+continuous conversation. Formal runs must use real decision, compaction, and
+Codex worker providers plus an independent official evaluator. Gold patches
+and hidden tests must remain outside provider/worker context, evaluator results
+must enter through task/run/receipt evidence rather than direct DB mutation,
+and all three small/medium/large tasks must be officially resolved with zero
+consistency violations, warnings, duplicate facts, compaction fallbacks, or
+credential leaks before Phase 4H begins.
 
 For this branch, do not routinely rebase `main`, and do not restore the old
 oversized session `019e497b-56e0-7bb0-a357-0db06954ae4d` as implementation
