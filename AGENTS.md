@@ -184,9 +184,17 @@ continuous conversation. Formal runs must use real decision, compaction, and
 Codex worker providers plus an independent official evaluator. Gold patches
 and hidden tests must remain outside provider/worker context, evaluator results
 must enter through task/run/receipt evidence rather than direct DB mutation,
-and all three small/medium/large tasks must be officially resolved with zero
-consistency violations, warnings, duplicate facts, compaction fallbacks, or
-credential leaks before Phase 4H begins.
+and implementation self-verification must never satisfy a verifier-required
+goal item. Independent verification must carry fixed-target producer/session
+provenance and be enforced by the local completion reducer; known verifier
+constraints must not depend on the Decision Provider deciding to add a node.
+Do not force SWE-EVO tasks to naturally produce structure requests, graph
+expansion, or first-pass evaluator failures. Cover those branches with
+controlled integration cases and apply conditional assertions when they occur
+in real tasks. Report Runtime Validation separately from End-to-End Capability
+Validation: task-quality failure may coexist with runtime-correct evidence, but
+all three small/medium/large tasks must still be officially resolved before
+claiming the production capability baseline or beginning Phase 4H.
 
 For this branch, do not routinely rebase `main`, and do not restore the old
 oversized session `019e497b-56e0-7bb0-a357-0db06954ae4d` as implementation

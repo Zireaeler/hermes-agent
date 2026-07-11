@@ -1,6 +1,6 @@
 # Hermes Kanban Runtime Kernel Phase 4G8
 
-# SWE-EVO Real Long-Horizon Validation
+# SWE-EVO 真实长周期验证
 
 ## 1. 背景
 
@@ -342,9 +342,19 @@ Phase 4G8 继续遵守 delegation policy：
 - 仅因为理论上可以并行；
 - 为满足测试中的 node 数量而拆分。
 
+真实任务不得被要求自然触发全部可选 runtime 分支。Phase 4G8 将断言分为两类：
+
+- 强制断言：进程边界、DB continuity、独立 evaluator、compaction/recovery correctness、
+  committed fact 幂等性和最终 evaluator 结果；
+- 条件断言：`structure_request`、graph expansion 和 evaluator 首次失败一旦发生，就必须按
+  合法 evidence path 被持久化、处理和恢复；未发生本身不构成真实任务失败。
+
+需要必然覆盖的可选分支由受控 integration case 确定性触发，不能通过篡改 SWE-EVO 业务结果、
+制造无意义 decision round 或诱导 provider 进行 speculative split 来满足测试计数。
+
 ---
 
-## 11. Independent Evaluator
+## 11. 独立 Evaluator
 
 Official evaluator 是 worker 之外的独立责任主体。
 
@@ -378,6 +388,62 @@ progress ledger / goal gap reducer
 Evaluator lane 可以是 deterministic local backend，不要求额外 LLM，但必须经过 Kanban
 task/run/receipt contract，不能由测试脚本直接把 goal item 改成 satisfied。
 
+### 11.1 独立验证 provenance
+
+当前 implementation worker 的 `verification.passed=true` 只能表示自报验证，不能满足
+`verifier_required=true`。Phase 4G8 正式运行前，progress ledger 必须区分：
+
+```text
+implementation worker verification
+        -> self_reported / implementation_verified
+
+independent evaluator + fixed target + independent process/session
+        -> independently_verified
+```
+
+`verifier_required=true` 只能由 `independently_verified` 或显式、可审计的 human waiver 满足。
+Evaluator receipt 至少携带：
+
+```json
+{
+  "producer_kind": "official_evaluator",
+  "producer_node_id": "node_xxx",
+  "producer_task_id": "task_xxx",
+  "producer_session_id": "evaluator-session-xxx",
+  "target_revision": "git:<sha>",
+  "target_materialization_id": "mat_xxx",
+  "target_evidence_ref": "receipt:implementation:attempt-2",
+  "independent_from_session_id": "codex-thread-xxx"
+}
+```
+
+本地 reducer 必须校验 producer kind、固定 target、node/task/materialization 关联和 session
+独立性。仅把 evaluator 日志放入 artifact、仅创建 `node_type=verification`，或让 implementation
+worker 自报 official tests passed，均不能提升为 `independently_verified`。
+
+### 11.2 Evaluator 的确定性创建
+
+独立 evaluator 是已知 completion policy，不依赖 Decision Provider 临场决定是否插入：
+
+```text
+implementation terminal receipt
+        |
+        v
+freeze candidate revision
+        |
+        v
+local verification policy checks verifier_required
+        |
+        v
+create or activate evaluator node
+        |
+        v
+normal materialization -> task/run/receipt -> ledger
+```
+
+Decision Provider 只处理执行中发现的未知结构边界。已知 verifier constraint 由本地 policy
+确定性执行，且重复 reducer/tick 不得重复创建 evaluator node 或 evaluator task。
+
 ---
 
 ## 12. 强制进程边界
@@ -408,24 +474,50 @@ task/run/receipt contract，不能由测试脚本直接把 goal item 改成 sati
 - 至少一次真实 Decision Session compaction；
 - compaction 后由新 daemon process 继续。
 
+Worker interruption 必须终止测试 harness 所拥有的 worker process group，而不只是 wrapper PID；
+必须确认 Codex child 未成为 orphan，且不得影响用户自己的 Codex session。旧 attempt 在新 attempt
+开始后提交的迟到 receipt 必须被识别为 stale，不能覆盖新 attempt 或重复提交 terminal fact。
+
 ### 12.3 Large
 
 除 medium 覆盖外，必须：
 
 - 至少两次 daemon process boundary；
-- 一次发生在 worker-running；
+- 一次为 worker-running 期间的真实 hard crash / `SIGKILL`，并在 lease expiry 后由新 owner takeover；
 - 一次发生在 task terminal receipt 已存在但 node 尚未 ingest；
-- 至少一次 worker structure_request 或基于真实 evidence 的 graph expansion；
 - 至少两个 accepted real checkpoints；
-- 独立 evaluator 首次失败时，runtime 根据新 gap 继续，而不是静默结束；
-- 最终 official evaluator resolved。
+- 最终运行 official evaluator，并保留 resolved 或 failed 的完整结果。
 
-如果 large 实例第一次 evaluator 已直接通过，仍需通过预先定义的 process boundary 验证恢复，
-但不得人为篡改 evaluator 结果制造业务失败。Graph expansion 只由真实执行 evidence 决定。
+如果 large 实例出现 `structure_request` 或 graph expansion，必须验证其 evidence 和 delegation
+policy 合法性；未出现时不得为了测试计数强制扩图。如果第一次 evaluator 失败，runtime 必须重新
+打开 gap 并继续；如果第一次直接通过，不得人为篡改 evaluator 结果制造第二轮。
+
+Receipt-before-ingest 的精确触发条件是：
+
+- Kanban terminal receipt 已持久化；
+- runtime node 尚未 terminal；
+- progress ledger 尚无该 receipt evidence；
+- `node_completed` / `node_failed` terminal execution event 尚不存在。
+
+恢复后允许重复读取，但 receipt ingest、ledger insert 和 terminal fact 的 committed 结果必须各
+恰好一次。
+
+### 12.4 受控 integration cases
+
+正式 SWE-EVO 运行前必须用隔离 fixture 确定性覆盖：
+
+- Control verifier：implementation 自报不能满足 `verifier_required`，独立 evaluator 可以满足，
+  stale target evaluator receipt 被拒绝；
+- Control structure：合法 `structure_request` 被持久化并驱动 evidence-backed expansion，非法
+  speculative split 被 validator 拒绝；
+- Control compaction：daemon production poll 使用 real provider，在固定低 threshold 下触发
+  checkpoint，fallback 为 0，compaction 后新 daemon 不读取 old transcript。
+
+这些 control cases 验证 runtime 分支，不计入 SWE-EVO task capability 结果。
 
 ---
 
-## 13. Real Compaction 要求
+## 13. 真实 Compaction 要求
 
 Phase 4G8 必须把 real compaction provider 正式接入 daemon production poll，而不是在运行间隙
 手工调用独立 CLI。
@@ -438,6 +530,22 @@ Daemon 配置必须支持：
 - no-fallback production validation mode；
 - compaction health threshold；
 - checkpoint chain validation。
+
+实现必须形成显式配置链：
+
+```text
+daemon CLI/config
+        -> RuntimeSupervisorDaemonConfig
+        -> supervise_runtime_jobs_once
+        -> supervisor_runtime_tick
+        -> advance_runtime_job
+        -> compact_decision_session
+        -> selected RuntimeCompactionProvider
+```
+
+每次 compaction 必须记录 provider identity、model、profile hash、timeout、retry、fallback policy、
+request/response reference 和 validator result。测试使用固定、较低的 token threshold 确定性触发
+real compaction，不通过无意义 decision rounds 填充上下文。
 
 正式三项任务中：
 
@@ -453,9 +561,9 @@ no-fallback 验收，必须修复通用问题后从干净环境重跑。
 
 ---
 
-## 14. Completion 与判定
+## 14. 完成与判定
 
-每项任务有两类完成条件，二者必须同时成立。
+每项任务分别产生 runtime validation 和 end-to-end capability 两类结论，不能混为一个布尔值。
 
 ### 14.1 Runtime completion
 
@@ -473,6 +581,29 @@ no-fallback 验收，必须修复通用问题后从干净环境重跑。
 - PASS_TO_PASS 全部通过；
 - instance status 为 resolved；
 - evaluator artifact 可追溯到固定 candidate revision。
+
+### 14.3 聚合结论
+
+Phase 4G8 必须分别发布：
+
+**Runtime Validation**
+
+- 三项实例的 runtime invariants 均通过；
+- task quality failure 可以记录为 `runtime-correct / task-failed`；
+- 任一 runtime correctness failure 都会使该结论失败。
+
+**End-to-End Capability Validation**
+
+- 三项实例 official evaluator 均为 resolved；
+- 只有 3/3 resolved 才标记 capability validation complete。
+
+3/3 resolved 仍是进入 production capability baseline 的高标准目标，但单纯 task quality failure
+不能否定已由同一次运行证明的 lease、recovery、compaction、evaluator provenance 和 consistency
+invariants。
+
+当 official evaluator failed 时，Runtime Validation 通过的前提是 runtime 如实保留 open/reopened
+gap、可继续结构或显式 exhausted/failed 状态，并且没有 premature `done`、silent idle 或伪造
+verified ledger；它不表示该 job 已完成。
 
 以下状态均不算完成：
 
@@ -508,8 +639,9 @@ Phase 4G8 报告必须区分三类失败。
 
 Runtime 边界正确，但模型未完成 SRS 或 official tests 未通过。
 
-这说明当前 provider/worker/delegation/context 策略不足。Phase 4G8 最终仍不能标记完成，但不应
-通过放宽 validator、直接写 ledger 或注入 gold hint 修复。
+这说明当前 provider/worker/delegation/context 策略不足。该实例不能计入 End-to-End Capability
+Validation resolved，但可以计入通过的 Runtime Validation。不得通过放宽 validator、直接写
+ledger 或注入 gold hint 修复。
 
 ### 15.3 Infrastructure Invalid
 
@@ -588,7 +720,23 @@ Infrastructure invalid 不算模型或 runtime 失败，但实例必须重新 qu
 - old transcript exclusion；
 - provider token/usage/cost。
 
-### 17.5 Correctness
+### 17.5 Context 与编排效率
+
+- `worker_input_tokens`；
+- `worker_cached_input_tokens`；
+- `worker_output_tokens`；
+- `cache_hit_ratio`；
+- `tokens_before_and_after_resume`；
+- `context_reacquisition_count`；
+- `worker_execution_wall_time`；
+- `orchestration_wall_time`；
+- `time_to_first_evidence`；
+- `decision_provider_wait_time`；
+- `evaluator_wall_time`；
+- `nodes_per_goal_item`；
+- `handoffs_per_goal_item`。
+
+### 17.6 Correctness
 
 - consistency violations/warnings；
 - liveness violations；
@@ -599,7 +747,22 @@ Infrastructure invalid 不算模型或 runtime 失败，但实例必须重新 qu
 
 ---
 
-## 18. 资源与运行策略
+## 18. 测试矩阵
+
+| Case | 强制覆盖 | 不应强制 |
+|---|---|---|
+| Offline qualification | dataset revision、base/gold oracle、manifest hash、gold isolation、资源预算 | 模型调用 |
+| Control verifier | implementation 自报不能满足 `verifier_required`；独立 evaluator 可以满足；stale target 被拒绝 | SWE-EVO resolved |
+| Control structure | 合法 `structure_request`、evidence-backed expansion、非法 speculative split 被拒绝 | 等待真实模型偶然触发 |
+| Control compaction | real provider、固定低 threshold、fallback=0、old transcript exclusion、restart continuation | 依赖任务自然积累 checkpoint |
+| Small SWE-EVO | one primary node、真实 worker、worker-running 时 graceful daemon restart、固定 revision evaluator | graph expansion、evaluator 首次失败 |
+| Medium SWE-EVO | hard worker interruption、same backend session resume、新 attempt、至少一次 real checkpoint、新 daemon continuation | 必须拆成多个 worker |
+| Large SWE-EVO | hard daemon crash、lease takeover、receipt-before-ingest restart、至少两个 real checkpoint、固定 revision evaluator | 必须出现 `structure_request`；必须首次 evaluator 失败 |
+| Aggregate | runtime invariants、task quality、资源、token/cache、全部失败记录 | 只报告最佳 run |
+
+---
+
+## 19. 资源与运行策略
 
 截至 2026-07-11，当前执行 host 清理后约有 26G 可用空间。SWE-EVO 全量 evaluator 公开说明
 可能需要 50-80G Docker images，因此 Phase 4G8 必须顺序运行：
@@ -635,7 +798,14 @@ worktree、部署数据或 runtime audit DB 强行腾挪。
 
 ---
 
-## 19. 实现范围
+## 20. 实现范围
+
+正式 SWE-EVO 运行前有四个阻断项：
+
+1. 独立 evaluator provenance 与 `verifier_required` completion invariant；
+2. real compaction provider 的 daemon production wiring；
+3. worker tool network 与模型 transport network 的物理隔离；
+4. 修订后的强制/条件断言、双结论和 fault trigger state machine。
 
 ### Step 1：Qualification Harness
 
@@ -661,6 +831,9 @@ worktree、部署数据或 runtime audit DB 强行腾挪。
 - bounded structured receipt；
 - raw log artifact reference；
 - runtime evidence ingest。
+- 本地 completion policy 确定性创建/激活 evaluator；
+- `independently_verified` provenance 校验；
+- stale target、同 session 和 implementation 自报拒绝测试。
 
 ### Step 4：Fault Injector
 
@@ -683,7 +856,28 @@ worktree、部署数据或 runtime audit DB 强行腾挪。
 - report/credential redaction；
 - deterministic fixture 只验证 harness，不计正式结果。
 
-### Step 6：Sequential Real Runs
+### Step 6：Controlled Integration Cases
+
+- Control verifier 确定性验证 independent provenance completion invariant；
+- Control structure 确定性验证 structure request、合法 expansion 和 speculative split rejection；
+- Control compaction 使用真实 provider 和 daemon poll，验证 no-fallback checkpoint 与 restart；
+- control result 与 SWE-EVO capability result 分开报告。
+
+### Step 7：Worker Receipt Contract
+
+Worker materialization prompt 必须明确 `structure_request`：
+
+- optional；
+- 只允许出现在 terminal receipt；
+- 与 `verdict` 正交；
+- `reason_type` 使用 delegation policy 枚举；
+- discovered gap 必须携带 evidence refs；
+- 不能直接 mutate graph。
+
+Malformed `structure_request` 不得产生 graph mutation；原始 worker artifact 必须保留，validator
+应拒绝该字段或整份 receipt，并提供可审计原因。
+
+### Step 8：Sequential Real Runs
 
 - small qualification + real run；
 - medium qualification + real run；
@@ -693,9 +887,9 @@ worktree、部署数据或 runtime audit DB 强行腾挪。
 
 ---
 
-## 20. 验收标准
+## 21. 验收标准
 
-Phase 4G8 只有同时满足以下条件才能完成：
+### 21.1 Runtime Validation 完成条件
 
 - 三项正式任务均通过 oracle qualification；
 - 三项均使用真实 decision provider；
@@ -705,9 +899,10 @@ Phase 4G8 只有同时满足以下条件才能完成：
 - medium/large 均发生 worker interruption 和 backend session resume；
 - large 覆盖 receipt-before-ingest restart；
 - implementation 和 evaluator 使用独立 process/session；
-- 三项 official evaluator 均为 resolved；
-- FAIL_TO_PASS 和 PASS_TO_PASS 均全部通过；
-- 三项 runtime job 均由 reducer/ledger/evidence 正常完成；
+- 三项均运行 official evaluator，并保留 fixed revision 的 resolved/failed 原始结果；
+- evaluator failed 时 runtime 不得 premature `done` 或 silent idle；
+- implementation 自报 verification 不得满足 `verifier_required`；
+- evaluator provenance、fixed target 和 stale target rejection 均通过；
 - deterministic compaction fallback 为 0；
 - checkpoint chain 全部 valid；
 - duplicate decision/patch/materialization/terminal fact 为 0；
@@ -717,14 +912,23 @@ Phase 4G8 只有同时满足以下条件才能完成：
 - credential scan 为 0；
 - 主 `.codex` config/auth hash 未变化；
 - 所有失败尝试、recovery、validator rejection 和 fallback audit 均保留；
+- Control verifier / structure / compaction 均通过；
 - 文档、实现、qualification、真实报告、测试和提交作为一个阶段统一交付并推送。
 
-三项任务只要有一项未 resolved，Phase 4G8 就不能写成 production validation complete。
-可以准确记录 runtime-correct/task-failed，但不能用该分类降低 3/3 门槛。
+### 21.2 End-to-End Capability Validation 完成条件
+
+- 三项 official evaluator 均为 resolved；
+- 三项 FAIL_TO_PASS 和 PASS_TO_PASS 均全部通过；
+- 三项 runtime job 均由 reducer/ledger/evidence 正常完成；
+- evaluator artifact 均可追溯到各自固定 candidate revision。
+
+三项任务只要有一项未 resolved，就不能写成 End-to-End Capability Validation complete，必须
+准确记录 task quality failure。此结果不自动推翻已通过的 Runtime Validation，也不得把
+`runtime-correct / task-failed` 冒充 production capability complete。
 
 ---
 
-## 21. 后续关系
+## 22. 后续关系
 
 Phase 4G8 是 Phase 4H Dashboard Runtime UI 之前的 production validation gate。
 

@@ -743,5 +743,16 @@ API 定向测试为 1 passed。
 Phase 4G8 使用 SWE-EVO 的 small/medium/large 三项真实版本演进任务建立 production validation
 gate。任务复杂度本身不能证明单 worker session 不足，因此测试协议必须主动制造 daemon restart、
 worker interruption/resume、compaction 后新进程继续、receipt-before-ingest restart 和独立
-evaluator 边界。三项 official evaluator 必须全部 resolved；runtime-correct 但 task-failed 只能
-作为准确失败分类，不能算阶段完成。
+evaluator 边界。真实任务强制验证进程、continuity、compaction、evaluator provenance 和事实
+幂等性；`structure_request`、graph expansion 和 evaluator 首次失败采用条件断言，并由独立受控
+case 确定性覆盖，不能要求真实任务自然产生所有分支。
+
+本阶段发布两个独立结论：三个实例 runtime invariants 全部通过时，Runtime Validation 可以完成，
+并允许准确记录 `runtime-correct / task-failed`；三个 official evaluator 全部 resolved 时，
+End-to-End Capability Validation 才能完成。3/3 仍是 production capability baseline，不再用纯
+task quality failure 否定已经证明的 runtime correctness。
+
+正式 SWE-EVO 运行前必须先补齐独立 evaluator provenance 与 `verifier_required` completion
+invariant、real compaction provider 的 daemon production wiring、worker tool network 与模型
+transport network 的物理隔离，以及 DB/event 驱动的 fault trigger state machine。已知独立验证
+约束由本地 completion policy 确定性创建 evaluator node，不依赖 Decision Provider 临场判断。

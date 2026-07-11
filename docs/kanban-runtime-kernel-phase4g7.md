@@ -419,7 +419,10 @@ Phase 4G7 MVP 完成必须满足：
 
 Phase 4G7 完成后，下一阶段进入 Phase 4G8 SWE-EVO Real Long-Horizon Validation。只有真实
 decision、真实 compaction、真实 worker、daemon/worker process boundary 和 independent hidden
-evaluator 在三项长期任务中形成完整闭环后，才进入 Phase 4H Dashboard Runtime UI。
+evaluator 在三项长期任务中形成完整闭环，并分别报告 Runtime Validation 与 End-to-End
+Capability Validation 后，才进入 Phase 4H Dashboard Runtime UI。Runtime correctness 不能被
+task quality failure 否定，但 production capability baseline 仍要求三项 official evaluator 3/3
+resolved。
 
 更长时间真实 worker soak、多 provider soak、动态 lease renewal 和路径级 sandbox 仍是
 production final 的后续 hardening，不应被 Phase 4H UI 掩盖。
