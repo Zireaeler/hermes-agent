@@ -468,7 +468,7 @@ Decision Provider 只处理执行中发现的未知结构边界。已知 verifie
 除 small 覆盖外，必须：
 
 - 在 worker 已产生 heartbeat 和 backend session id 后终止 worker process；
-- 只终止测试启动的 worker PID，不影响用户 Codex session；
+- 只终止测试 harness 启动并拥有的 worker process group，不影响用户 Codex session；
 - recovery 创建新的 materialization attempt；
 - 新 attempt resume 原 Codex session；
 - 至少一次真实 Decision Session compaction；
@@ -830,7 +830,7 @@ worktree、部署数据或 runtime audit DB 强行腾挪。
 - official evaluator invocation；
 - bounded structured receipt；
 - raw log artifact reference；
-- runtime evidence ingest。
+- runtime evidence ingest；
 - 本地 completion policy 确定性创建/激活 evaluator；
 - `independently_verified` provenance 校验；
 - stale target、同 session 和 implementation 自报拒绝测试。
