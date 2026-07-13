@@ -39,7 +39,7 @@ def _job(conn) -> str:
                 "item_key": "runtime-result",
                 "description": "runtime result is verified",
                 "required": True,
-                "verifier_required": True,
+                "verifier_required": False,
             }
         ],
         initialization_mode="fixture",

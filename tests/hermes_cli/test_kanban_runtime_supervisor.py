@@ -14,6 +14,7 @@ import pytest
 from hermes_cli import kanban as kc
 from hermes_cli import kanban_db as kb
 from hermes_cli import kanban_runtime_kernel as rk
+from hermes_cli import kanban_runtime_decision as rd
 from hermes_cli import kanban_runtime_supervisor as rs
 
 
@@ -59,6 +60,36 @@ def _daemon_config(tmp_path: Path, **overrides) -> rs.RuntimeSupervisorDaemonCon
     }
     values.update(overrides)
     return rs.RuntimeSupervisorDaemonConfig(**values)
+
+
+class _DaemonCompactionProvider:
+    provider_name = "fake-real-compactor"
+    model = "fake-real-model"
+
+    def __init__(self):
+        self.calls = []
+
+    def compact(self, request):
+        self.calls.append(request)
+        with kb.connect() as conn:
+            checkpoint = rd.build_deterministic_checkpoint(
+                conn,
+                request.job_id,
+                request.source_segment["id"],
+                profile_name=request.profile["profile_name"],
+            )
+        return rd.CompactionProviderResult(
+            checkpoint=checkpoint,
+            raw_output=checkpoint,
+            provider_name=self.provider_name,
+            model=self.model,
+            profile_name=request.profile["profile_name"],
+            profile_version=request.profile["profile_version"],
+            profile_hash=request.profile["profile_hash"],
+            request_ref="daemon-compaction-request",
+            response_ref="daemon-compaction-response",
+            parse_status="parsed",
+        )
 
 
 def test_daemon_config_rejects_remote_health_bind(tmp_path):
@@ -179,6 +210,8 @@ def test_daemon_redacts_poll_error_and_exits_after_error_budget(tmp_path):
     assert report["exit_reason"] == "max_consecutive_errors"
     assert report["state"]["poll_count"] == 2
     assert secret not in state_text
+    assert "provider rejected key" in state_text
+    assert "detail_sha256" in state_text
     assert not config.pidfile.exists()
 
 
@@ -217,6 +250,44 @@ def test_daemon_restart_does_not_duplicate_patch_or_materialization(kanban_home,
             "SELECT advance_lock FROM runtime_jobs WHERE id = ?",
             (job_id,),
         ).fetchone()[0] is None
+
+
+def test_daemon_poll_uses_configured_compaction_provider_without_fallback(kanban_home, tmp_path):
+    job_id = _provider_first_job()
+    with kb.connect() as conn:
+        rk.append_decision_segment_entry(
+            conn,
+            job_id,
+            "delta_appended",
+            {"reason": "force bounded daemon compaction"},
+            payload_text="x" * 200,
+        )
+    provider = _DaemonCompactionProvider()
+
+    rs.run_runtime_supervisor_daemon(
+        _daemon_config(
+            tmp_path,
+            compaction_policy={"max_active_segment_tokens": 1},
+            compaction_fallback_to_deterministic=False,
+        ),
+        compaction_provider=provider,
+        owner="daemon-compaction",
+    )
+
+    assert len(provider.calls) == 1
+    with kb.connect() as conn:
+        checkpoint = conn.execute(
+            "SELECT * FROM decision_checkpoints WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+        assert checkpoint is not None
+        metadata = json.loads(checkpoint["metadata_json"])
+        assert metadata["provider_name"] == "fake-real-compactor"
+        assert metadata["request_ref"] == "daemon-compaction-request"
+        assert conn.execute(
+            "SELECT COUNT(*) FROM decision_segment_entries WHERE job_id = ? AND entry_type = 'compaction_fallback'",
+            (job_id,),
+        ).fetchone()[0] == 0
 
 
 def test_daemon_takes_over_expired_crash_lease_without_duplicate_work(kanban_home, tmp_path):
@@ -329,7 +400,15 @@ def test_runtime_daemon_real_provider_requires_ttl_for_retry_window(kanban_home)
         "--timeout 20 --max-retries 1 --lock-ttl 30 --max-polls 1"
     )
 
-    assert "must exceed the real provider timeout across all retries" in output
+    assert "must exceed real decision and compaction provider retry windows" in output
+
+
+def test_runtime_daemon_real_compaction_requires_bounded_timeout(kanban_home):
+    output = kc.run_slash(
+        "runtime daemon --compaction-provider real --model-provider custom --model test-model --max-polls 1"
+    )
+
+    assert "requires a positive --compaction-timeout" in output
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX SIGTERM process test")

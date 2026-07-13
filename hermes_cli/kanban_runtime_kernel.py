@@ -79,6 +79,7 @@ VERIFIER_TARGET_FIELDS = {
     "target_artifact_ref",
     "target_workspace_revision",
 }
+INDEPENDENT_VERIFIER_PRODUCER_KINDS = {"official_evaluator", "runtime_evaluator"}
 BLOCKER_TYPES = {
     "missing_secret",
     "external_cost",
@@ -1194,6 +1195,7 @@ def create_runtime_job(
     goal_items: Optional[list[dict[str, Any]]] = None,
     initial_assignee: Optional[str] = None,
     initialization_mode: str = "provider_first",
+    runtime_metadata: Optional[dict[str, Any]] = None,
 ) -> str:
     """Create a runtime job and its authoritative goal/decision state."""
 
@@ -1228,7 +1230,8 @@ def create_runtime_job(
 
     initial_state = "active" if initialization_mode == "fixture" else "waiting_decision"
     decision_profile = "fixture" if initialization_mode == "fixture" else "graph_patch_decision"
-    job_metadata = {"initialization_mode": initialization_mode}
+    job_metadata = dict(runtime_metadata or {})
+    job_metadata["initialization_mode"] = initialization_mode
     if initial_assignee:
         job_metadata["default_worker_lane"] = initial_assignee
     conn.execute(
@@ -3059,7 +3062,7 @@ def _structure_request_valid(structure_request: Any) -> bool:
         if not isinstance(gap, dict) or not str(gap.get("description") or "").strip():
             return False
         refs = gap.get("evidence_refs") or []
-        if not isinstance(refs, list) or any(not isinstance(ref, str) or not ref.strip() for ref in refs):
+        if not isinstance(refs, list) or not refs or any(not isinstance(ref, str) or not ref.strip() for ref in refs):
             return False
     suggested = structure_request.get("suggested_nodes") or []
     return isinstance(suggested, list) and not any(
@@ -3068,7 +3071,35 @@ def _structure_request_valid(structure_request: Any) -> bool:
     )
 
 
-def _runtime_receipt_from_evidence(evidence: Any, node: Optional[dict[str, Any]] = None) -> Optional[dict[str, Any]]:
+def _node_linked_goal_item_keys(
+    conn: Optional[sqlite3.Connection],
+    node: dict[str, Any],
+) -> set[str]:
+    metadata = _loads(node.get("metadata_json"))
+    allowed = {str(value) for value in metadata.get("goal_item_keys") or [] if str(value).strip()}
+    gap_keys = [str(value) for value in metadata.get("gap_keys") or [] if str(value).strip()]
+    if conn is None or not gap_keys:
+        return allowed
+    placeholders = ",".join("?" for _ in gap_keys)
+    rows = conn.execute(
+        f"""
+        SELECT DISTINCT gi.item_key
+          FROM goal_gaps gg
+          JOIN goal_items gi ON gi.id = gg.goal_item_id
+         WHERE gg.job_id = ? AND gg.gap_key IN ({placeholders})
+        """,
+        (node["job_id"], *gap_keys),
+    ).fetchall()
+    allowed.update(str(row["item_key"]) for row in rows)
+    return allowed
+
+
+def _runtime_receipt_from_evidence(
+    evidence: Any,
+    node: Optional[dict[str, Any]] = None,
+    *,
+    conn: Optional[sqlite3.Connection] = None,
+) -> Optional[dict[str, Any]]:
     """Validate a Codex runtime receipt before allowing it into the ledger."""
     if not isinstance(evidence, dict):
         return None
@@ -3089,6 +3120,15 @@ def _runtime_receipt_from_evidence(evidence: Any, node: Optional[dict[str, Any]]
         if not isinstance(values, list) or any(not isinstance(value, str) or not value.strip() for value in values):
             return None
         result[key] = [value.strip() for value in values]
+        if len(set(result[key])) != len(result[key]):
+            return None
+    outcome_sets = [set(result[key]) for key in keys]
+    if any(
+        outcome_sets[left] & outcome_sets[right]
+        for left in range(len(outcome_sets))
+        for right in range(left + 1, len(outcome_sets))
+    ):
+        return None
     changed_files = result.get("changed_files", [])
     if not isinstance(changed_files, list) or any(not isinstance(value, str) or not value.strip() for value in changed_files):
         return None
@@ -3097,8 +3137,7 @@ def _runtime_receipt_from_evidence(evidence: Any, node: Optional[dict[str, Any]]
     if structure_request is not None and not _structure_request_valid(structure_request):
         return None
     if node is not None:
-        metadata = _loads(node.get("metadata_json"))
-        allowed = {str(value) for value in metadata.get("goal_item_keys") or []}
+        allowed = _node_linked_goal_item_keys(conn, node)
         referenced = set().union(*(set(result[key]) for key in keys))
         if not referenced.issubset(allowed):
             return None
@@ -3107,9 +3146,14 @@ def _runtime_receipt_from_evidence(evidence: Any, node: Optional[dict[str, Any]]
     return result
 
 
-def _receipt_evidence_valid(evidence: Any, *, node: Optional[dict[str, Any]] = None) -> bool:
+def _receipt_evidence_valid(
+    evidence: Any,
+    *,
+    node: Optional[dict[str, Any]] = None,
+    conn: Optional[sqlite3.Connection] = None,
+) -> bool:
     if _is_codex_lane_evidence(evidence):
-        return _runtime_receipt_from_evidence(evidence, node) is not None
+        return _runtime_receipt_from_evidence(evidence, node, conn=conn) is not None
     if not isinstance(evidence, dict) or not evidence:
         return False
     return any(
@@ -3447,7 +3491,11 @@ def reconcile_runtime_materializations(
                 run_id=snapshot_run_id,
             )
             continue
-        if snapshot.task.status in {"done", "blocked"} and not _receipt_evidence_valid(snapshot.evidence, node=node):
+        if snapshot.task.status in {"done", "blocked"} and not _receipt_evidence_valid(
+            snapshot.evidence,
+            node=node,
+            conn=conn,
+        ):
             failure_type = "receipt_missing" if not snapshot.evidence else "receipt_invalid"
             _update_materialization_recovery_status(
                 conn,
@@ -4176,7 +4224,7 @@ def detect_goal_gaps(conn: sqlite3.Connection, job_id: str) -> list[dict[str, An
             gap_type = "partial_evidence"
         elif latest_ledger and latest_ledger["satisfaction"] == "full" and latest_ledger[
             "verification_state"
-        ] in {"unverified", "self_reported"}:
+        ] in {"unverified", "self_reported", "implementation_verified", "verified"}:
             gap_type = "needs_verification" if item["verifier_required"] else "partial_evidence"
         else:
             gap_type = "missing_evidence"
@@ -4490,6 +4538,8 @@ def advance_runtime_job(
     max_patches: int = 1,
     auto_compact: bool = True,
     compaction_policy: Optional[dict[str, Any]] = None,
+    compaction_provider: Any = None,
+    compaction_fallback_to_deterministic: bool = True,
 ) -> AdvanceResult:
     ensure_runtime_schema(conn)
     recovery = reconcile_runtime_materializations(conn, job_id, board=board)
@@ -4501,6 +4551,9 @@ def advance_runtime_job(
         if ingest_runtime_node_evidence(conn, node["id"], board=board):
             ingested.append(node["node_key"])
     reduction = reduce_runtime_job(conn, job_id)
+    ensured_verifiers = ensure_required_evaluator_nodes(conn, job_id)
+    if ensured_verifiers:
+        reduction = reduce_runtime_job(conn, job_id)
     materialized: list[str] = []
     if create_tasks:
         for node in conn.execute(
@@ -4757,6 +4810,8 @@ def advance_runtime_job(
                             job_id,
                             profile_name=policy_result["profile_name"],
                             reason=policy_result["reason"],
+                            compaction_provider=compaction_provider,
+                            fallback_to_deterministic=compaction_fallback_to_deterministic,
                         )
                 final = status_runtime_job(conn, job_id)["job"]["state"]
                 return AdvanceResult(
@@ -4824,6 +4879,8 @@ def advance_runtime_job(
                 job_id,
                 profile_name=policy_result["profile_name"],
                 reason=policy_result["reason"],
+                compaction_provider=compaction_provider,
+                fallback_to_deterministic=compaction_fallback_to_deterministic,
             )
     final_state = _job(conn, job_id)["state"]
     events = [row["event_type"] for row in conn.execute("SELECT event_type FROM execution_events WHERE job_id = ? ORDER BY id", (job_id,))]
@@ -4837,6 +4894,126 @@ def advance_runtime_job(
         events=events,
         recovery=recovery,
     )
+
+
+def ensure_required_evaluator_nodes(conn: sqlite3.Connection, job_id: str) -> list[str]:
+    """Deterministically create fixed-target evaluator nodes for opted-in jobs."""
+
+    job = _job(conn, job_id)
+    job_metadata = _loads(job.get("metadata_json"))
+    policy = job_metadata.get("verification_policy")
+    if not isinstance(policy, dict) or policy.get("mode") != "required_evaluator":
+        return []
+    created: list[str] = []
+    contract = _contract(conn, job_id)
+    items = conn.execute(
+        "SELECT * FROM goal_items WHERE contract_id = ? AND required = 1 AND verifier_required = 1 ORDER BY item_key",
+        (contract["id"],),
+    ).fetchall()
+    for item in items:
+        if item["state"] in {"satisfied", "waived"}:
+            continue
+        ledger = conn.execute(
+            """
+            SELECT * FROM progress_ledger
+             WHERE goal_item_id = ? AND satisfaction = 'full'
+             ORDER BY created_at DESC, rowid DESC LIMIT 1
+            """,
+            (item["id"],),
+        ).fetchone()
+        if ledger is None or not ledger["node_id"]:
+            continue
+        target_node = conn.execute("SELECT * FROM execution_nodes WHERE id = ?", (ledger["node_id"],)).fetchone()
+        if target_node is None or target_node["node_type"] == "verification" or target_node["state"] != "succeeded":
+            continue
+        target_materialization = conn.execute(
+            """
+            SELECT * FROM node_materializations
+             WHERE node_id = ? AND status = 'succeeded'
+             ORDER BY attempt DESC LIMIT 1
+            """,
+            (target_node["id"],),
+        ).fetchone()
+        if target_materialization is None:
+            continue
+        existing = conn.execute(
+            """
+            SELECT verifier.node_key
+              FROM node_relations nr
+              JOIN execution_nodes verifier ON verifier.id = nr.from_node_id
+             WHERE nr.job_id = ? AND nr.to_node_id = ? AND nr.relation_type = 'verifies'
+            """,
+            (job_id, target_node["id"]),
+        ).fetchall()
+        if existing:
+            continue
+        ledger_metadata = _loads(ledger["metadata_json"])
+        verification = ledger_metadata.get("verification")
+        workspace_revision = ledger_metadata.get("workspace_revision")
+        if workspace_revision is None and isinstance(verification, dict):
+            workspace_revision = verification.get("workspace_revision")
+        if policy.get("require_workspace_revision", False) and not workspace_revision:
+            _event_once(
+                conn,
+                job_id,
+                "evaluator_target_missing_revision",
+                f"{item['item_key']}:{target_materialization['id']}",
+                {
+                    "goal_item_key": item["item_key"],
+                    "target_node_id": target_node["id"],
+                    "target_materialization_id": target_materialization["id"],
+                },
+            )
+            continue
+        target_revision = str(workspace_revision or f"materialization:{target_materialization['id']}")
+        safe_goal_key = "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in item["item_key"])
+        verifier_key = f"verify-{safe_goal_key}-{str(target_materialization['id'])[-8:]}"
+        verifier_contract = {
+            "outcome": f"Independently verify goal item {item['item_key']} at fixed revision {target_revision}.",
+            "acceptance_criteria": _loads(item["acceptance_criteria_json"]),
+            "success_evidence": ["official_evaluator_result", "verification_provenance"],
+            "declared_write_scope": [],
+            "prohibited_actions": ["modify_target_workspace", "production_deployment"],
+        }
+        _apply_op(
+            conn,
+            job_id,
+            {
+                "op": "insert_verifier",
+                "target_node_key": target_node["node_key"],
+                "target_materialization_attempt": int(target_materialization["attempt"]),
+                "target_workspace_revision": target_revision,
+                "verifier_node_key": verifier_key,
+                "title": f"Independently verify {item['item_key']}",
+                "description": f"Run the configured evaluator against fixed target {target_revision}.",
+                "goal_item_keys": [item["item_key"]],
+                "gap_keys": [f"{item['item_key']}:needs_verification"],
+                "assignee": policy.get("assignee"),
+                "requested_capabilities": policy.get("requested_capabilities") or [],
+                "contract": verifier_contract,
+            },
+        )
+        conn.execute(
+            "UPDATE runtime_jobs SET graph_revision = graph_revision + 1, updated_at = ? WHERE id = ?",
+            (_now(), job_id),
+        )
+        verifier = _node_by_key(conn, job_id, verifier_key)
+        _event(
+            conn,
+            job_id,
+            "required_evaluator_created",
+            {
+                "goal_item_key": item["item_key"],
+                "verifier_node_key": verifier_key,
+                "target_node_key": target_node["node_key"],
+                "target_materialization_id": target_materialization["id"],
+                "target_revision": target_revision,
+            },
+            node_id=verifier["id"],
+            source="verification_policy",
+        )
+        created.append(verifier_key)
+    return created
 
 
 def advance_runtime_job_until_idle(
@@ -4920,6 +5097,8 @@ def supervisor_runtime_tick(
     max_patches: int = 1,
     auto_compact: bool = True,
     compaction_policy: Optional[dict[str, Any]] = None,
+    compaction_provider: Any = None,
+    compaction_fallback_to_deterministic: bool = True,
 ) -> dict[str, Any]:
     """Run one production supervisor tick under a resumable DB lease."""
 
@@ -4947,6 +5126,8 @@ def supervisor_runtime_tick(
             max_patches=max_patches,
             auto_compact=auto_compact,
             compaction_policy=compaction_policy,
+            compaction_provider=compaction_provider,
+            compaction_fallback_to_deterministic=compaction_fallback_to_deterministic,
         )
         return {
             "job_id": job_id,
@@ -4975,6 +5156,10 @@ def supervise_runtime_jobs_once(
     create_tasks: bool = True,
     decision_provider: Optional[Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]] = None,
     lock_ttl_seconds: int = 60,
+    auto_compact: bool = True,
+    compaction_policy: Optional[dict[str, Any]] = None,
+    compaction_provider: Any = None,
+    compaction_fallback_to_deterministic: bool = True,
 ) -> dict[str, Any]:
     """Poll resumable runtime jobs and run at most one leased tick per job."""
 
@@ -4998,6 +5183,10 @@ def supervise_runtime_jobs_once(
             board=board,
             create_tasks=create_tasks,
             decision_provider=decision_provider,
+            auto_compact=auto_compact,
+            compaction_policy=compaction_policy,
+            compaction_provider=compaction_provider,
+            compaction_fallback_to_deterministic=compaction_fallback_to_deterministic,
         )
         for row in rows
     ]
@@ -5233,6 +5422,7 @@ def _worker_context(
     continuity: Optional[dict[str, Any]] = None,
 ) -> str:
     metadata = _loads(node.get("metadata_json"))
+    job_metadata = _loads(job.get("metadata_json"))
     constraints = _loads(node.get("constraints_json"))
     capability_policy = metadata.get("capability_policy")
     if not isinstance(capability_policy, dict):
@@ -5279,6 +5469,29 @@ def _worker_context(
             "context_reacquisition": bool((continuity or {}).get("context_reacquisition")),
         },
     }
+    if node.get("node_type") == "verification":
+        try:
+            target = _independent_verification_target(conn, node)
+        except ValueError:
+            target = None
+        if target is not None:
+            footer["runtime_verification_target"] = {
+                "target_node_id": target["target_node_id"],
+                "target_revision": target["target_revision"],
+                "target_materialization_id": target["target_materialization"]["id"],
+                "target_evidence_ref": target["target_evidence_ref"],
+                "producer_kind": "runtime_evaluator",
+                "provenance_required": True,
+            }
+    phase4g8_worker_boundary = ""
+    if job_metadata.get("phase4g8_run_id") and node.get("node_type") != "verification":
+        phase4g8_worker_boundary = (
+            "Phase 4G8 trusted-evaluator boundary: an independent official evaluator runs after "
+            "your terminal receipt. Do not inspect Hermes databases, other worker session histories, "
+            "protected evaluator files, or evaluator artifacts. Use only the bounded failure diagnostics "
+            "provided in this node context. Fix repository source and tests; do not alter the evaluator "
+            "environment, toolchain, or harness to make evidence pass.\n\n"
+        )
     return (
         f"# Runtime node\n\n"
         f"Objective: {job['objective']}\n\n"
@@ -5288,9 +5501,13 @@ def _worker_context(
         f"Gaps: {', '.join(metadata.get('gap_keys') or []) or '-'}\n\n"
         f"Node contract: {json.dumps(constraints.get('contract') or {}, sort_keys=True)}\n\n"
         f"Dependencies:\n{deps}\n\n"
+        f"{phase4g8_worker_boundary}"
         "Expected receipt fields: verdict, summary, claimed_goal_items, "
         "partial_goal_items, unmet_goal_items, verification, artifacts, "
-        "active_assumptions, rejected_approaches, known_failure_boundaries.\n\n"
+        "active_assumptions, rejected_approaches, known_failure_boundaries, "
+        "optional structure_request, and verification_provenance for verification nodes. "
+        "structure_request is terminal-only, orthogonal to verdict, requires an allowed reason_type "
+        "and evidence_refs for every discovered gap, and cannot mutate the runtime graph.\n\n"
         "Capability policy: obey Runtime footer.runtime_capability_policy. "
         "Do not perform denied actions; return blocked or human_required instead.\n\n"
         f"Runtime footer: {json.dumps(footer, sort_keys=True)}"
@@ -5340,7 +5557,7 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
         return False
     raw_evidence = dict(snapshot.evidence or {})
     metadata = (
-        _runtime_receipt_from_evidence(raw_evidence, dict(node))
+        _runtime_receipt_from_evidence(raw_evidence, dict(node), conn=conn)
         if _is_codex_lane_evidence(raw_evidence)
         else raw_evidence
     )
@@ -5496,13 +5713,44 @@ def update_progress_ledger(conn: sqlite3.Connection, node_id: str, evidence: dic
     summary = str(evidence.get("summary") or "")
     verification = evidence.get("verification") or {}
     verification_passed = bool(verification.get("passed")) if isinstance(verification, dict) else False
-    explicit_verification_state = str(evidence.get("verification_state") or "").strip()
-    default_verification_state = _default_verification_state(dict(node), evidence, verification_passed)
+    verification_state, provenance_result = _verification_state_from_evidence(
+        conn,
+        dict(node),
+        evidence,
+        verification_passed,
+    )
     metadata = _ledger_metadata(evidence)
-    claimed_items = evidence.get("claimed_goal_item_keys") or evidence.get("claimed_goal_items") or []
-    partial_items = evidence.get("partial_goal_item_keys") or evidence.get("partial_goal_items") or []
-    unmet_items = evidence.get("unmet_goal_item_keys") or evidence.get("unmet_goal_items") or []
-    contradicted_items = evidence.get("contradicted_goal_item_keys") or evidence.get("contradicted_goal_items") or []
+    metadata["verification_provenance_result"] = provenance_result
+    def unique_items(values: Any) -> list[Any]:
+        result: list[Any] = []
+        seen: set[str] = set()
+        for value in values or []:
+            key = str(value)
+            if key not in seen:
+                seen.add(key)
+                result.append(value)
+        return result
+
+    claimed_items = unique_items(evidence.get("claimed_goal_item_keys") or evidence.get("claimed_goal_items"))
+    partial_items = unique_items(evidence.get("partial_goal_item_keys") or evidence.get("partial_goal_items"))
+    unmet_items = unique_items(evidence.get("unmet_goal_item_keys") or evidence.get("unmet_goal_items"))
+    contradicted_items = unique_items(
+        evidence.get("contradicted_goal_item_keys") or evidence.get("contradicted_goal_items") or []
+    )
+    contradicted_keys = {str(key) for key in contradicted_items}
+    claimed_items = [key for key in claimed_items if str(key) not in contradicted_keys]
+    claimed_keys = {str(key) for key in claimed_items}
+    partial_items = [
+        key for key in partial_items
+        if str(key) not in contradicted_keys and str(key) not in claimed_keys
+    ]
+    partial_keys = {str(key) for key in partial_items}
+    unmet_items = [
+        key for key in unmet_items
+        if str(key) not in contradicted_keys
+        and str(key) not in claimed_keys
+        and str(key) not in partial_keys
+    ]
     for key in claimed_items:
         item = _goal_item_optional(conn, job_id, str(key))
         if item:
@@ -5513,7 +5761,7 @@ def update_progress_ledger(conn: sqlite3.Connection, node_id: str, evidence: dic
                 item["id"],
                 node_id,
                 str(evidence.get("satisfaction") or "full"),
-                explicit_verification_state or default_verification_state,
+                verification_state,
                 summary,
                 metadata,
             )
@@ -5591,16 +5839,270 @@ def waive_goal_item(
     }
 
 
-def _default_verification_state(node: dict[str, Any], evidence: dict[str, Any], verification_passed: bool) -> str:
+def _verification_state_from_evidence(
+    conn: sqlite3.Connection,
+    node: dict[str, Any],
+    evidence: dict[str, Any],
+    verification_passed: bool,
+) -> tuple[str, dict[str, Any]]:
     verification = evidence.get("verification")
     verdict = _normalize_verdict(evidence.get("verdict") or "")
+    if verification_passed and node.get("node_type") == "verification":
+        provenance = _validate_independent_verification_provenance(conn, node, evidence)
+        return ("independently_verified" if provenance["valid"] else "self_reported", provenance)
     if verification_passed:
-        return "verified"
+        return "implementation_verified", {
+            "valid": False,
+            "reason": "implementation verification is not independent",
+            "producer_node_id": node.get("id"),
+        }
     if node.get("node_type") == "verification" and (verification or verdict == "failed"):
-        return "failed"
+        return "failed", {
+            "valid": False,
+            "reason": "independent verifier reported failure",
+            "producer_node_id": node.get("id"),
+        }
     if isinstance(verification, dict) and verification.get("passed") is False and node.get("node_type") == "verification":
-        return "failed"
-    return "self_reported"
+        return "failed", {
+            "valid": False,
+            "reason": "independent verifier reported failure",
+            "producer_node_id": node.get("id"),
+        }
+    return "self_reported", {
+        "valid": False,
+        "reason": "verification did not pass",
+        "producer_node_id": node.get("id"),
+    }
+
+
+def _validate_independent_verification_provenance(
+    conn: sqlite3.Connection,
+    node: dict[str, Any],
+    evidence: dict[str, Any],
+) -> dict[str, Any]:
+    provenance = evidence.get("verification_provenance")
+    if not isinstance(provenance, dict):
+        verification = evidence.get("verification")
+        provenance = verification.get("provenance") if isinstance(verification, dict) else None
+    if not isinstance(provenance, dict):
+        return {"valid": False, "reason": "verification provenance is required"}
+    required = {
+        "producer_kind",
+        "producer_node_id",
+        "producer_task_id",
+        "producer_session_id",
+        "target_revision",
+        "target_materialization_id",
+        "target_evidence_ref",
+        "independent_from_session_id",
+    }
+    missing = sorted(field for field in required if not str(provenance.get(field) or "").strip())
+    if missing:
+        return {"valid": False, "reason": "verification provenance missing fields", "missing_fields": missing}
+    if provenance["producer_kind"] not in INDEPENDENT_VERIFIER_PRODUCER_KINDS:
+        return {"valid": False, "reason": "unsupported independent verifier producer kind"}
+    if str(provenance["producer_node_id"]) != str(node["id"]):
+        return {"valid": False, "reason": "producer node does not match verifier node"}
+    if str(provenance["producer_task_id"]) != str(node.get("latest_task_id") or ""):
+        return {"valid": False, "reason": "producer task does not match verifier materialization"}
+    if str(provenance["producer_session_id"]) == str(provenance["independent_from_session_id"]):
+        return {"valid": False, "reason": "verifier and implementation sessions are not independent"}
+
+    try:
+        target = _independent_verification_target(conn, node)
+    except ValueError as exc:
+        return {"valid": False, "reason": str(exc)}
+    target_metadata = target["target_metadata"]
+    target_materialization = target["target_materialization"]
+    expected_evidence_ref = target["target_evidence_ref"]
+    expected_revision = target["target_revision"]
+    if str(provenance["target_materialization_id"]) != str(target_materialization["id"]):
+        return {"valid": False, "reason": "target materialization is stale or mismatched"}
+    if str(provenance["target_evidence_ref"]) != expected_evidence_ref:
+        return {"valid": False, "reason": "target evidence reference is stale or mismatched"}
+    if str(provenance["target_revision"]) != str(expected_revision):
+        return {"valid": False, "reason": "target revision is stale or mismatched"}
+
+    verifier_materialization = conn.execute(
+        "SELECT * FROM node_materializations WHERE node_id = ? AND task_id = ?",
+        (node["id"], node.get("latest_task_id")),
+    ).fetchone()
+    if verifier_materialization is None:
+        return {"valid": False, "reason": "verifier materialization does not exist"}
+    producer_sessions = conn.execute(
+        "SELECT id, backend_session_key FROM backend_worker_sessions WHERE node_id = ? ORDER BY updated_at DESC",
+        (node["id"],),
+    ).fetchall()
+    allowed_producer_sessions = {
+        value
+        for row in producer_sessions
+        for value in (str(row["id"]), str(row["backend_session_key"]))
+        if value
+    } or {f"materialization:{verifier_materialization['id']}"}
+    if str(provenance["producer_session_id"]) not in allowed_producer_sessions:
+        return {"valid": False, "reason": "producer session does not match verifier execution"}
+
+    target_sessions = conn.execute(
+        "SELECT id, backend_session_key FROM backend_worker_sessions WHERE node_id = ? ORDER BY updated_at DESC",
+        (target["target_node_id"],),
+    ).fetchall()
+    allowed_target_sessions = {
+        value
+        for row in target_sessions
+        for value in (str(row["id"]), str(row["backend_session_key"]))
+        if value
+    } or {f"materialization:{target_materialization['id']}"}
+    if str(provenance["independent_from_session_id"]) not in allowed_target_sessions:
+        return {"valid": False, "reason": "implementation session does not match fixed target execution"}
+
+    return {
+        "valid": True,
+        "reason": "independent verifier provenance accepted",
+        "producer_kind": provenance["producer_kind"],
+        "producer_node_id": node["id"],
+        "producer_task_id": node.get("latest_task_id"),
+        "producer_session_id": provenance["producer_session_id"],
+        "target_node_id": target["target_node_id"],
+        "target_materialization_id": target_materialization["id"],
+        "target_evidence_ref": expected_evidence_ref,
+        "target_revision": expected_revision,
+        "independent_from_session_id": provenance["independent_from_session_id"],
+        "fixed_target": target_metadata,
+    }
+
+
+def _independent_verification_target(conn: sqlite3.Connection, node: dict[str, Any]) -> dict[str, Any]:
+    relation = conn.execute(
+        """
+        SELECT nr.*, target.id AS target_node_id
+          FROM node_relations nr
+          JOIN execution_nodes target ON target.id = nr.to_node_id
+         WHERE nr.job_id = ? AND nr.from_node_id = ? AND nr.relation_type = 'verifies'
+         ORDER BY nr.created_at DESC, nr.rowid DESC
+         LIMIT 1
+        """,
+        (node["job_id"], node["id"]),
+    ).fetchone()
+    if relation is None:
+        raise ValueError("verifier has no fixed target relation")
+    target_metadata = _loads(relation["metadata_json"])
+    if not any(target_metadata.get(field) not in {None, ""} for field in VERIFIER_TARGET_FIELDS):
+        raise ValueError("verifier relation has no fixed target")
+
+    attempt = target_metadata.get("target_materialization_attempt")
+    if attempt is not None:
+        target_materialization = conn.execute(
+            "SELECT * FROM node_materializations WHERE node_id = ? AND attempt = ?",
+            (relation["target_node_id"], int(attempt)),
+        ).fetchone()
+    else:
+        target_materialization = conn.execute(
+            """
+            SELECT * FROM node_materializations
+             WHERE node_id = ? AND status IN ('succeeded', 'failed', 'blocked')
+             ORDER BY attempt DESC LIMIT 1
+            """,
+            (relation["target_node_id"],),
+        ).fetchone()
+    if target_materialization is None:
+        raise ValueError("fixed target materialization does not exist")
+
+    target_ledger = conn.execute(
+        """
+        SELECT evidence_ref FROM progress_ledger
+         WHERE job_id = ? AND node_id = ?
+         ORDER BY created_at DESC, rowid DESC LIMIT 1
+        """,
+        (node["job_id"], relation["target_node_id"]),
+    ).fetchone()
+    expected_evidence_ref = str(target_ledger["evidence_ref"]) if target_ledger else f"node:{relation['target_node_id']}"
+    expected_revision = target_metadata.get("target_workspace_revision")
+    if expected_revision is None:
+        expected_revision = f"materialization:{target_materialization['id']}"
+    return {
+        "target_metadata": target_metadata,
+        "target_node_id": relation["target_node_id"],
+        "target_materialization": dict(target_materialization),
+        "target_evidence_ref": expected_evidence_ref,
+        "target_revision": expected_revision,
+    }
+
+
+def build_independent_verification_provenance(
+    conn: sqlite3.Connection,
+    verifier_node_id: str,
+    *,
+    producer_kind: str = "runtime_evaluator",
+    producer_session_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Build the DB-bound provenance contract an evaluator receipt must return."""
+
+    node = conn.execute("SELECT * FROM execution_nodes WHERE id = ?", (verifier_node_id,)).fetchone()
+    if node is None or node["node_type"] != "verification":
+        raise ValueError("independent verification provenance requires a verification node")
+    if not node["latest_task_id"]:
+        raise ValueError("verification node must be materialized before building provenance")
+    target = _independent_verification_target(conn, dict(node))
+    verifier_materialization = conn.execute(
+        "SELECT * FROM node_materializations WHERE node_id = ? AND task_id = ?",
+        (node["id"], node["latest_task_id"]),
+    ).fetchone()
+    if verifier_materialization is None:
+        raise ValueError("verifier materialization does not exist")
+    producer_session = conn.execute(
+        "SELECT id, backend_session_key FROM backend_worker_sessions WHERE node_id = ? ORDER BY updated_at DESC LIMIT 1",
+        (node["id"],),
+    ).fetchone()
+    target_session = conn.execute(
+        "SELECT id, backend_session_key FROM backend_worker_sessions WHERE node_id = ? ORDER BY updated_at DESC LIMIT 1",
+        (target["target_node_id"],),
+    ).fetchone()
+    return {
+        "producer_kind": producer_kind,
+        "producer_node_id": node["id"],
+        "producer_task_id": node["latest_task_id"],
+        "producer_session_id": str(
+            producer_session_id
+            or (producer_session["backend_session_key"] if producer_session else "")
+            or f"materialization:{verifier_materialization['id']}"
+        ),
+        "target_revision": target["target_revision"],
+        "target_materialization_id": target["target_materialization"]["id"],
+        "target_evidence_ref": target["target_evidence_ref"],
+        "independent_from_session_id": str(target_session["backend_session_key"])
+        if target_session else f"materialization:{target['target_materialization']['id']}",
+    }
+
+
+def bind_runtime_receipt_provenance(
+    conn: sqlite3.Connection,
+    task_id: str,
+    runtime_receipt: Optional[dict[str, Any]],
+    *,
+    backend_session_id: Optional[str] = None,
+    producer_kind: str = "runtime_evaluator",
+) -> Optional[dict[str, Any]]:
+    """Attach trusted local identity fields to a verification receipt."""
+
+    if not isinstance(runtime_receipt, dict):
+        return runtime_receipt
+    node = conn.execute(
+        "SELECT * FROM execution_nodes WHERE latest_task_id = ?",
+        (task_id,),
+    ).fetchone()
+    if node is None or node["node_type"] != "verification":
+        return runtime_receipt
+    verification = runtime_receipt.get("verification")
+    if not isinstance(verification, dict) or verification.get("passed") is not True:
+        return runtime_receipt
+    result = dict(runtime_receipt)
+    result["verification_provenance"] = build_independent_verification_provenance(
+        conn,
+        node["id"],
+        producer_kind=producer_kind,
+        producer_session_id=backend_session_id,
+    )
+    return result
 
 
 def _ledger_metadata(evidence: dict[str, Any]) -> dict[str, Any]:
@@ -5617,6 +6119,9 @@ def _ledger_metadata(evidence: dict[str, Any]) -> dict[str, Any]:
         "artifact_refs",
         "verification",
         "verification_refs",
+        "verification_provenance",
+        "official_evaluator_result",
+        "workspace_revision",
         "remaining_gaps",
         "new_constraints",
         "active_assumptions",
@@ -5684,7 +6189,7 @@ def _refresh_goal_item_states(conn: sqlite3.Connection, contract_id: str) -> Non
         elif latest and latest["satisfaction"] == "waived":
             state = "waived"
         elif latest and latest["satisfaction"] == "full" and (
-            latest["verification_state"] == "verified"
+            latest["verification_state"] in {"independently_verified", "waived"}
             or (not item["verifier_required"] and latest["verification_state"] not in {"failed", "failed_verification"})
         ):
             state = "satisfied"

@@ -1611,6 +1611,58 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     )
     rt_continuity_smoke.add_argument("--json", action="store_true")
 
+    rt_phase4g8 = runtime_sub.add_parser(
+        "phase4g8",
+        help="Run Phase 4G8 qualification and fault-trigger checks",
+    )
+    phase4g8_sub = rt_phase4g8.add_subparsers(dest="phase4g8_action", required=True)
+    phase4g8_prepare = phase4g8_sub.add_parser(
+        "prepare-swe-evo",
+        help="Create protected specs from the locked official SWE-EVO Arrow artifact",
+    )
+    phase4g8_prepare.add_argument("--arrow", required=True)
+    phase4g8_prepare.add_argument("--output-root", required=True)
+    phase4g8_prepare.add_argument("--harness-python", required=True)
+    phase4g8_prepare.add_argument("--instance-id", action="append", default=[])
+    phase4g8_prepare.add_argument(
+        "--mirror",
+        action="append",
+        default=[],
+        metavar="INSTANCE_ID=PATH",
+        help="Repeat once for each selected instance",
+    )
+    phase4g8_prepare.add_argument("--expected-arrow-sha256", default=None)
+    phase4g8_prepare.add_argument("--pip-index-url", default=None)
+    phase4g8_prepare.add_argument("--pip-trusted-host", default=None)
+    phase4g8_prepare.add_argument("--json", action="store_true")
+    phase4g8_run = phase4g8_sub.add_parser(
+        "run-swe-evo",
+        help="Run one qualified SWE-EVO instance through the real Phase 4G8 path",
+    )
+    phase4g8_run.add_argument("--spec", required=True)
+    phase4g8_run.add_argument("--run-root", required=True)
+    phase4g8_run.add_argument("--source-codex-home", default="~/.codex")
+    phase4g8_run.add_argument("--case-size", choices=["small", "medium", "large"], required=True)
+    phase4g8_run.add_argument("--max-wall-seconds", type=float, default=14400)
+    phase4g8_run.add_argument("--worker-timeout-seconds", type=int, default=7200)
+    phase4g8_run.add_argument("--max-unresolved-evaluator-attempts", type=int, default=3)
+    phase4g8_run.add_argument("--execute-real", action="store_true", required=True)
+    phase4g8_run.add_argument("--json", action="store_true")
+    phase4g8_qualify = phase4g8_sub.add_parser("qualify", help="Run base/gold oracle qualification")
+    phase4g8_qualify.add_argument("--spec", required=True)
+    phase4g8_qualify.add_argument("--output-root", required=True)
+    phase4g8_qualify.add_argument("--min-free-gb", type=float, default=8.0)
+    phase4g8_qualify.add_argument("--json", action="store_true")
+    phase4g8_trigger = phase4g8_sub.add_parser("trigger-status", help="Evaluate an exact DB fault trigger")
+    phase4g8_trigger.add_argument("--job-id", required=True)
+    phase4g8_trigger.add_argument(
+        "--trigger",
+        choices=["worker_running", "receipt_before_ingest", "lease_expired"],
+        required=True,
+    )
+    phase4g8_trigger.add_argument("--node-key", default=None)
+    phase4g8_trigger.add_argument("--json", action="store_true")
+
     rt_list = runtime_sub.add_parser("list", aliases=["ls"], help="List runtime jobs")
     rt_list.add_argument("--state", default=None)
     rt_list.add_argument("--limit", type=int, default=50)
@@ -1680,6 +1732,17 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     rt_daemon.add_argument("--profile", default="graph_patch_decision")
     rt_daemon.add_argument("--max-retries", type=int, default=1)
     rt_daemon.add_argument("--timeout", type=float, default=None)
+    rt_daemon.add_argument(
+        "--compaction-provider",
+        choices=["deterministic", "real"],
+        default="deterministic",
+        help="Compaction provider used by daemon production polls",
+    )
+    rt_daemon.add_argument("--compaction-profile", default="token_budget_compaction")
+    rt_daemon.add_argument("--compaction-max-retries", type=int, default=1)
+    rt_daemon.add_argument("--compaction-timeout", type=float, default=None)
+    rt_daemon.add_argument("--compaction-no-fallback", action="store_true")
+    rt_daemon.add_argument("--compaction-max-active-segment-tokens", type=int, default=None)
     rt_daemon.add_argument("--verbose", action="store_true")
     rt_daemon.add_argument("--json", action="store_true")
 
@@ -2248,6 +2311,8 @@ def _dispatch_runtime(args: argparse.Namespace) -> int:
         return _cmd_runtime_worker_smoke(args)
     if sub == "continuity-smoke":
         return _cmd_runtime_continuity_smoke(args)
+    if sub == "phase4g8":
+        return _cmd_runtime_phase4g8(args)
     if sub == "advance":
         return _cmd_runtime_advance(args)
     if sub == "supervise":
@@ -2296,6 +2361,26 @@ def _runtime_decision_provider_from_args(args: argparse.Namespace):
         profile_name=getattr(args, "profile", None) or "graph_patch_decision",
         max_retries=getattr(args, "max_retries", 1),
         timeout_seconds=getattr(args, "timeout", None),
+        explicit_base_url=source.get("explicit_base_url"),
+        explicit_api_key=source.get("explicit_api_key"),
+    )
+
+
+def _runtime_compaction_provider_from_args(args: argparse.Namespace):
+    from hermes_cli import kanban_runtime_decision as rd
+
+    mode = getattr(args, "compaction_provider", "deterministic")
+    if mode == "deterministic":
+        return None
+    if mode != "real":
+        raise ValueError(f"unknown runtime compaction provider mode {mode!r}")
+    source = _runtime_model_source_from_args(args, require_for_real=True)
+    return rd.RuntimeCompactionProvider(
+        provider_name=source["provider_name"],
+        model=source["model"],
+        profile_name=getattr(args, "compaction_profile", None) or "token_budget_compaction",
+        max_retries=getattr(args, "compaction_max_retries", 1),
+        timeout_seconds=getattr(args, "compaction_timeout", None),
         explicit_base_url=source.get("explicit_base_url"),
         explicit_api_key=source.get("explicit_api_key"),
     )
@@ -2861,23 +2946,115 @@ def _cmd_runtime_supervise(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_runtime_phase4g8(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_phase4g8 as p4g8
+
+    action = getattr(args, "phase4g8_action", None)
+    try:
+        if action == "prepare-swe-evo":
+            from hermes_cli import phase4g8_swe_evo as swe_evo
+
+            instance_ids = list(args.instance_id or swe_evo.SWE_EVO_OFFICIAL_INSTANCE_IDS)
+            mirrors: dict[str, Path] = {}
+            for value in args.mirror:
+                instance_id, separator, path = str(value).partition("=")
+                if not separator or not instance_id.strip() or not path.strip():
+                    raise ValueError("--mirror must use INSTANCE_ID=PATH")
+                if instance_id in mirrors:
+                    raise ValueError(f"duplicate --mirror for {instance_id}")
+                mirrors[instance_id] = Path(path).expanduser()
+            rows = swe_evo.load_swe_evo_rows(
+                Path(args.arrow),
+                instance_ids,
+                expected_sha256=args.expected_arrow_sha256 or swe_evo.SWE_EVO_ARROW_SHA256,
+            )
+            payload = swe_evo.prepare_swe_evo_specs(
+                rows,
+                output_root=Path(args.output_root).expanduser(),
+                local_mirrors=mirrors,
+                harness_python=Path(args.harness_python),
+                evaluator_env={
+                    key: value
+                    for key, value in {
+                        "PIP_INDEX_URL": args.pip_index_url,
+                        "PIP_TRUSTED_HOST": args.pip_trusted_host,
+                    }.items()
+                    if value
+                },
+            )
+        elif action == "run-swe-evo":
+            from hermes_cli import kanban_runtime_phase4g8_run as phase4g8_run
+
+            payload = phase4g8_run.run_phase4g8_real_case(
+                qualification_spec_path=Path(args.spec).expanduser(),
+                run_root=Path(args.run_root).expanduser(),
+                source_codex_home=Path(args.source_codex_home).expanduser(),
+                case_size=args.case_size,
+                execute_real=bool(args.execute_real),
+                max_wall_seconds=args.max_wall_seconds,
+                worker_timeout_seconds=args.worker_timeout_seconds,
+                max_unresolved_evaluator_attempts=args.max_unresolved_evaluator_attempts,
+            )
+        elif action == "qualify":
+            spec = p4g8.load_qualification_spec(Path(args.spec).expanduser())
+            payload = p4g8.run_oracle_qualification(
+                spec,
+                output_root=Path(args.output_root).expanduser(),
+                min_free_bytes=max(0, int(float(args.min_free_gb) * 1024 * 1024 * 1024)),
+            )
+        elif action == "trigger-status":
+            with kb.connect() as conn:
+                payload = p4g8.evaluate_fault_trigger(
+                    conn,
+                    args.job_id,
+                    args.trigger,
+                    node_key=getattr(args, "node_key", None),
+                )
+        else:
+            raise ValueError(f"unknown Phase 4G8 action {action!r}")
+    except (ValueError, RuntimeError, OSError, json.JSONDecodeError) as exc:
+        print(f"kanban runtime phase4g8: {exc}", file=sys.stderr)
+        return 2
+    if getattr(args, "json", False):
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
 def _cmd_runtime_daemon(args: argparse.Namespace) -> int:
     from hermes_cli import kanban_runtime_supervisor as rs
 
     try:
         provider = _runtime_decision_provider_from_args(args)
+        compaction_provider = _runtime_compaction_provider_from_args(args)
+        provider_window = 0.0
         if getattr(args, "provider", "none") == "real":
             timeout = getattr(args, "timeout", None)
             if timeout is None or timeout <= 0:
                 raise ValueError("runtime daemon with --provider real requires a positive --timeout")
             retries = max(0, int(getattr(args, "max_retries", 1)))
-            margin = max(5.0, float(getattr(args, "interval", 5.0)))
-            required_ttl = timeout * (retries + 1) + margin
-            if int(getattr(args, "lock_ttl", 60)) <= required_ttl:
-                raise ValueError(
-                    "--lock-ttl must exceed the real provider timeout across all retries "
-                    f"plus reducer margin ({required_ttl:.1f}s)"
-                )
+            provider_window = timeout * (retries + 1)
+        compaction_window = 0.0
+        if getattr(args, "compaction_provider", "deterministic") == "real":
+            compaction_timeout = getattr(args, "compaction_timeout", None)
+            if compaction_timeout is None or compaction_timeout <= 0:
+                raise ValueError("runtime daemon with --compaction-provider real requires a positive --compaction-timeout")
+            compaction_retries = max(0, int(getattr(args, "compaction_max_retries", 1)))
+            compaction_window = compaction_timeout * (compaction_retries + 1)
+        margin = max(5.0, float(getattr(args, "interval", 5.0)))
+        required_ttl = provider_window + compaction_window + margin
+        if required_ttl > margin and int(getattr(args, "lock_ttl", 60)) <= required_ttl:
+            raise ValueError(
+                "--lock-ttl must exceed real decision and compaction provider retry windows "
+                f"plus reducer margin ({required_ttl:.1f}s)"
+            )
+        compaction_policy = None
+        compaction_threshold = getattr(args, "compaction_max_active_segment_tokens", None)
+        if compaction_threshold is not None:
+            if compaction_threshold < 1:
+                raise ValueError("--compaction-max-active-segment-tokens must be positive")
+            compaction_policy = {"max_active_segment_tokens": int(compaction_threshold)}
         board = kb.get_current_board()
         config = rs.RuntimeSupervisorDaemonConfig(
             board=board,
@@ -2893,6 +3070,8 @@ def _cmd_runtime_daemon(args: argparse.Namespace) -> int:
             health_host=getattr(args, "health_host", "127.0.0.1"),
             health_port=getattr(args, "health_port", None),
             readiness_timeout_seconds=getattr(args, "readiness_timeout", None),
+            compaction_policy=compaction_policy,
+            compaction_fallback_to_deterministic=not getattr(args, "compaction_no_fallback", False),
         )
 
         def on_poll(result: dict[str, Any]) -> None:
@@ -2918,6 +3097,7 @@ def _cmd_runtime_daemon(args: argparse.Namespace) -> int:
         report = rs.run_runtime_supervisor_daemon(
             config,
             decision_provider=provider,
+            compaction_provider=compaction_provider,
             on_poll=on_poll,
         )
     except (ValueError, OSError, rs.SupervisorAlreadyRunningError) as exc:

@@ -29,9 +29,17 @@ PATCH_OPS = {
 }
 DEFAULT_COMPACTION_POLICY = {
     "mode": "auto",
-    "max_active_segment_tokens": 12000,
-    "max_context_window_ratio": 0.8,
+    "max_active_segment_tokens": None,
+    "compaction_trigger_ratio": 0.65,
+    "max_context_window_ratio": 0.65,
     "context_window_tokens": 128000,
+    "reserved_output_tokens": 8192,
+    "reserved_reasoning_tokens": 32768,
+    "estimation_safety_tokens": 32768,
+    "max_compaction_input_ratio": 0.55,
+    "max_compaction_input_chars": 1000000,
+    "max_single_entry_chars": 16000,
+    "max_segment_entries": 200,
     "rejected_patch_threshold": 5,
     "noop_threshold": 5,
     "max_tail_entries": 8,
@@ -39,6 +47,16 @@ DEFAULT_COMPACTION_POLICY = {
     "default_profile": "token_budget_compaction",
     "fallback_degraded_threshold": 2,
 }
+COMPACTION_AUDIT_ENTRY_TYPES = frozenset({
+    "compaction_requested",
+    "compaction_provider_input",
+    "compaction_provider_output",
+    "compaction_fallback",
+    "compaction_event",
+    "checkpoint_created",
+    "checkpoint_rejected",
+})
+COMPACTION_NON_CONTEXT_ENTRY_TYPES = COMPACTION_AUDIT_ENTRY_TYPES | {"provider_input"}
 CHECKPOINT_FACT_SOURCE_REF_TYPES = {
     "satisfied_goal_items": {"goal_item_key", "evidence_ref"},
     "open_goal_gaps": {"gap_key"},
@@ -57,6 +75,10 @@ CHECKPOINT_FACT_SOURCE_REF_TYPES = {
 
 class ProviderPatchParseError(ValueError):
     """Raised when provider output is not a strict runtime graph patch."""
+
+
+class CompactionInputBudgetError(ValueError):
+    """Raised before provider invocation when compaction input exceeds its hard budget."""
 
 
 @dataclass(frozen=True)
@@ -572,7 +594,7 @@ def build_deterministic_checkpoint(
         ]
         verified = [
             entry for entry in entries
-            if entry["satisfaction"] == "full" and entry["verification_state"] in {"verified", "waived"}
+            if entry["satisfaction"] == "full" and entry["verification_state"] in {"independently_verified", "waived"}
         ]
         if verified:
             goal_items.append(
@@ -829,8 +851,8 @@ def _validate_checkpoint_fact_payload(
                         "reason": f"{key} {identity_ref[0]} does not match its provenance",
                     }
             if key == "satisfied_goal_items":
-                if item.get("verification_state") not in {"verified", "waived"}:
-                    return {"status": "rejected", "reason": "satisfied goal item must be verified or waived"}
+                if item.get("verification_state") not in {"independently_verified", "waived"}:
+                    return {"status": "rejected", "reason": "satisfied goal item must be independently verified or waived"}
 
     return {"status": "accepted"}
 
@@ -1059,35 +1081,108 @@ def _segment_range(conn: sqlite3.Connection, segment_id: str) -> dict[str, Any]:
     }
 
 
-def _segment_entries_for_compaction(conn: sqlite3.Connection, segment_id: str, *, max_entries: int = 200) -> list[dict[str, Any]]:
+def _entry_type_exclusion_sql(entry_types: set[str] | frozenset[str]) -> tuple[str, list[str]]:
+    ordered = sorted(entry_types)
+    return ", ".join("?" for _ in ordered), ordered
+
+
+def _project_compaction_entry(row: sqlite3.Row, *, max_chars: int) -> dict[str, Any]:
+    item = _row(row) or {}
+    raw = str(item.pop("payload_json", "") or "")
+    item.pop("payload_text", None)
+    item["source_estimated_tokens"] = int(item.pop("estimated_tokens", 0) or 0)
+    if len(raw) <= max_chars:
+        item["payload"] = _loads(raw)
+    else:
+        payload = _loads(raw)
+        scalar_summary = {}
+        if isinstance(payload, dict):
+            for key in (
+                "status", "state", "outcome", "verdict", "summary", "reason", "error",
+                "key", "gap_key", "node_key", "profile_name", "parse_status",
+            ):
+                value = payload.get(key)
+                if isinstance(value, (str, int, float, bool)) or value is None:
+                    scalar_summary[key] = (
+                        value[:1000] + "[truncated]"
+                        if isinstance(value, str) and len(value) > 1000
+                        else value
+                    )
+        item["payload"] = {
+            "truncated": True,
+            "payload_chars": len(raw),
+            "payload_sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+            "scalar_summary": scalar_summary,
+        }
+    item["projected_tokens"] = _estimate_tokens(item)
+    return item
+
+
+def _segment_entries_for_compaction(
+    conn: sqlite3.Connection,
+    segment_id: str,
+    *,
+    max_entries: int = 200,
+    max_single_entry_chars: int = 16000,
+) -> list[dict[str, Any]]:
+    placeholders, excluded = _entry_type_exclusion_sql(COMPACTION_NON_CONTEXT_ENTRY_TYPES)
     rows = conn.execute(
-        """
+        f"""
         SELECT id, entry_index, entry_type, decision_id, event_id, patch_id,
                graph_revision, ref_type, ref_id, payload_json, payload_text,
                estimated_tokens, created_at
           FROM decision_segment_entries
-         WHERE segment_id = ?
-         ORDER BY entry_index, id
+         WHERE segment_id = ? AND entry_type NOT IN ({placeholders})
+         ORDER BY entry_index DESC, id DESC
          LIMIT ?
         """,
-        (segment_id, max(1, int(max_entries))),
+        (segment_id, *excluded, max(1, int(max_entries))),
     ).fetchall()
-    entries: list[dict[str, Any]] = []
+    return list(reversed([
+        _project_compaction_entry(row, max_chars=max(256, int(max_single_entry_chars)))
+        for row in rows
+    ]))
+
+
+def _compaction_source_fingerprint(
+    conn: sqlite3.Connection,
+    job_id: str,
+    segment_id: str,
+) -> str:
+    placeholders, excluded = _entry_type_exclusion_sql(COMPACTION_NON_CONTEXT_ENTRY_TYPES)
+    digest = hashlib.sha256()
+    digest.update(_json(build_checkpoint_payload(conn, job_id)).encode("utf-8"))
+    rows = conn.execute(
+        f"""
+        SELECT id, entry_type, decision_id, event_id, patch_id, graph_revision, payload_json
+          FROM decision_segment_entries
+         WHERE segment_id = ? AND entry_type NOT IN ({placeholders})
+         ORDER BY entry_index, id
+        """,
+        (segment_id, *excluded),
+    ).fetchall()
     for row in rows:
-        item = _row(row) or {}
-        text = item.get("payload_text")
-        if isinstance(text, str) and len(text) > 4000:
-            item["payload_text"] = text[:4000] + "\n[truncated]"
-        entries.append(item)
-    return entries
+        digest.update(str(row["id"]).encode("ascii"))
+        digest.update(str(row["entry_type"]).encode("utf-8"))
+        digest.update(str(row["decision_id"] or "").encode("utf-8"))
+        digest.update(str(row["event_id"] or "").encode("utf-8"))
+        digest.update(str(row["patch_id"] or "").encode("utf-8"))
+        digest.update(str(row["graph_revision"] or "").encode("ascii"))
+        digest.update(hashlib.sha256(str(row["payload_json"] or "").encode("utf-8")).digest())
+    return digest.hexdigest()
 
 
 def estimate_segment_tokens(conn: sqlite3.Connection, segment_id: str) -> dict[str, int]:
     """Estimate token usage for one decision session segment from entries."""
 
+    placeholders, excluded = _entry_type_exclusion_sql(COMPACTION_NON_CONTEXT_ENTRY_TYPES)
     row = conn.execute(
-        """
-        SELECT COALESCE(SUM(estimated_tokens), 0) AS active_segment_tokens,
+        f"""
+        SELECT COALESCE(SUM(CASE WHEN entry_type NOT IN ({placeholders})
+                                 THEN estimated_tokens ELSE 0 END), 0) AS active_segment_tokens,
+               COALESCE(SUM(estimated_tokens), 0) AS persisted_segment_tokens,
+               COALESCE(SUM(CASE WHEN entry_type IN ({placeholders})
+                                 THEN estimated_tokens ELSE 0 END), 0) AS audit_segment_tokens,
                COALESCE(SUM(CASE WHEN entry_type IN ('provider_input', 'compaction_provider_input', 'delta_appended')
                                  THEN estimated_tokens ELSE 0 END), 0) AS estimated_input_tokens,
                COALESCE(SUM(CASE WHEN entry_type IN ('provider_output', 'compaction_provider_output')
@@ -1095,10 +1190,12 @@ def estimate_segment_tokens(conn: sqlite3.Connection, segment_id: str) -> dict[s
           FROM decision_segment_entries
          WHERE segment_id = ?
         """,
-        (segment_id,),
+        (*excluded, *excluded, segment_id),
     ).fetchone()
     return {
         "active_segment_tokens": int(row["active_segment_tokens"] or 0),
+        "persisted_segment_tokens": int(row["persisted_segment_tokens"] or 0),
+        "audit_segment_tokens": int(row["audit_segment_tokens"] or 0),
         "estimated_input_tokens": int(row["estimated_input_tokens"] or 0),
         "estimated_output_tokens": int(row["estimated_output_tokens"] or 0),
     }
@@ -1118,33 +1215,78 @@ def build_compaction_provider_request(
     source_segment = source_segment or rk.ensure_decision_segment(conn, job_id)
     profile = load_compaction_profile(profile_name)
     metrics = estimate_segment_tokens(conn, source_segment["id"])
+    policy = _job_compaction_policy(conn, job_id)
+    context_window_tokens = max(1, int(policy["context_window_tokens"]))
+    max_input_ratio = float(policy.get("max_compaction_input_ratio") or 0.55)
     resolved_budget = {
         "max_checkpoint_tokens": 3000,
-        "max_segment_entries": 200,
+        "max_segment_entries": int(policy.get("max_segment_entries") or 200),
+        "max_single_entry_chars": int(policy.get("max_single_entry_chars") or 16000),
+        "max_compaction_input_tokens": max(1, int(context_window_tokens * max_input_ratio)),
+        "max_compaction_input_chars": int(policy.get("max_compaction_input_chars") or 1000000),
         **(budget or {}),
         "active_segment_tokens": metrics["active_segment_tokens"],
+        "persisted_segment_tokens": metrics["persisted_segment_tokens"],
+        "audit_segment_tokens": metrics["audit_segment_tokens"],
     }
     db_state = build_checkpoint_payload(conn, job_id)
-    segment_entries = _segment_entries_for_compaction(
+    candidates = _segment_entries_for_compaction(
         conn,
         source_segment["id"],
         max_entries=int(resolved_budget["max_segment_entries"]),
+        max_single_entry_chars=int(resolved_budget["max_single_entry_chars"]),
     )
-    return CompactionProviderRequest(
-        job_id=job_id,
-        source_segment={
-            "id": source_segment["id"],
-            "segment_index": source_segment["segment_index"],
-            "state": source_segment["state"],
-            "covered_graph_revision_start": source_segment.get("covered_graph_revision_start"),
-        },
-        profile=profile,
-        budget=resolved_budget,
-        db_state=db_state,
-        provenance_catalog=_build_compaction_provenance_catalog(db_state, segment_entries),
-        checkpoint_fact_schema=_compaction_checkpoint_fact_schema(),
-        segment_entries=segment_entries,
-    )
+    source_summary = {
+        "id": source_segment["id"],
+        "segment_index": source_segment["segment_index"],
+        "state": source_segment["state"],
+        "covered_graph_revision_start": source_segment.get("covered_graph_revision_start"),
+    }
+
+    def _request(entries: list[dict[str, Any]], resolved: dict[str, Any]) -> CompactionProviderRequest:
+        return CompactionProviderRequest(
+            job_id=job_id,
+            source_segment=source_summary,
+            profile=profile,
+            budget=resolved,
+            db_state=db_state,
+            provenance_catalog=_build_compaction_provenance_catalog(db_state, entries),
+            checkpoint_fact_schema=_compaction_checkpoint_fact_schema(),
+            segment_entries=entries,
+        )
+
+    max_tokens = max(1, int(resolved_budget["max_compaction_input_tokens"]))
+    max_chars = max(1024, int(resolved_budget["max_compaction_input_chars"]))
+    selected: list[dict[str, Any]] = []
+    for entry in reversed(candidates):
+        candidate_entries = [entry, *selected]
+        candidate = _request(candidate_entries, resolved_budget)
+        messages, rendered, _ = render_compaction_messages(candidate)
+        rendered_chars = sum(len(str(message.get("content") or "")) for message in messages)
+        rendered_tokens = estimate_decision_input_tokens(rendered, profile["content"])
+        if rendered_tokens <= max_tokens and rendered_chars <= max_chars:
+            selected = candidate_entries
+
+    resolved_budget = {
+        **resolved_budget,
+        "eligible_entry_count": len(candidates),
+        "included_entry_count": len(selected),
+        "omitted_entry_count": len(candidates) - len(selected),
+        "included_entry_ids": [int(entry["id"]) for entry in selected],
+        "source_fingerprint": _compaction_source_fingerprint(conn, job_id, source_segment["id"]),
+    }
+    request = _request(selected, resolved_budget)
+    messages, rendered, _ = render_compaction_messages(request)
+    rendered_chars = sum(len(str(message.get("content") or "")) for message in messages)
+    rendered_tokens = estimate_decision_input_tokens(rendered, profile["content"])
+    if rendered_tokens > max_tokens or rendered_chars > max_chars:
+        raise CompactionInputBudgetError(
+            "compaction_input_budget_exceeded: "
+            f"tokens={rendered_tokens}/{max_tokens}, chars={rendered_chars}/{max_chars}"
+        )
+    request.budget["rendered_input_tokens"] = rendered_tokens
+    request.budget["rendered_input_chars"] = rendered_chars
+    return request
 
 
 def _build_compaction_provenance_catalog(
@@ -1153,7 +1295,7 @@ def _build_compaction_provenance_catalog(
 ) -> dict[str, Any]:
     verified_evidence: dict[str, list[str]] = {}
     for entry in db_state.get("progress_ledger") or []:
-        if entry.get("satisfaction") != "full" or entry.get("verification_state") not in {"verified", "waived"}:
+        if entry.get("satisfaction") != "full" or entry.get("verification_state") not in {"independently_verified", "waived"}:
             continue
         evidence_ref = entry.get("evidence_ref")
         if evidence_ref:
@@ -1221,7 +1363,7 @@ def _compaction_checkpoint_fact_schema() -> dict[str, Any]:
             "satisfied_goal_items": {
                 "required_fields": ["goal_item_key", "state", "summary", "verification_state", "source_refs"],
                 "allowed_source_refs": ["goal_item_key", "evidence_ref"],
-                "verification_state": ["verified", "waived"],
+                "verification_state": ["independently_verified", "waived"],
             },
             "open_goal_gaps": {
                 "required_fields": ["gap_key", "gap_type", "summary", "source_refs"],
@@ -1335,10 +1477,24 @@ def _job_compaction_policy(conn: sqlite3.Connection, job_id: str, policy: Option
     session = latest_decision_session(conn, job_id)
     session_metadata = _loads(session.get("metadata_json"))
     merged = dict(DEFAULT_COMPACTION_POLICY)
-    merged.update(metadata.get("compaction_policy") or {})
-    merged.update(session_metadata.get("compaction_policy") or {})
-    if policy:
-        merged.update(policy)
+    for source in (
+        metadata.get("compaction_policy") or {},
+        session_metadata.get("compaction_policy") or {},
+        policy or {},
+    ):
+        normalized = dict(source)
+        if "max_context_window_ratio" in normalized and "compaction_trigger_ratio" not in normalized:
+            normalized["compaction_trigger_ratio"] = normalized["max_context_window_ratio"]
+        merged.update(normalized)
+    trigger_ratio = float(merged.get("compaction_trigger_ratio") or 0.65)
+    input_ratio = float(merged.get("max_compaction_input_ratio") or 0.55)
+    if not 0 < trigger_ratio < 1:
+        raise ValueError("compaction_trigger_ratio must be between 0 and 1")
+    if not 0 < input_ratio < trigger_ratio:
+        raise ValueError("max_compaction_input_ratio must be positive and below compaction_trigger_ratio")
+    merged["compaction_trigger_ratio"] = trigger_ratio
+    merged["max_context_window_ratio"] = trigger_ratio
+    merged["max_compaction_input_ratio"] = input_ratio
     return merged
 
 
@@ -1402,10 +1558,21 @@ def build_compaction_telemetry(
         payload = _loads(row["payload_json"])
         if payload.get("status") == "noop" or payload.get("ops") == []:
             noop_count += 1
-    active_segment_tokens = int(active.get("active_segment_tokens") or 0)
+    segment_metrics = estimate_segment_tokens(conn, active["id"])
+    active_segment_tokens = int(segment_metrics["active_segment_tokens"] or 0)
     cacheable_prefix_tokens = stable_prefix_tokens + checkpoint_tokens
-    input_tokens = cacheable_prefix_tokens + tail_tokens + delta_tokens
+    continuity_tokens = max(active_segment_tokens, tail_tokens)
+    projected_context_tokens = cacheable_prefix_tokens + continuity_tokens + delta_tokens
     context_window = max(1, int(resolved_policy["context_window_tokens"]))
+    trigger_ratio = float(resolved_policy["compaction_trigger_ratio"])
+    reserve_tokens = sum(max(0, int(resolved_policy.get(key) or 0)) for key in (
+        "reserved_output_tokens",
+        "reserved_reasoning_tokens",
+        "estimation_safety_tokens",
+    ))
+    ratio_trigger_tokens = max(1, int(context_window * trigger_ratio))
+    reserve_trigger_tokens = max(1, context_window - reserve_tokens)
+    trigger_tokens = min(ratio_trigger_tokens, reserve_trigger_tokens)
     return {
         "stable_prefix_tokens": stable_prefix_tokens,
         "checkpoint_tokens": checkpoint_tokens,
@@ -1413,8 +1580,14 @@ def build_compaction_telemetry(
         "delta_tokens": delta_tokens,
         "model_output_tokens": int(model_output_tokens or 0),
         "active_segment_tokens": active_segment_tokens,
+        "continuity_tokens": continuity_tokens,
+        "persisted_segment_tokens": int(segment_metrics["persisted_segment_tokens"] or 0),
+        "audit_segment_tokens": int(segment_metrics["audit_segment_tokens"] or 0),
         "cacheable_prefix_tokens": cacheable_prefix_tokens,
-        "context_window_ratio": input_tokens / context_window,
+        "projected_context_tokens": projected_context_tokens,
+        "context_window_tokens": context_window,
+        "compaction_trigger_tokens": trigger_tokens,
+        "context_window_ratio": projected_context_tokens / context_window,
         "accepted_patch_count": int(
             conn.execute(
                 "SELECT COUNT(*) FROM decision_segment_entries WHERE segment_id = ? AND entry_type = 'patch_applied'",
@@ -1438,39 +1611,144 @@ def should_compact_decision_session(
 ) -> dict[str, Any]:
     """Evaluate configured compaction policy against current telemetry."""
 
+    from hermes_cli import kanban_runtime_kernel as rk
+
     telemetry = build_compaction_telemetry(conn, job_id, delta=delta, policy=policy)
     resolved = telemetry["policy"]
     if resolved.get("mode") == "manual":
         return {"should_compact": False, "reason": "manual_mode", "profile_name": None, "telemetry": telemetry}
-    if telemetry["active_segment_tokens"] >= int(resolved["max_active_segment_tokens"]):
+    fixed_threshold = resolved.get("max_active_segment_tokens")
+    fixed_triggered = fixed_threshold is not None and int(fixed_threshold) > 0 and (
+        telemetry["active_segment_tokens"] >= int(fixed_threshold)
+    )
+    ratio_triggered = telemetry["projected_context_tokens"] >= telemetry["compaction_trigger_tokens"]
+    trigger_reason: Optional[str] = None
+    profile_name: Optional[str] = None
+    if fixed_triggered or ratio_triggered:
+        trigger_reason = "token_threshold" if fixed_triggered else "context_window_ratio"
+        profile_name = resolved.get("default_profile") or "token_budget_compaction"
+    elif telemetry["rejected_patch_count"] >= int(resolved["rejected_patch_threshold"]):
+        trigger_reason = "rejection_threshold"
+        profile_name = "validator_boundary_compaction"
+    elif telemetry["noop_count"] >= int(resolved["noop_threshold"]):
+        trigger_reason = "noop_threshold"
+        profile_name = "anti_stuck_compaction"
+    if trigger_reason is None:
+        return {"should_compact": False, "reason": "below_threshold", "profile_name": None, "telemetry": telemetry}
+
+    active = rk.ensure_decision_segment(conn, job_id)
+    fingerprint = _compaction_source_fingerprint(conn, job_id, active["id"])
+    latest_rejection = conn.execute(
+        """
+        SELECT payload_json FROM decision_segment_entries
+         WHERE segment_id = ? AND entry_type = 'checkpoint_rejected'
+         ORDER BY id DESC LIMIT 1
+        """,
+        (active["id"],),
+    ).fetchone()
+    rejected_fingerprint = None
+    if latest_rejection is not None:
+        rejected_fingerprint = _loads(latest_rejection["payload_json"]).get("source_fingerprint")
+    if rejected_fingerprint == fingerprint:
         return {
-            "should_compact": True,
-            "reason": "token_threshold",
-            "profile_name": resolved.get("default_profile") or "token_budget_compaction",
+            "should_compact": False,
+            "reason": "unchanged_after_rejection",
+            "profile_name": None,
+            "source_fingerprint": fingerprint,
             "telemetry": telemetry,
         }
-    if telemetry["context_window_ratio"] >= float(resolved["max_context_window_ratio"]):
-        return {
-            "should_compact": True,
-            "reason": "context_window_ratio",
-            "profile_name": resolved.get("default_profile") or "token_budget_compaction",
-            "telemetry": telemetry,
-        }
-    if telemetry["rejected_patch_count"] >= int(resolved["rejected_patch_threshold"]):
-        return {
-            "should_compact": True,
-            "reason": "rejection_threshold",
-            "profile_name": "validator_boundary_compaction",
-            "telemetry": telemetry,
-        }
-    if telemetry["noop_count"] >= int(resolved["noop_threshold"]):
-        return {
-            "should_compact": True,
-            "reason": "noop_threshold",
-            "profile_name": "anti_stuck_compaction",
-            "telemetry": telemetry,
-        }
-    return {"should_compact": False, "reason": "below_threshold", "profile_name": None, "telemetry": telemetry}
+    return {
+        "should_compact": True,
+        "reason": trigger_reason,
+        "profile_name": profile_name,
+        "source_fingerprint": fingerprint,
+        "telemetry": telemetry,
+    }
+
+
+def _compaction_result_audit(result: CompactionProviderResult) -> dict[str, Any]:
+    payload = result.to_dict()
+    raw_output = payload.pop("raw_output", None)
+    checkpoint = payload.pop("checkpoint", None)
+    if raw_output is not None:
+        raw_text = str(raw_output)
+        payload["raw_output_ref"] = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
+        payload["raw_output_chars"] = len(raw_text)
+    if checkpoint is not None:
+        checkpoint_text = _json(checkpoint)
+        payload["checkpoint_ref"] = hashlib.sha256(checkpoint_text.encode("utf-8")).hexdigest()
+        payload["checkpoint_chars"] = len(checkpoint_text)
+    return payload
+
+
+def _record_local_compaction_rejection(
+    conn: sqlite3.Connection,
+    job_id: str,
+    session: dict[str, Any],
+    source_segment: dict[str, Any],
+    *,
+    profile_name: str,
+    source_fingerprint: str,
+    reason: str,
+) -> dict[str, Any]:
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    result = CompactionProviderResult(
+        checkpoint=None,
+        raw_output=None,
+        provider_name="local_budget_guard",
+        profile_name=profile_name,
+        parse_status="input_budget_rejected",
+        error=reason,
+    )
+    audit = _compaction_result_audit(result)
+    rk.append_decision_segment_entry(
+        conn,
+        job_id,
+        "compaction_provider_output",
+        audit,
+        ref_type="decision_session_segment",
+        ref_id=source_segment["id"],
+    )
+    validation = {"status": "rejected", "reason": reason}
+    rk.append_decision_segment_entry(
+        conn,
+        job_id,
+        "checkpoint_rejected",
+        {
+            "validation": validation,
+            "provider_validation": validation,
+            "provider_result": audit,
+            "profile_name": profile_name,
+            "source_fingerprint": source_fingerprint,
+        },
+        ref_type="decision_session_segment",
+        ref_id=source_segment["id"],
+    )
+    now = _now()
+    conn.execute(
+        """
+        UPDATE decision_sessions
+           SET last_compaction_status = 'rejected', last_compaction_profile = ?,
+               last_compaction_at = ?, updated_at = ?
+         WHERE id = ?
+        """,
+        (profile_name, now, now, session["id"]),
+    )
+    health = _sync_compaction_health_events(conn, job_id)
+    return {
+        "status": "rejected",
+        "reason": reason,
+        "source_segment_id": source_segment["id"],
+        "profile_name": profile_name,
+        "active_segment_preserved": True,
+        "provider_result": audit,
+        "provider_validation": validation,
+        "fallback_used": False,
+        "provider_called": False,
+        "source_fingerprint": source_fingerprint,
+        "compaction_health": health,
+    }
 
 
 def compact_decision_session(
@@ -1496,6 +1774,7 @@ def compact_decision_session(
     source_segment = rk.ensure_decision_segment(conn, job_id)
     session = latest_decision_session(conn, job_id)
     provider_mode = "deterministic" if compaction_provider is None else getattr(compaction_provider, "provider_name", "custom")
+    source_fingerprint = _compaction_source_fingerprint(conn, job_id, source_segment["id"])
     request_entry = rk.append_decision_segment_entry(
         conn,
         job_id,
@@ -1506,30 +1785,53 @@ def compact_decision_session(
             "source_segment_id": source_segment["id"],
             "provider_mode": provider_mode,
             "fallback_to_deterministic": bool(fallback_to_deterministic),
+            "source_fingerprint": source_fingerprint,
         },
         ref_type="decision_session_segment",
         ref_id=source_segment["id"],
     )
-    request = build_compaction_provider_request(
-        conn,
-        job_id,
-        source_segment=source_segment,
-        profile_name=profile_name,
-        budget=budget,
-    )
+    try:
+        request = build_compaction_provider_request(
+            conn,
+            job_id,
+            source_segment=source_segment,
+            profile_name=profile_name,
+            budget=budget,
+        )
+    except CompactionInputBudgetError as exc:
+        return _record_local_compaction_rejection(
+            conn,
+            job_id,
+            session,
+            source_segment,
+            profile_name=profile_name,
+            source_fingerprint=source_fingerprint,
+            reason=str(exc),
+        )
     messages, rendered, request_profile = render_compaction_messages(request)
+    rendered_text = _json(rendered)
+    request_ref = hashlib.sha256(rendered_text.encode("utf-8")).hexdigest()
     provider_input_entry = rk.append_decision_segment_entry(
         conn,
         job_id,
         "compaction_provider_input",
         {
-            "request": request.to_dict(),
-            "rendered": rendered,
+            "request_ref": request_ref,
+            "source_fingerprint": request.budget.get("source_fingerprint"),
+            "source_segment_id": source_segment["id"],
             "profile": _profile_public(request_profile),
+            "provider_name": provider_mode,
+            "model": getattr(compaction_provider, "model", None),
+            "included_entry_ids": request.budget.get("included_entry_ids") or [],
+            "included_entry_count": request.budget.get("included_entry_count", 0),
+            "omitted_entry_count": request.budget.get("omitted_entry_count", 0),
+            "rendered_input_tokens": request.budget.get("rendered_input_tokens"),
+            "rendered_input_chars": request.budget.get("rendered_input_chars"),
+            "max_compaction_input_tokens": request.budget.get("max_compaction_input_tokens"),
+            "max_compaction_input_chars": request.budget.get("max_compaction_input_chars"),
             "no_tools": True,
             "single_shot": True,
         },
-        payload_text=_json(messages),
         ref_type="decision_session_segment",
         ref_id=source_segment["id"],
     )
@@ -1554,11 +1856,12 @@ def compact_decision_session(
             error=str(exc),
         )
 
+    provider_result_audit = _compaction_result_audit(provider_result)
     rk.append_decision_segment_entry(
         conn,
         job_id,
         "compaction_provider_output",
-        provider_result.to_dict(),
+        provider_result_audit,
         ref_type="decision_session_segment",
         ref_id=source_segment["id"],
     )
@@ -1578,7 +1881,7 @@ def compact_decision_session(
             "compaction_fallback",
             {
                 "reason": validation["reason"],
-                "provider_result": provider_result.to_dict(),
+                "provider_result": provider_result_audit,
                 "fallback_provider": "deterministic",
             },
             ref_type="decision_session_segment",
@@ -1609,11 +1912,12 @@ def compact_decision_session(
             fallback_used=True,
         )
         fallback_used = True
+        provider_result_audit = _compaction_result_audit(provider_result)
         rk.append_decision_segment_entry(
             conn,
             job_id,
             "compaction_provider_output",
-            provider_result.to_dict(),
+            provider_result_audit,
             ref_type="decision_session_segment",
             ref_id=source_segment["id"],
         )
@@ -1626,8 +1930,9 @@ def compact_decision_session(
             {
                 "validation": validation,
                 "provider_validation": provider_validation,
-                "provider_result": provider_result.to_dict(),
+                "provider_result": provider_result_audit,
                 "profile_name": profile_name,
+                "source_fingerprint": request.budget.get("source_fingerprint") or source_fingerprint,
             },
             ref_type="decision_session_segment",
             ref_id=source_segment["id"],
@@ -1648,9 +1953,11 @@ def compact_decision_session(
             "source_segment_id": source_segment["id"],
             "profile_name": profile_name,
             "active_segment_preserved": True,
-            "provider_result": provider_result.to_dict(),
+            "provider_result": provider_result_audit,
             "provider_validation": provider_validation,
             "fallback_used": fallback_used,
+            "provider_called": True,
+            "source_fingerprint": request.budget.get("source_fingerprint") or source_fingerprint,
             "compaction_health": health,
         }
 
@@ -1962,16 +2269,17 @@ def _short_tail_entries(
     covered_end = checkpoint_row.get("covered_entry_end")
     if covered_end is None:
         return []
+    placeholders, excluded = _entry_type_exclusion_sql(COMPACTION_NON_CONTEXT_ENTRY_TYPES)
     rows = conn.execute(
-        """
+        f"""
         SELECT id, segment_id, entry_index, entry_type, ref_type, ref_id,
                decision_id, event_id, patch_id, graph_revision, payload_json,
                payload_text, estimated_tokens, created_at
           FROM decision_segment_entries
-         WHERE job_id = ? AND id > ?
+         WHERE job_id = ? AND id > ? AND entry_type NOT IN ({placeholders})
          ORDER BY id ASC
         """,
-        (job_id, int(covered_end)),
+        (job_id, int(covered_end), *excluded),
     ).fetchall()
     tail: list[dict[str, Any]] = []
     tokens = 0
@@ -1980,7 +2288,7 @@ def _short_tail_entries(
             break
         estimated = int(row["estimated_tokens"] or 0)
         if tokens + estimated > max_tail_tokens:
-            break
+            continue
         data = _row(row) or {}
         data["payload"] = _loads(data.get("payload_json"))
         tail.append(data)
@@ -2230,6 +2538,7 @@ def build_decision_provider_request(
     else:
         checkpoint = checkpoint_row["checkpoint"]
         short_tail = _short_tail_entries(conn, job_id, checkpoint_row)
+    authoritative_goal_contract = build_checkpoint_payload(conn, job_id)["goal_contract"]
     job = _row(conn.execute("SELECT * FROM runtime_jobs WHERE id = ?", (job_id,)).fetchone())
     if job is None:
         raise ValueError(f"unknown runtime job {job_id}")
@@ -2291,7 +2600,7 @@ def build_decision_provider_request(
         db_revision=int(job["graph_revision"]),
         session=session,
         stable_prefix=stable_prefix,
-        goal_contract=checkpoint["goal_contract"],
+        goal_contract=authoritative_goal_contract,
         checkpoint=checkpoint,
         memory={
             "non_authoritative_notice": memory["non_authoritative_notice"],
@@ -2393,6 +2702,7 @@ class RuntimeDecisionProvider:
         temperature: float = 0.0,
         max_tokens: int = 2048,
         timeout_seconds: Optional[float] = None,
+        reasoning_effort: Optional[str] = None,
         explicit_api_key: Optional[str] = None,
         explicit_base_url: Optional[str] = None,
     ) -> None:
@@ -2409,6 +2719,7 @@ class RuntimeDecisionProvider:
         self.temperature = float(temperature)
         self.max_tokens = int(max_tokens)
         self.timeout_seconds = timeout_seconds
+        self.reasoning_effort = str(reasoning_effort).strip() if reasoning_effort else None
         self.explicit_api_key = explicit_api_key
         self.explicit_base_url = explicit_base_url
 
@@ -2441,6 +2752,8 @@ class RuntimeDecisionProvider:
         return client, resolved_model or self.model
 
     def _call_model(self, client: Any, model: str, messages: list[dict[str, str]]) -> Any:
+        if hasattr(client, "with_options"):
+            client = client.with_options(max_retries=0)
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -2449,6 +2762,8 @@ class RuntimeDecisionProvider:
         }
         if self.timeout_seconds is not None:
             kwargs["timeout"] = self.timeout_seconds
+        if self.reasoning_effort is not None:
+            kwargs["reasoning_effort"] = self.reasoning_effort
         # Intentionally no tools/tool_choice/web_search arguments here.
         return client.chat.completions.create(**kwargs)
 

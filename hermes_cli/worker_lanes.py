@@ -36,6 +36,7 @@ _ALLOWED_APPROVALS = {"never", "on-request", "on-failure", "untrusted"}
 _ALLOWED_SUCCESS_POLICIES = {"block_for_review"}
 _MAX_LANE_CONCURRENCY = 8
 _FORBIDDEN_REQUEST_KEYS = {"command", "cmd", "shell", "argv", "executable"}
+_PHASE4G8_NETNS_RE = re.compile(r"^h4g8-[0-9a-f]{8}$")
 
 
 @dataclass
@@ -284,6 +285,17 @@ def validate_worker_lane_request(request: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError("json_events must be a boolean")
         else:
             raise ValueError("json_events must be a boolean")
+    network_namespace = str(request.get("network_namespace") or "").strip()
+    phase4g8_run_id = str(request.get("phase4g8_run_id") or "").strip()
+    if network_namespace or phase4g8_run_id:
+        if not _PHASE4G8_NETNS_RE.fullmatch(network_namespace):
+            raise ValueError("network_namespace must be a Phase 4G8 managed namespace")
+        if not phase4g8_run_id or len(phase4g8_run_id) > 128:
+            raise ValueError("phase4g8_run_id is required with network_namespace")
+        out["network_namespace"] = network_namespace
+        out["phase4g8_run_id"] = phase4g8_run_id
+        out["network_uid"] = 65534
+        out["network_gid"] = 65534
     return out
 
 

@@ -9,6 +9,7 @@ blocks the task for Hermes review when Codex exits successfully.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import queue
@@ -85,6 +86,12 @@ class CodexLaneConfig:
     timeout_seconds: Optional[int] = None
     heartbeat_interval_seconds: float = DEFAULT_HEARTBEAT_INTERVAL_SECONDS
     json_events: bool = False
+    network_namespace: Optional[str] = None
+    phase4g8_run_id: Optional[str] = None
+    network_uid: int = 65534
+    network_gid: int = 65534
+    isolated_codex_home_seed: Optional[str] = None
+    isolated_codex_home_root: Optional[str] = None
 
 
 class _TailBuffer:
@@ -121,11 +128,40 @@ def make_codex_worker_lane(config: dict[str, Any], *, source: str = "config") ->
             else None
         ),
         json_events=_as_bool(config.get("json_events"), default=False),
+        network_namespace=(str(config["network_namespace"]) if config.get("network_namespace") else None),
+        phase4g8_run_id=(str(config["phase4g8_run_id"]) if config.get("phase4g8_run_id") else None),
+        network_uid=int(config.get("network_uid", 65534)),
+        network_gid=int(config.get("network_gid", 65534)),
+        isolated_codex_home_seed=(
+            str(config["isolated_codex_home_seed"])
+            if config.get("isolated_codex_home_seed")
+            else None
+        ),
+        isolated_codex_home_root=(
+            str(config["isolated_codex_home_root"])
+            if config.get("isolated_codex_home_root")
+            else None
+        ),
     )
 
     def _spawn(task, workspace: str, *, board: Optional[str] = None) -> Optional[int]:
         return spawn_codex_worker(task, workspace, cfg, board=board)
 
+    lane_config = {
+        "type": "codex_cli",
+        "model": cfg.model,
+        "sandbox": cfg.sandbox,
+        "approval": cfg.approval,
+        "timeout_seconds": cfg.timeout_seconds,
+        "json_events": cfg.json_events,
+    }
+    if cfg.network_namespace:
+        lane_config["network_namespace"] = cfg.network_namespace
+        lane_config["phase4g8_run_id"] = cfg.phase4g8_run_id
+        lane_config["network_uid"] = cfg.network_uid
+        lane_config["network_gid"] = cfg.network_gid
+        lane_config["isolated_codex_home_seed"] = cfg.isolated_codex_home_seed
+        lane_config["isolated_codex_home_root"] = cfg.isolated_codex_home_root
     return WorkerLane(
         name=cfg.name,
         kind="codex_cli",
@@ -134,14 +170,7 @@ def make_codex_worker_lane(config: dict[str, Any], *, source: str = "config") ->
         success_policy=cfg.success_policy,
         max_concurrency=cfg.max_concurrency,
         source=source,
-        config={
-            "type": "codex_cli",
-            "model": cfg.model,
-            "sandbox": cfg.sandbox,
-            "approval": cfg.approval,
-            "timeout_seconds": cfg.timeout_seconds,
-            "json_events": cfg.json_events,
-        },
+        config=lane_config,
     )
 
 
@@ -186,6 +215,7 @@ def _safe_env_for_worker(task, workspace: str, cfg: CodexLaneConfig, *, board: O
         "XDG_CONFIG_HOME",
         "XDG_CACHE_HOME",
         "XDG_DATA_HOME",
+        "PHASE4G8_WORKER_TOOLCHAIN",
     }
     env = {k: v for k, v in os.environ.items() if k in allowed and v is not None}
     project_root = str(Path(__file__).resolve().parent.parent)
@@ -210,7 +240,52 @@ def _safe_env_for_worker(task, workspace: str, cfg: CodexLaneConfig, *, board: O
         env["HERMES_KANBAN_CLAIM_LOCK"] = task.claim_lock
     if task.tenant:
         env["HERMES_TENANT"] = task.tenant
+    if cfg.isolated_codex_home_seed or cfg.isolated_codex_home_root:
+        env["CODEX_HOME"] = str(_isolated_codex_home_for_task(task.id, cfg, board=board))
     return env
+
+
+def _isolated_codex_home_for_task(
+    task_id: str,
+    cfg: CodexLaneConfig,
+    *,
+    board: Optional[str],
+) -> Path:
+    """Return one durable Codex state directory per runtime execution node."""
+
+    from hermes_cli import kanban_db as kb
+
+    if not cfg.isolated_codex_home_seed or not cfg.isolated_codex_home_root:
+        raise ValueError("isolated CODEX_HOME requires both seed and root")
+    seed = Path(cfg.isolated_codex_home_seed).resolve()
+    root = Path(cfg.isolated_codex_home_root).resolve()
+    if not seed.is_dir() or not all((seed / name).is_file() for name in ("config.toml", "auth.json")):
+        raise ValueError("isolated CODEX_HOME seed is incomplete")
+    with kb.connect(board=board) as conn:
+        row = conn.execute(
+            "SELECT id FROM execution_nodes WHERE latest_task_id = ? LIMIT 1",
+            (task_id,),
+        ).fetchone()
+    if row is None:
+        raise ValueError(f"runtime execution node not found for task {task_id}")
+    node_id = str(row["id"])
+    node_key = hashlib.sha256(node_id.encode("utf-8")).hexdigest()[:24]
+    target = root / f"node-{node_key}"
+    root.mkdir(parents=True, exist_ok=True)
+    os.chmod(root, 0o711)
+    target.mkdir(mode=0o700, exist_ok=True)
+    for name in ("config.toml", "auth.json"):
+        destination = target / name
+        if not destination.exists():
+            shutil.copyfile(seed / name, destination)
+        os.chmod(destination, 0o600)
+        os.chown(destination, int(cfg.network_uid), int(cfg.network_gid))
+    marker = target / ".execution-node"
+    marker.write_text(node_id + "\n", encoding="utf-8")
+    os.chmod(marker, 0o600)
+    os.chown(marker, int(cfg.network_uid), int(cfg.network_gid))
+    os.chown(target, int(cfg.network_uid), int(cfg.network_gid))
+    return target
 
 
 def _path_is_writable_dir(path: Optional[str]) -> bool:
@@ -250,6 +325,7 @@ def _safe_env_for_codex(workspace: Optional[str] = None) -> dict[str, str]:
         "HERMES_KANBAN_BOARD",
         "HERMES_WORKER_LANE",
         "HERMES_WORKER_KIND",
+        "PHASE4G8_WORKER_TOOLCHAIN",
     }
     env = {k: v for k, v in os.environ.items() if k in allowed and v is not None}
     home_writable = _path_is_writable_dir(env.get("HOME"))
@@ -313,6 +389,12 @@ def spawn_codex_worker(
         cmd.extend(["--model", cfg.model])
     if cfg.timeout_seconds is not None:
         cmd.extend(["--timeout-seconds", str(cfg.timeout_seconds)])
+    if cfg.network_namespace:
+        cmd.extend([
+            "--network-namespace", cfg.network_namespace,
+            "--network-uid", str(cfg.network_uid),
+            "--network-gid", str(cfg.network_gid),
+        ])
     resolved_board = kb._normalize_board_slug(board) or kb.get_current_board()
     cmd.extend(["--board", resolved_board])
 
@@ -321,6 +403,8 @@ def spawn_codex_worker(
     log_path = log_dir / f"{task.id}.log"
     kb._rotate_worker_log(log_path, kb.DEFAULT_LOG_ROTATE_BYTES)
     env = _safe_env_for_worker(task, workspace, cfg, board=board)
+    if cfg.phase4g8_run_id:
+        env["HERMES_PHASE4G8_RUN_ID"] = cfg.phase4g8_run_id
 
     log_f = open(log_path, "ab")
     try:
@@ -369,6 +453,128 @@ def build_codex_argv(
         argv.append(str(resume_session_id))
     argv.append("-")
     return argv
+
+
+def wrap_codex_network_argv(
+    argv: list[str],
+    network_namespace: Optional[str],
+    *,
+    uid: int = 65534,
+    gid: int = 65534,
+    workspace: Optional[str] = None,
+    worker_env: Optional[dict[str, str]] = None,
+    filesystem_isolation: bool = False,
+) -> list[str]:
+    prefix: list[str] = []
+    if network_namespace:
+        if not re.fullmatch(r"h4g8-[0-9a-f]{8}", network_namespace):
+            raise ValueError("invalid Phase 4G8 network namespace")
+        prefix = ["ip", "netns", "exec", network_namespace]
+    if not filesystem_isolation:
+        if not network_namespace:
+            return list(argv)
+        return [
+            *prefix,
+            "setpriv",
+            "--bounding-set=-net_admin,-net_raw",
+            "--inh-caps=-all",
+            "--ambient-caps=-all",
+            "--no-new-privs",
+            f"--reuid={int(uid)}",
+            f"--regid={int(gid)}",
+            "--clear-groups",
+            *argv,
+        ]
+
+    bubblewrap = shutil.which("bwrap")
+    if not bubblewrap:
+        raise RuntimeError("Phase 4G8 filesystem isolation requires bubblewrap")
+    if not workspace or not worker_env:
+        raise ValueError("Phase 4G8 filesystem isolation requires workspace and worker_env")
+
+    writable_paths = {
+        str(Path(workspace).resolve()),
+        str(Path(worker_env["HOME"]).resolve()),
+        str(Path(worker_env["CODEX_HOME"]).resolve()),
+    }
+    toolchain = str(worker_env.get("PHASE4G8_WORKER_TOOLCHAIN") or "").strip()
+    readonly_paths = {str(Path(toolchain).resolve())} if toolchain else set()
+    for path in writable_paths | readonly_paths:
+        if not Path(path).is_dir():
+            raise RuntimeError(f"Phase 4G8 isolation path is not a directory: {path}")
+
+    isolated = [
+        bubblewrap,
+        "--die-with-parent",
+        "--new-session",
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--dev", "/dev",
+        "--proc", "/proc",
+        "--tmpfs", "/tmp",
+        "--chmod", "1777", "/tmp",
+    ]
+    for system_path in ("/usr", "/bin", "/lib", "/lib64"):
+        if Path(system_path).exists():
+            isolated.extend(["--ro-bind", system_path, system_path])
+    isolated.extend(["--dir", "/opt"])
+    codex_binary = shutil.which("codex")
+    if codex_binary:
+        resolved_codex = Path(codex_binary).resolve()
+        if len(resolved_codex.parts) >= 3 and resolved_codex.parts[1] == "opt":
+            codex_runtime = Path("/") / resolved_codex.parts[1] / resolved_codex.parts[2]
+            isolated.extend(["--ro-bind", str(codex_runtime), str(codex_runtime)])
+    if toolchain:
+        isolated.extend([
+            "--dir", "/opt/miniconda3",
+            "--dir", "/opt/miniconda3/envs",
+            "--ro-bind", str(Path(toolchain).resolve()), "/opt/miniconda3/envs/testbed",
+        ])
+    isolated.extend(["--dir", "/etc"])
+    for system_path in (
+        "/etc/alternatives",
+        "/etc/ca-certificates",
+        "/etc/ssl",
+        "/etc/pki",
+        "/etc/ld.so.cache",
+        "/etc/hosts",
+        "/etc/resolv.conf",
+        "/etc/nsswitch.conf",
+        "/etc/passwd",
+        "/etc/group",
+        "/etc/localtime",
+    ):
+        if Path(system_path).exists():
+            isolated.extend(["--ro-bind", system_path, system_path])
+
+    bind_paths = sorted(writable_paths | readonly_paths, key=lambda value: (len(Path(value).parts), value))
+    created_parents: set[str] = {"/tmp", "/etc"}
+    for bind_path in bind_paths:
+        for parent in reversed(Path(bind_path).parents):
+            parent_text = str(parent)
+            if parent_text == "/" or parent_text in created_parents:
+                continue
+            isolated.extend(["--dir", parent_text])
+            created_parents.add(parent_text)
+        isolated.extend([
+            "--ro-bind" if bind_path in readonly_paths else "--bind",
+            bind_path,
+            bind_path,
+        ])
+    isolated.extend([
+        "--chdir", str(Path(workspace).resolve()),
+        "setpriv",
+        "--bounding-set=-net_admin,-net_raw",
+        "--inh-caps=-all",
+        "--ambient-caps=-all",
+        "--no-new-privs",
+        f"--reuid={int(uid)}",
+        f"--regid={int(gid)}",
+        "--clear-groups",
+        *argv,
+    ])
+    return [*prefix, *isolated]
 
 
 def parse_progress_items(text: str) -> list[dict[str, Any]]:
@@ -634,8 +840,9 @@ def _cap(text: Optional[str], limit: int = CODEX_FIELD_MAX_BYTES) -> str:
 
 def _run_git(args: list[str], workspace: str, *, timeout: float = 5.0) -> str:
     try:
+        safe_workspace = str(Path(workspace).resolve())
         proc = subprocess.run(
-            ["git", "-C", workspace, *args],
+            ["git", "-c", f"safe.directory={safe_workspace}", "-C", workspace, *args],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -649,10 +856,56 @@ def _run_git(args: list[str], workspace: str, *, timeout: float = 5.0) -> str:
         return str(exc)
 
 
-def collect_git_evidence(workspace: str) -> dict[str, Any]:
+def _git_path_fingerprint(workspace: str, relative_path: str) -> str:
+    path = Path(workspace) / relative_path.rstrip("/")
+    fingerprint = hashlib.sha256()
+    fingerprint.update(relative_path.encode("utf-8", errors="replace"))
+    if path.is_symlink():
+        try:
+            fingerprint.update(b"symlink\0" + os.readlink(path).encode("utf-8", errors="replace"))
+        except OSError:
+            fingerprint.update(b"unreadable-symlink")
+    elif path.is_file():
+        try:
+            fingerprint.update(b"file\0" + path.read_bytes())
+        except OSError:
+            fingerprint.update(b"unreadable-file")
+    elif path.is_dir():
+        fingerprint.update(b"directory\0")
+        for child in sorted(candidate for candidate in path.rglob("*") if candidate.is_file() or candidate.is_symlink()):
+            child_relative = child.relative_to(path).as_posix()
+            fingerprint.update(child_relative.encode("utf-8", errors="replace") + b"\0")
+            try:
+                fingerprint.update(os.readlink(child).encode("utf-8", errors="replace") if child.is_symlink() else child.read_bytes())
+            except OSError:
+                fingerprint.update(b"<unreadable>")
+    else:
+        fingerprint.update(b"missing")
+    return fingerprint.hexdigest()
+
+
+def capture_git_change_baseline(workspace: str) -> dict[str, Any]:
+    evidence = collect_git_evidence(workspace)
+    changed_files = list(evidence.get("changed_files") or [])
+    return {
+        "head_revision": evidence.get("head_revision"),
+        "changed_files": changed_files,
+        "path_fingerprints": {
+            path: _git_path_fingerprint(workspace, path)
+            for path in changed_files
+        },
+    }
+
+
+def collect_git_evidence(
+    workspace: str,
+    *,
+    baseline: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
     if not shutil.which("git"):
         return {"status": "", "changed_files": [], "diff_summary": "git not found"}
     status = _run_git(["status", "--short"], workspace)
+    head_revision = _run_git(["rev-parse", "HEAD"], workspace).strip()
     changed_files: list[str] = []
     for line in status.splitlines():
         if not line.strip():
@@ -679,10 +932,59 @@ def collect_git_evidence(workspace: str) -> dict[str, Any]:
             diff_stat + "\n" + untracked_summary
             if diff_stat else untracked_summary
         )
+    fingerprint = hashlib.sha256()
+    fingerprint.update(head_revision.encode("utf-8", errors="replace"))
+    fingerprint.update(status.encode("utf-8", errors="replace"))
+    fingerprint.update(_run_git(["diff", "--binary", "HEAD"], workspace).encode("utf-8", errors="replace"))
+    for relative_path in sorted(untracked):
+        path = Path(workspace) / relative_path
+        fingerprint.update(relative_path.encode("utf-8", errors="replace"))
+        if path.is_file():
+            try:
+                fingerprint.update(path.read_bytes())
+            except OSError:
+                fingerprint.update(b"<unreadable>")
+    clean = not status.strip()
+    workspace_revision = (
+        f"git:{head_revision}"
+        if clean and head_revision
+        else f"git:{head_revision or 'unknown'}:worktree:{fingerprint.hexdigest()}"
+    )
+    attempt_changed_files = list(changed_files)
+    if baseline is not None:
+        baseline_files = {
+            str(path)
+            for path in baseline.get("changed_files") or []
+            if str(path).strip()
+        }
+        baseline_fingerprints = baseline.get("path_fingerprints") or {}
+        current_files = set(changed_files)
+        attempt_changed_files = sorted(
+            path
+            for path in baseline_files | current_files
+            if (
+                path not in baseline_files
+                or path not in current_files
+                or baseline_fingerprints.get(path) != _git_path_fingerprint(workspace, path)
+            )
+        )
+        baseline_head = str(baseline.get("head_revision") or "").strip()
+        if baseline_head and head_revision and baseline_head != head_revision:
+            committed_delta = _run_git(
+                ["diff", "--name-only", "--diff-filter=ACDMRTUXB", baseline_head, head_revision],
+                workspace,
+            )
+            attempt_changed_files = sorted(
+                set(attempt_changed_files)
+                | {path.strip() for path in committed_delta.splitlines() if path.strip()}
+            )
     return {
         "status": _cap(status),
         "changed_files": changed_files[:200],
+        "attempt_changed_files": attempt_changed_files[:200],
         "diff_summary": _cap(diff_stat),
+        "head_revision": head_revision,
+        "workspace_revision": workspace_revision,
     }
 
 
@@ -951,6 +1253,73 @@ def _extract_runtime_receipt(output: str) -> Optional[dict[str, Any]]:
     return None
 
 
+def _adapt_missing_phase4g8_runtime_receipt(
+    task_id: str,
+    *,
+    receipt: dict[str, Any],
+    git_evidence: dict[str, Any],
+    verification: dict[str, Any],
+    output_tail: str,
+) -> Optional[dict[str, Any]]:
+    """Build a non-verifying receipt for a completed Phase 4G8 Codex turn."""
+
+    if not os.environ.get("HERMES_PHASE4G8_RUN_ID"):
+        return None
+    try:
+        from hermes_cli import kanban_db as kb
+
+        with kb.connect() as conn:
+            node = conn.execute(
+                "SELECT job_id, metadata_json FROM execution_nodes WHERE latest_task_id = ?",
+                (task_id,),
+            ).fetchone()
+            if node is None:
+                return None
+            metadata = json.loads(node["metadata_json"] or "{}")
+            goal_keys = [str(value) for value in metadata.get("goal_item_keys") or [] if str(value).strip()]
+            gap_keys = [str(value) for value in metadata.get("gap_keys") or [] if str(value).strip()]
+            if not goal_keys and gap_keys:
+                placeholders = ",".join("?" for _ in gap_keys)
+                goal_keys = [
+                    str(row["item_key"])
+                    for row in conn.execute(
+                        f"""
+                        SELECT DISTINCT gi.item_key
+                          FROM goal_gaps gg
+                          JOIN goal_items gi ON gi.id = gg.goal_item_id
+                         WHERE gg.job_id = ? AND gg.gap_key IN ({placeholders})
+                         ORDER BY gi.item_key
+                        """,
+                        (node["job_id"], *gap_keys),
+                    ).fetchall()
+                ]
+        if not goal_keys or not git_evidence.get("workspace_revision"):
+            return None
+        sections = receipt.get("sections") if isinstance(receipt.get("sections"), dict) else {}
+        summary = str(sections.get("progress") or output_tail or "Codex execution completed").strip()
+        verification_summary = str(verification.get("summary") or "No explicit worker verification result").strip()
+        return {
+            "schema": "runtime_worker_receipt_v1",
+            "verdict": "pass",
+            "summary": _cap(summary, 2000),
+            "claimed_goal_items": goal_keys,
+            "partial_goal_items": [],
+            "unmet_goal_items": [],
+            "contradicted_goal_items": [],
+            "changed_files": list(git_evidence.get("changed_files") or []),
+            "verification": {
+                "passed": False,
+                "summary": _cap(verification_summary, 2000),
+                "adapter_requires_independent_verification": True,
+            },
+            "artifacts": [],
+            "workspace_revision": git_evidence["workspace_revision"],
+            "receipt_adapter": "phase4g8_missing_envelope_v1",
+        }
+    except Exception:
+        return None
+
+
 def _metadata(
     *,
     lane: str,
@@ -968,12 +1337,44 @@ def _metadata(
     execution_mode: str = "fresh",
     backend_session_id: Optional[str] = None,
     resume_status: Optional[str] = None,
+    git_baseline: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     succeeded = (exit_code == 0 and not timed_out and not binary_missing)
     receipt = _extract_worker_receipt(output_tail)
     runtime_receipt = _extract_runtime_receipt(output_tail)
     verification = _extract_verification_summary(output_tail)
     review_output_tail = _review_output_tail(output_tail, receipt)
+    git_evidence = collect_git_evidence(workspace, baseline=git_baseline)
+    if runtime_receipt is None and succeeded:
+        runtime_receipt = _adapt_missing_phase4g8_runtime_receipt(
+            task_id,
+            receipt=receipt,
+            git_evidence=git_evidence,
+            verification=verification,
+            output_tail=review_output_tail,
+        )
+    if isinstance(runtime_receipt, dict) and git_evidence.get("workspace_revision"):
+        runtime_receipt = dict(runtime_receipt)
+        runtime_receipt["worker_declared_changed_files"] = list(runtime_receipt.get("changed_files") or [])
+        runtime_receipt["changed_files"] = list(git_evidence.get("attempt_changed_files") or [])
+        runtime_receipt["changed_files_source"] = (
+            "wrapper_git_attempt_delta" if git_baseline is not None else "wrapper_git_workspace_delta"
+        )
+        runtime_receipt["workspace_revision"] = git_evidence["workspace_revision"]
+    if isinstance(runtime_receipt, dict):
+        try:
+            from hermes_cli import kanban_db as kb
+            from hermes_cli import kanban_runtime_kernel as rk
+
+            with kb.connect() as conn:
+                runtime_receipt = rk.bind_runtime_receipt_provenance(
+                    conn,
+                    task_id,
+                    runtime_receipt,
+                    backend_session_id=backend_session_id,
+                )
+        except Exception:
+            pass
     if receipt.get("verdict"):
         verification["verdict"] = receipt["verdict"]
     return {
@@ -1007,7 +1408,7 @@ def _metadata(
             "backend_session_id": backend_session_id,
             "resume_status": resume_status,
         },
-        "git": collect_git_evidence(workspace),
+        "git": git_evidence,
         "verification": verification,
         "worker_receipt": receipt,
         "runtime_receipt": runtime_receipt,
@@ -1183,12 +1584,14 @@ def run_codex_worker(
     timeout_seconds: Optional[float] = None,
     heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
     json_events: bool = False,
+    network_namespace: Optional[str] = None,
+    network_uid: int = 65534,
+    network_gid: int = 65534,
 ) -> int:
     from hermes_cli import kanban_db as kb
 
     log_path = kb.worker_log_path(task_id, board=board)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    started = time.monotonic()
     worker_pid = os.getpid()
     tail = _TailBuffer()
     last_progress_json = ""
@@ -1206,6 +1609,8 @@ def run_codex_worker(
     effective_json_events = bool(json_events or is_runtime_materialization or resume_session_id)
     backend_session_id = resume_session_id
     resume_status = "pending" if resume_session_id else None
+    git_baseline = capture_git_change_baseline(workspace)
+    started = time.monotonic()
 
     with open(log_path, "a", encoding="utf-8", errors="replace") as log_f:
         header = {
@@ -1252,6 +1657,7 @@ def run_codex_worker(
                 execution_mode=execution_mode,
                 backend_session_id=backend_session_id,
                 resume_status=resume_status,
+                git_baseline=git_baseline,
             )
             _record_event(task_id, "worker_failed", meta["worker_lane"], run_id=run_id)
             _finish_blocked(
@@ -1278,6 +1684,16 @@ def run_codex_worker(
             json_events=effective_json_events,
             resume_session_id=resume_session_id,
         )
+        codex_env = _safe_env_for_codex(workspace)
+        argv = wrap_codex_network_argv(
+            argv,
+            network_namespace,
+            uid=network_uid,
+            gid=network_gid,
+            workspace=workspace,
+            worker_env=codex_env,
+            filesystem_isolation=bool(network_namespace),
+        )
         _write_log(log_f, "[codex-worker] exec " + json.dumps(argv, ensure_ascii=False) + "\n")
 
         try:
@@ -1289,7 +1705,7 @@ def run_codex_worker(
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
-                env=_safe_env_for_codex(workspace),
+                env=codex_env,
                 close_fds=True,
             )
         except OSError as exc:
@@ -1310,6 +1726,7 @@ def run_codex_worker(
                 execution_mode=execution_mode,
                 backend_session_id=backend_session_id,
                 resume_status="failed" if resume_session_id else resume_status,
+                git_baseline=git_baseline,
             )
             if resume_session_id:
                 _record_event(
@@ -1516,6 +1933,7 @@ def run_codex_worker(
             execution_mode=execution_mode,
             backend_session_id=backend_session_id,
             resume_status=resume_status,
+            git_baseline=git_baseline,
         )
         if timed_out:
             _record_event(task_id, "worker_timed_out", meta["worker_lane"], run_id=run_id)
@@ -1597,6 +2015,9 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     run.add_argument("--timeout-seconds", type=float)
     run.add_argument("--heartbeat-interval", type=float, default=DEFAULT_HEARTBEAT_INTERVAL_SECONDS)
     run.add_argument("--json-events", action="store_true")
+    run.add_argument("--network-namespace")
+    run.add_argument("--network-uid", type=int, default=65534)
+    run.add_argument("--network-gid", type=int, default=65534)
     return parser.parse_args(argv)
 
 
@@ -1617,6 +2038,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             timeout_seconds=args.timeout_seconds,
             heartbeat_interval=args.heartbeat_interval,
             json_events=bool(args.json_events),
+            network_namespace=args.network_namespace,
+            network_uid=args.network_uid,
+            network_gid=args.network_gid,
         )
     return 2
 

@@ -92,6 +92,11 @@ class _FakeClient:
     def __init__(self, outputs):
         self.completions = _FakeCompletions(outputs)
         self.chat = SimpleNamespace(completions=self.completions)
+        self.options_calls = []
+
+    def with_options(self, **kwargs):
+        self.options_calls.append(kwargs)
+        return self
 
 
 class _StaticCompactionProvider:
@@ -272,6 +277,118 @@ def test_should_compact_uses_token_telemetry(conn):
     assert result["reason"] == "token_threshold"
     assert result["profile_name"] == "token_budget_compaction"
     assert result["telemetry"]["active_segment_tokens"] >= 1
+
+
+def test_compaction_profile_uses_configured_effective_context_ratio(conn):
+    job_id = _job(conn)
+
+    telemetry = rd.build_compaction_telemetry(
+        conn,
+        job_id,
+        policy={
+            "context_window_tokens": 353_400,
+            "compaction_trigger_ratio": 0.65,
+            "max_compaction_input_ratio": 0.55,
+        },
+    )
+
+    assert telemetry["context_window_tokens"] == 353_400
+    assert telemetry["compaction_trigger_tokens"] == 229_710
+    assert telemetry["policy"]["max_compaction_input_ratio"] == 0.55
+
+
+def test_compaction_source_excludes_recursive_audit_payloads(conn):
+    job_id = _job(conn)
+    segment = rk.ensure_decision_segment(conn, job_id)
+    rk.append_decision_segment_entry(conn, job_id, "delta_appended", {"signal": "eligible"})
+    sentinel = "recursive-compaction-sentinel-" + "x" * 100_000
+    rk.append_decision_segment_entry(
+        conn,
+        job_id,
+        "compaction_provider_input",
+        {"rendered": sentinel},
+        payload_text=sentinel,
+    )
+
+    request = rd.build_compaction_provider_request(conn, job_id, source_segment=segment)
+    messages, _rendered, _profile = rd.render_compaction_messages(request)
+    metrics = rd.estimate_segment_tokens(conn, segment["id"])
+
+    assert [entry["entry_type"] for entry in request.segment_entries] == ["delta_appended"]
+    assert sentinel not in json.dumps(messages)
+    assert metrics["audit_segment_tokens"] > metrics["active_segment_tokens"]
+
+
+def test_compaction_budget_rejection_skips_provider_and_suppresses_same_fingerprint(conn):
+    job_id = _job(conn)
+    rk.append_decision_segment_entry(conn, job_id, "delta_appended", {"signal": "eligible"})
+
+    class CountingProvider:
+        provider_name = "counting"
+        model = "counting-model"
+
+        def __init__(self):
+            self.calls = 0
+
+        def compact(self, _request):
+            self.calls += 1
+            raise AssertionError("provider must not be called for local budget rejection")
+
+    provider = CountingProvider()
+    result = rd.compact_decision_session(
+        conn,
+        job_id,
+        compaction_provider=provider,
+        fallback_to_deterministic=False,
+        budget={"max_compaction_input_tokens": 1},
+    )
+
+    assert result["status"] == "rejected"
+    assert result["provider_called"] is False
+    assert result["provider_result"]["parse_status"] == "input_budget_rejected"
+    assert provider.calls == 0
+    suppressed = rd.should_compact_decision_session(
+        conn,
+        job_id,
+        {"max_active_segment_tokens": 1},
+    )
+    assert suppressed["should_compact"] is False
+    assert suppressed["reason"] == "unchanged_after_rejection"
+
+    rk.append_decision_segment_entry(conn, job_id, "delta_appended", {"new_evidence": True})
+    retry = rd.should_compact_decision_session(conn, job_id, {"max_active_segment_tokens": 1})
+    assert retry["should_compact"] is True
+
+
+def test_compaction_provider_input_audit_is_bounded_and_does_not_store_messages(conn):
+    job_id = _job(conn)
+    segment = rk.ensure_decision_segment(conn, job_id)
+    rk.append_decision_segment_entry(conn, job_id, "delta_appended", {"old": "provider path"})
+    provider = _StaticCompactionProvider(
+        conn,
+        checkpoint_factory=lambda request: rd.build_deterministic_checkpoint(
+            conn,
+            request.job_id,
+            request.source_segment["id"],
+            profile_name=request.profile["profile_name"],
+        ),
+    )
+
+    result = rd.compact_decision_session(conn, job_id, compaction_provider=provider)
+
+    assert result["status"] == "compacted"
+    row = conn.execute(
+        "SELECT payload_json, payload_text FROM decision_segment_entries "
+        "WHERE segment_id = ? AND entry_type = 'compaction_provider_input'",
+        (segment["id"],),
+    ).fetchone()
+    payload = json.loads(row["payload_json"])
+    assert row["payload_text"] is None
+    assert "rendered" not in payload
+    assert "request" not in payload
+    assert payload["request_ref"]
+    assert payload["rendered_input_tokens"] <= payload["max_compaction_input_tokens"]
+    assert len(row["payload_json"]) < 10_000
 
 
 def test_should_compact_rejection_threshold_selects_validator_profile(conn):
@@ -462,6 +579,7 @@ def test_runtime_decision_provider_is_no_tools_single_shot(conn):
         model="fake-model",
         client=fake,
         max_retries=0,
+        reasoning_effort="high",
     )
 
     result = provider.decide(request)
@@ -476,6 +594,18 @@ def test_runtime_decision_provider_is_no_tools_single_shot(conn):
     assert "tools" not in call
     assert "tool_choice" not in call
     assert "web_search" not in call
+    assert call["reasoning_effort"] == "high"
+    assert fake.options_calls == [{"max_retries": 0}]
+
+
+def test_decision_profiles_require_typed_contract_for_strategy_update():
+    graph_profile = rd.load_decision_profile("graph_patch_decision")["content"]
+    recovery_profile = rd.load_decision_profile("validator_recovery_decision")["content"]
+
+    for content in (graph_profile, recovery_profile):
+        assert "strategy_update" in content
+        assert "typed `contract`" in content
+        assert "declared_write_scope" in content
 
 
 def test_runtime_decision_provider_parse_retry_stays_schema_only(conn):
@@ -734,6 +864,30 @@ def test_provider_compaction_failure_falls_back_to_deterministic(conn):
     metadata = json.loads(checkpoint["metadata_json"])
     assert metadata["fallback_used"] is True
     assert metadata["provider_name"] == "deterministic"
+
+
+def test_decision_request_uses_authoritative_goal_contract_when_real_checkpoint_omits_copy(conn):
+    job_id = _job(conn)
+    checkpoint = rd.build_deterministic_checkpoint(
+        conn,
+        job_id,
+        rk.ensure_decision_segment(conn, job_id)["id"],
+        profile_name="token_budget_compaction",
+    )
+    checkpoint.pop("goal_contract", None)
+    result = rd.compact_decision_session(
+        conn,
+        job_id,
+        compaction_provider=_StaticCompactionProvider(conn, checkpoint=checkpoint),
+        fallback_to_deterministic=False,
+    )
+    assert result["status"] == "compacted"
+
+    request = rd.build_decision_provider_request(conn, job_id, rk.build_decision_delta(conn, job_id))
+
+    contract = conn.execute("SELECT * FROM goal_contracts WHERE job_id = ? AND state = 'active'", (job_id,)).fetchone()
+    assert request.goal_contract["id"] == contract["id"]
+    assert "goal_contract" not in request.checkpoint
 
 
 def test_compaction_health_tracks_fallback_degradation_and_recovery(conn):
@@ -1325,6 +1479,18 @@ def _runtime_metadata_arg(payload: dict) -> str:
     return json.dumps(payload, separators=(",", ":"))
 
 
+def _independent_verifier_evidence(job_id: str, node_key: str, payload: dict) -> dict:
+    result = dict(payload)
+    with kb.connect() as conn:
+        node = conn.execute(
+            "SELECT * FROM execution_nodes WHERE job_id = ? AND node_key = ?",
+            (job_id, node_key),
+        ).fetchone()
+        assert node is not None
+        result["verification_provenance"] = rk.build_independent_verification_provenance(conn, node["id"])
+    return result
+
+
 def test_runtime_complete_node_records_kanban_evidence_without_ingest(kanban_home):
     created = json.loads(kc.run_slash("runtime create 'phase3c complete-node bridge' --json"))
     job_id = created["id"]
@@ -1385,12 +1551,12 @@ def test_runtime_cli_drives_multiround_goal_loop_with_evidence_bridge(kanban_hom
     assert any(step["patch_status"] == "applied" for step in second["steps"])
     assert any("verify-initial-runtime-result" in step["materialized_nodes"] for step in second["steps"])
 
-    verifier_evidence = {
+    verifier_evidence = _independent_verifier_evidence(job_id, "verify-initial-runtime-result", {
         "verdict": "succeeded",
         "summary": "verification passed for the runtime goal",
         "claimed_goal_items": ["initial-runtime-result"],
         "verification": {"commands": ["pytest"], "passed": True, "summary": "passed"},
-    }
+    })
     json.loads(
         kc.run_slash(
             f"runtime complete-node {job_id} verify-initial-runtime-result "
@@ -1405,7 +1571,7 @@ def test_runtime_cli_drives_multiround_goal_loop_with_evidence_bridge(kanban_hom
     status = json.loads(kc.run_slash(f"runtime status {job_id} --json"))
     assert status["job"]["state"] == "done"
     assert status["goal_items"][0]["state"] == "satisfied"
-    assert any(row["verification_state"] == "verified" for row in status["progress_ledger"])
+    assert any(row["verification_state"] == "independently_verified" for row in status["progress_ledger"])
     assert len(status["materializations"]) == 2
 
     decisions = json.loads(kc.run_slash(f"runtime decision {job_id} --json"))
@@ -1442,6 +1608,25 @@ def test_runtime_cli_resumes_and_completes_after_goal_waiver(kanban_home):
     resumed = json.loads(kc.run_slash(f"runtime advance {job_id} --loop --provider none --json"))
     assert resumed["state"] == "waiting_decision"
     assert any("implement-core-result" in step["ingested_nodes"] for step in resumed["steps"])
+
+    verification = json.loads(kc.run_slash(f"runtime advance {job_id} --loop --fake-provider --json"))
+    assert verification["state"] == "waiting_worker"
+    assert any("verify-core-result" in step["materialized_nodes"] for step in verification["steps"])
+    verifier_evidence = _independent_verifier_evidence(job_id, "verify-core-result", {
+        "verdict": "succeeded",
+        "summary": "independent verification passed for core result",
+        "claimed_goal_items": ["core-result"],
+        "verification": {"commands": ["pytest"], "passed": True, "summary": "passed"},
+    })
+    json.loads(
+        kc.run_slash(
+            f"runtime complete-node {job_id} verify-core-result "
+            "--summary 'independent verification passed for core result' "
+            f"--metadata '{_runtime_metadata_arg(verifier_evidence)}' --json"
+        )
+    )
+    verified = json.loads(kc.run_slash(f"runtime advance {job_id} --loop --provider none --json"))
+    assert any("verify-core-result" in step["ingested_nodes"] for step in verified["steps"])
 
     waived = json.loads(
         kc.run_slash(

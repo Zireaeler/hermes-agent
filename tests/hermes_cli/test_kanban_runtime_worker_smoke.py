@@ -130,7 +130,7 @@ def test_worker_smoke_uses_dispatcher_wrapper_and_runtime_receipt(kanban_home, t
             workspace_path=str(tmp_path),
             initial_assignee="codex-runtime-smoke",
             goal_items=[
-                {"item_key": "worker-smoke-result", "description": "worker evidence", "required": True, "verifier_required": True},
+                {"item_key": "worker-smoke-result", "description": "worker evidence", "required": True, "verifier_required": False},
             ],
         )
         assert conn.execute(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -10,9 +11,11 @@ import pytest
 
 from hermes_cli import kanban_db as kb
 from hermes_cli import codex_worker as cw
+from hermes_cli import kanban_runtime_kernel as rk
 from hermes_cli.codex_worker import (
     CodexLaneConfig,
     build_codex_argv,
+    wrap_codex_network_argv,
     parse_progress_items,
     run_codex_worker,
     _safe_env_for_codex,
@@ -212,6 +215,77 @@ def test_lane_request_validator_rejects_invalid_json_events():
             "type": "codex_cli",
             "json_events": "maybe",
         })
+
+
+def test_phase4g8_lane_requires_managed_namespace_and_run_marker():
+    valid = validate_worker_lane_request({
+        "name": "codex-phase4g8",
+        "type": "codex_cli",
+        "network_namespace": "h4g8-1234abcd",
+        "phase4g8_run_id": "phase4g8-small-run-1",
+    })
+    assert valid["network_namespace"] == "h4g8-1234abcd"
+    assert valid["phase4g8_run_id"] == "phase4g8-small-run-1"
+    with pytest.raises(ValueError, match="managed namespace"):
+        validate_worker_lane_request({
+            "name": "codex-unsafe-netns",
+            "type": "codex_cli",
+            "network_namespace": "host",
+            "phase4g8_run_id": "run-1",
+        })
+
+
+def test_codex_network_wrapper_drops_network_admin_capabilities():
+    argv = wrap_codex_network_argv(["codex", "exec", "-"], "h4g8-1234abcd")
+    assert argv[:5] == ["ip", "netns", "exec", "h4g8-1234abcd", "setpriv"]
+    assert "--bounding-set=-net_admin,-net_raw" in argv
+    assert argv[-3:] == ["codex", "exec", "-"]
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or os.geteuid() != 0 or shutil.which("bwrap") is None or shutil.which("setpriv") is None,
+    reason="filesystem namespace isolation requires POSIX root, bubblewrap, and setpriv",
+)
+def test_phase4g8_filesystem_wrapper_hides_host_tmp_and_exposes_only_worker_paths(tmp_path):
+    workspace = tmp_path / "run" / "workspace"
+    home = tmp_path / "run" / "home"
+    codex_home = tmp_path / "run" / "codex-home"
+    toolchain = tmp_path / "toolchain"
+    protected = tmp_path / "protected-gold.patch"
+    for path in (workspace, home, codex_home, toolchain):
+        path.mkdir(parents=True)
+    protected.write_text("gold\n", encoding="utf-8")
+    (workspace / "visible.txt").write_text("worker\n", encoding="utf-8")
+    worker_uid, worker_gid = 345_678_901, 345_678_902
+    for path in (workspace, workspace / "visible.txt", home, codex_home):
+        os.chown(path, worker_uid, worker_gid)
+    os.chmod(toolchain, 0o755)
+    (toolchain / "bin").mkdir()
+    (toolchain / "bin" / "python").write_text("public python\n", encoding="utf-8")
+    env = {
+        "HOME": str(home),
+        "CODEX_HOME": str(codex_home),
+        "PHASE4G8_WORKER_TOOLCHAIN": str(toolchain),
+    }
+    command = [
+        "/bin/sh", "-c",
+        f"test -r {workspace / 'visible.txt'} && test ! -e {protected} && test ! -e /root "
+        "&& test -r /opt/miniconda3/envs/testbed/bin/python "
+        "&& printf isolated > /tmp/worker-canary",
+    ]
+    argv = wrap_codex_network_argv(
+        command,
+        None,
+        uid=worker_uid,
+        gid=worker_gid,
+        workspace=str(workspace),
+        worker_env=env,
+        filesystem_isolation=True,
+    )
+
+    result = subprocess.run(argv, text=True, capture_output=True, check=False)
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_dispatcher_uses_external_lane_assignee(kanban_home, monkeypatch):
@@ -574,6 +648,97 @@ def test_codex_runtime_receipt_ignores_truncated_prior_closing_fence():
     assert receipt["verdict"] == "pass"
 
 
+def test_phase4g8_adapter_wraps_missing_runtime_envelope_without_claiming_verification(
+    kanban_home,
+    tmp_path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    subprocess.run(["git", "init", "--quiet"], cwd=workspace, check=True)
+    subprocess.run(["git", "config", "user.email", "phase4g8@example.invalid"], cwd=workspace, check=True)
+    subprocess.run(["git", "config", "user.name", "Phase4G8 Test"], cwd=workspace, check=True)
+    (workspace / "result.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "result.txt"], cwd=workspace, check=True)
+    subprocess.run(["git", "commit", "--quiet", "-m", "base"], cwd=workspace, check=True)
+    (workspace / "result.txt").write_text("implemented\n", encoding="utf-8")
+    with kb.connect() as conn:
+        root = kb.create_task(conn, title="phase4g8 adapter", initial_status="running")
+        job_id = rk.create_runtime_job(
+            conn,
+            root,
+            "adapt a missing runtime receipt",
+            workspace_path=str(workspace),
+            goal_items=[{"item_key": "result", "description": "result", "required": True, "verifier_required": True}],
+            initialization_mode="fixture",
+        )
+        rk.advance_runtime_job(conn, job_id, create_tasks=True)
+        node = conn.execute("SELECT * FROM execution_nodes WHERE job_id = ?", (job_id,)).fetchone()
+        gap = conn.execute(
+            """
+            SELECT gg.gap_key
+              FROM goal_gaps gg
+              JOIN goal_items gi ON gi.id = gg.goal_item_id
+             WHERE gg.job_id = ? AND gi.item_key = 'result'
+             ORDER BY gg.created_at DESC LIMIT 1
+            """,
+            (job_id,),
+        ).fetchone()
+        metadata = json.loads(node["metadata_json"] or "{}")
+        metadata["goal_item_keys"] = []
+        metadata["gap_keys"] = [gap["gap_key"]]
+        conn.execute(
+            "UPDATE execution_nodes SET metadata_json = ? WHERE id = ?",
+            (json.dumps(metadata), node["id"]),
+        )
+    monkeypatch.setenv("HERMES_PHASE4G8_RUN_ID", "phase4g8-adapter-control")
+
+    meta = _metadata(
+        lane="phase4g8-codex",
+        task_id=node["latest_task_id"],
+        run_id=1,
+        worker_pid=123,
+        claim_lock="control:123",
+        workspace=str(workspace),
+        model="gpt-5.6-sol",
+        exit_code=0,
+        timed_out=False,
+        output_tail=(
+            "Progress:\n- [x] implemented result\n\n"
+            "Changed files:\n- result.txt\n\n"
+            "Verification:\n- command: git diff --check\n  result: passed\n"
+        ),
+    )
+
+    receipt = meta["runtime_receipt"]
+    assert receipt["receipt_adapter"] == "phase4g8_missing_envelope_v1"
+    assert receipt["claimed_goal_items"] == ["result"]
+    assert receipt["changed_files"] == ["result.txt"]
+    assert receipt["verification"]["passed"] is False
+    assert receipt["verification"]["adapter_requires_independent_verification"] is True
+
+
+def test_phase4g8_adapter_does_not_replace_malformed_explicit_envelope(kanban_home, tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_PHASE4G8_RUN_ID", "phase4g8-adapter-control")
+    output = '```json\n{"schema":"runtime_worker_receipt_v1","verdict":"pass"}\n```\n'
+
+    meta = _metadata(
+        lane="phase4g8-codex",
+        task_id="missing-task",
+        run_id=1,
+        worker_pid=123,
+        claim_lock="control:123",
+        workspace=str(tmp_path),
+        model="gpt-5.6-sol",
+        exit_code=0,
+        timed_out=False,
+        output_tail=output,
+    )
+
+    assert meta["runtime_receipt"] == {"schema": "runtime_worker_receipt_v1", "verdict": "pass"}
+    assert "receipt_adapter" not in meta["runtime_receipt"]
+
+
 def test_codex_metadata_output_tail_excludes_echoed_prompt_prefix():
     meta = _metadata(
         lane="codex-deep",
@@ -761,6 +926,80 @@ def test_codex_env_preserves_existing_writable_codex_home(tmp_path, monkeypatch)
     assert env.get("CODEX_HOME") is None
 
 
+def test_phase4g8_codex_home_isolated_per_execution_node_and_reused_for_retry(
+    kanban_home,
+    tmp_path,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    seed = tmp_path / "codex-seed"
+    seed.mkdir()
+    (seed / "config.toml").write_text('model = "test"\n', encoding="utf-8")
+    (seed / "auth.json").write_text('{"OPENAI_API_KEY":"test"}\n', encoding="utf-8")
+    node_homes = tmp_path / "codex-homes"
+    cfg = CodexLaneConfig(
+        name="phase4g8-codex",
+        isolated_codex_home_seed=str(seed),
+        isolated_codex_home_root=str(node_homes),
+        network_uid=os.geteuid(),
+        network_gid=os.getegid(),
+    )
+    with kb.connect() as conn:
+        root = kb.create_task(conn, title="root", initial_status="running")
+        job_id = rk.create_runtime_job(
+            conn,
+            root,
+            "node-isolated Codex state",
+            initialization_mode="provider_first",
+        )
+        tasks = [
+            kb.create_task(
+                conn,
+                title=f"worker {index}",
+                assignee="phase4g8-codex",
+                initial_status="running",
+            )
+            for index in range(2)
+        ]
+        now = 1
+        for index, task_id in enumerate(tasks):
+            conn.execute(
+                """
+                INSERT INTO execution_nodes (
+                    id, job_id, node_key, node_type, state, title, description,
+                    assignee, latest_task_id, assumptions_json, constraints_json,
+                    metadata_json, created_at, updated_at
+                ) VALUES (?, ?, ?, 'implementation', 'ready', ?, ?,
+                          'phase4g8-codex', ?, '{}', '{}', '{}', ?, ?)
+                """,
+                (
+                    f"rnode_isolated_{index}",
+                    job_id,
+                    f"node-{index}",
+                    f"Node {index}",
+                    f"Node {index}",
+                    task_id,
+                    now + index,
+                    now + index,
+                ),
+            )
+        task_a = kb.get_task(conn, tasks[0])
+        task_b = kb.get_task(conn, tasks[1])
+
+    home_a = Path(_safe_env_for_worker(task_a, str(workspace), cfg, board=None)["CODEX_HOME"])
+    (home_a / "sessions").mkdir()
+    (home_a / "sessions" / "resume.jsonl").write_text("session\n", encoding="utf-8")
+    retry_home_a = Path(_safe_env_for_worker(task_a, str(workspace), cfg, board=None)["CODEX_HOME"])
+    home_b = Path(_safe_env_for_worker(task_b, str(workspace), cfg, board=None)["CODEX_HOME"])
+
+    assert retry_home_a == home_a
+    assert (retry_home_a / "sessions" / "resume.jsonl").is_file()
+    assert home_b != home_a
+    assert not (home_b / "sessions").exists()
+    assert (home_b / "config.toml").read_text(encoding="utf-8") == 'model = "test"\n'
+    assert len(list(node_homes.glob("node-*"))) == 2
+
+
 def test_codex_env_does_not_forward_proxy_variables(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / ".codex").mkdir(parents=True)
@@ -794,6 +1033,9 @@ def test_codex_env_does_not_forward_proxy_variables(tmp_path, monkeypatch):
 def test_codex_wrapper_env_does_not_forward_proxy_variables(
     kanban_home, tmp_path, monkeypatch,
 ):
+    toolchain = tmp_path / "public-toolchain"
+    toolchain.mkdir()
+    monkeypatch.setenv("PHASE4G8_WORKER_TOOLCHAIN", str(toolchain))
     for name in (
         "HTTP_PROXY",
         "HTTPS_PROXY",
@@ -836,6 +1078,7 @@ def test_codex_wrapper_env_does_not_forward_proxy_variables(
         "no_proxy",
     ):
         assert name not in env
+    assert env["PHASE4G8_WORKER_TOOLCHAIN"] == str(toolchain)
 
 
 def test_collect_git_evidence_preserves_short_status_paths(tmp_path):
@@ -854,6 +1097,37 @@ def test_collect_git_evidence_preserves_short_status_paths(tmp_path):
 
     assert evidence["status"] == " M codex_followup_dispatch_smoke.txt"
     assert evidence["changed_files"] == ["codex_followup_dispatch_smoke.txt"]
+    assert evidence["attempt_changed_files"] == ["codex_followup_dispatch_smoke.txt"]
+
+
+def test_collect_git_evidence_attributes_only_attempt_delta(tmp_path):
+    from hermes_cli.codex_worker import capture_git_change_baseline, collect_git_evidence
+
+    subprocess.run(["git", "init", "--quiet"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Hermes Test"], cwd=tmp_path, check=True)
+    legacy = tmp_path / "legacy.md"
+    allowed = tmp_path / "src" / "allowed.py"
+    allowed.parent.mkdir()
+    legacy.write_text("base\n", encoding="utf-8")
+    allowed.write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "--quiet", "-m", "base"], cwd=tmp_path, check=True)
+
+    legacy.write_text("changed by an earlier node\n", encoding="utf-8")
+    baseline = capture_git_change_baseline(str(tmp_path))
+    unchanged = collect_git_evidence(str(tmp_path), baseline=baseline)
+    assert unchanged["changed_files"] == ["legacy.md"]
+    assert unchanged["attempt_changed_files"] == []
+
+    allowed.write_text("changed by this node\n", encoding="utf-8")
+    current = collect_git_evidence(str(tmp_path), baseline=baseline)
+    assert current["changed_files"] == ["legacy.md", "src/allowed.py"]
+    assert current["attempt_changed_files"] == ["src/allowed.py"]
+
+    legacy.write_text("changed again by this node\n", encoding="utf-8")
+    current = collect_git_evidence(str(tmp_path), baseline=baseline)
+    assert current["attempt_changed_files"] == ["legacy.md", "src/allowed.py"]
 
 
 def test_codex_env_uses_workspace_home_when_inherited_home_unwritable(

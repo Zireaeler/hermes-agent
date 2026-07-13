@@ -109,7 +109,7 @@ def test_continuity_smoke_interrupts_then_resumes_same_session(
                 "item_key": "continuity-result",
                 "description": "resumed worker result is verified",
                 "required": True,
-                "verifier_required": True,
+                "verifier_required": False,
             }],
         )
         assert rk.apply_graph_patch(

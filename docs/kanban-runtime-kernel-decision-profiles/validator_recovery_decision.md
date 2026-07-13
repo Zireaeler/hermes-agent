@@ -43,8 +43,11 @@ No Markdown fences, no explanatory prose, no comments.
 - If the rejected reason is stale revision, use the current `db_revision` /
   `graph_revision` from the request.
 - If the rejected op is `strategy_update`, include `strategy_summary` and a
-  non-empty `changes_from_previous_attempts` list. Do not use it to mark the job
-  done or blocked.
+  non-empty `changes_from_previous_attempts` list. Include a typed `contract`
+  with `outcome`, `acceptance_criteria`, `success_evidence`,
+  `declared_write_scope`, and `prohibited_actions`. Provider-first jobs reject
+  `strategy_update` without this contract. Do not use it to mark the job done
+  or blocked.
 
 ## Safe Fallback
 

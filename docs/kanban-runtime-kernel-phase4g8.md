@@ -118,12 +118,25 @@ Phase 4G8 固定选择 small、medium、large 三档任务。候选实例为：
 
 | 档位 | 候选实例 | 选择原因 |
 |---|---|---|
-| small | `iterative__dvc_1.10.2_1.11.0` | 版本演进范围相对较小，但仍包含多个 requirement 和真实回归测试 |
+| small | `pydantic__pydantic_v2.6.0b1_v2.6.0` | 较小但非局部修复，官方 oracle 包含 1 个 FAIL_TO_PASS 与 51 个 PASS_TO_PASS 测试 |
 | medium | `dask__dask_2022.9.2_2022.10.0` | 多模块演进、较大测试面，适合 worker resume 和 compaction |
-| large | `conan-io__conan_2.0.14_2.0.15` | 大范围版本演进，适合多轮 decision、structure escalation 和长期恢复 |
+| large | `iterative__dvc_1.0.0a1_1.0.0a2` | 大范围版本演进，gold patch 超过 220 KB，官方 oracle 覆盖 68 个 FAIL_TO_PASS 与 242 个 PASS_TO_PASS 测试 |
 
 公开第三方运行中生成的 patch 大小只能作为粗略分档信号，不能作为 official task ground truth，
 也不能暴露给 provider。正式任务只有在完成 oracle qualification 后才锁定。
+
+三个正式实例均已完成严格 oracle qualification。原 large 候选
+`dask__dask_2023.3.2_2023.4.0` 在固定 gold revision 的多次运行中出现不同 PASS_TO_PASS
+偶发失败，无法形成稳定 oracle，因此已淘汰。替代 DVC large 候选已由 qualification harness
+完整执行 base/gold 并正式锁定。
+
+最终 qualification 事实：
+
+| 档位 | Base F2P | Base P2P | Gold F2P | Gold P2P | 结果 |
+|---|---:|---:|---:|---:|---|
+| small | 0/1 | 51/51 | 1/1 | 51/51 | qualified |
+| medium | 0/44 | 2861/2861 | 44/44 | 2861/2861 | qualified |
+| large | 0/68 | 242/242 | 68/68 | 242/242 | qualified |
 
 ### 5.1 分档不是只看 LOC
 
@@ -238,7 +251,9 @@ provider、worker、memory candidate 或 decision checkpoint。
 phase4g8/<instance_id>/
   home/
   hermes-home/
-  codex-home/
+  codex-home-seed/
+  codex-homes/
+    node-<execution_node_hash>/
   kanban.db
   workspace/
   evaluator/
@@ -261,7 +276,7 @@ phase4g8/<instance_id>/
 - evaluator cache/result；
 - memory topics/candidates。
 
-模型源可以从主 `.codex` 读取后复制到隔离 `CODEX_HOME`，但必须：
+模型源可以从主 `.codex` 读取后复制到只包含配置和认证的 `codex-home-seed`，但必须：
 
 - 只复制运行所需的 `base_url`、model 和 API key；
 - 文件权限为 0600；
@@ -269,6 +284,11 @@ phase4g8/<instance_id>/
 - 运行前后记录主配置 hash；
 - 不复制主 session history；
 - 不把 key 写入 DB、state、report、prompt、event 或日志。
+
+Worker 的实际 `CODEX_HOME` 必须按 `execution_node_id` 派生。相同 node 的 retry/resume 复用同一
+目录，以保留 backend session；新的 recovery、verification 或其他 execution node 必须使用不同
+目录。Worker filesystem namespace 只挂载当前 node 的目录，不挂载 seed 或其他 node 的 session
+目录。这样 durable resume 可以保留，但不同 runtime responsibility 之间不能读取隐藏对话历史。
 
 ---
 
@@ -559,6 +579,102 @@ real compaction，不通过无意义 decision rounds 填充上下文。
 如果 real compaction 失败，任务可以继续由 DB truth 恢复，但该实例不能满足 Phase 4G8
 no-fallback 验收，必须修复通用问题后从干净环境重跑。
 
+### 13.1 模型上下文与自动触发策略
+
+Compaction 的生产触发条件必须基于即将进入下一次 decision provider 请求的
+`projected_context_tokens`，不能基于包含 runtime audit 原文的数据库 segment 总大小。
+模型上下文窗口是输入、已有上下文、reasoning 和输出共享的总预算，不得把它解释为纯输入额度。
+
+当前正式验证使用的模型源为 `MySub2api/gpt-5.6-sol`，reasoning effort 为 `high`。Codex
+runtime 在真实会话中上报的有效 `model_context_window` 为 `353400`；本机 Codex 配置中的手工
+override 不能替代该运行事实。Phase 4G8 使用以下 provider/model profile：
+
+```json
+{
+  "provider": "MySub2api",
+  "model": "gpt-5.6-sol",
+  "reasoning_effort": "high",
+  "context_window_tokens": 353400,
+  "compaction_trigger_ratio": 0.65,
+  "reserved_output_tokens": 8192,
+  "reserved_reasoning_tokens": 32768,
+  "estimation_safety_tokens": 32768,
+  "max_compaction_input_ratio": 0.55,
+  "max_compaction_input_chars": 1000000,
+  "max_single_entry_chars": 16000,
+  "max_segment_entries": 200
+}
+```
+
+该 profile 的自动触发点为 `353400 * 0.65 = 229710` tokens，compaction provider 输入硬上限
+为 `353400 * 0.55 = 194370` tokens。比例、上下文窗口和 reserve 均必须可配置；不得把该模型
+profile 写成所有 provider 的全局常量。生产默认优先使用比例触发，固定
+`max_active_segment_tokens` 只允许作为显式兼容兜底或受控测试开关。Phase 4G8 control case 可以
+使用固定低阈值确定性触发，但必须在报告中标记 `test_only_forced_threshold=true`。
+
+触发计算至少包含：stable prefix、validated checkpoint、eligible short tail、当前 delta、下一轮
+固定协议开销以及 reserve。`compaction_requested`、provider 调用审计和 rejected checkpoint
+不能增加 eligible context，也不能单独触发下一次 compaction。
+
+### 13.2 非递归输入与失败抑制
+
+下列 audit entry 永远不能作为后续 compaction provider 的正文输入：
+
+- `compaction_requested`；
+- `compaction_provider_input`；
+- `compaction_provider_output`；
+- `compaction_fallback`；
+- `compaction_event`；
+- `checkpoint_created`；
+- `checkpoint_rejected`。
+
+普通 `provider_input` 也不能以完整 prompt 形式进入 compaction，只能投影为有界 metadata 和
+引用。Compaction source selection 应优先使用 `delta_appended`、provider parsed result、validator
+result、patch result、worker/evaluator evidence summary 和 human decision 等语义 entry，并对单条、
+总 token、总字符和 entry 数量分别执行构造前预算。最终 rendered request 超预算时必须在本地返回
+`compaction_input_budget_exceeded`，provider 调用次数必须为 0。
+
+`compaction_provider_input` 只持久化 request/response ref、provider/model/profile、included entry
+ids、included/omitted count、token/character estimate 和预算结果。不得把完整 messages、rendered
+request 或旧 compaction prompt 写回 active segment。完整原文若因受控诊断确需保存，只能进入
+有大小上限、root-only、不会被 provider read path 读取的外部 artifact。
+
+Rejected compaction 必须记录 eligible-content fingerprint。相同 fingerprint 在没有新 decision、
+evidence、validator 或 human fact 时不得重复调用 provider；compaction 自身产生的 audit entry 不算
+新 fact。可配置 cooldown 只能作为第二层保护，不能替代 fingerprint 门槛。
+
+### 13.3 失败传播与进程收割
+
+Phase 4G8 harness 每轮必须先检查 supervisor process 和 root-only state file，再 dispatch 新 worker。
+Supervisor 达到 fail-fast error budget 后，harness 必须立即：
+
+1. 停止继续 materialize 或 dispatch；
+2. 只终止带当前 `phase4g8_run_id` ownership marker 的 worker process group；
+3. 等待并回收 owned child process；
+4. 从 DB 重新读取 evaluator provenance、fixed target、ledger 和 continuity facts；
+5. 写入 `infrastructure_invalid` 报告并立即退出。
+
+Wrapper heartbeat 不能掩盖没有任何 `worker_codex_event` 的 backend stall。正式运行必须配置
+Codex event startup/stall timeout；超时后按 owned process group 收割，并明确区分 provider transport
+stall、worker timeout 和 task-quality failure。异常路径不得继续等待整个 case `max_wall_seconds`。
+
+### 13.4 Task-quality 终止预算
+
+真实任务不能因 official evaluator 持续失败而无限创建 recovery worker。Harness 必须在每次
+`dispatch_once()` 之前，从 terminal evaluator `task_runs.metadata` 统计未 resolved 的 official
+evaluator attempts，并应用可配置的 `max_unresolved_evaluator_attempts`；默认值为 `3`。
+
+达到预算后必须：
+
+1. 不再 dispatch 新 recovery worker；
+2. 停止本 case 的 daemon 与 owned worker；
+3. 保留最新 fixed-revision evaluator result、open/reopened gap 和全部失败 evidence；
+4. 生成正常 `run-report.json`，记录 attempt count、failure count、预算和 exhausted 状态；
+5. 将结果分类为 `runtime-correct / task-failed`，前提是其他 runtime invariants 均通过。
+
+预算耗尽不是 `infrastructure_invalid`，也不能把 runtime job 伪造为 `done`。若最新 evaluator 已
+resolved，即使此前失败次数达到预算，也应按成功路径完成，不能由历史失败覆盖最终有效证据。
+
 ---
 
 ## 14. 完成与判定
@@ -745,6 +861,29 @@ Infrastructure invalid 不算模型或 runtime 失败，但实例必须重新 qu
 - capability blocks/authorizations；
 - credential scan hits。
 
+### 17.7 实际能力过程记录
+
+每个正式 case 除 `run-report.json` 外，必须同时生成：
+
+- `capability-trace.json`：供聚合、对比和后续分析使用的结构化过程记录；
+- `capability-trace.md`：供 operator 阅读的中文能力过程报告。
+
+能力过程报告不是普通测试日志，也不能只重复最终 pass/fail。它至少必须回答：
+
+- Decision Provider 最初创建了什么责任，为什么没有或为什么需要拆分；
+- worker 实际检查、修改和验证了什么；
+- worker 的本地判断与 independent evaluator 是否一致；
+- evaluator 提供了什么固定 revision failure evidence；
+- Runtime 如何创建 recovery responsibility，后续策略是否相对前一轮发生实质变化；
+- 多轮 recovery 是收敛、重复失败还是预算耗尽；
+- daemon、session、checkpoint、consistency 和 capability 边界是否保持正确；
+- 最终是 runtime correctness failure、task quality failure 还是 resolved。
+
+报告应保留可观察的 agent message、已完成命令、修改文件、标准化 receipt、evaluator result、
+checkpoint audit 和 evidence ref，但不得包含 gold patch、受保护 evaluator 源码、隐藏推理、凭据或
+其他 node 的私有 session。真实任务失败同样必须生成该报告，因为失败路径通常比成功数字更能说明
+当前系统的诊断、恢复和收敛能力。
+
 ---
 
 ## 18. 测试矩阵
@@ -807,6 +946,18 @@ worktree、部署数据或 runtime audit DB 强行腾挪。
 3. worker tool network 与模型 transport network 的物理隔离；
 4. 修订后的强制/条件断言、双结论和 fault trigger state machine。
 
+Phase 4G8 worker 的工具边界由外层 netns、nft allowlist、非特权 UID、`no-new-privs` 和
+capability drop 强制实施。Codex 内层 sandbox 使用 `danger-full-access`，避免嵌套 `bwrap`
+在外层 netns 中因无法配置 loopback 而阻断所有工具；这不会移除外层网络、身份和 protected
+artifact 隔离。
+
+正式 worker 必须能运行 base workspace 中的公开测试。Runner 可以从 locked official image 中只
+提取依赖 toolchain/conda environment，按 image hash 缓存为 root-owned read-only 目录并加入 worker
+`PATH`；不得复制 image 的 `/testbed` checkout、test patch、evaluator script、gold patch 或 evaluator
+artifact。提取后必须删除指向 `/testbed` 等 image workspace 的 `.pth` 绝对路径，并验证 worker UID
+只能读取/执行 toolchain、不能写入 toolchain。公开 toolchain 不是 evaluator evidence，不能替代固定
+revision official evaluator。
+
 ### Step 1：Qualification Harness
 
 - 读取 SWE-EVO instance metadata；
@@ -818,9 +969,14 @@ worktree、部署数据或 runtime audit DB 强行腾挪。
 ### Step 2：Real Daemon Provider Wiring
 
 - daemon 接入 real compaction provider；
+- 为 `MySub2api/gpt-5.6-sol high` 配置 `353400` token model profile、`0.65` trigger ratio 和
+  `0.55` provider input hard limit；
+- compaction source projection 排除全部 compaction audit 原文，并执行 token/character/entry 硬预算；
+- rejected compaction 使用 eligible-content fingerprint 抑制相同输入重试；
 - no-fallback validation mode；
 - provider/compaction timeout 与 lease TTL 校验；
 - service environment/config 生成；
+- 从 locked official image 提取不含 `/testbed` 的只读公开测试 toolchain；
 - state/log secret redaction。
 
 ### Step 3：Evaluator Lane
@@ -843,6 +999,8 @@ worktree、部署数据或 runtime audit DB 强行腾挪。
 - worker-owned PID termination；
 - backend session resume validation；
 - receipt-before-ingest restart；
+- daemon fail-fast 后 owned worker 收割和 harness 快速退出；
+- wrapper heartbeat 存在但无 `worker_codex_event` 的 stall detection；
 - 不影响用户 session/process。
 
 ### Step 5：Offline Tests
@@ -901,6 +1059,8 @@ Malformed `structure_request` 不得产生 graph mutation；原始 worker artifa
 - implementation 和 evaluator 使用独立 process/session；
 - 三项均运行 official evaluator，并保留 fixed revision 的 resolved/failed 原始结果；
 - evaluator failed 时 runtime 不得 premature `done` 或 silent idle；
+- evaluator 连续失败达到预算时停止新 recovery dispatch，并输出
+  `runtime-correct / task-failed`，不得误报 `infrastructure_invalid`；
 - implementation 自报 verification 不得满足 `verifier_required`；
 - evaluator provenance、fixed target 和 stale target rejection 均通过；
 - deterministic compaction fallback 为 0；
@@ -911,7 +1071,10 @@ Malformed `structure_request` 不得产生 graph mutation；原始 worker artifa
 - goal 未满足时没有 silent idle/done；
 - credential scan 为 0；
 - 主 `.codex` config/auth hash 未变化；
+- 不同 execution node 的 `CODEX_HOME` 相互隔离，同一 node 的 retry/resume 可复用；
 - 所有失败尝试、recovery、validator rejection 和 fallback audit 均保留；
+- 每项正式任务均生成中文 `capability-trace.md` 和结构化 `capability-trace.json`，并能区分
+  worker 自报、本地验证、official evaluator、recovery 收敛性与最终双重结论；
 - Control verifier / structure / compaction 均通过；
 - 文档、实现、qualification、真实报告、测试和提交作为一个阶段统一交付并推送。
 

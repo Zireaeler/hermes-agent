@@ -1,0 +1,465 @@
+{
+  "schema": "hermes_phase4g8_real_case_v1",
+  "run_id": "phase4g8-small-6dafeda34c",
+  "job_id": "rjob_70f9838a73c7",
+  "worker_identity": {
+    "uid": 551891558,
+    "gid": 158530636
+  },
+  "model_source": {
+    "source": "codex_config",
+    "provider": "MySub2api",
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high",
+    "base_url_sha256": "d7006f4957539674e207643c9937cbcdc637ab6ef7a3e3e4b85e2a054a6b241b"
+  },
+  "run_report": {
+    "schema": "hermes_phase4g8_run_report_v1",
+    "instance_id": "pydantic__pydantic_v2.6.0b1_v2.6.0",
+    "job_id": "rjob_70f9838a73c7",
+    "classification": "runtime-correct/task-failed",
+    "runtime_validation": {
+      "passed": true,
+      "failures": [],
+      "consistency": {
+        "status": "passed",
+        "violation_count": 0,
+        "warning_count": 0
+      },
+      "checkpoint_chain": {
+        "status": "valid",
+        "selection_mode": "latest_checkpoint",
+        "latest_checkpoint_id": "dchk_2867b3731be7",
+        "selected_checkpoint_id": "dchk_2867b3731be7",
+        "selected_checkpoint": {
+          "id": "dchk_2867b3731be7",
+          "job_id": "rjob_70f9838a73c7",
+          "decision_session_id": "dses_d4e135605663",
+          "revision": 1,
+          "checkpoint_json": "{\"artifact_index\": [], \"do_not_repeat\": [{\"source_refs\": [{\"patch_id\": \"gpatch_21198b3468ba\"}], \"summary\": \"Do not create a duplicate primary implementation effort while the applied implementation node remains running.\"}, {\"source_refs\": [{\"patch_id\": \"gpatch_21198b3468ba\"}], \"summary\": \"Do not bypass or alter the fixed official evaluator, deploy to production, publish releases, or modify external services.\"}], \"goal_contract_revision\": 1, \"graph_frontier\": [{\"node_key\": \"implement-srs-and-resolve-evaluator\", \"node_type\": \"implementation\", \"source_refs\": [{\"node_key\": \"implement-srs-and-resolve-evaluator\"}], \"state\": \"running\", \"summary\": \"Inspect the repository and SRS/evaluator context, implement the complete required behavior, add focused tests, debug regressions, run the strongest available validation and official evaluator when accessible, and preserve concrete outputs plus the workspace revision for follow-up verification.\"}], \"human_decisions\": [], \"key_decisions\": [{\"source_refs\": [{\"decision_id\": \"kdec_b5a63162015c\"}, {\"patch_id\": \"gpatch_21198b3468ba\"}], \"summary\": \"A single goal-linked implementation node was created and applied to resolve the missing implementation and evaluator evidence.\"}], \"known_failure_boundaries\": [], \"metadata\": {\"checkpoint_is_non_authoritative_context\": true, \"covered_graph_revision_end\": 1, \"covered_graph_revision_start\": 0, \"db_is_authoritative\": true, \"db_revision\": 1, \"graph_revision\": 1, \"included_entry_ids\": [1, 3, 4, 5, 6, 7], \"ledger_revision\": 1, \"profile_hash\": \"ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c\", \"profile_name\": \"token_budget_compaction\", \"profile_path\": \"docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md\", \"profile_version\": \"1\", \"provider_audit\": {\"fallback_used\": false, \"input_token_estimate\": 17716, \"output_token_estimate\": 827, \"parse_status\": \"parsed\", \"provider_input_entry_id\": 9, \"provider_latency_ms\": 41609, \"provider_model\": \"gpt-5.6-sol\", \"provider_name\": \"custom\", \"provider_validation\": {\"status\": \"accepted\"}, \"reason\": \"phase4g8_controlled_process_boundary\", \"request_entry_id\": 8, \"request_ref\": \"1b00d480765bdb2b51c84205b4389353589d30aa9cd56a50bdfe9a2a2feac8a7\", \"response_ref\": \"be9013a3e51149ed584f19604d154fe7f891dd2e42e7d2329eaee8e4b107ab13\", \"retry_count\": 0}, \"provider_generated\": true, \"source_fingerprint\": \"1322d96fa74fc609ec56d60cb33b553f09ac7325662e983a5b6a36abdd51f575\", \"source_segment_id\": \"dseg_71cef74a1e8b\"}, \"next_strategy_constraints\": [{\"source_refs\": [{\"node_key\": \"implement-srs-and-resolve-evaluator\"}, {\"goal_item_key\": \"official-evaluator-resolved\"}], \"summary\": \"Wait for the running implementation node to report changed files, focused and applicable test results, exact official evaluator output when available, workspace revision, and worker summary before assessing completion.\"}, {\"source_refs\": [{\"goal_item_key\": \"official-evaluator-resolved\"}], \"summary\": \"The required goal cannot be marked satisfied from partial or worker-only claims; it requires independent verification or an explicit waiver.\"}], \"objective_summary\": \"Implement the required Pydantic v2.6.0 SRS behavior in the workspace and pass the fixed official SWE-EVO evaluator with independently verifiable evidence.\", \"open_blockers\": [{\"source_refs\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"Goal satisfaction is blocked until implementation, test, workspace revision, and fixed official evaluator evidence is produced and independently verified.\"}], \"open_goal_gaps\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\", \"gap_type\": \"missing_evidence\", \"source_refs\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"The required official-evaluator goal remains open because no verified implementation or evaluator evidence has been recorded.\"}, {\"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\", \"gap_type\": \"stale_or_no_progress\", \"source_refs\": [{\"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\"}], \"summary\": \"The missing-evidence gap has not yet produced recorded progress.\"}], \"rejected_approaches\": [], \"satisfied_goal_items\": [], \"validator_rejection_lessons\": []}",
+          "reason": "phase4g8_controlled_process_boundary",
+          "transcript_ref": "decision_segment:dseg_71cef74a1e8b",
+          "created_at": 1783939687,
+          "source_segment_id": "dseg_71cef74a1e8b",
+          "profile_name": "token_budget_compaction",
+          "profile_version": "1",
+          "profile_hash": "ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c",
+          "profile_path": "docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md",
+          "checkpoint_revision": 1,
+          "db_revision": 1,
+          "graph_revision": 1,
+          "ledger_revision": 1,
+          "covered_event_start": null,
+          "covered_event_end": null,
+          "covered_decision_start": "kdec_b5a63162015c",
+          "covered_decision_end": "kdec_b5a63162015c",
+          "covered_entry_start": 1,
+          "covered_entry_end": 10,
+          "payload_json": "{\"artifact_index\": [], \"do_not_repeat\": [{\"source_refs\": [{\"patch_id\": \"gpatch_21198b3468ba\"}], \"summary\": \"Do not create a duplicate primary implementation effort while the applied implementation node remains running.\"}, {\"source_refs\": [{\"patch_id\": \"gpatch_21198b3468ba\"}], \"summary\": \"Do not bypass or alter the fixed official evaluator, deploy to production, publish releases, or modify external services.\"}], \"goal_contract_revision\": 1, \"graph_frontier\": [{\"node_key\": \"implement-srs-and-resolve-evaluator\", \"node_type\": \"implementation\", \"source_refs\": [{\"node_key\": \"implement-srs-and-resolve-evaluator\"}], \"state\": \"running\", \"summary\": \"Inspect the repository and SRS/evaluator context, implement the complete required behavior, add focused tests, debug regressions, run the strongest available validation and official evaluator when accessible, and preserve concrete outputs plus the workspace revision for follow-up verification.\"}], \"human_decisions\": [], \"key_decisions\": [{\"source_refs\": [{\"decision_id\": \"kdec_b5a63162015c\"}, {\"patch_id\": \"gpatch_21198b3468ba\"}], \"summary\": \"A single goal-linked implementation node was created and applied to resolve the missing implementation and evaluator evidence.\"}], \"known_failure_boundaries\": [], \"metadata\": {\"checkpoint_is_non_authoritative_context\": true, \"covered_graph_revision_end\": 1, \"covered_graph_revision_start\": 0, \"db_is_authoritative\": true, \"db_revision\": 1, \"graph_revision\": 1, \"included_entry_ids\": [1, 3, 4, 5, 6, 7], \"ledger_revision\": 1, \"profile_hash\": \"ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c\", \"profile_name\": \"token_budget_compaction\", \"profile_path\": \"docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md\", \"profile_version\": \"1\", \"provider_audit\": {\"fallback_used\": false, \"input_token_estimate\": 17716, \"output_token_estimate\": 827, \"parse_status\": \"parsed\", \"provider_input_entry_id\": 9, \"provider_latency_ms\": 41609, \"provider_model\": \"gpt-5.6-sol\", \"provider_name\": \"custom\", \"provider_validation\": {\"status\": \"accepted\"}, \"reason\": \"phase4g8_controlled_process_boundary\", \"request_entry_id\": 8, \"request_ref\": \"1b00d480765bdb2b51c84205b4389353589d30aa9cd56a50bdfe9a2a2feac8a7\", \"response_ref\": \"be9013a3e51149ed584f19604d154fe7f891dd2e42e7d2329eaee8e4b107ab13\", \"retry_count\": 0}, \"provider_generated\": true, \"source_fingerprint\": \"1322d96fa74fc609ec56d60cb33b553f09ac7325662e983a5b6a36abdd51f575\", \"source_segment_id\": \"dseg_71cef74a1e8b\"}, \"next_strategy_constraints\": [{\"source_refs\": [{\"node_key\": \"implement-srs-and-resolve-evaluator\"}, {\"goal_item_key\": \"official-evaluator-resolved\"}], \"summary\": \"Wait for the running implementation node to report changed files, focused and applicable test results, exact official evaluator output when available, workspace revision, and worker summary before assessing completion.\"}, {\"source_refs\": [{\"goal_item_key\": \"official-evaluator-resolved\"}], \"summary\": \"The required goal cannot be marked satisfied from partial or worker-only claims; it requires independent verification or an explicit waiver.\"}], \"objective_summary\": \"Implement the required Pydantic v2.6.0 SRS behavior in the workspace and pass the fixed official SWE-EVO evaluator with independently verifiable evidence.\", \"open_blockers\": [{\"source_refs\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"Goal satisfaction is blocked until implementation, test, workspace revision, and fixed official evaluator evidence is produced and independently verified.\"}], \"open_goal_gaps\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\", \"gap_type\": \"missing_evidence\", \"source_refs\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"The required official-evaluator goal remains open because no verified implementation or evaluator evidence has been recorded.\"}, {\"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\", \"gap_type\": \"stale_or_no_progress\", \"source_refs\": [{\"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\"}], \"summary\": \"The missing-evidence gap has not yet produced recorded progress.\"}], \"rejected_approaches\": [], \"satisfied_goal_items\": [], \"validator_rejection_lessons\": []}",
+          "payload_text": "{\n  \"artifact_index\": [],\n  \"do_not_repeat\": [\n    {\n      \"source_refs\": [\n        {\n          \"patch_id\": \"gpatch_21198b3468ba\"\n        }\n      ],\n      \"summary\": \"Do not create a duplicate primary implementation effort while the applied implementation node remains running.\"\n    },\n    {\n      \"source_refs\": [\n        {\n          \"patch_id\": \"gpatch_21198b3468ba\"\n        }\n      ],\n      \"summary\": \"Do not bypass or alter the fixed official evaluator, deploy to production, publish releases, or modify external services.\"\n    }\n  ],\n  \"goal_contract_revision\": 1,\n  \"graph_frontier\": [\n    {\n      \"node_key\": \"implement-srs-and-resolve-evaluator\",\n      \"node_type\": \"implementation\",\n      \"source_refs\": [\n        {\n          \"node_key\": \"implement-srs-and-resolve-evaluator\"\n        }\n      ],\n      \"state\": \"running\",\n      \"summary\": \"Inspect the repository and SRS/evaluator context, implement the complete required behavior, add focused tests, debug regressions, run the strongest available validation and official evaluator when accessible, and preserve concrete outputs plus the workspace revision for follow-up verification.\"\n    }\n  ],\n  \"human_decisions\": [],\n  \"key_decisions\": [\n    {\n      \"source_refs\": [\n        {\n          \"decision_id\": \"kdec_b5a63162015c\"\n        },\n        {\n          \"patch_id\": \"gpatch_21198b3468ba\"\n        }\n      ],\n      \"summary\": \"A single goal-linked implementation node was created and applied to resolve the missing implementation and evaluator evidence.\"\n    }\n  ],\n  \"known_failure_boundaries\": [],\n  \"metadata\": {\n    \"checkpoint_is_non_authoritative_context\": true,\n    \"covered_graph_revision_end\": 1,\n    \"covered_graph_revision_start\": 0,\n    \"db_is_authoritative\": true,\n    \"db_revision\": 1,\n    \"graph_revision\": 1,\n    \"included_entry_ids\": [\n      1,\n      3,\n      4,\n      5,\n      6,\n      7\n    ],\n    \"ledger_revision\": 1,\n    \"profile_hash\": \"ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c\",\n    \"profile_name\": \"token_budget_compaction\",\n    \"profile_path\": \"docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md\",\n    \"profile_version\": \"1\",\n    \"provider_audit\": {\n      \"fallback_used\": false,\n      \"input_token_estimate\": 17716,\n      \"output_token_estimate\": 827,\n      \"parse_status\": \"parsed\",\n      \"provider_input_entry_id\": 9,\n      \"provider_latency_ms\": 41609,\n      \"provider_model\": \"gpt-5.6-sol\",\n      \"provider_name\": \"custom\",\n      \"provider_validation\": {\n        \"status\": \"accepted\"\n      },\n      \"reason\": \"phase4g8_controlled_process_boundary\",\n      \"request_entry_id\": 8,\n      \"request_ref\": \"1b00d480765bdb2b51c84205b4389353589d30aa9cd56a50bdfe9a2a2feac8a7\",\n      \"response_ref\": \"be9013a3e51149ed584f19604d154fe7f891dd2e42e7d2329eaee8e4b107ab13\",\n      \"retry_count\": 0\n    },\n    \"provider_generated\": true,\n    \"source_fingerprint\": \"1322d96fa74fc609ec56d60cb33b553f09ac7325662e983a5b6a36abdd51f575\",\n    \"source_segment_id\": \"dseg_71cef74a1e8b\"\n  },\n  \"next_strategy_constraints\": [\n    {\n      \"source_refs\": [\n        {\n          \"node_key\": \"implement-srs-and-resolve-evaluator\"\n        },\n        {\n          \"goal_item_key\": \"official-evaluator-resolved\"\n        }\n      ],\n      \"summary\": \"Wait for the running implementation node to report changed files, focused and applicable test results, exact official evaluator output when available, workspace revision, and worker summary before assessing completion.\"\n    },\n    {\n      \"source_refs\": [\n        {\n          \"goal_item_key\": \"official-evaluator-resolved\"\n        }\n      ],\n      \"summary\": \"The required goal cannot be marked satisfied from partial or worker-only claims; it requires independent verification or an explicit waiver.\"\n    }\n  ],\n  \"objective_summary\": \"Implement the required Pydantic v2.6.0 SRS behavior in the workspace and pass the fixed official SWE-EVO evaluator with independently verifiable evidence.\",\n  \"open_blockers\": [\n    {\n      \"source_refs\": [\n        {\n          \"gap_key\": \"official-evaluator-resolved:missing_evidence\"\n        }\n      ],\n      \"summary\": \"Goal satisfaction is blocked until implementation, test, workspace revision, and fixed official evaluator evidence is produced and independently verified.\"\n    }\n  ],\n  \"open_goal_gaps\": [\n    {\n      \"gap_key\": \"official-evaluator-resolved:missing_evidence\",\n      \"gap_type\": \"missing_evidence\",\n      \"source_refs\": [\n        {\n          \"gap_key\": \"official-evaluator-resolved:missing_evidence\"\n        }\n      ],\n      \"summary\": \"The required official-evaluator goal remains open because no verified implementation or evaluator evidence has been recorded.\"\n    },\n    {\n      \"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\",\n      \"gap_type\": \"stale_or_no_progress\",\n      \"source_refs\": [\n        {\n          \"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\"\n        }\n      ],\n      \"summary\": \"The missing-evidence gap has not yet produced recorded progress.\"\n    }\n  ],\n  \"rejected_approaches\": [],\n  \"satisfied_goal_items\": [],\n  \"validator_rejection_lessons\": []\n}",
+          "validator_status": "accepted",
+          "reject_reason": null,
+          "supersedes_checkpoint_id": null,
+          "metadata_json": "{\"fallback_used\": false, \"input_token_estimate\": 17716, \"output_token_estimate\": 827, \"parse_status\": \"parsed\", \"provider_input_entry_id\": 9, \"provider_latency_ms\": 41609, \"provider_model\": \"gpt-5.6-sol\", \"provider_name\": \"custom\", \"provider_validation\": {\"status\": \"accepted\"}, \"reason\": \"phase4g8_controlled_process_boundary\", \"request_entry_id\": 8, \"request_ref\": \"1b00d480765bdb2b51c84205b4389353589d30aa9cd56a50bdfe9a2a2feac8a7\", \"response_ref\": \"be9013a3e51149ed584f19604d154fe7f891dd2e42e7d2329eaee8e4b107ab13\", \"retry_count\": 0}",
+          "checkpoint": {
+            "artifact_index": [],
+            "do_not_repeat": [
+              {
+                "source_refs": [
+                  {
+                    "patch_id": "gpatch_21198b3468ba"
+                  }
+                ],
+                "summary": "Do not create a duplicate primary implementation effort while the applied implementation node remains running."
+              },
+              {
+                "source_refs": [
+                  {
+                    "patch_id": "gpatch_21198b3468ba"
+                  }
+                ],
+                "summary": "Do not bypass or alter the fixed official evaluator, deploy to production, publish releases, or modify external services."
+              }
+            ],
+            "goal_contract_revision": 1,
+            "graph_frontier": [
+              {
+                "node_key": "implement-srs-and-resolve-evaluator",
+                "node_type": "implementation",
+                "source_refs": [
+                  {
+                    "node_key": "implement-srs-and-resolve-evaluator"
+                  }
+                ],
+                "state": "running",
+                "summary": "Inspect the repository and SRS/evaluator context, implement the complete required behavior, add focused tests, debug regressions, run the strongest available validation and official evaluator when accessible, and preserve concrete outputs plus the workspace revision for follow-up verification."
+              }
+            ],
+            "human_decisions": [],
+            "key_decisions": [
+              {
+                "source_refs": [
+                  {
+                    "decision_id": "kdec_b5a63162015c"
+                  },
+                  {
+                    "patch_id": "gpatch_21198b3468ba"
+                  }
+                ],
+                "summary": "A single goal-linked implementation node was created and applied to resolve the missing implementation and evaluator evidence."
+              }
+            ],
+            "known_failure_boundaries": [],
+            "metadata": {
+              "checkpoint_is_non_authoritative_context": true,
+              "covered_graph_revision_end": 1,
+              "covered_graph_revision_start": 0,
+              "db_is_authoritative": true,
+              "db_revision": 1,
+              "graph_revision": 1,
+              "included_entry_ids": [
+                1,
+                3,
+                4,
+                5,
+                6,
+                7
+              ],
+              "ledger_revision": 1,
+              "profile_hash": "ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c",
+              "profile_name": "token_budget_compaction",
+              "profile_path": "docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md",
+              "profile_version": "1",
+              "provider_audit": {
+                "fallback_used": false,
+                "input_token_estimate": 17716,
+                "output_token_estimate": 827,
+                "parse_status": "parsed",
+                "provider_input_entry_id": 9,
+                "provider_latency_ms": 41609,
+                "provider_model": "gpt-5.6-sol",
+                "provider_name": "custom",
+                "provider_validation": {
+                  "status": "accepted"
+                },
+                "reason": "phase4g8_controlled_process_boundary",
+                "request_entry_id": 8,
+                "request_ref": "1b00d480765bdb2b51c84205b4389353589d30aa9cd56a50bdfe9a2a2feac8a7",
+                "response_ref": "be9013a3e51149ed584f19604d154fe7f891dd2e42e7d2329eaee8e4b107ab13",
+                "retry_count": 0
+              },
+              "provider_generated": true,
+              "source_fingerprint": "1322d96fa74fc609ec56d60cb33b553f09ac7325662e983a5b6a36abdd51f575",
+              "source_segment_id": "dseg_71cef74a1e8b"
+            },
+            "next_strategy_constraints": [
+              {
+                "source_refs": [
+                  {
+                    "node_key": "implement-srs-and-resolve-evaluator"
+                  },
+                  {
+                    "goal_item_key": "official-evaluator-resolved"
+                  }
+                ],
+                "summary": "Wait for the running implementation node to report changed files, focused and applicable test results, exact official evaluator output when available, workspace revision, and worker summary before assessing completion."
+              },
+              {
+                "source_refs": [
+                  {
+                    "goal_item_key": "official-evaluator-resolved"
+                  }
+                ],
+                "summary": "The required goal cannot be marked satisfied from partial or worker-only claims; it requires independent verification or an explicit waiver."
+              }
+            ],
+            "objective_summary": "Implement the required Pydantic v2.6.0 SRS behavior in the workspace and pass the fixed official SWE-EVO evaluator with independently verifiable evidence.",
+            "open_blockers": [
+              {
+                "source_refs": [
+                  {
+                    "gap_key": "official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "Goal satisfaction is blocked until implementation, test, workspace revision, and fixed official evaluator evidence is produced and independently verified."
+              }
+            ],
+            "open_goal_gaps": [
+              {
+                "gap_key": "official-evaluator-resolved:missing_evidence",
+                "gap_type": "missing_evidence",
+                "source_refs": [
+                  {
+                    "gap_key": "official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "The required official-evaluator goal remains open because no verified implementation or evaluator evidence has been recorded."
+              },
+              {
+                "gap_key": "runtime:stale:official-evaluator-resolved:missing_evidence",
+                "gap_type": "stale_or_no_progress",
+                "source_refs": [
+                  {
+                    "gap_key": "runtime:stale:official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "The missing-evidence gap has not yet produced recorded progress."
+              }
+            ],
+            "rejected_approaches": [],
+            "satisfied_goal_items": [],
+            "validator_rejection_lessons": []
+          },
+          "payload": {
+            "artifact_index": [],
+            "do_not_repeat": [
+              {
+                "source_refs": [
+                  {
+                    "patch_id": "gpatch_21198b3468ba"
+                  }
+                ],
+                "summary": "Do not create a duplicate primary implementation effort while the applied implementation node remains running."
+              },
+              {
+                "source_refs": [
+                  {
+                    "patch_id": "gpatch_21198b3468ba"
+                  }
+                ],
+                "summary": "Do not bypass or alter the fixed official evaluator, deploy to production, publish releases, or modify external services."
+              }
+            ],
+            "goal_contract_revision": 1,
+            "graph_frontier": [
+              {
+                "node_key": "implement-srs-and-resolve-evaluator",
+                "node_type": "implementation",
+                "source_refs": [
+                  {
+                    "node_key": "implement-srs-and-resolve-evaluator"
+                  }
+                ],
+                "state": "running",
+                "summary": "Inspect the repository and SRS/evaluator context, implement the complete required behavior, add focused tests, debug regressions, run the strongest available validation and official evaluator when accessible, and preserve concrete outputs plus the workspace revision for follow-up verification."
+              }
+            ],
+            "human_decisions": [],
+            "key_decisions": [
+              {
+                "source_refs": [
+                  {
+                    "decision_id": "kdec_b5a63162015c"
+                  },
+                  {
+                    "patch_id": "gpatch_21198b3468ba"
+                  }
+                ],
+                "summary": "A single goal-linked implementation node was created and applied to resolve the missing implementation and evaluator evidence."
+              }
+            ],
+            "known_failure_boundaries": [],
+            "metadata": {
+              "checkpoint_is_non_authoritative_context": true,
+              "covered_graph_revision_end": 1,
+              "covered_graph_revision_start": 0,
+              "db_is_authoritative": true,
+              "db_revision": 1,
+              "graph_revision": 1,
+              "included_entry_ids": [
+                1,
+                3,
+                4,
+                5,
+                6,
+                7
+              ],
+              "ledger_revision": 1,
+              "profile_hash": "ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c",
+              "profile_name": "token_budget_compaction",
+              "profile_path": "docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md",
+              "profile_version": "1",
+              "provider_audit": {
+                "fallback_used": false,
+                "input_token_estimate": 17716,
+                "output_token_estimate": 827,
+                "parse_status": "parsed",
+                "provider_input_entry_id": 9,
+                "provider_latency_ms": 41609,
+                "provider_model": "gpt-5.6-sol",
+                "provider_name": "custom",
+                "provider_validation": {
+                  "status": "accepted"
+                },
+                "reason": "phase4g8_controlled_process_boundary",
+                "request_entry_id": 8,
+                "request_ref": "1b00d480765bdb2b51c84205b4389353589d30aa9cd56a50bdfe9a2a2feac8a7",
+                "response_ref": "be9013a3e51149ed584f19604d154fe7f891dd2e42e7d2329eaee8e4b107ab13",
+                "retry_count": 0
+              },
+              "provider_generated": true,
+              "source_fingerprint": "1322d96fa74fc609ec56d60cb33b553f09ac7325662e983a5b6a36abdd51f575",
+              "source_segment_id": "dseg_71cef74a1e8b"
+            },
+            "next_strategy_constraints": [
+              {
+                "source_refs": [
+                  {
+                    "node_key": "implement-srs-and-resolve-evaluator"
+                  },
+                  {
+                    "goal_item_key": "official-evaluator-resolved"
+                  }
+                ],
+                "summary": "Wait for the running implementation node to report changed files, focused and applicable test results, exact official evaluator output when available, workspace revision, and worker summary before assessing completion."
+              },
+              {
+                "source_refs": [
+                  {
+                    "goal_item_key": "official-evaluator-resolved"
+                  }
+                ],
+                "summary": "The required goal cannot be marked satisfied from partial or worker-only claims; it requires independent verification or an explicit waiver."
+              }
+            ],
+            "objective_summary": "Implement the required Pydantic v2.6.0 SRS behavior in the workspace and pass the fixed official SWE-EVO evaluator with independently verifiable evidence.",
+            "open_blockers": [
+              {
+                "source_refs": [
+                  {
+                    "gap_key": "official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "Goal satisfaction is blocked until implementation, test, workspace revision, and fixed official evaluator evidence is produced and independently verified."
+              }
+            ],
+            "open_goal_gaps": [
+              {
+                "gap_key": "official-evaluator-resolved:missing_evidence",
+                "gap_type": "missing_evidence",
+                "source_refs": [
+                  {
+                    "gap_key": "official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "The required official-evaluator goal remains open because no verified implementation or evaluator evidence has been recorded."
+              },
+              {
+                "gap_key": "runtime:stale:official-evaluator-resolved:missing_evidence",
+                "gap_type": "stale_or_no_progress",
+                "source_refs": [
+                  {
+                    "gap_key": "runtime:stale:official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "The missing-evidence gap has not yet produced recorded progress."
+              }
+            ],
+            "rejected_approaches": [],
+            "satisfied_goal_items": [],
+            "validator_rejection_lessons": []
+          },
+          "metadata": {
+            "fallback_used": false,
+            "input_token_estimate": 17716,
+            "output_token_estimate": 827,
+            "parse_status": "parsed",
+            "provider_input_entry_id": 9,
+            "provider_latency_ms": 41609,
+            "provider_model": "gpt-5.6-sol",
+            "provider_name": "custom",
+            "provider_validation": {
+              "status": "accepted"
+            },
+            "reason": "phase4g8_controlled_process_boundary",
+            "request_entry_id": 8,
+            "request_ref": "1b00d480765bdb2b51c84205b4389353589d30aa9cd56a50bdfe9a2a2feac8a7",
+            "response_ref": "be9013a3e51149ed584f19604d154fe7f891dd2e42e7d2329eaee8e4b107ab13",
+            "retry_count": 0
+          }
+        },
+        "active_segment_id": "dseg_9f455275c92f",
+        "checked_checkpoint_count": 1,
+        "errors": [],
+        "checks": [
+          {
+            "checkpoint_id": "dchk_2867b3731be7",
+            "errors": []
+          }
+        ]
+      },
+      "compaction_fallback_count": 0,
+      "duplicate_terminal_fact_count": 0,
+      "duplicate_ledger_fact_count": 0,
+      "premature_done": false,
+      "process_boundaries": {
+        "daemon_process_started": true,
+        "daemon_restarted": true,
+        "worker_process_started": true,
+        "independent_evaluator_process": true,
+        "fixed_revision_evaluated": true,
+        "filesystem_isolation_preflight": true
+      },
+      "credential_scan_hits": 0,
+      "source_config_unchanged": true
+    },
+    "capability_validation": {
+      "passed": false,
+      "official_resolved": false,
+      "runtime_job_state": "waiting_decision",
+      "fail_to_pass": {
+        "passed": 0,
+        "failed": 1,
+        "total": 1,
+        "failed_tests": [
+          "tests/test_discriminated_union.py::test_presence_of_discriminator_when_generating_type_adaptor_json_schema_definitions"
+        ],
+        "failed_tests_truncated": 0
+      },
+      "pass_to_pass": {
+        "passed": 51,
+        "failed": 0,
+        "total": 51,
+        "failed_tests": [],
+        "failed_tests_truncated": 0
+      }
+    },
+    "metrics": {
+      "wall_time_seconds": 1134.038,
+      "case_size": "small",
+      "worker_interrupted": false,
+      "evaluator_attempt_count": 3,
+      "evaluator_failure_count": 3,
+      "max_unresolved_evaluator_attempts": 3,
+      "evaluator_budget_exhausted": true,
+      "evaluator_budget_session_sync": {
+        "job_id": "rjob_70f9838a73c7",
+        "discovered": [],
+        "updated": [
+          "bws_019a77543be6",
+          "bws_4571ed6b20db",
+          "bws_5cded89e7a9c",
+          "bws_5bb6666a2c5d",
+          "bws_920fd2e7f271",
+          "bws_ffd3bc16a81b"
+        ],
+        "resumed": [],
+        "resume_failed": [],
+        "identity_conflicts": []
+      }
+    },
+    "generated_at": 1783940761
+  },
+  "termination": {
+    "reason": "evaluator_failure_budget_exhausted",
+    "evaluator_budget_exhausted": true
+  },
+  "paths": {
+    "root": "/tmp/hermes-phase4g8-real/pydantic__pydantic_v2.6.0b1_v2.6.0/phase4g8-small-6dafeda34c",
+    "report": "/tmp/hermes-phase4g8-real/pydantic__pydantic_v2.6.0b1_v2.6.0/phase4g8-small-6dafeda34c/reports/run-report.json",
+    "capability_trace": {
+      "json": "/tmp/hermes-phase4g8-real/pydantic__pydantic_v2.6.0b1_v2.6.0/phase4g8-small-6dafeda34c/reports/capability-trace.json",
+      "markdown": "/tmp/hermes-phase4g8-real/pydantic__pydantic_v2.6.0b1_v2.6.0/phase4g8-small-6dafeda34c/reports/capability-trace.md"
+    }
+  }
+}

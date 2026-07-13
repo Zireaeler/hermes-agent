@@ -39,7 +39,7 @@ def _root_task(conn) -> str:
     return kb.create_task(conn, title="root goal", initial_status="running")
 
 
-def _job(conn, *, goal_key: str = "initial-runtime-result") -> str:
+def _job(conn, *, goal_key: str = "initial-runtime-result", verifier_required: bool = True) -> str:
     return rk.create_runtime_job(
         conn,
         _root_task(conn),
@@ -49,7 +49,7 @@ def _job(conn, *, goal_key: str = "initial-runtime-result") -> str:
                 "item_key": goal_key,
                 "description": "phase1 runtime evidence exists",
                 "required": True,
-                "verifier_required": True,
+                "verifier_required": verifier_required,
             }
         ],
         initialization_mode="fixture",
@@ -88,12 +88,21 @@ def _contract(*scopes: str):
 
 def _complete_node(conn, node, evidence: dict):
     assert node["latest_task_id"]
+    payload = dict(evidence)
+    verification = payload.get("verification")
+    if (
+        node["node_type"] == "verification"
+        and isinstance(verification, dict)
+        and verification.get("passed") is True
+        and "verification_provenance" not in payload
+    ):
+        payload["verification_provenance"] = rk.build_independent_verification_provenance(conn, node["id"])
     assert kb.complete_task(
         conn,
         node["latest_task_id"],
-        result=evidence.get("summary", "done"),
-        summary=evidence.get("summary", "done"),
-        metadata=evidence,
+        result=payload.get("summary", "done"),
+        summary=payload.get("summary", "done"),
+        metadata=payload,
     )
 
 
@@ -1381,15 +1390,156 @@ def test_fake_evidence_updates_progress_ledger(conn):
             "verdict": "succeeded",
             "summary": "verified runtime evidence",
             "claimed_goal_items": ["initial-runtime-result"],
+            "verification_state": "independently_verified",
             "verification": {"commands": ["pytest"], "passed": True, "summary": "passed"},
         },
     )
     assert rk.ingest_runtime_node_evidence(conn, node["id"])
     status = rk.status_runtime_job(conn, job_id)
     assert status["progress_ledger"][0]["satisfaction"] == "full"
-    assert status["progress_ledger"][0]["verification_state"] == "verified"
-    assert status["goal_items"][0]["state"] == "satisfied"
+    assert status["progress_ledger"][0]["verification_state"] == "implementation_verified"
+    assert status["goal_items"][0]["state"] == "partial"
+    assert status["job"]["state"] == "waiting_decision"
+    assert any(gap["gap_type"] == "needs_verification" for gap in status["goal_gaps"] if gap["state"] == "open")
+
+
+def test_required_evaluator_policy_creates_fixed_target_and_completes_goal(conn):
+    root = _root_task(conn)
+    job_id = rk.create_runtime_job(
+        conn,
+        root,
+        "verify a fixed implementation revision",
+        goal_items=[{
+            "item_key": "runtime-result",
+            "description": "runtime result is independently verified",
+            "required": True,
+            "verifier_required": True,
+        }],
+        initialization_mode="provider_first",
+        runtime_metadata={
+            "verification_policy": {
+                "mode": "required_evaluator",
+                "assignee": "runtime-evaluator",
+                "require_workspace_revision": True,
+            }
+        },
+    )
+    assert rk.apply_graph_patch(conn, job_id, _patch(
+        job_id,
+        _revision(conn, job_id),
+        {
+            "op": "create_node",
+            "node_key": "implement-runtime-result",
+            "node_type": "implementation",
+            "title": "Implement runtime result",
+            "description": "Produce the candidate runtime result.",
+            "goal_item_keys": ["runtime-result"],
+            "contract": _contract(),
+        },
+    ))["status"] == "applied"
+    implementation = _node(conn, job_id, "implement-runtime-result")
+    rk.reduce_runtime_job(conn, job_id)
+    assert rk.materialize_runtime_node(conn, dict(_node(conn, job_id, implementation["node_key"])))
+    implementation = _node(conn, job_id, implementation["node_key"])
+    _complete_node(conn, implementation, {
+        "verdict": "succeeded",
+        "summary": "candidate implementation completed",
+        "claimed_goal_items": ["runtime-result"],
+        "workspace_revision": "git:candidate-sha",
+        "verification": {"passed": True, "summary": "implementation tests passed"},
+    })
+
+    advanced = rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    verifier_keys = [key for key in advanced.materialized_nodes if key.startswith("verify-runtime-result-")]
+    assert len(verifier_keys) == 1
+    assert advanced.decision_requested is False
+    verifier = _node(conn, job_id, verifier_keys[0])
+    relation = conn.execute(
+        "SELECT * FROM node_relations WHERE from_node_id = ? AND relation_type = 'verifies'",
+        (verifier["id"],),
+    ).fetchone()
+    relation_metadata = json.loads(relation["metadata_json"])
+    assert relation_metadata["target_workspace_revision"] == "git:candidate-sha"
+    assert relation_metadata["target_materialization_attempt"] == 1
+
+    _complete_node(conn, verifier, {
+        "verdict": "succeeded",
+        "summary": "official evaluator passed",
+        "claimed_goal_items": ["runtime-result"],
+        "verification": {"passed": True, "summary": "official tests passed"},
+    })
+    assert rk.ingest_runtime_node_evidence(conn, verifier["id"])
+    status = rk.status_runtime_job(conn, job_id)
     assert status["job"]["state"] == "done"
+    assert status["goal_items"][0]["state"] == "satisfied"
+    verifier_ledger = next(row for row in status["progress_ledger"] if row["node_id"] == verifier["id"])
+    assert verifier_ledger["verification_state"] == "independently_verified"
+    assert conn.execute(
+        "SELECT COUNT(*) FROM execution_events WHERE job_id = ? AND event_type = 'required_evaluator_created'",
+        (job_id,),
+    ).fetchone()[0] == 1
+    assert rk.ensure_required_evaluator_nodes(conn, job_id) == []
+
+
+def test_stale_evaluator_target_cannot_satisfy_verifier_required_goal(conn):
+    job_id = _job(conn)
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    implementation = _node(conn, job_id, "understand-scope")
+    _complete_node(conn, implementation, {
+        "verdict": "succeeded",
+        "summary": "implementation completed",
+        "claimed_goal_items": ["initial-runtime-result"],
+        "verification": {"passed": True},
+    })
+    assert rk.ingest_runtime_node_evidence(conn, implementation["id"])
+    assert rk.apply_graph_patch(conn, job_id, {
+        **_patch(
+            job_id,
+            _revision(conn, job_id),
+            {
+                "op": "insert_verifier",
+                "target_node_key": "understand-scope",
+                "target_materialization_attempt": 1,
+                "target_workspace_revision": "git:fixed-revision",
+                "verifier_node_key": "verify-stale-target",
+                "title": "Verify fixed target",
+                "goal_item_keys": ["initial-runtime-result"],
+                "gap_keys": ["initial-runtime-result:needs_verification"],
+            },
+        ),
+        "decomposition": {
+            "policy_version": "1",
+            "mode": "multiple_runtime_nodes",
+            "justifications": [{
+                "type": "independent_verification",
+                "nodes": ["understand-scope", "verify-stale-target"],
+                "explanation": "Verifier uses a separate execution responsibility.",
+                "evidence_refs": [],
+            }],
+        },
+    })["status"] == "applied"
+    rk.reduce_runtime_job(conn, job_id)
+    verifier = _node(conn, job_id, "verify-stale-target")
+    assert rk.materialize_runtime_node(conn, dict(verifier))
+    verifier = _node(conn, job_id, "verify-stale-target")
+    provenance = rk.build_independent_verification_provenance(conn, verifier["id"])
+    provenance["target_materialization_id"] = "mat_stale"
+    _complete_node(conn, verifier, {
+        "verdict": "succeeded",
+        "summary": "stale evaluator result",
+        "claimed_goal_items": ["initial-runtime-result"],
+        "verification": {"passed": True},
+        "verification_provenance": provenance,
+    })
+    assert rk.ingest_runtime_node_evidence(conn, verifier["id"])
+    status = rk.status_runtime_job(conn, job_id)
+    assert status["job"]["state"] != "done"
+    assert status["goal_items"][0]["state"] == "partial"
+    verifier_ledger = next(row for row in status["progress_ledger"] if row["node_id"] == verifier["id"])
+    assert verifier_ledger["verification_state"] == "self_reported"
+    assert verifier_ledger["metadata"]["verification_provenance_result"]["reason"] == (
+        "target materialization is stale or mismatched"
+    )
 
 
 def test_node_completed_does_not_directly_call_provider(conn):
@@ -1508,7 +1658,7 @@ def test_contradicted_ledger_blocks_completion(conn):
 
 
 def test_later_evidence_reopens_and_then_resolves_satisfied_goal(conn):
-    job_id = _job(conn)
+    job_id = _job(conn, verifier_required=False)
     rk.advance_runtime_job(conn, job_id, create_tasks=True)
     node = _node(conn, job_id, "understand-scope")
     _complete_node(
@@ -1570,7 +1720,7 @@ def test_no_runnable_unmet_goal_requests_decision_without_liveness_violation(con
 
 
 def test_done_requires_required_goal_items_satisfied(conn):
-    job_id = _job(conn)
+    job_id = _job(conn, verifier_required=False)
     rk.advance_runtime_job(conn, job_id, create_tasks=True)
     node = _node(conn, job_id, "understand-scope")
     _complete_node(
@@ -1949,7 +2099,7 @@ def test_runtime_materialized_task_dispatch_and_ingest_fixture_lane(conn, monkey
                 "item_key": "initial-runtime-result",
                 "description": "runtime node can flow through dispatcher",
                 "required": True,
-                "verifier_required": True,
+                "verifier_required": False,
             }
         ],
         initial_assignee="runtime-fixture",
@@ -2011,7 +2161,7 @@ def test_materialization_uses_job_default_worker_lane_when_node_is_unassigned(co
 
 
 def test_codex_runtime_receipt_is_required_for_runtime_goal_evidence(conn):
-    job_id = _job(conn)
+    job_id = _job(conn, verifier_required=False)
     rk.advance_runtime_job(conn, job_id, create_tasks=True)
     node = _node(conn, job_id, "understand-scope")
     _complete_node(
@@ -2059,6 +2209,95 @@ def test_codex_runtime_receipt_rejects_goal_item_outside_node_linkage(conn):
     reconciled = rk.reconcile_runtime_materializations(conn, job_id)
     assert reconciled["events"] == ["receipt_invalid"]
     assert _node(conn, job_id, "understand-scope")["state"] == "ready"
+
+
+def test_codex_runtime_receipt_rejects_overlapping_goal_outcomes(conn):
+    job_id = _job(conn)
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = _node(conn, job_id, "understand-scope")
+    _complete_node(
+        conn,
+        node,
+        {
+            "worker_lane": {"name": "codex-smoke", "kind": "codex_cli", "exit_code": 0},
+            "runtime_receipt": {
+                "schema": "runtime_worker_receipt_v1",
+                "verdict": "failed",
+                "summary": "one item cannot have two outcomes in one receipt",
+                "unmet_goal_items": ["initial-runtime-result"],
+                "contradicted_goal_items": ["initial-runtime-result"],
+                "verification": {"passed": False, "summary": "failed"},
+            },
+        },
+    )
+
+    assert not rk.ingest_runtime_node_evidence(conn, node["id"])
+    assert rk.reconcile_runtime_materializations(conn, job_id)["events"] == ["receipt_invalid"]
+
+
+def test_progress_ledger_coalesces_overlapping_non_codex_goal_outcomes(conn):
+    job_id = _job(conn)
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = _node(conn, job_id, "understand-scope")
+    _complete_node(
+        conn,
+        node,
+        {
+            "verdict": "failed",
+            "summary": "trusted evaluator contradiction",
+            "unmet_goal_items": ["initial-runtime-result"],
+            "contradicted_goal_items": ["initial-runtime-result"],
+            "verification": {"passed": False, "summary": "failed"},
+        },
+    )
+
+    assert rk.ingest_runtime_node_evidence(conn, node["id"])
+    rows = conn.execute(
+        "SELECT satisfaction, verification_state FROM progress_ledger WHERE node_id = ?",
+        (node["id"],),
+    ).fetchall()
+    assert [tuple(row) for row in rows] == [("contradicted", "failed")]
+
+
+def test_codex_runtime_receipt_accepts_goal_item_linked_through_gap(conn):
+    job_id = _job(conn, verifier_required=False)
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = _node(conn, job_id, "understand-scope")
+    gap = conn.execute(
+        """
+        SELECT gg.gap_key
+          FROM goal_gaps gg
+          JOIN goal_items gi ON gi.id = gg.goal_item_id
+         WHERE gg.job_id = ? AND gi.item_key = 'initial-runtime-result'
+         ORDER BY gg.created_at DESC LIMIT 1
+        """,
+        (job_id,),
+    ).fetchone()
+    metadata = json.loads(node["metadata_json"] or "{}")
+    metadata["goal_item_keys"] = []
+    metadata["gap_keys"] = [gap["gap_key"]]
+    conn.execute(
+        "UPDATE execution_nodes SET metadata_json = ? WHERE id = ?",
+        (json.dumps(metadata), node["id"]),
+    )
+    node = _node(conn, job_id, "understand-scope")
+    _complete_node(
+        conn,
+        node,
+        {
+            "worker_lane": {"name": "phase4g8-codex", "kind": "codex_cli", "exit_code": 0},
+            "runtime_receipt": {
+                "schema": "runtime_worker_receipt_v1",
+                "verdict": "pass",
+                "summary": "gap-linked runtime result",
+                "claimed_goal_items": ["initial-runtime-result"],
+                "verification": {"passed": False, "summary": "independent verification remains required"},
+            },
+        },
+    )
+
+    assert rk.ingest_runtime_node_evidence(conn, node["id"])
+    assert _node(conn, job_id, "understand-scope")["state"] == "succeeded"
 
 
 def test_delegation_policy_rejects_multiple_worker_nodes_without_decomposition(conn):

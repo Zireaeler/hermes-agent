@@ -47,6 +47,9 @@ class RuntimeSupervisorDaemonConfig:
     health_host: str = "127.0.0.1"
     health_port: Optional[int] = None
     readiness_timeout_seconds: Optional[float] = None
+    auto_compact: bool = True
+    compaction_policy: Optional[dict[str, Any]] = None
+    compaction_fallback_to_deterministic: bool = True
 
     def validate(self) -> None:
         if self.interval_seconds <= 0:
@@ -180,7 +183,8 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
 def _safe_error(exc: BaseException) -> str:
     message = redact_sensitive_text(str(exc), force=True).replace("\n", " ").strip()
     fingerprint = hashlib.sha256(message.encode("utf-8")).hexdigest()[:12]
-    return f"{type(exc).__name__}: poll failed (detail_sha256={fingerprint})"
+    detail = message[:240] if message else "no detail"
+    return f"{type(exc).__name__}: {detail} (detail_sha256={fingerprint})"
 
 
 def _summarize_poll(result: dict[str, Any]) -> dict[str, Any]:
@@ -385,6 +389,7 @@ def run_runtime_supervisor_daemon(
     config: RuntimeSupervisorDaemonConfig,
     *,
     decision_provider: Optional[Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]] = None,
+    compaction_provider: Any = None,
     stop_event: Optional[threading.Event] = None,
     owner: Optional[str] = None,
     poll_once: Optional[Callable[[str], dict[str, Any]]] = None,
@@ -422,6 +427,10 @@ def run_runtime_supervisor_daemon(
                     create_tasks=config.create_tasks,
                     decision_provider=decision_provider,
                     lock_ttl_seconds=config.lock_ttl_seconds,
+                    auto_compact=config.auto_compact,
+                    compaction_policy=config.compaction_policy,
+                    compaction_provider=compaction_provider,
+                    compaction_fallback_to_deterministic=config.compaction_fallback_to_deterministic,
                 )
 
     try:

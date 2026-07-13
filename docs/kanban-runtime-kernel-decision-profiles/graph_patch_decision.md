@@ -93,7 +93,10 @@ Use exactly these field names for patch ops:
   `default_recommendation`, `why_user_required`, and affected goal/gap keys.
 - `strategy_update`: include `node_key`, `title`, `description`,
   `goal_item_keys` or `gap_keys`, `strategy_summary`, and
-  `changes_from_previous_attempts`.
+  `changes_from_previous_attempts`. Also include the same typed `contract`
+  required by `create_node`: `outcome`, `acceptance_criteria`,
+  `success_evidence`, `declared_write_scope`, and `prohibited_actions`.
+  Provider-first jobs reject every `strategy_update` without this contract.
 
 Use `insert_verifier` only when you can name an existing `target_node_key` from
 the graph frontier or a real `target_goal_item_key` from the goal contract, and
