@@ -20,6 +20,7 @@ from hermes_cli import kanban_runtime_phase4g8 as p4g8
 from hermes_cli import kanban_runtime_phase4g8_run as p4g8_run
 from hermes_cli import phase4g8_swe_evo as swe_evo
 from hermes_cli import phase4g8_capability_trace as capability_trace
+from hermes_cli import phase4g8_evaluator
 from hermes_cli.worker_lanes import clear_worker_lanes, register_worker_lane
 
 
@@ -259,6 +260,112 @@ def test_swe_evo_candidate_patch_includes_tracked_and_untracked_files(tmp_path):
     status = _run("git", "status", "--short", cwd=workspace)
     assert "tracked.txt" in status
     assert "?? new.txt" in status
+
+
+def test_swe_evo_evaluator_patch_excludes_protected_test_paths(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _run("git", "init", "--quiet", cwd=workspace)
+    _run("git", "config", "user.email", "phase4g8@example.invalid", cwd=workspace)
+    _run("git", "config", "user.name", "Phase4G8 Test", cwd=workspace)
+    (workspace / "source.py").write_text("VALUE = 'base'\n", encoding="utf-8")
+    tests = workspace / "tests"
+    tests.mkdir()
+    (tests / "test_feature.py").write_text("def test_base(): pass\n", encoding="utf-8")
+    _run("git", "add", ".", cwd=workspace)
+    _run("git", "commit", "--quiet", "-m", "base", cwd=workspace)
+    base_commit = _run("git", "rev-parse", "HEAD", cwd=workspace)
+
+    (workspace / "source.py").write_text("VALUE = 'candidate'\n", encoding="utf-8")
+    (tests / "test_feature.py").write_text("def test_candidate(): pass\n", encoding="utf-8")
+    (tests / "test_hidden.py").write_text("def test_candidate_hidden(): pass\n", encoding="utf-8")
+    hidden_patch = (
+        "diff --git a/tests/test_feature.py b/tests/test_feature.py\n"
+        "index 3d4a24f..8d6c38f 100644\n"
+        "--- a/tests/test_feature.py\n"
+        "+++ b/tests/test_feature.py\n"
+        "@@ -1 +1 @@\n"
+        "-def test_base(): pass\n"
+        "+def test_hidden(): pass\n"
+        "diff --git a/tests/test_hidden.py b/tests/test_hidden.py\n"
+        "new file mode 100644\n"
+        "index 0000000..38dc9a5\n"
+        "--- /dev/null\n"
+        "+++ b/tests/test_hidden.py\n"
+        "@@ -0,0 +1 @@\n"
+        "+def test_hidden_only(): pass\n"
+    )
+
+    protected_paths = swe_evo._patch_paths(hidden_patch, workspace)
+    candidate_patch = swe_evo.collect_candidate_patch(
+        workspace,
+        base_commit,
+        exclude_paths=protected_paths,
+    )
+    combined = swe_evo._merge_patches(hidden_patch, candidate_patch)
+
+    assert protected_paths == {"tests/test_feature.py", "tests/test_hidden.py"}
+    assert "source.py" in candidate_patch
+    assert "tests/test_feature.py" not in candidate_patch
+    assert "tests/test_hidden.py" not in candidate_patch
+    assert combined.index("source.py") < combined.index("tests/test_feature.py")
+
+
+def test_swe_evo_evaluator_container_cleanup_removes_only_orphans(monkeypatch):
+    class FakeContainer:
+        def __init__(self, container_id, owner_pid):
+            self.id = container_id
+            self.labels = {
+                swe_evo.EVALUATOR_RUN_LABEL: "phase4g8-medium-test",
+                swe_evo.EVALUATOR_OWNER_PID_LABEL: str(owner_pid),
+            }
+            self.removed = False
+
+        def remove(self, *, force):
+            assert force is True
+            self.removed = True
+
+    active = FakeContainer("active", 101)
+    orphan = FakeContainer("orphan", 202)
+
+    class FakeContainers:
+        def list(self, *, all, filters):
+            assert all is True
+            assert filters == {
+                "label": f"{swe_evo.EVALUATOR_RUN_LABEL}=phase4g8-medium-test"
+            }
+            return [active, orphan]
+
+    class FakeClient:
+        containers = FakeContainers()
+
+    monkeypatch.setattr(swe_evo, "_pid_exists", lambda pid: pid == 101)
+
+    result = swe_evo.cleanup_phase4g8_evaluator_containers(
+        "phase4g8-medium-test",
+        client=FakeClient(),
+    )
+
+    assert result == {
+        "run_id": "phase4g8-medium-test",
+        "removed": ["orphan"],
+        "retained": ["active"],
+        "errors": [],
+    }
+    assert active.removed is False
+    assert orphan.removed is True
+
+
+def test_swe_evo_evaluator_container_labels_preserve_outer_run(monkeypatch):
+    monkeypatch.setenv("HERMES_PHASE4G8_RUN_ID", "phase4g8-medium-outer")
+
+    labels = swe_evo._evaluator_container_labels("phase4g8-internal-evaluator")
+
+    assert labels == {
+        swe_evo.EVALUATOR_RUN_LABEL: "phase4g8-medium-outer",
+        swe_evo.EVALUATOR_INVOCATION_LABEL: "phase4g8-internal-evaluator",
+        swe_evo.EVALUATOR_OWNER_PID_LABEL: str(os.getpid()),
+    }
 
 
 def test_swe_evo_locked_image_script_removes_only_install_command():
@@ -814,6 +921,58 @@ def test_evaluator_failure_budget_stops_only_after_latest_unresolved_attempt():
     assert resolved["failure_count"] == 3
     assert resolved["latest_resolved"] is True
     assert resolved["exhausted"] is False
+    infrastructure_invalid = p4g8_run._evaluator_failure_budget_status(
+        [
+            {"result": {"resolved": False}},
+            {"result": {"resolved": False, "error": "stale_target_revision"}},
+        ],
+        max_unresolved_evaluator_attempts=2,
+    )
+    assert infrastructure_invalid["attempt_count"] == 2
+    assert infrastructure_invalid["failure_count"] == 1
+    assert infrastructure_invalid["exhausted"] is False
+
+
+def test_official_evaluator_heartbeat_loop_stops_when_run_is_superseded(monkeypatch):
+    calls = []
+    stop_event = threading.Event()
+    lost_run = threading.Event()
+
+    class ConnectionContext:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(phase4g8_evaluator.kb, "connect", lambda **_kwargs: ConnectionContext())
+
+    def fake_heartbeat(_conn, **kwargs):
+        calls.append(kwargs)
+        return len(calls) < 3
+
+    monkeypatch.setattr(phase4g8_evaluator, "_heartbeat_evaluator", fake_heartbeat)
+    thread = threading.Thread(
+        target=phase4g8_evaluator._evaluator_heartbeat_loop,
+        kwargs={
+            "stop_event": stop_event,
+            "lost_run": lost_run,
+            "task_id": "task-evaluator",
+            "task_run_id": 7,
+            "session_id": "official-evaluator:test",
+            "board": "default",
+            "interval_seconds": 0.01,
+        },
+    )
+
+    thread.start()
+    assert lost_run.wait(timeout=1)
+    stop_event.set()
+    thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert len(calls) == 3
+    assert all(call["task_run_id"] == 7 for call in calls)
 
 
 def test_aggregate_requires_runtime_three_of_three_separately_from_resolved_three_of_three():
@@ -960,6 +1119,14 @@ def test_official_evaluator_lane_completes_goal_through_task_receipt(kanban_home
                 "SELECT COUNT(*) FROM task_events WHERE task_id = ? AND kind = 'official_evaluator_completed'",
                 (verifier["latest_task_id"],),
             ).fetchone()[0] == 1
+            assert conn.execute(
+                "SELECT COUNT(*) FROM task_events WHERE task_id = ? AND kind = 'worker_heartbeat'",
+                (verifier["latest_task_id"],),
+            ).fetchone()[0] >= 1
+            assert conn.execute(
+                "SELECT last_heartbeat_at FROM task_runs WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+                (verifier["latest_task_id"],),
+            ).fetchone()[0] is not None
             session = conn.execute(
                 "SELECT * FROM backend_worker_sessions WHERE node_id = ?",
                 (verifier["id"],),

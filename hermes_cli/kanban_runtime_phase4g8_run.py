@@ -21,6 +21,7 @@ from hermes_cli import kanban_runtime_decision as rd
 from hermes_cli import kanban_runtime_kernel as rk
 from hermes_cli import kanban_runtime_phase4g8 as p4g8
 from hermes_cli import phase4g8_capability_trace as capability_trace
+from hermes_cli import phase4g8_swe_evo as swe_evo
 from hermes_cli import kanban_runtime_supervisor as supervisor
 from hermes_cli.codex_worker import (
     _safe_env_for_codex,
@@ -119,6 +120,8 @@ def run_phase4g8_real_case(
     evaluator_budget_exhausted = False
     evaluator_attempts: list[dict[str, Any]] = []
     evaluator_budget_session_sync: dict[str, Any] = {}
+    evaluator_container_cleanup: list[dict[str, Any]] = []
+    next_evaluator_cleanup_at = 0.0
     try:
         namespace = p4g8.Phase4G8NetworkNamespace(run_id, source["explicit_base_url"]).start()
         p4g8.prepare_isolated_codex_home(
@@ -195,6 +198,11 @@ def run_phase4g8_real_case(
 
         deadline = time.monotonic() + max(60.0, float(max_wall_seconds))
         while time.monotonic() < deadline:
+            if time.monotonic() >= next_evaluator_cleanup_at:
+                evaluator_container_cleanup.append(
+                    swe_evo.cleanup_phase4g8_evaluator_containers(run_id)
+                )
+                next_evaluator_cleanup_at = time.monotonic() + 10.0
             daemon_state = _read_daemon_state(paths["service"] / "supervisor-state.json")
             if (
                 not evaluator_daemon_stopped
@@ -394,6 +402,7 @@ def run_phase4g8_real_case(
                     "max_unresolved_evaluator_attempts": int(max_unresolved_evaluator_attempts),
                     "evaluator_budget_exhausted": evaluator_budget_exhausted,
                     "evaluator_budget_session_sync": evaluator_budget_session_sync,
+                    "evaluator_container_cleanup": evaluator_container_cleanup,
                 },
                 source_config_unchanged=p4g8.verify_codex_source_unchanged(
                     source_codex_home, source["source_hashes"]
@@ -482,6 +491,12 @@ def run_phase4g8_real_case(
             _stop_daemon(daemon_process, hard=False)
         if job_id is not None:
             _terminate_owned_job_workers(job_id, run_id=run_id)
+        try:
+            evaluator_container_cleanup.append(
+                swe_evo.cleanup_phase4g8_evaluator_containers(run_id, include_active=True)
+            )
+        except Exception:
+            pass
         clear_worker_lanes()
         if old_environment:
             _restore_environment(old_environment)
@@ -1141,6 +1156,7 @@ def _evaluator_failure_budget_status(
         raise ValueError("max_unresolved_evaluator_attempts must be positive")
     failure_count = sum(
         attempt.get("result", {}).get("resolved") is not True
+        and attempt.get("result", {}).get("error") not in {"stale_target_revision"}
         for attempt in attempts
     )
     latest_resolved = bool(

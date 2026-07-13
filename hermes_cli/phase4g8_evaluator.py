@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import threading
 import uuid
 from typing import Any, Optional
 
@@ -23,7 +24,10 @@ def run_official_evaluator(
     run_id: str,
     task_run_id: Optional[int] = None,
     board: Optional[str] = None,
+    heartbeat_interval_seconds: float = 10.0,
 ) -> dict[str, Any]:
+    if float(heartbeat_interval_seconds) <= 0:
+        raise ValueError("heartbeat_interval_seconds must be positive")
     spec = p4g8.load_qualification_spec(spec_path)
     session_id = f"official-evaluator:{run_id}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
     with kb.connect(board=board) as conn:
@@ -50,15 +54,50 @@ def run_official_evaluator(
             },
             run_id=task_run_id,
         )
+        if not _heartbeat_evaluator(
+            conn,
+            task_id=task_id,
+            task_run_id=task_run_id,
+            session_id=session_id,
+        ):
+            raise RuntimeError("official evaluator run is no longer current")
 
-    before = collect_git_evidence(str(workspace))
-    if before.get("workspace_revision") != target["target_revision"]:
-        result = _stale_target_result(before.get("workspace_revision"), target["target_revision"])
-    else:
-        result = p4g8._run_evaluator(spec, workspace)
+    stop_heartbeat = threading.Event()
+    lost_run = threading.Event()
+    heartbeat_thread = threading.Thread(
+        target=_evaluator_heartbeat_loop,
+        kwargs={
+            "stop_event": stop_heartbeat,
+            "lost_run": lost_run,
+            "task_id": task_id,
+            "task_run_id": task_run_id,
+            "session_id": session_id,
+            "board": board,
+            "interval_seconds": float(heartbeat_interval_seconds),
+        },
+        name=f"phase4g8-evaluator-heartbeat-{task_id}",
+        daemon=True,
+    )
+    heartbeat_thread.start()
+    try:
+        before = collect_git_evidence(str(workspace))
+        if before.get("workspace_revision") != target["target_revision"]:
+            result = _stale_target_result(before.get("workspace_revision"), target["target_revision"])
+        else:
+            result = p4g8._run_evaluator(
+                spec,
+                workspace,
+                extra_env={"HERMES_PHASE4G8_RUN_ID": run_id},
+            )
+    finally:
+        stop_heartbeat.set()
+        heartbeat_thread.join(timeout=max(1.0, float(heartbeat_interval_seconds) * 2))
+    if lost_run.is_set():
+        raise RuntimeError("official evaluator run was superseded")
     after = collect_git_evidence(str(workspace))
     workspace_unchanged = before.get("workspace_revision") == after.get("workspace_revision")
     passed = result.get("resolved") is True and workspace_unchanged
+    infrastructure_invalid = result.get("error") in {"stale_target_revision"}
     failed_tests = [
         str(test_id)
         for section in (result.get("fail_to_pass") or {}, result.get("pass_to_pass") or {})
@@ -75,17 +114,19 @@ def run_official_evaluator(
         failure_summary += "\nFailure diagnostics:\n" + str(diagnostics["text"])
     receipt = {
         "schema": "runtime_worker_receipt_v1",
-        "verdict": "pass" if passed else "failed",
+        "verdict": "pass" if passed else ("blocked" if infrastructure_invalid else "failed"),
         "summary": "official evaluator resolved fixed target" if passed else failure_summary,
         "claimed_goal_items": list(goal_keys) if passed else [],
         "partial_goal_items": [],
         "unmet_goal_items": [],
-        "contradicted_goal_items": [] if passed else list(goal_keys),
+        "contradicted_goal_items": [] if passed or infrastructure_invalid else list(goal_keys),
         "changed_files": [],
+        "infrastructure_invalid": infrastructure_invalid,
         "verification": {
             "passed": passed,
             "summary": "official evaluator result" if passed else failure_summary,
             "workspace_unchanged": workspace_unchanged,
+            "infrastructure_invalid": infrastructure_invalid,
         },
         "verification_provenance": provenance,
         "artifacts": [{
@@ -118,6 +159,61 @@ def run_official_evaluator(
     return receipt
 
 
+def _heartbeat_evaluator(
+    conn: Any,
+    *,
+    task_id: str,
+    task_run_id: Optional[int],
+    session_id: str,
+) -> bool:
+    accepted = kb.heartbeat_worker(
+        conn,
+        task_id,
+        note="worker_lane=phase4g8-evaluator",
+        expected_run_id=task_run_id,
+    )
+    if not accepted:
+        return False
+    kb.record_task_event(
+        conn,
+        task_id,
+        "worker_heartbeat",
+        {
+            "worker_lane": "phase4g8-evaluator",
+            "worker_kind": "phase4g8_evaluator",
+            "run_id": task_run_id,
+            "backend_session_id": session_id,
+        },
+        run_id=task_run_id,
+    )
+    return True
+
+
+def _evaluator_heartbeat_loop(
+    *,
+    stop_event: threading.Event,
+    lost_run: threading.Event,
+    task_id: str,
+    task_run_id: Optional[int],
+    session_id: str,
+    board: Optional[str],
+    interval_seconds: float,
+) -> None:
+    while not stop_event.wait(float(interval_seconds)):
+        try:
+            with kb.connect(board=board) as conn:
+                if not _heartbeat_evaluator(
+                    conn,
+                    task_id=task_id,
+                    task_run_id=task_run_id,
+                    session_id=session_id,
+                ):
+                    lost_run.set()
+                    return
+        except Exception:
+            continue
+
+
 def _stale_target_result(actual: Any, expected: Any) -> dict[str, Any]:
     return {
         "schema": p4g8.EVALUATOR_RESULT_SCHEMA,
@@ -139,6 +235,7 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--task-run-id", type=int)
     parser.add_argument("--board")
+    parser.add_argument("--heartbeat-interval", type=float, default=10.0)
     return parser.parse_args(argv)
 
 
@@ -152,6 +249,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             run_id=args.run_id,
             task_run_id=args.task_run_id,
             board=args.board,
+            heartbeat_interval_seconds=args.heartbeat_interval,
         )
     except Exception as exc:
         try:

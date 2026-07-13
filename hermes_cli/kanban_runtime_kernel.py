@@ -2070,6 +2070,11 @@ def _apply_op(conn: sqlite3.Connection, job_id: str, op: dict[str, Any]) -> None
         _insert_dependency(conn, job_id, from_node["id"], to_node["id"], str(op.get("dependency_type") or "depends_on"))
     elif name == "insert_verifier":
         goal_keys = op.get("goal_item_keys") or ([op["target_goal_item_key"]] if op.get("target_goal_item_key") else [])
+        target_node = (
+            _node_by_key(conn, job_id, str(op["target_node_key"]))
+            if op.get("target_node_key")
+            else None
+        )
         verifier_op = {
             "op": "create_node",
             "node_key": op["verifier_node_key"],
@@ -2079,7 +2084,11 @@ def _apply_op(conn: sqlite3.Connection, job_id: str, op: dict[str, Any]) -> None
             "goal_item_keys": goal_keys,
             "gap_keys": op.get("gap_keys") or [],
             "assignee": op.get("assignee"),
-            "depends_on": [op["target_node_key"]] if op.get("target_node_key") else [],
+            "depends_on": (
+                [op["target_node_key"]]
+                if target_node is not None and target_node["state"] not in TERMINAL_NODE_STATES
+                else []
+            ),
             "requested_capabilities": op.get("requested_capabilities") or [],
             "contract": op.get("contract"),
         }
@@ -2688,6 +2697,40 @@ def sync_runtime_backend_sessions(
             if created:
                 summary["identity_conflicts"].append(existing["id"])
             continue
+        prior_active_sessions = conn.execute(
+            """
+            SELECT * FROM backend_worker_sessions
+             WHERE node_id = ? AND status = 'active' AND backend_session_key != ?
+            """,
+            (materialization["node_id"], session_key),
+        ).fetchall()
+        for prior in prior_active_sessions:
+            cursor = conn.execute(
+                """
+                UPDATE backend_worker_sessions
+                   SET status = 'interrupted', updated_at = ?, completed_at = COALESCE(completed_at, ?)
+                 WHERE id = ? AND status = 'active'
+                """,
+                (now, now, prior["id"]),
+            )
+            if cursor.rowcount != 1:
+                continue
+            if prior["id"] not in summary["updated"]:
+                summary["updated"].append(prior["id"])
+            _recovery_event_once(
+                conn,
+                job_id,
+                "worker_session_superseded",
+                f"worker-session:{prior['id']}:superseded-by:{session_key}",
+                {
+                    "backend_session_record_id": prior["id"],
+                    "superseded_by_session_id": session_key,
+                    "materialization_id": materialization["id"],
+                },
+                node_id=materialization["node_id"],
+                task_id=materialization["task_id"],
+                run_id=materialization.get("run_id"),
+            )
         stale_projection = bool(
             existing is not None
             and existing["latest_materialization_id"] != materialization["id"]
@@ -4913,29 +4956,11 @@ def ensure_required_evaluator_nodes(conn: sqlite3.Connection, job_id: str) -> li
     for item in items:
         if item["state"] in {"satisfied", "waived"}:
             continue
-        ledger = conn.execute(
-            """
-            SELECT * FROM progress_ledger
-             WHERE goal_item_id = ? AND satisfaction = 'full'
-             ORDER BY created_at DESC, rowid DESC LIMIT 1
-            """,
-            (item["id"],),
-        ).fetchone()
-        if ledger is None or not ledger["node_id"]:
+        candidate = _required_evaluator_candidate(conn, job, dict(item))
+        if candidate is None:
             continue
-        target_node = conn.execute("SELECT * FROM execution_nodes WHERE id = ?", (ledger["node_id"],)).fetchone()
-        if target_node is None or target_node["node_type"] == "verification" or target_node["state"] != "succeeded":
-            continue
-        target_materialization = conn.execute(
-            """
-            SELECT * FROM node_materializations
-             WHERE node_id = ? AND status = 'succeeded'
-             ORDER BY attempt DESC LIMIT 1
-            """,
-            (target_node["id"],),
-        ).fetchone()
-        if target_materialization is None:
-            continue
+        target_node = candidate["node"]
+        target_materialization = candidate["materialization"]
         existing = conn.execute(
             """
             SELECT verifier.node_key
@@ -4947,11 +4972,7 @@ def ensure_required_evaluator_nodes(conn: sqlite3.Connection, job_id: str) -> li
         ).fetchall()
         if existing:
             continue
-        ledger_metadata = _loads(ledger["metadata_json"])
-        verification = ledger_metadata.get("verification")
-        workspace_revision = ledger_metadata.get("workspace_revision")
-        if workspace_revision is None and isinstance(verification, dict):
-            workspace_revision = verification.get("workspace_revision")
+        workspace_revision = candidate.get("workspace_revision")
         if policy.get("require_workspace_revision", False) and not workspace_revision:
             _event_once(
                 conn,
@@ -5014,6 +5035,118 @@ def ensure_required_evaluator_nodes(conn: sqlite3.Connection, job_id: str) -> li
         )
         created.append(verifier_key)
     return created
+
+
+def _required_evaluator_candidate(
+    conn: sqlite3.Connection,
+    job: dict[str, Any],
+    item: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    latest_contradiction = conn.execute(
+        """
+        SELECT * FROM progress_ledger
+         WHERE goal_item_id = ? AND satisfaction = 'contradicted'
+         ORDER BY created_at DESC, rowid DESC LIMIT 1
+        """,
+        (item["id"],),
+    ).fetchone()
+    contradiction_at = int(latest_contradiction["created_at"]) if latest_contradiction else -1
+    ledger = conn.execute(
+        """
+        SELECT * FROM progress_ledger
+         WHERE goal_item_id = ? AND satisfaction = 'full' AND created_at > ?
+         ORDER BY created_at DESC, rowid DESC LIMIT 1
+        """,
+        (item["id"], contradiction_at),
+    ).fetchone()
+    if ledger is not None and ledger["node_id"]:
+        target_node = conn.execute(
+            "SELECT * FROM execution_nodes WHERE id = ?",
+            (ledger["node_id"],),
+        ).fetchone()
+        candidate = _evaluator_candidate_from_node(conn, job, dict(item), target_node)
+        if candidate is not None:
+            ledger_metadata = _loads(ledger["metadata_json"])
+            verification = ledger_metadata.get("verification")
+            workspace_revision = ledger_metadata.get("workspace_revision")
+            if workspace_revision is None and isinstance(verification, dict):
+                workspace_revision = verification.get("workspace_revision")
+            candidate["workspace_revision"] = workspace_revision
+            candidate["source"] = "progress_ledger"
+            return candidate
+    if latest_contradiction is None:
+        return None
+
+    linked_nodes = []
+    for row in conn.execute(
+        """
+        SELECT * FROM execution_nodes
+         WHERE job_id = ? AND node_type != 'verification' AND created_at >= ?
+         ORDER BY created_at DESC, rowid DESC
+        """,
+        (job["id"], contradiction_at),
+    ).fetchall():
+        node = dict(row)
+        if str(item["item_key"]) in _node_linked_goal_item_keys(conn, node):
+            linked_nodes.append(node)
+    if not linked_nodes:
+        return None
+    for linked_node in linked_nodes:
+        candidate = _evaluator_candidate_from_node(conn, job, dict(item), linked_node)
+        if candidate is None or not linked_node.get("latest_task_id"):
+            continue
+        snapshot = kb.task_progress_snapshot(
+            conn,
+            linked_node["latest_task_id"],
+            board=job.get("board"),
+        )
+        raw_evidence = dict(snapshot.evidence or {}) if snapshot is not None else {}
+        receipt = (
+            _runtime_receipt_from_evidence(raw_evidence, linked_node, conn=conn)
+            if _is_codex_lane_evidence(raw_evidence)
+            else raw_evidence
+        )
+        receipt_is_candidate = (
+            receipt is not None
+            and (
+                (
+                    _normalize_verdict(receipt.get("verdict")) == "succeeded"
+                    and bool((receipt.get("verification") or {}).get("passed"))
+                )
+                or _trusted_evaluator_pending_candidate(job, linked_node, receipt)
+            )
+        )
+        if not receipt_is_candidate or not receipt.get("workspace_revision"):
+            continue
+        candidate["workspace_revision"] = receipt["workspace_revision"]
+        candidate["source"] = "gap_linked_terminal_receipt"
+        return candidate
+    return None
+
+
+def _evaluator_candidate_from_node(
+    conn: sqlite3.Connection,
+    job: dict[str, Any],
+    item: dict[str, Any],
+    node: Any,
+) -> Optional[dict[str, Any]]:
+    if node is None or node["node_type"] == "verification" or node["state"] not in {"succeeded", "blocked"}:
+        return None
+    materialization = conn.execute(
+        """
+        SELECT * FROM node_materializations
+         WHERE node_id = ? AND status IN ('succeeded', 'blocked')
+         ORDER BY attempt DESC LIMIT 1
+        """,
+        (node["id"],),
+    ).fetchone()
+    if materialization is None:
+        return None
+    return {
+        "node": dict(node),
+        "materialization": dict(materialization),
+        "workspace_revision": None,
+    }
 
 
 def advance_runtime_job_until_idle(
@@ -5497,7 +5630,7 @@ def _worker_context(
         f"Objective: {job['objective']}\n\n"
         f"Node: {node['title']}\n\n"
         f"{node['description']}\n\n"
-        f"Goal items: {', '.join(metadata.get('goal_item_keys') or []) or '-'}\n"
+        f"Goal items: {', '.join(sorted(_node_linked_goal_item_keys(conn, node))) or '-'}\n"
         f"Gaps: {', '.join(metadata.get('gap_keys') or []) or '-'}\n\n"
         f"Node contract: {json.dumps(constraints.get('contract') or {}, sort_keys=True)}\n\n"
         f"Dependencies:\n{deps}\n\n"
@@ -5568,10 +5701,15 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
     metadata, scope_violations, scope_unverified = _apply_declared_write_scope_check(dict(node), metadata)
     snapshot_run_id = snapshot.run.id if snapshot.run else node["latest_run_id"]
     verdict = _normalize_verdict(metadata.get("verdict") or snapshot.task.status)
+    trusted_evaluator_pending = _trusted_evaluator_pending_candidate(
+        _job(conn, node["job_id"]),
+        dict(node),
+        metadata,
+    )
     if node["state"] in TERMINAL_NODE_STATES:
         return False
     now = _now()
-    if verdict == "succeeded":
+    if verdict == "succeeded" or trusted_evaluator_pending:
         state = "succeeded"
         event_type = "node_completed"
     elif verdict == "waiting_human":
@@ -5686,9 +5824,46 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
             run_id=snapshot_run_id,
             source="kanban_task",
         )
+    if trusted_evaluator_pending:
+        _event(
+            conn,
+            node["job_id"],
+            "worker_candidate_ready_for_evaluator",
+            {
+                "node_key": node["node_key"],
+                "workspace_revision": metadata.get("workspace_revision"),
+                "reason": "trusted_evaluator_unavailable_inside_worker_boundary",
+            },
+            node_id=node_id,
+            task_id=node["latest_task_id"],
+            run_id=snapshot_run_id,
+            source="verification_policy",
+        )
     _event(conn, node["job_id"], event_type, {"node_key": node["node_key"], "verdict": verdict}, node_id=node_id, task_id=node["latest_task_id"], run_id=snapshot_run_id, source="kanban_task")
     reduce_runtime_job(conn, node["job_id"])
     return True
+
+
+def _trusted_evaluator_pending_candidate(
+    job: dict[str, Any],
+    node: dict[str, Any],
+    evidence: dict[str, Any],
+) -> bool:
+    job_metadata = _loads(job.get("metadata_json"))
+    policy = job_metadata.get("verification_policy")
+    provenance = evidence.get("verification_provenance")
+    return bool(
+        job_metadata.get("phase4g8_run_id")
+        and isinstance(policy, dict)
+        and policy.get("mode") == "required_evaluator"
+        and node.get("node_type") != "verification"
+        and _normalize_verdict(evidence.get("verdict")) == "blocked"
+        and isinstance(provenance, dict)
+        and str(provenance.get("kind") or "").strip() in {"worker_local", "workspace_process"}
+        and evidence.get("workspace_revision")
+        and isinstance(evidence.get("changed_files"), list)
+        and bool(evidence.get("changed_files"))
+    )
 
 
 def _normalize_verdict(verdict: Any) -> str:

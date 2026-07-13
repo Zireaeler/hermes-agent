@@ -847,6 +847,57 @@ def test_reconcile_worker_run_crashed_schedules_retry(conn):
     assert mat["status"] == "crashed"
 
 
+def test_new_backend_session_interrupts_prior_active_session_for_same_node(conn):
+    job_id = _job(conn)
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = _node(conn, job_id, "understand-scope")
+    materialization = conn.execute(
+        "SELECT * FROM node_materializations WHERE node_id = ?",
+        (node["id"],),
+    ).fetchone()
+    first_session = "019f0000-0000-7000-8000-000000000011"
+    second_session = "019f0000-0000-7000-8000-000000000012"
+    kb.record_task_event(
+        conn,
+        node["latest_task_id"],
+        "worker_backend_session_started",
+        {
+            "worker_lane": materialization["worker_lane"],
+            "worker_kind": "codex_cli",
+            "backend_session_id": first_session,
+            "execution_mode": "fresh",
+        },
+    )
+    rk.sync_runtime_backend_sessions(conn, job_id)
+    kb.record_task_event(
+        conn,
+        node["latest_task_id"],
+        "worker_backend_session_started",
+        {
+            "worker_lane": materialization["worker_lane"],
+            "worker_kind": "codex_cli",
+            "backend_session_id": second_session,
+            "execution_mode": "fresh",
+        },
+    )
+
+    synced = rk.sync_runtime_backend_sessions(conn, job_id)
+
+    sessions = {
+        row["backend_session_key"]: row["status"]
+        for row in conn.execute(
+            "SELECT backend_session_key, status FROM backend_worker_sessions WHERE node_id = ?",
+            (node["id"],),
+        ).fetchall()
+    }
+    assert sessions == {first_session: "interrupted", second_session: "active"}
+    assert len(synced["discovered"]) == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM execution_events WHERE job_id = ? AND event_type = 'worker_session_superseded'",
+        (job_id,),
+    ).fetchone()[0] == 1
+
+
 def test_crashed_materialization_resumes_discovered_backend_session(conn, tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -1479,6 +1530,136 @@ def test_required_evaluator_policy_creates_fixed_target_and_completes_goal(conn)
         (job_id,),
     ).fetchone()[0] == 1
     assert rk.ensure_required_evaluator_nodes(conn, job_id) == []
+
+
+def test_required_evaluator_uses_latest_gap_linked_remediation_receipt(conn):
+    root = _root_task(conn)
+    job_id = rk.create_runtime_job(
+        conn,
+        root,
+        "verify remediation after an evaluator failure",
+        goal_items=[{
+            "item_key": "runtime-result",
+            "description": "runtime result is independently verified",
+            "required": True,
+            "verifier_required": True,
+        }],
+        initialization_mode="provider_first",
+        runtime_metadata={
+            "phase4g8_run_id": "phase4g8-test",
+            "verification_policy": {
+                "mode": "required_evaluator",
+                "assignee": "runtime-evaluator",
+                "require_workspace_revision": True,
+            }
+        },
+    )
+    assert rk.apply_graph_patch(conn, job_id, _patch(
+        job_id,
+        _revision(conn, job_id),
+        {
+            "op": "create_node",
+            "node_key": "implement-runtime-result",
+            "node_type": "implementation",
+            "title": "Implement runtime result",
+            "description": "Produce the candidate runtime result.",
+            "goal_item_keys": ["runtime-result"],
+            "contract": _contract(),
+        },
+    ))["status"] == "applied"
+    rk.reduce_runtime_job(conn, job_id)
+    implementation = _node(conn, job_id, "implement-runtime-result")
+    assert rk.materialize_runtime_node(conn, dict(implementation))
+    implementation = _node(conn, job_id, implementation["node_key"])
+    _complete_node(conn, implementation, {
+        "verdict": "succeeded",
+        "summary": "initial candidate",
+        "claimed_goal_items": ["runtime-result"],
+        "workspace_revision": "git:initial-candidate",
+        "verification": {"passed": True},
+    })
+    first = rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    first_verifier_key = next(key for key in first.materialized_nodes if key.startswith("verify-runtime-result-"))
+    first_verifier = _node(conn, job_id, first_verifier_key)
+    _complete_node(conn, first_verifier, {
+        "verdict": "failed",
+        "summary": "official evaluator failed",
+        "contradicted_goal_items": ["runtime-result"],
+        "verification": {"passed": False},
+    })
+    assert rk.ingest_runtime_node_evidence(conn, first_verifier["id"])
+    open_gap = next(
+        gap["gap_key"]
+        for gap in rk.status_runtime_job(conn, job_id)["goal_gaps"]
+        if gap["state"] == "open" and gap["gap_key"].startswith("runtime-result:")
+    )
+
+    assert rk.apply_graph_patch(conn, job_id, _patch(
+        job_id,
+        _revision(conn, job_id),
+        {
+            "op": "strategy_update",
+            "node_key": "remediate-runtime-result",
+            "title": "Remediate runtime result",
+            "description": "Correct the evaluator-reported failures.",
+            "gap_keys": [open_gap],
+            "strategy_summary": "Correct the concrete failures reported by the independent evaluator.",
+            "changes_from_previous_attempts": [
+                "use the evaluator failure evidence instead of repeating the initial implementation",
+            ],
+            "contract": _contract(),
+        },
+    ))["status"] == "applied"
+    rk.reduce_runtime_job(conn, job_id)
+    remediation = _node(conn, job_id, "remediate-runtime-result")
+    assert rk.materialize_runtime_node(conn, dict(remediation))
+    remediation = _node(conn, job_id, remediation["node_key"])
+    _complete_node(conn, remediation, {
+        "verdict": "blocked",
+        "blocked_reason": "official evaluator is outside the worker trust boundary",
+        "summary": "remediation candidate completed",
+        "claimed_goal_items": [],
+        "changed_files": ["src/runtime.py"],
+        "workspace_revision": "git:remediation-candidate",
+        "verification": {"passed": False},
+        "verification_provenance": {
+            "kind": "worker_local",
+            "official_evaluator": "not_available_within_workspace_boundary",
+        },
+    })
+    assert rk.ingest_runtime_node_evidence(conn, remediation["id"])
+    assert _node(conn, job_id, remediation["node_key"])["state"] == "succeeded"
+
+    assert rk.apply_graph_patch(conn, job_id, _patch(
+        job_id,
+        _revision(conn, job_id),
+        {
+            "op": "strategy_update",
+            "node_key": "redundant-remediation",
+            "title": "Redundant remediation",
+            "description": "A newer dispatch that failed before producing a receipt.",
+            "gap_keys": [open_gap],
+            "strategy_summary": "This dispatch must not hide the prior valid candidate.",
+            "changes_from_previous_attempts": ["none; dispatch failed before execution"],
+            "contract": _contract(),
+        },
+    ))["status"] == "applied"
+    redundant = _node(conn, job_id, "redundant-remediation")
+    conn.execute(
+        "UPDATE execution_nodes SET state = 'failed', completed_at = updated_at WHERE id = ?",
+        (redundant["id"],),
+    )
+
+    created = rk.ensure_required_evaluator_nodes(conn, job_id)
+
+    assert len(created) == 1
+    verifier = _node(conn, job_id, created[0])
+    relation = conn.execute(
+        "SELECT * FROM node_relations WHERE from_node_id = ? AND relation_type = 'verifies'",
+        (verifier["id"],),
+    ).fetchone()
+    assert relation["to_node_id"] == remediation["id"]
+    assert json.loads(relation["metadata_json"])["target_workspace_revision"] == "git:remediation-candidate"
 
 
 def test_stale_evaluator_target_cannot_satisfy_verifier_required_goal(conn):

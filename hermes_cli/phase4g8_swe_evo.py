@@ -24,6 +24,9 @@ from hermes_cli import kanban_runtime_phase4g8 as phase4g8
 SWE_EVO_ADAPTER_SCHEMA = "hermes_phase4g8_swe_evo_adapter_v1"
 SWE_EVO_DATASET_REVISION = "9b83d5af943ba7a17567336f5b18239f73960219"
 SWE_EVO_ARROW_SHA256 = "74e7c63160ada4ceba71d5d89a9bb7c9794f4574b384458d546eb65cdb730520"
+EVALUATOR_RUN_LABEL = "hermes.phase4g8.run_id"
+EVALUATOR_INVOCATION_LABEL = "hermes.phase4g8.evaluator_invocation_id"
+EVALUATOR_OWNER_PID_LABEL = "hermes.phase4g8.owner_pid"
 SWE_EVO_OFFICIAL_INSTANCE_IDS = (
     "pydantic__pydantic_v2.6.0b1_v2.6.0",
     "dask__dask_2022.9.2_2022.10.0",
@@ -170,9 +173,15 @@ def evaluate_swe_evo_workspace(instance_path: Path, workspace: Path, output_root
         raise ValueError("candidate workspace must be a git repository")
     candidate_patch = collect_candidate_patch(workspace, instance["base_commit"])
     test_patch = Path(instance.pop("test_patch_path")).read_text(encoding="utf-8")
+    protected_test_paths = _patch_paths(test_patch, workspace)
+    evaluator_candidate_patch = collect_candidate_patch(
+        workspace,
+        instance["base_commit"],
+        exclude_paths=protected_test_paths,
+    )
     benchmark_row = dict(instance)
     benchmark_row["test_patch"] = test_patch
-    combined_patch = _merge_patches(test_patch, candidate_patch)
+    combined_patch = _merge_patches(test_patch, evaluator_candidate_patch)
     run_id = f"phase4g8-{uuid.uuid4().hex[:12]}"
     run_root = output_root.resolve() / run_id
     run_root.mkdir(parents=True, exist_ok=False)
@@ -194,6 +203,10 @@ def evaluate_swe_evo_workspace(instance_path: Path, workspace: Path, output_root
         "harness_log_sha256": _sha256_file(log_path),
         "candidate_patch_sha256": hashlib.sha256(candidate_patch.encode("utf-8")).hexdigest(),
         "candidate_patch_bytes": len(candidate_patch.encode("utf-8")),
+        "evaluator_candidate_patch_sha256": hashlib.sha256(
+            evaluator_candidate_patch.encode("utf-8")
+        ).hexdigest(),
+        "protected_test_path_count": len(protected_test_paths),
         "official_image": benchmark_row["image"],
         "dataset_revision": benchmark_row["dataset_revision"],
     })
@@ -232,16 +245,28 @@ def _extract_pytest_failure_diagnostics(path: Path, *, max_chars: int = 6_000) -
     }
 
 
-def collect_candidate_patch(workspace: Path, base_commit: str) -> str:
+def collect_candidate_patch(
+    workspace: Path,
+    base_commit: str,
+    *,
+    exclude_paths: Optional[set[str]] = None,
+) -> str:
     """Create a binary patch including untracked files without changing the workspace."""
 
+    excluded = {str(path) for path in (exclude_paths or set())}
     head = _run_git(workspace, ["rev-parse", "HEAD"]).strip()
     if head != base_commit:
         raise ValueError(f"candidate HEAD mismatch: expected {base_commit}, got {head}")
-    tracked = _run_git(workspace, ["diff", "--binary", "--no-ext-diff", base_commit])
+    tracked_args = ["diff", "--binary", "--no-ext-diff", base_commit]
+    if excluded:
+        tracked_args.extend(["--", "."])
+        tracked_args.extend(f":(exclude,literal){path}" for path in sorted(excluded))
+    tracked = _run_git(workspace, tracked_args)
     untracked_raw = _run_git(workspace, ["ls-files", "--others", "--exclude-standard", "-z"])
     parts = [tracked] if tracked else []
     for relative in [value for value in untracked_raw.split("\0") if value]:
+        if relative in excluded:
+            continue
         completed = subprocess.run(
             ["git", "diff", "--binary", "--no-index", "--", "/dev/null", relative],
             cwd=workspace,
@@ -303,6 +328,7 @@ def _run_official_harness(
             for key in ("PIP_INDEX_URL", "PIP_TRUSTED_HOST")
             if os.environ.get(key)
         },
+        labels=_evaluator_container_labels(run_id),
     )
     patch_path = run_root / "combined.patch"
     eval_path = run_root / "eval.sh"
@@ -353,6 +379,131 @@ def _run_official_harness(
             container.remove(force=True)
         except Exception:
             pass
+
+
+def cleanup_phase4g8_evaluator_containers(
+    run_id: str,
+    *,
+    include_active: bool = False,
+    client: Any = None,
+) -> dict[str, Any]:
+    """Remove evaluator containers whose owning evaluator process no longer exists."""
+
+    selected_run_id = str(run_id or "").strip()
+    if not selected_run_id:
+        raise ValueError("run_id is required for evaluator container cleanup")
+    if client is None:
+        return _cleanup_phase4g8_evaluator_containers_cli(
+            selected_run_id,
+            include_active=include_active,
+        )
+    containers = client.containers.list(
+        all=True,
+        filters={"label": f"{EVALUATOR_RUN_LABEL}={selected_run_id}"},
+    )
+    removed: list[str] = []
+    retained: list[str] = []
+    errors: list[str] = []
+    for container in containers:
+        labels = getattr(container, "labels", None)
+        if not isinstance(labels, dict):
+            attrs = getattr(container, "attrs", {})
+            labels = ((attrs.get("Config") or {}).get("Labels") or {}) if isinstance(attrs, dict) else {}
+        owner_pid = _positive_int(labels.get(EVALUATOR_OWNER_PID_LABEL))
+        container_id = str(getattr(container, "id", "unknown"))
+        if not include_active and owner_pid is not None and _pid_exists(owner_pid):
+            retained.append(container_id)
+            continue
+        try:
+            container.remove(force=True)
+            removed.append(container_id)
+        except Exception as exc:
+            errors.append(f"{container_id}:{type(exc).__name__}")
+    return {
+        "run_id": selected_run_id,
+        "removed": removed,
+        "retained": retained,
+        "errors": errors,
+    }
+
+
+def _evaluator_container_labels(evaluator_invocation_id: str) -> dict[str, str]:
+    outer_run_id = str(os.environ.get("HERMES_PHASE4G8_RUN_ID") or evaluator_invocation_id)
+    return {
+        EVALUATOR_RUN_LABEL: outer_run_id,
+        EVALUATOR_INVOCATION_LABEL: str(evaluator_invocation_id),
+        EVALUATOR_OWNER_PID_LABEL: str(os.getpid()),
+    }
+
+
+def _cleanup_phase4g8_evaluator_containers_cli(
+    run_id: str,
+    *,
+    include_active: bool,
+) -> dict[str, Any]:
+    listed = subprocess.run(
+        ["docker", "ps", "-aq", "--filter", f"label={EVALUATOR_RUN_LABEL}={run_id}"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if listed.returncode != 0:
+        raise RuntimeError("could not list Phase 4G8 evaluator containers")
+    removed: list[str] = []
+    retained: list[str] = []
+    errors: list[str] = []
+    for container_id in [line.strip() for line in listed.stdout.splitlines() if line.strip()]:
+        inspected = subprocess.run(
+            [
+                "docker", "inspect", "--format",
+                f'{{{{ index .Config.Labels "{EVALUATOR_OWNER_PID_LABEL}" }}}}',
+                container_id,
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        owner_pid = _positive_int(inspected.stdout.strip()) if inspected.returncode == 0 else None
+        if not include_active and owner_pid is not None and _pid_exists(owner_pid):
+            retained.append(container_id)
+            continue
+        removed_process = subprocess.run(
+            ["docker", "rm", "-f", container_id],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if removed_process.returncode == 0:
+            removed.append(container_id)
+        else:
+            errors.append(f"{container_id}:docker_rm_failed")
+    return {
+        "run_id": run_id,
+        "removed": removed,
+        "retained": retained,
+        "errors": errors,
+    }
+
+
+def _positive_int(value: Any) -> Optional[int]:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _pid_exists(pid: int) -> bool:
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def _load_swebench_as_namespace() -> None:
@@ -492,8 +643,32 @@ def _validate_evaluator_instance(instance: dict[str, Any]) -> None:
 
 
 def _merge_patches(test_patch: str, candidate_patch: str) -> str:
-    parts = [value.rstrip("\n") for value in (test_patch, candidate_patch) if value]
+    parts = [value.rstrip("\n") for value in (candidate_patch, test_patch) if value]
     return "\n".join(parts) + ("\n" if parts else "")
+
+
+def _patch_paths(patch: str, workspace: Path) -> set[str]:
+    if not patch:
+        return set()
+    completed = subprocess.run(
+        ["git", "apply", "--numstat", "-z", "-"],
+        cwd=workspace,
+        input=patch.encode("utf-8"),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("protected test patch paths could not be parsed")
+    paths: set[str] = set()
+    for record in completed.stdout.split(b"\0"):
+        if not record:
+            continue
+        fields = record.split(b"\t", 2)
+        if len(fields) != 3:
+            raise RuntimeError("protected test patch numstat is malformed")
+        paths.add(fields[2].decode("utf-8", errors="surrogateescape"))
+    return paths
 
 
 def _run_git(workspace: Path, args: list[str]) -> str:

@@ -83,11 +83,19 @@ class _ModelProxyHandler(BaseHTTPRequestHandler):
                     self.wfile.write(chunk)
                     self.wfile.flush()
         except urllib.error.HTTPError as exc:
-            self.send_response(exc.code)
-            self.end_headers()
-            self.wfile.write(exc.read())
+            try:
+                self.send_response(exc.code)
+                self.end_headers()
+                self.wfile.write(exc.read())
+            except (BrokenPipeError, ConnectionResetError):
+                return
+        except (BrokenPipeError, ConnectionResetError):
+            return
         except Exception:
-            self.send_error(502, "model transport unavailable")
+            try:
+                self.send_error(502, "model transport unavailable")
+            except (BrokenPipeError, ConnectionResetError):
+                return
 
     def log_message(self, _format: str, *_args: Any) -> None:
         return
@@ -372,8 +380,11 @@ def make_phase4g8_evaluator_lane(config: dict[str, Any]):
     name = normalize_lane_name(str(config.get("name") or "phase4g8-evaluator"))
     spec_path = Path(str(config.get("spec_path") or "")).expanduser().resolve()
     run_id = str(config.get("run_id") or "").strip()
+    heartbeat_interval_seconds = float(config.get("heartbeat_interval_seconds") or 10.0)
     if not spec_path.is_file() or not run_id:
         raise ValueError("Phase 4G8 evaluator lane requires spec_path and run_id")
+    if heartbeat_interval_seconds <= 0:
+        raise ValueError("Phase 4G8 evaluator heartbeat interval must be positive")
 
     def spawn(task: Any, workspace: str, *, board: Optional[str] = None) -> Optional[int]:
         from hermes_cli import kanban_db as kb
@@ -390,6 +401,8 @@ def make_phase4g8_evaluator_lane(config: dict[str, Any]):
             str(spec_path),
             "--run-id",
             run_id,
+            "--heartbeat-interval",
+            str(heartbeat_interval_seconds),
         ]
         if task.current_run_id is not None:
             command.extend(["--task-run-id", str(task.current_run_id)])
@@ -435,7 +448,12 @@ def make_phase4g8_evaluator_lane(config: dict[str, Any]):
         success_policy="block_for_review",
         max_concurrency=1,
         source="phase4g8",
-        config={"type": "phase4g8_evaluator", "spec_path": str(spec_path), "run_id": run_id},
+        config={
+            "type": "phase4g8_evaluator",
+            "spec_path": str(spec_path),
+            "run_id": run_id,
+            "heartbeat_interval_seconds": heartbeat_interval_seconds,
+        },
     )
 
 
@@ -844,7 +862,12 @@ def runtime_fact_counts(conn: sqlite3.Connection, job_id: str, node_id: str) -> 
     }
 
 
-def _run_evaluator(spec: dict[str, Any], workspace: Path) -> dict[str, Any]:
+def _run_evaluator(
+    spec: dict[str, Any],
+    workspace: Path,
+    *,
+    extra_env: Optional[dict[str, str]] = None,
+) -> dict[str, Any]:
     evaluator = spec["evaluator"]
     replacements = {
         "workspace": str(workspace),
@@ -855,6 +878,8 @@ def _run_evaluator(spec: dict[str, Any], workspace: Path) -> dict[str, Any]:
     env = os.environ.copy()
     for key, value in (evaluator.get("env") or {}).items():
         env[str(key)] = str(value).format(**replacements)
+    for key, value in (extra_env or {}).items():
+        env[str(key)] = str(value)
     started = time.monotonic()
     completed = _run(argv, cwd=workspace, env=env, timeout=int(evaluator["timeout_seconds"]))
     try:
