@@ -569,7 +569,6 @@ def run_native_arm1(
         _write_text(paths["worker_events"] / "codex-exec.jsonl", _redact_jsonl(raw_lines))
         _write_text(paths["worker_events"] / "codex-stderr.log", redact_sensitive_text(stderr))
         model_transport = network.transport_audit()
-        _write_json(paths["provider_trace"] / "transport-audit.json", model_transport)
 
     event_summary = summarize_exec_events(raw_lines)
     if not event_summary.get("parent_thread_id"):
@@ -645,7 +644,7 @@ def run_native_arm1(
         phase="phase4g9",
         instance_id=FROZEN_INSTANCE_ID,
         redactions=validation_artifacts.model_source_redactions(source_codex_home),
-        expected_entries={"codex-home", "worker-events", "provider-trace", "reports"},
+        expected_entries={"codex-home", "worker-events", "reports"},
     )
     return report
 
@@ -756,10 +755,6 @@ def finalize_existing_terminal_arm1(
             "recovery_did_not_resume_codex": True,
         },
     }
-    provider_trace = run_root / "provider-trace"
-    provider_trace.mkdir(exist_ok=True)
-    os.chmod(provider_trace, 0o700)
-    _write_json(provider_trace / "transport-audit.json", report["model_transport"])
     _write_json(reports / "run-report.json", report)
     _write_text(reports / "execution-summary.md", render_execution_summary(report))
     validation_artifacts.archive_validation_run(
@@ -768,7 +763,7 @@ def finalize_existing_terminal_arm1(
         phase="phase4g9",
         instance_id=FROZEN_INSTANCE_ID,
         redactions=validation_artifacts.model_source_redactions(source_codex_home),
-        expected_entries={"codex-home", "worker-events", "provider-trace", "reports"},
+        expected_entries={"codex-home", "worker-events", "reports"},
     )
     return report
 
@@ -950,14 +945,12 @@ def _prepare_layout(root: Path, spec: dict[str, Any]) -> dict[str, Path]:
         "workspace": root / "workspace",
         "protected": root / "protected",
         "worker_events": root / "worker-events",
-        "provider_trace": root / "provider-trace",
         "reports": root / "reports",
     }
-    for key in ("home", "protected", "worker_events", "provider_trace", "reports"):
+    for key in ("home", "protected", "worker_events", "reports"):
         paths[key].mkdir()
     os.chmod(paths["protected"], 0o700)
     os.chmod(paths["worker_events"], 0o700)
-    os.chmod(paths["provider_trace"], 0o700)
     os.chmod(paths["reports"], 0o700)
     subprocess.run(["git", "init", "--quiet", str(paths["workspace"])], check=True)
     subprocess.run(["git", "remote", "add", "source", mirror.as_uri()], cwd=paths["workspace"], check=True)

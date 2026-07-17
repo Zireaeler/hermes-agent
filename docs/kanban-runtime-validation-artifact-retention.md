@@ -9,7 +9,7 @@ Long-running validation produces two different outputs:
 
 A report is not a replacement for raw evidence. Cleanup may remove rebuildable
 execution material, but it must not remove the only copy of a Codex session,
-worker event stream, provider trace, Runtime database, or evaluator output.
+worker event stream, Runtime database, or evaluator output.
 
 ## 2. Storage Model
 
@@ -34,7 +34,7 @@ Raw evidence may remain outside Git under a stable artifact root:
   codex-home/
     sessions/
   worker-events/
-  provider-trace/
+  optional-telemetry/
   runtime-state/
   evaluator/
   candidates/
@@ -88,17 +88,16 @@ The following are irreplaceable and must be retained for real model runs:
 - leases, attempts, materializations, process IDs, and terminal facts;
 - policy resolution and capability footer evidence.
 
-### 4.3 Provider transport
+### 4.3 Optional provider telemetry
 
-- request identity, model, timestamps, retry and timeout events;
-- HTTP/WebSocket selection, upgrade, reconnect, and failure events;
-- per-request input, cached input, output, and reasoning token counts;
-- provider response identifiers and request/response hashes;
-- request and response bodies when available.
+Provider transport counters and error summaries may be retained for diagnosing
+the model service or measuring cost. They are not required to explain worker
+behavior, Runtime orchestration, candidate quality, or goal completion, and
+their absence must not block archive verification or cleanup.
 
-Provider traces must remove the model-source API key and replace the real
-model-source base URL. Other Codex configuration and model execution content
-are not treated as sensitive for this project.
+Full HTTP/WebSocket request and response capture is not a Runtime Kernel
+validation requirement. When optional provider telemetry is retained, it must
+remove the model-source API key and replace the real model-source base URL.
 
 ### 4.4 Candidate lineage
 
@@ -158,7 +157,7 @@ Automatic cleanup must not remove:
 
 - `codex-home/sessions` or node Codex homes;
 - `worker-events`;
-- provider traces;
+- provider traces that already exist, although creating them is optional;
 - Runtime database/service state;
 - evaluator raw results;
 - candidate lineage;
@@ -201,9 +200,9 @@ catalog records those entries as lost rather than implying complete retention.
 - cleanup rejects every entry outside the rebuildable allowlist.
 
 Phase 4G8 completed-run compaction now archives `codex-homes`, `service`,
-`hermes-home`, reports, and any worker/provider event directories before it
+`hermes-home`, reports, and any worker event or optional telemetry directories before it
 removes workspace, home, or seed state. Phase 4G9 native runs archive
-`codex-home`, `worker-events`, `provider-trace`, and reports before returning a
+`codex-home`, `worker-events`, and reports before returning a
 successful real-run result.
 
 The artifact root is configurable with `HERMES_VALIDATION_ARTIFACT_ROOT` or the
@@ -213,7 +212,6 @@ Phase 4G9 `--artifact-root` option. The default is:
 /root/hermes-validation-artifacts
 ```
 
-The current provider trace records the transport audit and counters. Full
-per-request HTTP/WebSocket body capture remains a separate observability
-extension; its absence must be stated in a run catalog rather than inferred
-from the transport summary.
+Phase 4G9 records aggregate transport counters inside `run-report.json` as
+optional telemetry. Those counters are not part of the archive acceptance
+predicate and do not require a separate provider-trace directory.

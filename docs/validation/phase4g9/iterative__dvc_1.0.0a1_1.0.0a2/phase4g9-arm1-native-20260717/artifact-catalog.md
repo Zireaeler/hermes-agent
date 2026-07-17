@@ -36,7 +36,7 @@
 | Codex stderr | `worker-events/codex-stderr.log` | **lost during cleanup** | No complete substitute |
 | Collaboration payloads | native rollout JSONL | **lost during cleanup** | 109 summarized calls, task names, statuses, and ciphertext hashes in report |
 | Guardian sessions | `codex-home/sessions/` | **lost during cleanup** | Two guardian identities and derived usage/terminal summaries in report |
-| Provider request trace | transport proxy | **not persisted before collector failure** | Aggregate token/cache and WebSocket configuration only; exact request count unavailable |
+| Optional provider telemetry | transport proxy | not persisted before collector failure | Not required for worker or Runtime analysis; aggregate token/cache facts survive elsewhere |
 | Workspace | `workspace/` | removed, reconstructable | Base commit plus complete candidate patch retained |
 | Evaluator raw directory | protected evaluator root | removed after diagnostic extraction | Standardized full failed-test list and bounded diagnostics retained in report |
 | Qualification base/gold checkout | protected qualification root | removed, rebuildable | Dataset revision, image, base/gold qualification outcomes retained in protocol/report |
