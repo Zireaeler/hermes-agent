@@ -544,6 +544,46 @@ def wrap_codex_network_argv(
         str(Path(worker_env["HOME"]).resolve()),
         str(Path(worker_env["CODEX_HOME"]).resolve()),
     }
+    workspace_path = Path(workspace).resolve()
+    common_path: Optional[Path] = None
+    dot_git = workspace_path / ".git"
+    if dot_git.is_file():
+        marker = dot_git.read_text(encoding="utf-8", errors="strict").strip()
+        if marker.startswith("gitdir:"):
+            git_dir = Path(marker.split(":", 1)[1].strip())
+            if not git_dir.is_absolute():
+                git_dir = workspace_path / git_dir
+            git_dir = git_dir.resolve()
+            common_marker = git_dir / "commondir"
+            if common_marker.is_file():
+                common_path = Path(
+                    common_marker.read_text(encoding="utf-8", errors="strict").strip()
+                )
+                if not common_path.is_absolute():
+                    common_path = git_dir / common_path
+                common_path = common_path.resolve()
+    if common_path is None:
+        git_common = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=workspace_path,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if git_common.returncode == 0 and git_common.stdout.strip():
+            common_path = Path(git_common.stdout.strip())
+            if not common_path.is_absolute():
+                common_path = workspace_path / common_path
+            common_path = common_path.resolve()
+    if common_path is not None:
+        try:
+            common_path.relative_to(workspace_path)
+        except ValueError:
+            # Detached Runtime worktrees keep their common Git metadata in the
+            # primary workspace. Bind only that metadata directory; sibling
+            # source worktrees remain invisible inside the worker sandbox.
+            writable_paths.add(str(common_path))
     toolchain = str(worker_env.get("PHASE4G8_WORKER_TOOLCHAIN") or "").strip()
     readonly_paths = {str(Path(toolchain).resolve())} if toolchain else set()
     for path in writable_paths | readonly_paths:
@@ -1303,7 +1343,10 @@ def _extract_runtime_receipt(output: str) -> Optional[dict[str, Any]]:
             candidate = json.loads(match.group(1))
         except json.JSONDecodeError:
             continue
-        if isinstance(candidate, dict) and candidate.get("schema") == "runtime_worker_receipt_v1":
+        if isinstance(candidate, dict) and candidate.get("schema") in {
+            "runtime_worker_receipt_v1",
+            "runtime_worker_structure_checkpoint_v1",
+        }:
             return candidate
     return None
 
@@ -1577,7 +1620,18 @@ def _finish_blocked(
 def build_codex_prompt(task_context: str, *, lane: str, model: Optional[str]) -> str:
     is_review_followup = "## Required review output" in task_context
     is_test_followup = "## Required test output" in task_context
-    if is_review_followup:
+    is_structure_assessment = "Early structure assessment mode:" in task_context
+    is_runtime_contribution = "Runtime contribution boundary:" in task_context
+    is_runtime_integration = "Frozen dependency contributions:" in task_context
+    if is_structure_assessment:
+        role_lines = (
+            f"You are Codex CLI running as Hermes Kanban assessment lane `{lane}`.\n"
+            "Inspect the assigned repository and goal, but do not modify source or tests. "
+            "Your only responsibility in this attempt is to decide whether durable Runtime "
+            "decomposition has evidence-backed value. Return the required structure checkpoint; "
+            "do not claim implementation completion."
+        )
+    elif is_review_followup:
         role_lines = (
             f"You are Codex CLI running as Hermes Kanban review lane `{lane}`.\n"
             "Review the bounded implementation evidence and workspace diff. "
@@ -1604,7 +1658,40 @@ def build_codex_prompt(task_context: str, *, lane: str, model: Optional[str]) ->
             "structured receipt to Hermes and block the task for review."
         )
     runtime_receipt_instructions = ""
-    if "Runtime footer:" in task_context:
+    if is_structure_assessment:
+        runtime_receipt_instructions = """
+
+This is an early Runtime structure assessment. Emit one final fenced JSON
+object and no prose after it:
+
+```json
+{
+  "schema": "runtime_worker_structure_checkpoint_v1",
+  "kind": "early_structure_assessment",
+  "recommendation": "continue_single_node",
+  "summary": "short evidence-backed assessment",
+  "inspected_scope": ["workspace-relative/path"],
+  "repository_facts": [
+    {"fact": "observed structural fact", "evidence_refs": ["workspace:path:..."]}
+  ],
+  "proposed_nodes": [],
+  "integration_owner_node_key": "node key from Runtime footer",
+  "shared_integration_scope": [],
+  "risks": [],
+  "worker_session_should_resume": true,
+  "changed_files": []
+}
+```
+
+Use recommendation `expand` only for 2-3 low-coupling responsibilities with
+non-overlapping declared write scopes. Each proposed node must include
+`node_key`, `outcome`, `acceptance_criteria`, `declared_write_scope`, and
+`requested_capabilities`. Use only Runtime capability names from the task
+context; typical local implementation capabilities are `filesystem_read`,
+`workspace_write`, `git_read`, and `process_spawn`. Otherwise use
+`continue_single_node` and leave `proposed_nodes` empty.
+"""
+    elif "Runtime footer:" in task_context:
         runtime_receipt_instructions = """
 
 This is a Runtime Kernel node. After the normal Markdown receipt, emit one
@@ -1633,6 +1720,39 @@ durable structural boundary, keep the normal verdict and add a separate
 For a Runtime node with a required independent evaluator, use verdict
 `candidate_ready` after local verification. This means the fixed revision is
 ready for external evaluation; it is not final goal completion.
+"""
+        if is_runtime_integration:
+            runtime_receipt_instructions = runtime_receipt_instructions.replace(
+                '  "artifacts": []\n}',
+                '  "artifacts": [],\n'
+                '  "accepted_contributions": ["artifact IDs applied without modification"],\n'
+                '  "modified_contributions": ["artifact IDs adapted during integration"],\n'
+                '  "rejected_contributions": ["artifact IDs not integrated"]\n}',
+            )
+            runtime_receipt_instructions += """
+
+Integration receipt requirement: classify every artifact ID from the frozen
+dependency contribution bundle exactly once across accepted_contributions,
+modified_contributions, and rejected_contributions. Use accepted only when the
+integrated files still match the frozen contribution hashes; use modified when
+you adapted that contribution. Unknown, duplicated, or omitted IDs invalidate
+the receipt's goal claim.
+"""
+        if is_runtime_contribution:
+            runtime_receipt_instructions += """
+
+Contribution exception: this isolated child is not the integrated candidate.
+Use verdict `succeeded`, not `candidate_ready`, after local verification. Any
+goal-item claim is non-authoritative partial evidence until the primary
+integration owner consumes the frozen contribution.
+"""
+    if is_structure_assessment:
+        return f"""{task_context.rstrip()}
+
+## External worker instructions
+
+{role_lines}
+{runtime_receipt_instructions}
 """
     return f"""{task_context.rstrip()}
 

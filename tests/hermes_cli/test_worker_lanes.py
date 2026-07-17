@@ -306,6 +306,63 @@ def test_phase4g8_filesystem_wrapper_hides_host_tmp_and_exposes_only_worker_path
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.skipif(
+    os.name == "nt" or os.geteuid() != 0 or shutil.which("bwrap") is None or shutil.which("setpriv") is None,
+    reason="filesystem namespace isolation requires POSIX root, bubblewrap, and setpriv",
+)
+def test_phase4g8_filesystem_wrapper_exposes_detached_worktree_git_common_dir(tmp_path):
+    primary = tmp_path / "run" / "primary"
+    worktree = tmp_path / "run" / "worktrees" / "child"
+    home = tmp_path / "run" / "home"
+    codex_home = tmp_path / "run" / "codex-home"
+    toolchain = tmp_path / "toolchain"
+    for path in (primary, worktree.parent, home, codex_home, toolchain / "bin"):
+        path.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=primary, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=primary, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=primary, check=True)
+    (primary / "tracked.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=primary, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=primary, check=True)
+    subprocess.run(
+        ["git", "worktree", "add", "--detach", str(worktree), "HEAD"],
+        cwd=primary,
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+    (codex_home / "config.toml").write_text('model = "test"\n', encoding="utf-8")
+    (codex_home / "auth.json").write_text('{}\n', encoding="utf-8")
+    (codex_home / "rules").mkdir()
+    (codex_home / "rules" / "default.rules").write_text("", encoding="utf-8")
+    (toolchain / "bin" / "python").write_text("python\n", encoding="utf-8")
+    worker_uid, worker_gid = 345_678_903, 345_678_904
+    for root in (primary, worktree, home, codex_home):
+        for current, dirs, files in os.walk(root):
+            os.chown(current, worker_uid, worker_gid)
+            for name in dirs:
+                os.chown(Path(current) / name, worker_uid, worker_gid)
+            for name in files:
+                os.chown(Path(current) / name, worker_uid, worker_gid)
+    env = {
+        "HOME": str(home),
+        "CODEX_HOME": str(codex_home),
+        "PHASE4G8_WORKER_TOOLCHAIN": str(toolchain),
+    }
+    argv = wrap_codex_network_argv(
+        ["/bin/sh", "-c", "git status --short && printf child >> tracked.txt && git diff --quiet --exit-code; test $? -eq 1"],
+        None,
+        uid=worker_uid,
+        gid=worker_gid,
+        workspace=str(worktree),
+        worker_env=env,
+        filesystem_isolation=True,
+    )
+
+    result = subprocess.run(argv, text=True, capture_output=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_dispatcher_uses_external_lane_assignee(kanban_home, monkeypatch):
     from hermes_cli import profiles
 
@@ -887,6 +944,69 @@ def test_codex_prompt_requires_runtime_receipt_for_runtime_node():
 
     assert "runtime_worker_receipt_v1" in prompt
     assert "Do not claim success merely" in prompt
+
+
+def test_codex_prompt_uses_read_only_early_structure_assessment_contract():
+    from hermes_cli.codex_worker import build_codex_prompt
+
+    prompt = build_codex_prompt(
+        "# Runtime node\n\n"
+        "Early structure assessment mode: inspect before implementation.\n\n"
+        "Runtime footer: {\"node_key\": \"primary\"}\n",
+        lane="codex-runtime",
+        model="gpt-5.6-sol",
+    )
+
+    assert "assessment lane `codex-runtime`" in prompt
+    assert "do not modify source or tests" in prompt
+    assert "runtime_worker_structure_checkpoint_v1" in prompt
+    assert "runtime_worker_receipt_v1" not in prompt
+    assert "When finished, print a concise structured receipt" not in prompt
+
+
+def test_extract_runtime_receipt_accepts_structure_checkpoint():
+    from hermes_cli.codex_worker import _extract_runtime_receipt
+
+    checkpoint = {
+        "schema": "runtime_worker_structure_checkpoint_v1",
+        "kind": "early_structure_assessment",
+    }
+    output = "```json\n" + json.dumps(checkpoint) + "\n```\n"
+
+    assert _extract_runtime_receipt(output) == checkpoint
+
+
+def test_codex_prompt_keeps_runtime_contribution_outside_candidate_ready():
+    from hermes_cli.codex_worker import build_codex_prompt
+
+    prompt = build_codex_prompt(
+        "# Runtime node\n\nRuntime contribution boundary: child only.\n\n"
+        "Runtime footer: {}\n",
+        lane="codex-runtime",
+        model="gpt-5.6-sol",
+    )
+
+    assert "Contribution exception" in prompt
+    assert "Use verdict `succeeded`, not `candidate_ready`" in prompt
+
+
+def test_codex_prompt_requires_complete_contribution_attribution_for_primary():
+    from hermes_cli.codex_worker import build_codex_prompt
+
+    prompt = build_codex_prompt(
+        "# Runtime node\n\n"
+        "Frozen dependency contributions:\n"
+        '[{"artifact_id":"art-a"},{"artifact_id":"art-b"}]\n\n'
+        "Runtime footer: {}\n",
+        lane="codex-runtime",
+        model="gpt-5.6-sol",
+    )
+
+    assert '"accepted_contributions"' in prompt
+    assert '"modified_contributions"' in prompt
+    assert '"rejected_contributions"' in prompt
+    assert "classify every artifact ID" in prompt
+    assert "Unknown, duplicated, or omitted IDs invalidate" in prompt
 
 
 def test_codex_prompt_uses_review_followup_role():

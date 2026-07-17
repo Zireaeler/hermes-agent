@@ -7,6 +7,7 @@ import json
 import multiprocessing
 import os
 from pathlib import Path
+import re
 import signal
 import shlex
 import shutil
@@ -70,6 +71,10 @@ def run_phase4g8_real_case(
     worker_event_stall_timeout_seconds: float = 3600.0,
     max_unresolved_evaluator_attempts: int = 3,
     max_evaluator_no_progress_streak: int = 2,
+    orchestration_policy: Optional[dict[str, Any]] = None,
+    fault_profile: Optional[str] = None,
+    run_id_prefix: str = "phase4g8",
+    reasoning_effort_override: Optional[str] = None,
 ) -> dict[str, Any]:
     """Run one qualified SWE-EVO case through production runtime boundaries."""
 
@@ -77,6 +82,11 @@ def run_phase4g8_real_case(
         raise ValueError("Phase 4G8 real case requires execute_real=True")
     if case_size not in {"small", "medium", "large"}:
         raise ValueError("case_size must be small, medium, or large")
+    selected_fault_profile = str(fault_profile or case_size)
+    if selected_fault_profile not in {"small", "medium", "large"}:
+        raise ValueError("fault_profile must be small, medium, or large")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", run_id_prefix):
+        raise ValueError("run_id_prefix must be a lowercase slug")
     if int(max_unresolved_evaluator_attempts) < 1:
         raise ValueError("max_unresolved_evaluator_attempts must be positive")
     if int(max_evaluator_no_progress_streak) < 1:
@@ -95,12 +105,16 @@ def run_phase4g8_real_case(
     if resumed_run:
         root = resume_run.resolve()
         run_id = root.name
-        if not run_id.startswith(f"phase4g8-{case_size}-"):
+        if not run_id.startswith(f"{run_id_prefix}-{case_size}-"):
             raise ValueError("resume run directory does not match the requested case size")
     else:
         instance_run_root = run_root.resolve() / str(spec["instance_id"])
-        previous_run_retention = _compact_completed_phase4g8_runs(instance_run_root)
-        run_id = f"phase4g8-{case_size}-{uuid.uuid4().hex[:10]}"
+        previous_run_retention = (
+            _compact_completed_phase4g8_runs(instance_run_root)
+            if run_id_prefix == "phase4g8"
+            else []
+        )
+        run_id = f"{run_id_prefix}-{case_size}-{uuid.uuid4().hex[:10]}"
         root = instance_run_root / run_id
     worker_uid, worker_gid = _derive_run_identity(run_id)
     paths = (
@@ -119,12 +133,12 @@ def run_phase4g8_real_case(
         "worker_evaluator_environment_parity_preflight": False,
         "worker_auto_review_preflight": False,
     }
-    if case_size in {"medium", "large"}:
+    if selected_fault_profile in {"medium", "large"}:
         boundaries.update({
             "worker_process_interrupted": False,
             "worker_backend_session_resumed": False,
         })
-    if case_size == "large":
+    if selected_fault_profile == "large":
         boundaries.update({
             "daemon_hard_crash": False,
             "expired_lease_takeover": False,
@@ -165,6 +179,7 @@ def run_phase4g8_real_case(
             model=source["model"],
             worker_uid=worker_uid,
             worker_gid=worker_gid,
+            reasoning_effort_override=reasoning_effort_override,
         )
         boundaries["worker_auto_review_preflight"] = bool(
             codex_home_audit.get("approval", {}).get("configured")
@@ -209,9 +224,15 @@ def run_phase4g8_real_case(
                 spec=spec,
                 workspace=paths["workspace"],
             )
-            pre_recovery = _reconstruct_resume_state(job_id, case_size=case_size)
+            pre_recovery = _reconstruct_resume_state(
+                job_id,
+                case_size=selected_fault_profile,
+            )
             resume_audit["runtime_recovery"] = _prepare_resumed_runtime_job(job_id)
-            recovered = _reconstruct_resume_state(job_id, case_size=case_size)
+            recovered = _reconstruct_resume_state(
+                job_id,
+                case_size=selected_fault_profile,
+            )
             boundaries.update(recovered["boundaries"])
             worker_killed = bool(
                 pre_recovery["worker_interrupted"] or recovered["worker_interrupted"]
@@ -222,11 +243,30 @@ def run_phase4g8_real_case(
             resume_audit["before_recovery"] = pre_recovery
             resume_audit["after_recovery"] = recovered
         else:
+            resolved_orchestration_policy = dict(orchestration_policy or {})
+            if resolved_orchestration_policy:
+                resolved_orchestration_policy.setdefault(
+                    "base_revision",
+                    str(spec["base_commit"]),
+                )
+                resolved_orchestration_policy.setdefault(
+                    "worktree_root",
+                    str(paths["root"] / "runtime-worktrees"),
+                )
+                resolved_orchestration_policy.setdefault(
+                    "contribution_root",
+                    str(paths["root"] / "runtime-contributions"),
+                )
+                resolved_orchestration_policy.setdefault(
+                    "workspace_owner",
+                    {"uid": worker_uid, "gid": worker_gid},
+                )
             job_id = _create_real_job(
                 spec,
                 paths["workspace"],
                 run_id,
                 max_evaluator_no_progress_streak=int(max_evaluator_no_progress_streak),
+                orchestration_policy=resolved_orchestration_policy or None,
             )
         _write_runner_state(
             paths["reports"] / "runner-state.json",
@@ -245,7 +285,9 @@ def run_phase4g8_real_case(
             profile_name="graph_patch_decision",
             max_retries=1,
             timeout_seconds=decision_timeout_seconds,
-            reasoning_effort=source.get("reasoning_effort"),
+            reasoning_effort=(
+                reasoning_effort_override or source.get("reasoning_effort")
+            ),
             explicit_base_url=source["explicit_base_url"],
             explicit_api_key=source["explicit_api_key"],
         )
@@ -255,7 +297,9 @@ def run_phase4g8_real_case(
             profile_name="token_budget_compaction",
             max_retries=1,
             timeout_seconds=compaction_timeout_seconds,
-            reasoning_effort=source.get("reasoning_effort"),
+            reasoning_effort=(
+                reasoning_effort_override or source.get("reasoning_effort")
+            ),
             explicit_base_url=source["explicit_base_url"],
             explicit_api_key=source["explicit_api_key"],
         )
@@ -325,7 +369,7 @@ def run_phase4g8_real_case(
                 continuity = rk.summarize_worker_execution_continuity(conn, job_id)
                 receipt_trigger = (
                     p4g8.evaluate_fault_trigger(conn, job_id, "receipt_before_ingest")
-                    if case_size == "large" and evaluator_daemon_stopped
+                    if selected_fault_profile == "large" and evaluator_daemon_stopped
                     else {"ready": False, "facts": {}}
                 )
                 active_backend_session = conn.execute(
@@ -354,7 +398,12 @@ def run_phase4g8_real_case(
             if evaluator and evaluator.get("worker_pid"):
                 boundaries["independent_evaluator_process"] = True
 
-            if worker and worker.get("worker_pid") and not daemon_restarted and case_size != "large":
+            if (
+                worker
+                and worker.get("worker_pid")
+                and not daemon_restarted
+                and selected_fault_profile != "large"
+            ):
                 _stop_daemon(daemon_process, hard=False)
                 with kb.connect() as conn:
                     if _accepted_checkpoint_count(conn, job_id) < 1:
@@ -369,7 +418,7 @@ def run_phase4g8_real_case(
                 boundaries["daemon_restarted"] = True
 
             if (
-                case_size in {"medium", "large"}
+                selected_fault_profile in {"medium", "large"}
                 and worker and worker.get("worker_pid")
                 and active_backend_session
                 and not worker_killed
@@ -383,7 +432,7 @@ def run_phase4g8_real_case(
                 boundaries["worker_backend_session_resumed"] = True
 
             if (
-                case_size == "large"
+                selected_fault_profile == "large"
                 and boundaries["worker_backend_session_resumed"]
                 and worker and worker.get("worker_pid")
                 and not large_lease_exercised
@@ -418,7 +467,7 @@ def run_phase4g8_real_case(
                 boundaries["daemon_restarted"] = True
 
             if (
-                case_size == "large"
+                selected_fault_profile == "large"
                 and evaluator and evaluator.get("worker_pid")
                 and not evaluator_fault_injected
                 and daemon_process is not None
@@ -428,7 +477,11 @@ def run_phase4g8_real_case(
                 evaluator_daemon_stopped = True
                 evaluator_fault_injected = True
 
-            if case_size == "large" and evaluator_daemon_stopped and receipt_trigger["ready"]:
+            if (
+                selected_fault_profile == "large"
+                and evaluator_daemon_stopped
+                and receipt_trigger["ready"]
+            ):
                 receipt_before_ingest_node_id = str(receipt_trigger["facts"]["node_id"])
                 receipt_before_ingest_materialization_id = str(
                     receipt_trigger["facts"]["materialization_id"]
@@ -491,6 +544,8 @@ def run_phase4g8_real_case(
                 metrics={
                     "wall_time_seconds": round(time.monotonic() - started, 3),
                     "case_size": case_size,
+                    "fault_profile": selected_fault_profile,
+                    "orchestration_policy": orchestration_policy or {},
                     "worker_interrupted": worker_killed,
                     "evaluator_attempt_count": len(evaluator_attempts),
                     "evaluator_failure_count": sum(
@@ -613,6 +668,7 @@ def run_phase4g8_real_case(
             "metrics": {
                 "wall_time_seconds": round(time.monotonic() - started, 3),
                 "case_size": case_size,
+                "fault_profile": selected_fault_profile,
                 "previous_run_retention": previous_run_retention,
             },
             "paths": {
@@ -1428,6 +1484,7 @@ def _create_real_job(
     run_id: str,
     *,
     max_evaluator_no_progress_streak: int = 2,
+    orchestration_policy: Optional[dict[str, Any]] = None,
 ) -> str:
     with kb.connect() as conn:
         root_task = kb.create_task(
@@ -1457,6 +1514,11 @@ def _create_real_job(
             initialization_mode="provider_first",
             runtime_metadata={
                 "phase4g8_run_id": run_id,
+                **(
+                    {"orchestration_policy": orchestration_policy}
+                    if orchestration_policy is not None
+                    else {}
+                ),
                 "verification_policy": {
                     "mode": "required_evaluator",
                     "assignee": "phase4g8-evaluator",

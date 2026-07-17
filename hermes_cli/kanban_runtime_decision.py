@@ -26,6 +26,7 @@ PATCH_OPS = {
     "request_human",
     "propose_blocked",
     "strategy_update",
+    "continue_node",
 }
 DEFAULT_COMPACTION_POLICY = {
     "mode": "auto",

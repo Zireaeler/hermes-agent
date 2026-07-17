@@ -1,4 +1,4 @@
-Profile-Version: 2
+Profile-Version: 3
 
 # Graph Patch Decision Profile
 
@@ -42,6 +42,7 @@ No Markdown fences, no explanatory prose, no comments.
 - `request_human`
 - `propose_blocked`
 - `strategy_update`
+- `continue_node`
 
 ## Forbidden Ops
 
@@ -68,6 +69,42 @@ Multiple durable nodes, an independent verifier, parallel writers, or different
 capability envelopes require a versioned `decomposition` with an allowed
 structural reason and evidence where required.
 
+When the decision delta contains one active `structure_checkpoints` entry,
+make exactly one structural choice. Use `continue_node` with the matching node
+key and checkpoint event ID when the responsibility should remain coherent.
+When the checkpoint recommends `expand` and repository evidence supports
+durable parallelism, create two or three child implementation nodes, then add
+one dependency from every child to the existing primary integration owner.
+Every child contract must set `workspace_mode` to `isolated_worktree`. The
+`durable_parallelism` decomposition must cover all child keys, use the existing
+primary as `integration_owner_node_key`, and cite the checkpoint as
+`event:<checkpoint_event_id>`. Do not replace or supersede the primary.
+
+For this expansion, use exactly this decomposition shape. Do not use
+`schema`, `reason`, `node_keys`, or top-level `evidence_refs` aliases:
+
+```json
+{
+  "decomposition": {
+    "policy_version": "1",
+    "mode": "multiple_runtime_nodes",
+    "justifications": [
+      {
+        "type": "durable_parallelism",
+        "nodes": ["child-a", "child-b"],
+        "explanation": "Concrete repository evidence and integration boundary",
+        "evidence_refs": ["event:123"],
+        "declared_write_scopes": {
+          "child-a": ["src/a/**", "tests/a/**"],
+          "child-b": ["src/b/**", "tests/b/**"]
+        },
+        "integration_owner_node_key": "existing-primary-node-key"
+      }
+    ]
+  }
+}
+```
+
 Use exactly these field names for patch ops:
 
 - `create_node`: `node_key`, `node_type`, `title`, `description`, and
@@ -80,6 +117,9 @@ Use exactly these field names for patch ops:
   paths or `..` segments.
 - `add_dependency`: `from_node_key` is the prerequisite node and `to_node_key`
   is the dependent node; optional `dependency_type` defaults to `depends_on`.
+- `continue_node`: `node_key` is the active `waiting_structure` primary and
+  `checkpoint_event_id` is its matching structure checkpoint event. Do not
+  combine this op with node creation.
 - `insert_verifier`: `verifier_node_key`, `title`, either
   `target_node_key` or `target_goal_item_key`, and `goal_item_keys` or
   `gap_keys` for the verifier node's own goal/gap linkage. Also fix at least

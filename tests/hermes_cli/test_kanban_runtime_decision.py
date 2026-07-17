@@ -253,7 +253,7 @@ def test_decision_profile_loader_reads_markdown_profile():
     profile = rd.load_decision_profile("graph_patch_decision")
 
     assert profile["profile_name"] == "graph_patch_decision"
-    assert profile["profile_version"] == "2"
+    assert profile["profile_version"] == "3"
     assert "External research does not by itself justify" in profile["content"]
     assert "at most one new runnable worker node" in profile["content"]
     assert "use `**` for the whole workspace" in profile["content"]

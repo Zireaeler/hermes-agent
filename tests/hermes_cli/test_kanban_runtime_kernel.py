@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -86,6 +87,17 @@ def _contract(*scopes: str):
         "declared_write_scope": list(scopes),
         "prohibited_actions": ["production_deployment"],
     }
+
+
+def _git(workspace: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args],
+        cwd=workspace,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    ).stdout.strip()
 
 
 def _complete_node(conn, node, evidence: dict):
@@ -3694,6 +3706,552 @@ def test_terminal_structure_request_is_evented_and_projected_to_decision_delta(c
     delta = rk.build_decision_delta(conn, job_id)
     assert delta["structure_requests"][0]["event_id"] == event["id"]
     assert delta["structure_requests"][0]["structure_request"] == structure_request
+
+
+def test_early_structure_checkpoint_pauses_without_ledger_and_resumes_same_session(conn):
+    job_id = rk.create_runtime_job(
+        conn,
+        _root_task(conn),
+        "assess and implement one durable orchestra result",
+        goal_items=[{
+            "item_key": "runtime-result",
+            "description": "runtime result exists",
+            "required": True,
+            "verifier_required": False,
+        }],
+        initial_assignee="codex-runtime",
+        initialization_mode="fixture",
+        runtime_metadata={
+            "orchestration_policy": {
+                "mode": "early_structure_assessment",
+                "required": True,
+            },
+        },
+    )
+    assert rk.advance_runtime_job(conn, job_id, create_tasks=True).materialized_nodes == [
+        "understand-scope"
+    ]
+    node = _node(conn, job_id, "understand-scope")
+    materialization = conn.execute(
+        "SELECT * FROM node_materializations WHERE node_id = ?",
+        (node["id"],),
+    ).fetchone()
+    session_id = "019f0000-0000-7000-8000-000000000010"
+    kb.record_task_event(
+        conn,
+        node["latest_task_id"],
+        "worker_backend_session_started",
+        {
+            "worker_lane": "codex-runtime",
+            "worker_kind": "codex_cli",
+            "backend_session_id": session_id,
+            "execution_mode": "fresh",
+        },
+    )
+    rk.sync_runtime_backend_sessions(conn, job_id)
+    checkpoint = {
+        "schema": rk.STRUCTURE_CHECKPOINT_SCHEMA,
+        "kind": "early_structure_assessment",
+        "recommendation": "continue_single_node",
+        "summary": "The responsibility is coherent after repository inspection.",
+        "inspected_scope": ["src", "tests"],
+        "repository_facts": [{
+            "fact": "Implementation and tests share one feedback loop.",
+            "evidence_refs": ["workspace:path:src"],
+        }],
+        "proposed_nodes": [],
+        "integration_owner_node_key": "understand-scope",
+        "shared_integration_scope": [],
+        "risks": [],
+        "worker_session_should_resume": True,
+        "changed_files": [],
+    }
+    _complete_node(
+        conn,
+        node,
+        {
+            "worker_lane": {
+                "name": "codex-runtime",
+                "kind": "codex_cli",
+                "exit_code": 0,
+            },
+            "runtime_receipt": checkpoint,
+        },
+    )
+
+    advanced = rk.advance_runtime_job(conn, job_id, create_tasks=False)
+    assert advanced.ingested_nodes == ["understand-scope"]
+    assert _node(conn, job_id, "understand-scope")["state"] == "waiting_structure"
+    assert conn.execute(
+        "SELECT COUNT(*) FROM progress_ledger WHERE job_id = ?",
+        (job_id,),
+    ).fetchone()[0] == 0
+    event = conn.execute(
+        """
+        SELECT id FROM execution_events
+         WHERE job_id = ? AND event_type = 'worker_structure_checkpointed'
+        """,
+        (job_id,),
+    ).fetchone()
+    assert event is not None
+    assert conn.execute(
+        "SELECT status FROM node_materializations WHERE id = ?",
+        (materialization["id"],),
+    ).fetchone()[0] == "structure_checkpoint"
+    rk.sync_runtime_backend_sessions(conn, job_id)
+    session = conn.execute(
+        "SELECT * FROM backend_worker_sessions WHERE node_id = ?",
+        (node["id"],),
+    ).fetchone()
+    assert session["status"] == "interrupted"
+    session_checkpoint = json.loads(session["checkpoint_json"])
+    assert session_checkpoint["resume_reason"] == "early_structure_integration"
+    delta = rk.build_decision_delta(conn, job_id)
+    assert delta["structure_checkpoints"][0]["event_id"] == event["id"]
+
+    result = rk.apply_graph_patch(
+        conn,
+        job_id,
+        _patch(
+            job_id,
+            _revision(conn, job_id),
+            {
+                "op": "continue_node",
+                "node_key": "understand-scope",
+                "checkpoint_event_id": event["id"],
+            },
+        ),
+    )
+    assert result["status"] == "applied"
+    resumed_task = rk.materialize_runtime_node(
+        conn,
+        dict(_node(conn, job_id, "understand-scope")),
+    )
+    assert resumed_task
+    attempt = conn.execute(
+        "SELECT * FROM node_materializations WHERE node_id = ? AND attempt = 2",
+        (node["id"],),
+    ).fetchone()
+    continuity = json.loads(attempt["metadata_json"])["execution_continuity"]
+    assert continuity["mode"] == "resume"
+    assert continuity["resume_session_id"] == session_id
+    assert continuity["resume_reason"] == "early_structure_integration"
+
+
+def test_early_structure_checkpoint_rejects_workspace_mutation(conn):
+    job_id = rk.create_runtime_job(
+        conn,
+        _root_task(conn),
+        "assess before implementation",
+        goal_items=[{"item_key": "result", "description": "result", "required": True}],
+        initialization_mode="fixture",
+        runtime_metadata={
+            "orchestration_policy": {"mode": "early_structure_assessment"},
+        },
+    )
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = _node(conn, job_id, "understand-scope")
+    checkpoint = {
+        "schema": rk.STRUCTURE_CHECKPOINT_SCHEMA,
+        "kind": "early_structure_assessment",
+        "recommendation": "continue_single_node",
+        "summary": "Assessment mutated source and must be rejected.",
+        "inspected_scope": ["src"],
+        "repository_facts": [],
+        "proposed_nodes": [],
+        "integration_owner_node_key": "understand-scope",
+        "shared_integration_scope": [],
+        "risks": [],
+        "worker_session_should_resume": True,
+        "changed_files": ["src/runtime.py"],
+    }
+    _complete_node(
+        conn,
+        node,
+        {
+            "worker_lane": {"name": "codex-runtime", "kind": "codex_cli"},
+            "runtime_receipt": checkpoint,
+        },
+    )
+
+    assert not rk.ingest_runtime_node_evidence(conn, node["id"])
+    assert _node(conn, job_id, "understand-scope")["state"] == "running"
+
+
+def test_early_structure_expansion_requires_checkpoint_backed_child_dependencies(conn):
+    job_id = _job(conn, verifier_required=False)
+    primary = _node(conn, job_id, "understand-scope")
+    conn.execute(
+        "UPDATE execution_nodes SET state = 'waiting_structure' WHERE id = ?",
+        (primary["id"],),
+    )
+    checkpoint_event_id = rk._event(
+        conn,
+        job_id,
+        "worker_structure_checkpointed",
+        {
+            "node_key": primary["node_key"],
+            "materialization_id": "mat-assessment",
+            "attempt": 1,
+            "checkpoint": {
+                "schema": rk.STRUCTURE_CHECKPOINT_SCHEMA,
+                "kind": "early_structure_assessment",
+                "recommendation": "expand",
+                "summary": "Two isolated responsibilities were found.",
+            },
+        },
+        node_id=primary["id"],
+    )
+    children = [
+        {
+            "op": "create_node",
+            "node_key": "plots-child",
+            "node_type": "implementation",
+            "title": "Plots child",
+            "description": "Implement plots responsibility.",
+            "goal_item_keys": ["initial-runtime-result"],
+            "contract": {
+                **_contract("src/plots/**"),
+                "workspace_mode": "isolated_worktree",
+            },
+        },
+        {
+            "op": "create_node",
+            "node_key": "tree-child",
+            "node_type": "implementation",
+            "title": "Tree child",
+            "description": "Implement tree responsibility.",
+            "goal_item_keys": ["initial-runtime-result"],
+            "contract": {
+                **_contract("src/tree/**"),
+                "workspace_mode": "isolated_worktree",
+            },
+        },
+    ]
+    dependency_ops = [
+        {
+            "op": "add_dependency",
+            "from_node_key": child["node_key"],
+            "to_node_key": primary["node_key"],
+        }
+        for child in children
+    ]
+    patch = _patch(
+        job_id,
+        _revision(conn, job_id),
+        *children,
+        *dependency_ops,
+    )
+    patch["decomposition"] = {
+        "policy_version": "1",
+        "mode": "multiple_runtime_nodes",
+        "justifications": [{
+            "type": "durable_parallelism",
+            "nodes": ["plots-child", "tree-child"],
+            "explanation": "The write scopes are independent and primary owns integration.",
+            "evidence_refs": [],
+            "declared_write_scopes": {
+                "plots-child": ["src/plots/**"],
+                "tree-child": ["src/tree/**"],
+            },
+            "integration_owner_node_key": primary["node_key"],
+        }],
+    }
+
+    rejected = rk.apply_graph_patch(conn, job_id, patch)
+    assert rejected["status"] == "rejected"
+    assert "reference checkpoint event evidence" in rejected["reason"]
+
+    patch["decomposition"]["justifications"][0]["evidence_refs"] = [
+        f"event:{checkpoint_event_id}"
+    ]
+    applied = rk.apply_graph_patch(conn, job_id, patch)
+
+    assert applied["status"] == "applied"
+    assert _node(conn, job_id, primary["node_key"])["state"] == "waiting_dependency"
+    assert _node(conn, job_id, "plots-child")["state"] == "ready"
+    assert _node(conn, job_id, "tree-child")["state"] == "ready"
+    dependencies = {
+        row["node_key"]
+        for row in conn.execute(
+            """
+            SELECT source.node_key
+              FROM execution_dependencies dep
+              JOIN execution_nodes source ON source.id = dep.from_node_id
+             WHERE dep.to_node_id = ?
+            """,
+            (primary["id"],),
+        ).fetchall()
+    }
+    assert dependencies == {"plots-child", "tree-child"}
+
+
+def test_isolated_children_freeze_contributions_for_primary_integration(
+    conn,
+    tmp_path,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "plots").mkdir()
+    (workspace / "tree").mkdir()
+    (workspace / "plots" / "feature.py").write_text("value = 1\n", encoding="utf-8")
+    (workspace / "tree" / "feature.py").write_text("value = 1\n", encoding="utf-8")
+    _git(workspace, "init")
+    _git(workspace, "config", "user.email", "runtime@example.invalid")
+    _git(workspace, "config", "user.name", "Runtime Test")
+    _git(workspace, "add", ".")
+    _git(workspace, "commit", "-m", "base")
+    base_revision = _git(workspace, "rev-parse", "HEAD")
+    job_id = rk.create_runtime_job(
+        conn,
+        _root_task(conn),
+        "integrate isolated runtime contributions",
+        workspace_path=str(workspace),
+        goal_items=[{
+            "item_key": "runtime-result",
+            "description": "integrated result",
+            "required": True,
+            "verifier_required": False,
+        }],
+        initialization_mode="fixture",
+        runtime_metadata={
+            "orchestration_policy": {
+                "mode": "early_structure_assessment",
+                "base_revision": base_revision,
+                "worktree_root": str(tmp_path / "worktrees"),
+                "contribution_root": str(tmp_path / "contributions"),
+                "require_contribution_attribution": True,
+                "minimum_integrated_contributions": 2,
+            },
+        },
+    )
+    primary = _node(conn, job_id, "understand-scope")
+    conn.execute(
+        "UPDATE execution_nodes SET state = 'waiting_structure' WHERE id = ?",
+        (primary["id"],),
+    )
+    checkpoint_event_id = rk._event(
+        conn,
+        job_id,
+        "worker_structure_checkpointed",
+        {
+            "node_key": primary["node_key"],
+            "checkpoint": {
+                "schema": rk.STRUCTURE_CHECKPOINT_SCHEMA,
+                "kind": "early_structure_assessment",
+                "recommendation": "expand",
+                "summary": "Plots and tree are isolated responsibilities.",
+            },
+        },
+        node_id=primary["id"],
+    )
+    child_specs = [
+        ("plots-child", "plots/**"),
+        ("tree-child", "tree/**"),
+    ]
+    create_ops = [
+        {
+            "op": "create_node",
+            "node_key": key,
+            "node_type": "implementation",
+            "title": key,
+            "description": f"Implement {key}.",
+            "goal_item_keys": ["runtime-result"],
+            "contract": {
+                **_contract(scope),
+                "workspace_mode": "isolated_worktree",
+            },
+        }
+        for key, scope in child_specs
+    ]
+    dependency_ops = [
+        {
+            "op": "add_dependency",
+            "from_node_key": key,
+            "to_node_key": primary["node_key"],
+        }
+        for key, _scope in child_specs
+    ]
+    patch = _patch(
+        job_id,
+        _revision(conn, job_id),
+        *create_ops,
+        *dependency_ops,
+    )
+    patch["decomposition"] = {
+        "policy_version": "1",
+        "mode": "multiple_runtime_nodes",
+        "justifications": [{
+            "type": "durable_parallelism",
+            "nodes": [key for key, _scope in child_specs],
+            "explanation": "Independent files with primary integration.",
+            "evidence_refs": [f"event:{checkpoint_event_id}"],
+            "declared_write_scopes": {
+                key: [scope] for key, scope in child_specs
+            },
+            "integration_owner_node_key": primary["node_key"],
+        }],
+    }
+    assert rk.apply_graph_patch(conn, job_id, patch)["status"] == "applied"
+
+    contribution_ids = []
+    contribution_paths = []
+    for key, scope in child_specs:
+        node = _node(conn, job_id, key)
+        task_id = rk.materialize_runtime_node(conn, dict(node))
+        assert task_id
+        node = _node(conn, job_id, key)
+        task = kb.get_task(conn, task_id)
+        child_workspace = Path(task.workspace_path)
+        assert child_workspace != workspace
+        assert _git(child_workspace, "rev-parse", "HEAD") == base_revision
+        relative = scope.removesuffix("**") + "feature.py"
+        (child_workspace / relative).write_text("value = 2\n", encoding="utf-8")
+        _complete_node(
+            conn,
+            node,
+            {
+                "verdict": "succeeded",
+                "summary": f"Completed {key}.",
+                "claimed_goal_items": ["runtime-result"],
+                "changed_files": [relative],
+                "verification": {"passed": True, "summary": "focused test passed"},
+            },
+        )
+        assert rk.ingest_runtime_node_evidence(conn, node["id"])
+        artifact = conn.execute(
+            """
+            SELECT * FROM node_artifacts
+             WHERE node_id = ? AND artifact_type = 'runtime_node_contribution'
+            """,
+            (node["id"],),
+        ).fetchone()
+        assert artifact is not None
+        contribution_ids.append(str(artifact["id"]))
+        contribution_paths.append(str(artifact["path_or_ref"]))
+        assert Path(artifact["path_or_ref"]).read_text(encoding="utf-8")
+
+    assert _node(conn, job_id, primary["node_key"])["state"] == "ready"
+    primary_task_id = rk.materialize_runtime_node(
+        conn,
+        dict(_node(conn, job_id, primary["node_key"])),
+    )
+    primary_task = kb.get_task(conn, primary_task_id)
+    assert all(value in primary_task.body for value in contribution_ids)
+    for patch_path in contribution_paths:
+        _git(workspace, "apply", patch_path)
+    primary = _node(conn, job_id, primary["node_key"])
+    _complete_node(
+        conn,
+        primary,
+        {
+            "verdict": "succeeded",
+            "summary": "Integrated both isolated contributions.",
+            "claimed_goal_items": ["runtime-result"],
+            "changed_files": ["plots/feature.py", "tree/feature.py"],
+            "accepted_contributions": contribution_ids,
+            "modified_contributions": [],
+            "rejected_contributions": [],
+            "verification": {"passed": True, "summary": "merged tests passed"},
+        },
+    )
+    assert rk.ingest_runtime_node_evidence(conn, primary["id"])
+    assert rk.status_runtime_job(conn, job_id)["job"]["state"] == "done"
+    ledger = conn.execute(
+        "SELECT satisfaction, node_id FROM progress_ledger WHERE job_id = ? ORDER BY created_at",
+        (job_id,),
+    ).fetchall()
+    assert [row["satisfaction"] for row in ledger[:-1]] == ["partial", "partial"]
+    assert ledger[-1]["satisfaction"] == "full"
+
+
+def test_primary_integration_rejects_unknown_or_unclassified_contributions(
+    conn,
+    tmp_path,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    job_id = rk.create_runtime_job(
+        conn,
+        _root_task(conn),
+        "validate contribution classifications",
+        workspace_path=str(workspace),
+        goal_items=[{
+            "item_key": "result",
+            "description": "integrated result",
+            "required": True,
+            "verifier_required": False,
+        }],
+        initialization_mode="fixture",
+        runtime_metadata={
+            "orchestration_policy": {
+                "mode": "early_structure_assessment",
+                "require_contribution_attribution": True,
+                "minimum_integrated_contributions": 1,
+            },
+        },
+    )
+    primary = _node(conn, job_id, "understand-scope")
+    child_ids = []
+    for index in range(2):
+        child_id = f"rnode_contribution_{index}"
+        child_ids.append(child_id)
+        conn.execute(
+            """
+            INSERT INTO execution_nodes (
+                id, job_id, node_key, node_type, state, title, description,
+                assumptions_json, constraints_json, metadata_json,
+                created_at, updated_at, completed_at
+            ) VALUES (?, ?, ?, 'implementation', 'succeeded', ?, ?, '{}', '{}',
+                      '{"non_authoritative_contribution":true}', 1, 1, 1)
+            """,
+            (child_id, job_id, f"child-{index}", f"child-{index}", f"child-{index}"),
+        )
+        conn.execute(
+            """
+            INSERT INTO execution_dependencies (
+                id, job_id, from_node_id, to_node_id, dependency_type,
+                required, metadata_json, created_at
+            ) VALUES (?, ?, ?, ?, 'depends_on', 1, '{}', 1)
+            """,
+            (f"dep_{index}", job_id, child_id, primary["id"]),
+        )
+        conn.execute(
+            """
+            INSERT INTO node_artifacts (
+                id, job_id, node_id, artifact_type, path_or_ref, summary,
+                metadata_json, created_at
+            ) VALUES (?, ?, ?, 'runtime_node_contribution', ?, 'contribution', ?, 1)
+            """,
+            (
+                f"artifact-{index}",
+                job_id,
+                child_id,
+                str(tmp_path / f"artifact-{index}.patch"),
+                json.dumps({"changed_files": [f"src/{index}.py"], "file_sha256": {}}),
+            ),
+        )
+
+    evidence, violations = rk._verify_integrated_contributions(
+        conn,
+        dict(conn.execute("SELECT * FROM runtime_jobs WHERE id = ?", (job_id,)).fetchone()),
+        dict(_node(conn, job_id, "understand-scope")),
+        {
+            "verdict": "succeeded",
+            "claimed_goal_items": ["result"],
+            "accepted_contributions": ["artifact-0", "artifact-missing"],
+            "modified_contributions": ["artifact-0"],
+            "rejected_contributions": [],
+            "changed_files": ["src/0.py"],
+            "verification": {"passed": True},
+        },
+    )
+
+    assert "unknown_contribution:artifact-missing" in violations
+    assert "contribution_classification_overlap:artifact-0" in violations
+    assert "contribution_not_classified:artifact-1" in violations
+    assert evidence["verdict"] == "failed"
+    assert evidence["claimed_goal_items"] == []
 
 
 def test_declared_write_scope_violation_prevents_goal_satisfaction(conn):

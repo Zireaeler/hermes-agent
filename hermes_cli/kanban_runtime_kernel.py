@@ -25,6 +25,7 @@ from hermes_cli import kanban_db as kb
 
 
 PATCH_SCHEMA = "runtime_graph_patch_v1"
+STRUCTURE_CHECKPOINT_SCHEMA = "runtime_worker_structure_checkpoint_v1"
 EVALUATOR_FAILURE_BUNDLE_SCHEMA = "runtime_evaluator_failure_bundle_v1"
 OFFICIAL_EVALUATOR_RESULT_SCHEMA = "hermes_phase4g8_evaluator_result_v1"
 
@@ -33,6 +34,7 @@ NODE_STATES = {
     "waiting_dependency",
     "ready",
     "running",
+    "waiting_structure",
     "candidate_ready",
     "succeeded",
     "failed",
@@ -61,6 +63,7 @@ PATCH_OPS = {
     "request_human",
     "propose_blocked",
     "strategy_update",
+    "continue_node",
 }
 DECOMPOSITION_REASON_TYPES = {
     "independent_verification",
@@ -76,7 +79,13 @@ DECOMPOSITION_EVIDENCE_REQUIRED = {
     "execution_discovered_gap",
 }
 EXECUTION_NODE_OPS = {"create_node", "insert_verifier", "strategy_update"}
-NONTERMINAL_EXECUTION_STATES = {"planned", "waiting_dependency", "ready", "running"}
+NONTERMINAL_EXECUTION_STATES = {
+    "planned",
+    "waiting_dependency",
+    "ready",
+    "running",
+    "waiting_structure",
+}
 RUNTIME_INITIALIZATION_MODES = {"provider_first", "fixture"}
 VERIFIER_TARGET_FIELDS = {
     "target_evidence_ref",
@@ -115,6 +124,7 @@ OPEN_NODE_STATES = {
     "waiting_dependency",
     "ready",
     "running",
+    "waiting_structure",
     "candidate_ready",
     "waiting_human",
 }
@@ -1686,6 +1696,14 @@ def _validate_node_contract(op: dict[str, Any], *, required: bool = False) -> No
         contract.get("declared_write_scope") or [],
         field_name="create_node contract declared_write_scope",
     )
+    workspace_mode = contract.get("workspace_mode")
+    if workspace_mode is not None and workspace_mode not in {
+        "shared_job_workspace",
+        "isolated_worktree",
+    }:
+        raise PatchValidationError(
+            "create_node contract workspace_mode must be shared_job_workspace or isolated_worktree"
+        )
 
 
 def _validate_declared_write_scopes(scopes: list[str], *, field_name: str) -> None:
@@ -1830,6 +1848,100 @@ def _validate_decomposition(conn: sqlite3.Connection, job_id: str, patch: dict[s
         raise PatchValidationError("decomposition must justify every new execution node")
 
 
+def _validate_early_structure_decision(
+    conn: sqlite3.Connection,
+    job_id: str,
+    patch: dict[str, Any],
+    ops: list[dict[str, Any]],
+) -> None:
+    waiting = [
+        dict(row)
+        for row in conn.execute(
+            "SELECT * FROM execution_nodes WHERE job_id = ? AND state = 'waiting_structure'",
+            (job_id,),
+        ).fetchall()
+    ]
+    if not waiting:
+        return
+    if len(waiting) != 1:
+        raise PatchValidationError("only one early structure checkpoint may be active")
+    owner = waiting[0]
+    checkpoint_event = conn.execute(
+        """
+        SELECT id, payload_json FROM execution_events
+         WHERE job_id = ? AND node_id = ?
+           AND event_type = 'worker_structure_checkpointed'
+         ORDER BY id DESC LIMIT 1
+        """,
+        (job_id, owner["id"]),
+    ).fetchone()
+    if checkpoint_event is None:
+        raise PatchValidationError("waiting_structure node has no checkpoint evidence")
+    checkpoint_event_id = int(checkpoint_event["id"])
+    checkpoint = _loads(checkpoint_event["payload_json"]).get("checkpoint") or {}
+    continue_ops = [op for op in ops if op.get("op") == "continue_node"]
+    create_ops = [op for op in ops if op.get("op") == "create_node"]
+    if continue_ops:
+        if len(continue_ops) != 1 or create_ops or len(ops) != 1:
+            raise PatchValidationError(
+                "early structure decision must continue one node or expand, not both"
+            )
+        if (
+            continue_ops[0].get("node_key") != owner["node_key"]
+            or int(continue_ops[0].get("checkpoint_event_id") or -1)
+            != checkpoint_event_id
+        ):
+            raise PatchValidationError("continue_node must consume the active checkpoint")
+        return
+    if checkpoint.get("recommendation") != "expand":
+        raise PatchValidationError(
+            "continue_single_node checkpoint cannot create durable child nodes"
+        )
+    if not 2 <= len(create_ops) <= 3:
+        raise PatchValidationError(
+            "early structure expansion requires two or three child nodes"
+        )
+    child_keys = {str(op.get("node_key") or "") for op in create_ops}
+    dependencies = {
+        str(op.get("from_node_key") or "")
+        for op in ops
+        if op.get("op") == "add_dependency"
+        and op.get("to_node_key") == owner["node_key"]
+    }
+    if dependencies != child_keys:
+        raise PatchValidationError(
+            "every early structure child must be a dependency of the primary integration owner"
+        )
+    for op in create_ops:
+        contract = op.get("contract") or {}
+        if contract.get("workspace_mode") != "isolated_worktree":
+            raise PatchValidationError(
+                "early structure child requires workspace_mode=isolated_worktree"
+            )
+    decomposition = patch.get("decomposition") or {}
+    justifications = decomposition.get("justifications") or []
+    matching = [
+        item
+        for item in justifications
+        if item.get("type") == "durable_parallelism"
+        and set(item.get("nodes") or []) == child_keys
+    ]
+    if len(matching) != 1:
+        raise PatchValidationError(
+            "early structure expansion requires one durable_parallelism justification"
+        )
+    justification = matching[0]
+    if justification.get("integration_owner_node_key") != owner["node_key"]:
+        raise PatchValidationError(
+            "early structure integration owner must be the checkpoint primary"
+        )
+    checkpoint_ref = f"event:{checkpoint_event_id}"
+    if checkpoint_ref not in (justification.get("evidence_refs") or []):
+        raise PatchValidationError(
+            "early structure expansion must reference checkpoint event evidence"
+        )
+
+
 def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]) -> None:
     job = _job(conn, job_id)
     typed_contract_required = (
@@ -1844,12 +1956,50 @@ def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]
     ops = patch.get("ops")
     if not isinstance(ops, list):
         raise PatchValidationError("patch ops must be a list")
+    validated_new_node_keys: set[str] = set()
     for op in ops:
         if not isinstance(op, dict):
             raise PatchValidationError("patch op must be an object")
         name = op.get("op")
         if name not in PATCH_OPS:
             raise PatchValidationError(f"unsupported patch op {name!r}")
+        if name == "continue_node":
+            node = _node_by_key(conn, job_id, str(op.get("node_key") or ""))
+            if node["state"] != "waiting_structure":
+                raise PatchValidationError("continue_node requires waiting_structure node")
+            try:
+                checkpoint_event_id = int(op.get("checkpoint_event_id"))
+            except (TypeError, ValueError) as exc:
+                raise PatchValidationError(
+                    "continue_node requires checkpoint_event_id"
+                ) from exc
+            checkpoint = conn.execute(
+                """
+                SELECT id FROM execution_events
+                 WHERE id = ? AND job_id = ? AND node_id = ?
+                   AND event_type = 'worker_structure_checkpointed'
+                """,
+                (checkpoint_event_id, job_id, node["id"]),
+            ).fetchone()
+            if checkpoint is None:
+                raise PatchValidationError(
+                    "continue_node checkpoint_event_id does not match node"
+                )
+            consumed = conn.execute(
+                """
+                SELECT 1 FROM execution_events
+                 WHERE job_id = ? AND source_event_id = ?
+                   AND event_type IN (
+                       'structure_checkpoint_continue_applied',
+                       'structure_checkpoint_expansion_applied'
+                   )
+                 LIMIT 1
+                """,
+                (job_id, checkpoint_event_id),
+            ).fetchone()
+            if consumed is not None:
+                raise PatchValidationError("structure checkpoint is already consumed")
+            continue
         if name == "create_node":
             _validate_goal_linkage(op)
             _node_capability_metadata(op)
@@ -1863,23 +2013,43 @@ def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]
             existing = _node_optional(conn, job_id, node_key)
             if existing is not None:
                 raise PatchValidationError(f"duplicate node_key {node_key!r}")
+            if node_key in validated_new_node_keys:
+                raise PatchValidationError(f"duplicate node_key {node_key!r}")
             for key in op.get("goal_item_keys") or []:
                 _goal_item_by_key(conn, job_id, key)
             for dep_key in op.get("depends_on") or []:
                 _node_by_key(conn, job_id, dep_key)
+            validated_new_node_keys.add(node_key)
         elif name == "add_dependency":
             from_key = str(op.get("from_node_key") or "").strip()
             to_key = str(op.get("to_node_key") or "").strip()
             if not from_key or not to_key:
                 raise PatchValidationError("add_dependency requires from_node_key and to_node_key")
-            from_node = _node_by_key(conn, job_id, from_key)
-            to_node = _node_by_key(conn, job_id, to_key)
+            from_node = _node_optional(conn, job_id, from_key)
+            to_node = _node_optional(conn, job_id, to_key)
+            if from_node is None and from_key not in validated_new_node_keys:
+                raise PatchValidationError(
+                    f"add_dependency references unknown from_node_key {from_key!r}"
+                )
+            if to_node is None and to_key not in validated_new_node_keys:
+                raise PatchValidationError(
+                    f"add_dependency references unknown to_node_key {to_key!r}"
+                )
             dep_type = str(op.get("dependency_type") or "depends_on")
             if dep_type not in DEPENDENCY_TYPES:
                 raise PatchValidationError(f"unknown dependency_type {dep_type!r}")
-            if from_node["id"] == to_node["id"]:
+            if from_key == to_key:
                 raise PatchValidationError("dependency cannot point to itself")
-            if _would_create_dependency_cycle(conn, job_id, from_node["id"], to_node["id"]):
+            if (
+                from_node is not None
+                and to_node is not None
+                and _would_create_dependency_cycle(
+                    conn,
+                    job_id,
+                    from_node["id"],
+                    to_node["id"],
+                )
+            ):
                 raise PatchValidationError("dependency would create a cycle")
         elif name == "insert_verifier":
             target_key = op.get("target_node_key")
@@ -1978,6 +2148,7 @@ def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]
                 _goal_item_by_key(conn, job_id, key)
 
     _validate_decomposition(conn, job_id, patch, ops)
+    _validate_early_structure_decision(conn, job_id, patch, ops)
 
 
 def _would_create_dependency_cycle(conn: sqlite3.Connection, job_id: str, from_id: str, to_id: str) -> bool:
@@ -2109,6 +2280,44 @@ def _apply_op(conn: sqlite3.Connection, job_id: str, op: dict[str, Any]) -> None
         from_node = _node_by_key(conn, job_id, str(op["from_node_key"]))
         to_node = _node_by_key(conn, job_id, str(op["to_node_key"]))
         _insert_dependency(conn, job_id, from_node["id"], to_node["id"], str(op.get("dependency_type") or "depends_on"))
+        checkpoint = conn.execute(
+            """
+            SELECT id FROM execution_events
+             WHERE job_id = ? AND node_id = ?
+               AND event_type = 'worker_structure_checkpointed'
+             ORDER BY id DESC LIMIT 1
+            """,
+            (job_id, to_node["id"]),
+        ).fetchone()
+        if checkpoint is not None and to_node["state"] in {
+            "waiting_structure",
+            "waiting_dependency",
+        }:
+            now = _now()
+            source_metadata = _loads(from_node.get("metadata_json"))
+            source_metadata["contribution_to_node_key"] = to_node["node_key"]
+            source_metadata["non_authoritative_contribution"] = True
+            conn.execute(
+                "UPDATE execution_nodes SET metadata_json = ?, updated_at = ? WHERE id = ?",
+                (_json(source_metadata), now, from_node["id"]),
+            )
+            if to_node["state"] == "waiting_structure":
+                conn.execute(
+                    "UPDATE execution_nodes SET state = 'waiting_dependency', updated_at = ? WHERE id = ?",
+                    (now, to_node["id"]),
+                )
+            _event(
+                conn,
+                job_id,
+                "structure_checkpoint_expansion_applied",
+                {
+                    "integration_owner_node_key": to_node["node_key"],
+                    "dependency_node_key": from_node["node_key"],
+                    "checkpoint_event_id": checkpoint["id"],
+                },
+                node_id=to_node["id"],
+                source_event_id=checkpoint["id"],
+            )
     elif name == "insert_verifier":
         goal_keys = op.get("goal_item_keys") or ([op["target_goal_item_key"]] if op.get("target_goal_item_key") else [])
         target_node = (
@@ -2205,6 +2414,25 @@ def _apply_op(conn: sqlite3.Connection, job_id: str, op: dict[str, Any]) -> None
             ),
         )
         _event(conn, job_id, "strategy_update_requested", metadata, node_id=node_id)
+    elif name == "continue_node":
+        node = _node_by_key(conn, job_id, str(op["node_key"]))
+        event_id = int(op["checkpoint_event_id"])
+        now = _now()
+        conn.execute(
+            "UPDATE execution_nodes SET state = 'ready', updated_at = ? WHERE id = ?",
+            (now, node["id"]),
+        )
+        _event(
+            conn,
+            job_id,
+            "structure_checkpoint_continue_applied",
+            {
+                "node_key": node["node_key"],
+                "checkpoint_event_id": event_id,
+            },
+            node_id=node["id"],
+            source_event_id=event_id,
+        )
 
 
 def _insert_dependency(conn: sqlite3.Connection, job_id: str, from_node_id: str, to_node_id: str, dep_type: str) -> None:
@@ -2271,6 +2499,7 @@ def summarize_active_frontier(conn: sqlite3.Connection, job_id: str) -> dict[str
     buckets: dict[str, list[dict[str, Any]]] = {
         "ready": [],
         "running": [],
+        "waiting_structure": [],
         "waiting_human": [],
         "waiting_dependency": [],
         "candidate_ready": [],
@@ -2297,6 +2526,7 @@ def summarize_active_frontier(conn: sqlite3.Connection, job_id: str) -> dict[str
         "has_runnable": bool(buckets["ready"] or buckets["running"]),
         "has_legal_wait": bool(
             buckets["running"]
+            or buckets["waiting_structure"]
             or buckets["waiting_human"]
             or buckets["candidate_ready"]
             or _has_pending_decision(conn, job_id)
@@ -2339,6 +2569,7 @@ def summarize_liveness(conn: sqlite3.Connection, job_id: str, frontier: Optional
     decision_requested = job["state"] == "waiting_decision"
     legal_wait = bool(
         frontier["running"]
+        or frontier["waiting_structure"]
         or frontier["waiting_human"]
         or pending_decision
         or decision_requested
@@ -2624,10 +2855,11 @@ def sync_runtime_backend_sessions(
     rows = conn.execute(
         """
         SELECT m.*, n.node_key, n.constraints_json, n.metadata_json AS node_metadata_json,
-               j.workspace_path
+               COALESCE(t.workspace_path, j.workspace_path) AS workspace_path
           FROM node_materializations m
           JOIN execution_nodes n ON n.id = m.node_id
           JOIN runtime_jobs j ON j.id = m.job_id
+          JOIN tasks t ON t.id = m.task_id
          WHERE m.job_id = ?
          ORDER BY m.attempt, m.created_at
         """,
@@ -2702,6 +2934,8 @@ def sync_runtime_backend_sessions(
             status = "interrupted"
         elif materialization["status"] in RECOVERY_FAILURE_STATUSES:
             status = "interrupted"
+        elif materialization["status"] == "structure_checkpoint":
+            status = "interrupted"
         elif materialization["status"] in {"succeeded", "failed", "blocked", "waiting_human"} or completed_event:
             status = "completed"
         else:
@@ -2717,6 +2951,21 @@ def sync_runtime_backend_sessions(
             ),
             "failure_event": failure_event["kind"] if failure_event else None,
         }
+        materialization_metadata = _loads(materialization.get("metadata_json"))
+        structure_checkpoint = materialization_metadata.get("structure_checkpoint")
+        if (
+            materialization["status"] == "structure_checkpoint"
+            and isinstance(structure_checkpoint, dict)
+        ):
+            checkpoint.update(
+                {
+                    "resume_reason": "early_structure_integration",
+                    "structure_checkpoint_event_id": structure_checkpoint.get("event_id"),
+                    "structure_checkpoint_recommendation": structure_checkpoint.get(
+                        "recommendation"
+                    ),
+                }
+            )
         now = _now()
         existing = conn.execute(
             "SELECT * FROM backend_worker_sessions WHERE backend_kind = 'codex_cli' AND backend_session_key = ?",
@@ -2976,14 +3225,16 @@ def _plan_worker_execution_continuity(
     node: dict[str, Any],
     *,
     assignee: Optional[str],
+    workspace_path: Optional[str] = None,
 ) -> dict[str, Any]:
     session = _latest_backend_worker_session(conn, node["id"])
     if session is None:
         return {"mode": "fresh", "eligibility": "no_prior_session", "context_reacquisition": False}
 
     reasons: list[str] = []
-    current_workspace = _canonical_workspace_path(job.get("workspace_path"))
-    current_revision = _workspace_revision(job.get("workspace_path"))
+    selected_workspace = workspace_path or job.get("workspace_path")
+    current_workspace = _canonical_workspace_path(selected_workspace)
+    current_revision = _workspace_revision(selected_workspace)
     if session["status"] != "interrupted":
         reasons.append(f"session_status_{session['status']}")
     if session["backend_kind"] != "codex_cli":
@@ -3192,6 +3443,136 @@ def _structure_request_valid(structure_request: Any) -> bool:
         not isinstance(item, dict) or not str(item.get("objective") or "").strip()
         for item in suggested
     )
+
+
+def _structure_checkpoint_valid(
+    checkpoint: Any,
+    *,
+    node_key: Optional[str] = None,
+) -> bool:
+    if not isinstance(checkpoint, dict):
+        return False
+    if checkpoint.get("schema") != STRUCTURE_CHECKPOINT_SCHEMA:
+        return False
+    if checkpoint.get("kind") != "early_structure_assessment":
+        return False
+    recommendation = checkpoint.get("recommendation")
+    if recommendation not in {"continue_single_node", "expand"}:
+        return False
+    if not str(checkpoint.get("summary") or "").strip():
+        return False
+    inspected = checkpoint.get("inspected_scope")
+    if not isinstance(inspected, list) or not inspected:
+        return False
+    if any(not isinstance(value, str) or not value.strip() for value in inspected):
+        return False
+    facts = checkpoint.get("repository_facts") or []
+    if not isinstance(facts, list):
+        return False
+    for fact in facts:
+        if not isinstance(fact, dict) or not str(fact.get("fact") or "").strip():
+            return False
+        refs = fact.get("evidence_refs") or []
+        if not isinstance(refs, list) or any(
+            not isinstance(ref, str) or not ref.strip() for ref in refs
+        ):
+            return False
+    proposed = checkpoint.get("proposed_nodes") or []
+    if not isinstance(proposed, list):
+        return False
+    if recommendation == "expand" and not 2 <= len(proposed) <= 3:
+        return False
+    if recommendation == "continue_single_node" and proposed:
+        return False
+    proposed_keys: set[str] = set()
+    proposed_scopes: list[list[str]] = []
+    for item in proposed:
+        if not isinstance(item, dict):
+            return False
+        key = str(item.get("node_key") or "").strip()
+        if not key or key in proposed_keys:
+            return False
+        proposed_keys.add(key)
+        if not str(item.get("outcome") or "").strip():
+            return False
+        criteria = item.get("acceptance_criteria")
+        scopes = item.get("declared_write_scope")
+        capabilities = item.get("requested_capabilities") or []
+        if not isinstance(criteria, list) or not criteria or any(
+            not isinstance(value, str) or not value.strip() for value in criteria
+        ):
+            return False
+        if not isinstance(scopes, list) or not scopes or any(
+            not isinstance(value, str) or not value.strip() for value in scopes
+        ):
+            return False
+        if not isinstance(capabilities, list) or any(
+            not isinstance(value, str) or not value.strip() for value in capabilities
+        ):
+            return False
+        try:
+            _validate_declared_write_scopes(
+                scopes,
+                field_name="structure checkpoint declared_write_scope",
+            )
+        except PatchValidationError:
+            return False
+        proposed_scopes.append(scopes)
+    for index, scopes in enumerate(proposed_scopes):
+        if any(
+            _scopes_obviously_overlap(scopes, other)
+            for other in proposed_scopes[index + 1 :]
+        ):
+            return False
+    owner = str(checkpoint.get("integration_owner_node_key") or "").strip()
+    if node_key is not None and owner != node_key:
+        return False
+    if recommendation == "expand" and not owner:
+        return False
+    shared_scope = checkpoint.get("shared_integration_scope") or []
+    if not isinstance(shared_scope, list) or any(
+        not isinstance(value, str) or not value.strip() for value in shared_scope
+    ):
+        return False
+    try:
+        _validate_declared_write_scopes(
+            shared_scope,
+            field_name="structure checkpoint shared_integration_scope",
+        )
+    except PatchValidationError:
+        return False
+    risks = checkpoint.get("risks") or []
+    return bool(
+        isinstance(risks, list)
+        and not any(not isinstance(value, str) or not value.strip() for value in risks)
+        and checkpoint.get("worker_session_should_resume") is True
+    )
+
+
+def _runtime_structure_checkpoint_from_evidence(
+    evidence: Any,
+    node: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    if not isinstance(evidence, dict):
+        return None
+    checkpoint = evidence.get("runtime_receipt")
+    if not _structure_checkpoint_valid(checkpoint, node_key=str(node["node_key"])):
+        return None
+    result = dict(checkpoint)
+    changed_files = result.get("changed_files", [])
+    if not isinstance(changed_files, list) or any(
+        not isinstance(value, str) or not value.strip() for value in changed_files
+    ):
+        return None
+    result["changed_files"] = [
+        value.strip().replace("\\", "/") for value in changed_files
+    ]
+    if result["changed_files"]:
+        return None
+    result["workspace_revision"] = checkpoint.get("workspace_revision")
+    result["worker_lane"] = evidence.get("worker_lane")
+    result["worker_receipt"] = evidence.get("worker_receipt")
+    return result
 
 
 def _node_linked_goal_item_keys(
@@ -3487,6 +3868,28 @@ def _runtime_receipt_from_evidence(
     if not isinstance(changed_files, list) or any(not isinstance(value, str) or not value.strip() for value in changed_files):
         return None
     result["changed_files"] = [value.strip().replace("\\", "/") for value in changed_files]
+    contribution_keys = (
+        "accepted_contributions",
+        "modified_contributions",
+        "rejected_contributions",
+    )
+    contribution_sets: list[set[str]] = []
+    for key in contribution_keys:
+        values = result.get(key, [])
+        if not isinstance(values, list) or any(
+            not isinstance(value, str) or not value.strip() for value in values
+        ):
+            return None
+        result[key] = [value.strip() for value in values]
+        if len(set(result[key])) != len(result[key]):
+            return None
+        contribution_sets.append(set(result[key]))
+    if any(
+        contribution_sets[left] & contribution_sets[right]
+        for left in range(len(contribution_sets))
+        for right in range(left + 1, len(contribution_sets))
+    ):
+        return None
     structure_request = result.get("structure_request")
     if structure_request is not None and not _structure_request_valid(structure_request):
         return None
@@ -3495,6 +3898,29 @@ def _runtime_receipt_from_evidence(
         referenced = set().union(*(set(result[key]) for key in keys))
         if not referenced.issubset(allowed):
             return None
+        if conn is not None:
+            contribution_rows = conn.execute(
+                """
+                SELECT artifact.id
+                  FROM execution_dependencies dep
+                  JOIN node_artifacts artifact ON artifact.node_id = dep.from_node_id
+                 WHERE dep.to_node_id = ?
+                   AND artifact.artifact_type = 'runtime_node_contribution'
+                """,
+                (node["id"],),
+            ).fetchall()
+            known_contributions = {str(row["id"]) for row in contribution_rows}
+            classified = set().union(*contribution_sets)
+            if not classified.issubset(known_contributions):
+                return None
+            job = _job(conn, node["job_id"])
+            policy = _loads(job.get("metadata_json")).get("orchestration_policy")
+            require_attribution = bool(
+                isinstance(policy, dict)
+                and policy.get("require_contribution_attribution") is True
+            )
+            if require_attribution and known_contributions != classified:
+                return None
     result["worker_lane"] = evidence.get("worker_lane")
     result["worker_receipt"] = evidence.get("worker_receipt")
     return result
@@ -3507,6 +3933,12 @@ def _receipt_evidence_valid(
     conn: Optional[sqlite3.Connection] = None,
 ) -> bool:
     if _is_codex_lane_evidence(evidence):
+        if (
+            node is not None
+            and _runtime_structure_checkpoint_from_evidence(evidence, node)
+            is not None
+        ):
+            return True
         return _runtime_receipt_from_evidence(evidence, node, conn=conn) is not None
     if not isinstance(evidence, dict) or not evidence:
         return False
@@ -4494,6 +4926,7 @@ def reduce_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
     counts = {row["state"]: int(row["count"]) for row in active_nodes}
     has_human = counts.get("waiting_human", 0) > 0
     has_running = counts.get("running", 0) > 0
+    has_waiting_structure = counts.get("waiting_structure", 0) > 0
     has_ready = counts.get("ready", 0) > 0
     has_candidate_ready = counts.get("candidate_ready", 0) > 0
     complete = _completion_satisfied(conn, job_id)
@@ -4509,6 +4942,15 @@ def reduce_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
         state = "waiting_human"
     elif has_running:
         state = "waiting_worker"
+    elif has_waiting_structure:
+        state = "waiting_decision"
+        _event_once(
+            conn,
+            job_id,
+            "decision_requested",
+            "early_structure_checkpoint",
+            {"reason": "primary worker submitted early structure assessment"},
+        )
     elif has_ready:
         state = "active"
     elif has_candidate_ready:
@@ -4546,7 +4988,7 @@ def _completion_satisfied(conn: sqlite3.Connection, job_id: str) -> bool:
         if item["state"] not in {"satisfied", "waived"}:
             return False
     running = conn.execute(
-        "SELECT 1 FROM execution_nodes WHERE job_id = ? AND state IN ('running', 'waiting_human') LIMIT 1",
+        "SELECT 1 FROM execution_nodes WHERE job_id = ? AND state IN ('running', 'waiting_structure', 'waiting_human') LIMIT 1",
         (job_id,),
     ).fetchone()
     return running is None
@@ -4600,7 +5042,7 @@ def detect_goal_gaps(conn: sqlite3.Connection, job_id: str) -> list[dict[str, An
     runnable = conn.execute(
         """
         SELECT 1 FROM execution_nodes
-         WHERE job_id = ? AND state IN ('ready', 'running', 'candidate_ready', 'waiting_human')
+         WHERE job_id = ? AND state IN ('ready', 'running', 'waiting_structure', 'candidate_ready', 'waiting_human')
          LIMIT 1
         """,
         (job_id,),
@@ -4689,6 +5131,24 @@ def build_decision_delta(conn: sqlite3.Connection, job_id: str, trigger_event_id
             (job_id,),
         ).fetchall()
     ]
+    structure_checkpoints = [
+        {
+            "event_id": row["id"],
+            "node_key": (_loads(row["payload_json"]).get("node_key")),
+            "materialization_id": (
+                _loads(row["payload_json"]).get("materialization_id")
+            ),
+            "checkpoint": (_loads(row["payload_json"]).get("checkpoint")),
+        }
+        for row in conn.execute(
+            """
+            SELECT id, payload_json FROM execution_events
+             WHERE job_id = ? AND event_type = 'worker_structure_checkpointed'
+             ORDER BY id DESC LIMIT 10
+            """,
+            (job_id,),
+        ).fetchall()
+    ]
     return {
         "job": {
             "id": job_id,
@@ -4722,9 +5182,18 @@ def build_decision_delta(conn: sqlite3.Connection, job_id: str, trigger_event_id
                 "summary": node.get("output_summary") or node.get("input_summary"),
             }
             for node in status["nodes"]
-            if node["state"] in {"ready", "running", "succeeded", "failed", "waiting_human"}
+            if node["state"] in {
+                "ready",
+                "running",
+                "waiting_structure",
+                "waiting_dependency",
+                "succeeded",
+                "failed",
+                "waiting_human",
+            }
         ],
         "structure_requests": structure_requests,
+        "structure_checkpoints": structure_checkpoints,
         "available_actions": sorted(PATCH_OPS),
         "policy": {
             "no_release_node": True,
@@ -6419,6 +6888,110 @@ def supervise_runtime_jobs_once(
     }
 
 
+def _run_git_command(workspace: Path, args: list[str]) -> str:
+    completed = subprocess.run(
+        ["git", *args],
+        cwd=workspace,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise RuntimeError(f"git {' '.join(args)} failed: {detail}")
+    return completed.stdout
+
+
+def _safe_workspace_component(value: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value)).strip("-.")
+    return normalized[:80] or "node"
+
+
+def _apply_workspace_owner(path: Path, policy: dict[str, Any]) -> None:
+    owner = policy.get("workspace_owner")
+    if not isinstance(owner, dict):
+        return
+    try:
+        uid = int(owner["uid"])
+        gid = int(owner["gid"])
+    except (KeyError, TypeError, ValueError):
+        return
+    for root, dirs, files in os.walk(path):
+        os.chown(root, uid, gid)
+        for name in dirs:
+            os.chown(Path(root) / name, uid, gid)
+        for name in files:
+            os.chown(Path(root) / name, uid, gid)
+    os.chown(path, uid, gid)
+
+
+def _prepare_runtime_node_workspace(
+    conn: sqlite3.Connection,
+    job: dict[str, Any],
+    node: dict[str, Any],
+) -> dict[str, Any]:
+    constraints = _loads(node.get("constraints_json"))
+    contract = constraints.get("contract") if isinstance(constraints.get("contract"), dict) else {}
+    mode = contract.get("workspace_mode")
+    job_workspace = Path(str(job.get("workspace_path") or "")).expanduser()
+    if mode != "isolated_worktree":
+        return {
+            "mode": "shared_job_workspace",
+            "kind": "worktree" if job.get("workspace_path") else "scratch",
+            "path": str(job_workspace.resolve()) if job.get("workspace_path") else None,
+            "base_revision": _workspace_revision(job.get("workspace_path")),
+        }
+    if not job.get("workspace_path") or not job_workspace.is_dir():
+        raise RuntimeError("isolated_worktree requires an existing job workspace")
+    job_workspace = job_workspace.resolve()
+    job_metadata = _loads(job.get("metadata_json"))
+    policy = job_metadata.get("orchestration_policy")
+    policy = policy if isinstance(policy, dict) else {}
+    base_revision = str(policy.get("base_revision") or "").removeprefix("git:")
+    if not base_revision:
+        base_revision = _run_git_command(job_workspace, ["rev-parse", "HEAD"]).strip()
+    worktree_root = Path(
+        str(
+            policy.get("worktree_root")
+            or (job_workspace.parent / "runtime-worktrees" / str(job["id"]))
+        )
+    ).expanduser().resolve()
+    worktree_root.mkdir(parents=True, exist_ok=True)
+    path = worktree_root / _safe_workspace_component(str(node["node_key"]))
+    if path.exists():
+        if not (path / ".git").exists():
+            raise RuntimeError(f"runtime worktree path already exists: {path}")
+        observed = _run_git_command(path, ["rev-parse", "HEAD"]).strip()
+        if observed != base_revision:
+            raise RuntimeError(
+                f"runtime worktree base mismatch for {node['node_key']}: {observed}"
+            )
+    else:
+        _run_git_command(
+            job_workspace,
+            ["worktree", "add", "--detach", str(path), base_revision],
+        )
+    _apply_workspace_owner(path, policy)
+    metadata = _loads(node.get("metadata_json"))
+    metadata["runtime_workspace"] = {
+        "mode": "isolated_worktree",
+        "path": str(path),
+        "base_revision": base_revision,
+    }
+    node["metadata_json"] = _json(metadata)
+    conn.execute(
+        "UPDATE execution_nodes SET metadata_json = ?, updated_at = ? WHERE id = ?",
+        (node["metadata_json"], _now(), node["id"]),
+    )
+    return {
+        "mode": "isolated_worktree",
+        "kind": "worktree",
+        "path": str(path),
+        "base_revision": base_revision,
+    }
+
+
 def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], board: Optional[str] = None) -> Optional[str]:
     if node["state"] != "ready":
         return None
@@ -6522,11 +7095,13 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
     ).fetchone()
     attempt = int(attempts["max_attempt"] or 0) + 1
     materialization_id = _id("mat")
+    workspace = _prepare_runtime_node_workspace(conn, job, node)
     continuity = _plan_worker_execution_continuity(
         conn,
         job,
         node,
         assignee=assignee,
+        workspace_path=workspace["path"],
     )
     body = _worker_context(conn, job, node, materialization_id, continuity=continuity)
     task_id = kb.create_task(
@@ -6535,8 +7110,8 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
         body=body,
         assignee=assignee,
         created_by="runtime_kernel",
-        workspace_kind="worktree" if job.get("workspace_path") else "scratch",
-        workspace_path=job.get("workspace_path"),
+        workspace_kind=workspace["kind"],
+        workspace_path=workspace["path"],
         tenant=f"runtime:{job['id']}",
         idempotency_key=f"runtime:{job['id']}:{node['id']}:{attempt}",
         initial_status="running",
@@ -6562,7 +7137,12 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
             assignee,
             now,
             now,
-            _json({"execution_continuity": continuity}),
+            _json(
+                {
+                    "execution_continuity": continuity,
+                    "runtime_workspace": workspace,
+                }
+            ),
         ),
     )
     if continuity["mode"] == "resume":
@@ -6633,7 +7213,21 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
         """,
         (task_id, run_id, now, now, node["id"]),
     )
-    _event(conn, job["id"], "node_materialized", {"node_key": node["node_key"], "task_id": task_id}, node_id=node["id"], task_id=task_id, run_id=run_id)
+    _event(
+        conn,
+        job["id"],
+        "node_materialized",
+        {
+            "node_key": node["node_key"],
+            "task_id": task_id,
+            "workspace_kind": workspace["kind"],
+            "workspace_path": workspace["path"],
+            "workspace_base_revision": workspace.get("base_revision"),
+        },
+        node_id=node["id"],
+        task_id=task_id,
+        run_id=run_id,
+    )
     _touch_job(conn, job["id"], state="waiting_worker")
     return task_id
 
@@ -6654,7 +7248,7 @@ def _worker_context(
         capability_policy = evaluate_node_capability_policy(conn, job["id"], node)
     dep_rows = conn.execute(
         """
-        SELECT n.node_key, n.output_summary
+        SELECT n.id, n.node_key, n.output_summary
           FROM execution_dependencies d
           JOIN execution_nodes n ON n.id = d.from_node_id
          WHERE d.to_node_id = ?
@@ -6663,6 +7257,41 @@ def _worker_context(
         (node["id"],),
     ).fetchall()
     deps = "\n".join(f"- {row['node_key']}: {row['output_summary'] or ''}" for row in dep_rows) or "- none"
+    contribution_bundle: list[dict[str, Any]] = []
+    if dep_rows:
+        dependency_ids = [str(row["id"]) for row in dep_rows]
+        placeholders = ",".join("?" for _ in dependency_ids)
+        for row in conn.execute(
+            f"""
+            SELECT id, node_id, path_or_ref, metadata_json
+              FROM node_artifacts
+             WHERE node_id IN ({placeholders})
+               AND artifact_type = 'runtime_node_contribution'
+             ORDER BY created_at, id
+            """,
+            dependency_ids,
+        ).fetchall():
+            payload = _loads(row["metadata_json"])
+            contribution_bundle.append(
+                {
+                    "artifact_id": row["id"],
+                    "node_key": payload.get("node_key"),
+                    "patch_ref": row["path_or_ref"],
+                    "patch_sha256": payload.get("patch_sha256"),
+                    "base_revision": payload.get("base_revision"),
+                    "changed_files": payload.get("changed_files") or [],
+                }
+            )
+    contribution_context = ""
+    if contribution_bundle:
+        contribution_context = (
+            "Frozen dependency contributions:\n"
+            + json.dumps(contribution_bundle, sort_keys=True)
+            + "\nApply, adapt, or reject each patch explicitly. You remain responsible for "
+            "the merged result and verification. In the final receipt include disjoint string "
+            "arrays accepted_contributions, modified_contributions, and rejected_contributions "
+            "using artifact_id values from this bundle.\n\n"
+        )
     footer = {
         "runtime_job_id": job["id"],
         "execution_node_id": node["id"],
@@ -6694,6 +7323,8 @@ def _worker_context(
             "context_reacquisition": bool((continuity or {}).get("context_reacquisition")),
         },
     }
+    if contribution_bundle:
+        footer["runtime_contribution_bundle"] = contribution_bundle
     if node.get("node_type") == "verification":
         try:
             target = _independent_verification_target(conn, node)
@@ -6710,12 +7341,69 @@ def _worker_context(
             }
     phase4g8_worker_boundary = ""
     if job_metadata.get("phase4g8_run_id") and node.get("node_type") != "verification":
-        phase4g8_worker_boundary = (
-            "Phase 4G8 trusted-evaluator boundary: an independent official evaluator runs after "
-            "your terminal receipt. Do not inspect Hermes databases, other worker session histories, "
-            "protected evaluator files, or evaluator artifacts. Use only the bounded failure diagnostics "
-            "provided in this node context. Fix repository source and tests; do not alter the evaluator "
-            "environment, toolchain, or harness to make evidence pass.\n\n"
+        if metadata.get("non_authoritative_contribution"):
+            phase4g8_worker_boundary = (
+                "Runtime contribution boundary: this child does not produce the integrated "
+                "official-evaluator candidate and cannot satisfy the goal item by itself. Complete "
+                "only the assigned isolated responsibility, verify it locally, and use verdict "
+                "succeeded. Report changed_files accurately; Runtime will downgrade any goal claim "
+                "to partial evidence and freeze your worktree patch for the primary integration "
+                "owner. Do not inspect Hermes databases, sibling sessions, protected evaluator "
+                "files, or evaluator artifacts.\n\n"
+            )
+        else:
+            phase4g8_worker_boundary = (
+                "Phase 4G8 trusted-evaluator boundary: an independent official evaluator runs after "
+                "your terminal receipt. Do not inspect Hermes databases, other worker session histories, "
+                "protected evaluator files, or evaluator artifacts. Use only the bounded failure diagnostics "
+                "provided in this node context. Fix repository source and tests; do not alter the evaluator "
+                "environment, toolchain, or harness to make evidence pass.\n\n"
+            )
+    structure_assessment_boundary = ""
+    orchestration_policy = job_metadata.get("orchestration_policy")
+    prior_structure_checkpoint = conn.execute(
+        """
+        SELECT 1 FROM execution_events
+         WHERE job_id = ? AND node_id = ?
+           AND event_type = 'worker_structure_checkpointed'
+         LIMIT 1
+        """,
+        (job["id"], node["id"]),
+    ).fetchone()
+    initial_execution_nodes = conn.execute(
+        """
+        SELECT COUNT(*) AS count FROM execution_nodes
+         WHERE job_id = ? AND node_type != 'human_gate'
+        """,
+        (job["id"],),
+    ).fetchone()
+    if (
+        isinstance(orchestration_policy, dict)
+        and orchestration_policy.get("mode") == "early_structure_assessment"
+        and node.get("node_type") != "verification"
+        and prior_structure_checkpoint is None
+        and int(initial_execution_nodes["count"] or 0) == 1
+    ):
+        structure_assessment_boundary = (
+            "Early structure assessment mode: this first attempt is a bounded, read-only "
+            "repository and goal assessment. Inspect the code layout, tests, dependency "
+            "boundaries, shared integration surfaces, and likely write scopes. Do not modify "
+            "source or tests, do not claim goal completion, and do not perform the full "
+            "implementation yet. Decide whether one coherent worker should continue or whether "
+            "2-3 low-coupling durable workers with non-overlapping declared write scopes would "
+            "provide real parallel value. The existing node remains the integration owner. "
+            "Finish this attempt with exactly one final fenced JSON object using schema "
+            "runtime_worker_structure_checkpoint_v1 and no prose after it. Set kind to "
+            "early_structure_assessment, recommendation to continue_single_node or expand, and "
+            "include summary, inspected_scope, repository_facts with evidence_refs, proposed_nodes, "
+            "integration_owner_node_key, shared_integration_scope, risks, "
+            "worker_session_should_resume=true, and changed_files=[]. For expand, propose exactly "
+            "2-3 nodes; each needs node_key, outcome, acceptance_criteria, declared_write_scope, "
+            "and requested_capabilities. Capability names must come from: filesystem_read, "
+            "filesystem_write, workspace_write, git_read, git_write, process_spawn, "
+            "long_running_process, network_access, secret_access, external_cost, "
+            "destructive_action, workspace_escape, db_read, or db_migration. For "
+            "continue_single_node, proposed_nodes must be empty.\n\n"
         )
     receipt_recovery_instruction = ""
     resume_from_materialization_id = (continuity or {}).get(
@@ -6770,6 +7458,7 @@ def _worker_context(
             "verdict=candidate_ready; "
             if job_metadata.get("phase4g8_run_id")
             and node.get("node_type") != "verification"
+            and not metadata.get("non_authoritative_contribution")
             else "Use the verdict that truthfully describes the node outcome; "
         )
         receipt_recovery_instruction = (
@@ -6792,14 +7481,23 @@ def _worker_context(
         f"Gaps: {', '.join(metadata.get('gap_keys') or []) or '-'}\n\n"
         f"Node contract: {json.dumps(constraints.get('contract') or {}, sort_keys=True)}\n\n"
         f"Dependencies:\n{deps}\n\n"
+        f"{contribution_context}"
+        f"{structure_assessment_boundary}"
         f"{phase4g8_worker_boundary}"
         f"{receipt_recovery_instruction}"
-        "Expected receipt fields: verdict, summary, claimed_goal_items, "
-        "partial_goal_items, unmet_goal_items, verification, artifacts, "
-        "active_assumptions, rejected_approaches, known_failure_boundaries, "
-        "optional structure_request, and verification_provenance for verification nodes. "
-        "structure_request is terminal-only, orthogonal to verdict, requires an allowed reason_type "
-        "and evidence_refs for every discovered gap, and cannot mutate the runtime graph.\n\n"
+        + (
+            "Expected output: runtime_worker_structure_checkpoint_v1 only; this checkpoint is "
+            "non-terminal for the execution node and does not update the progress ledger.\n\n"
+            if structure_assessment_boundary
+            else
+            "Expected receipt fields: verdict, summary, claimed_goal_items, partial_goal_items, "
+            "unmet_goal_items, verification, artifacts, active_assumptions, rejected_approaches, "
+            "known_failure_boundaries, optional structure_request, and verification_provenance "
+            "for verification nodes. structure_request is terminal-only, orthogonal to verdict, "
+            "requires an allowed reason_type and evidence_refs for every discovered gap, and "
+            "cannot mutate the runtime graph.\n\n"
+        )
+        +
         "Capability policy: obey Runtime footer.runtime_capability_policy. "
         "Do not perform denied actions; return blocked or human_required instead.\n\n"
         f"Runtime footer: {json.dumps(footer, sort_keys=True)}"
@@ -6838,6 +7536,310 @@ def _apply_declared_write_scope_check(node: dict[str, Any], evidence: dict[str, 
     return result, violations, False
 
 
+def _collect_runtime_workspace_patch(workspace: Path, base_revision: str) -> str:
+    head = _run_git_command(workspace, ["rev-parse", "HEAD"]).strip()
+    if head != base_revision:
+        raise RuntimeError(
+            f"runtime contribution HEAD mismatch: expected {base_revision}, got {head}"
+        )
+    tracked = _run_git_command(
+        workspace,
+        ["diff", "--binary", "--no-ext-diff", base_revision],
+    )
+    untracked = _run_git_command(
+        workspace,
+        ["ls-files", "--others", "--exclude-standard", "-z"],
+    )
+    parts = [tracked] if tracked else []
+    for relative in [value for value in untracked.split("\0") if value]:
+        completed = subprocess.run(
+            ["git", "diff", "--binary", "--no-index", "--", "/dev/null", relative],
+            cwd=workspace,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if completed.returncode not in {0, 1}:
+            detail = completed.stderr.strip() or completed.stdout.strip()
+            raise RuntimeError(
+                f"could not encode runtime contribution file {relative}: {detail}"
+            )
+        if completed.stdout:
+            parts.append(completed.stdout.rstrip("\n"))
+    return "\n".join(part for part in parts if part) + ("\n" if parts else "")
+
+
+def _contribution_file_hashes(
+    workspace: Path,
+    changed_files: list[str],
+) -> dict[str, Optional[str]]:
+    hashes: dict[str, Optional[str]] = {}
+    for relative in changed_files:
+        path = workspace / relative
+        if not path.is_file() or path.is_symlink():
+            hashes[relative] = None
+            continue
+        hashes[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return hashes
+
+
+def _freeze_runtime_node_contribution(
+    conn: sqlite3.Connection,
+    job: dict[str, Any],
+    node: dict[str, Any],
+    materialization: dict[str, Any],
+    evidence: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    node_metadata = _loads(node["metadata_json"])
+    if not node_metadata.get("non_authoritative_contribution"):
+        return None
+    materialization_metadata = _loads(materialization.get("metadata_json"))
+    workspace_info = materialization_metadata.get("runtime_workspace")
+    if not isinstance(workspace_info, dict) or workspace_info.get("mode") != "isolated_worktree":
+        raise RuntimeError("durable contribution node did not use an isolated worktree")
+    workspace = Path(str(workspace_info.get("path") or "")).resolve()
+    base_revision = str(workspace_info.get("base_revision") or "")
+    if not workspace.is_dir() or not base_revision:
+        raise RuntimeError("runtime contribution workspace metadata is incomplete")
+    patch = _collect_runtime_workspace_patch(workspace, base_revision)
+    patch_sha = hashlib.sha256(patch.encode("utf-8")).hexdigest()
+    job_metadata = _loads(job.get("metadata_json"))
+    policy = job_metadata.get("orchestration_policy")
+    policy = policy if isinstance(policy, dict) else {}
+    root = Path(
+        str(
+            policy.get("contribution_root")
+            or (workspace.parent.parent / "runtime-contributions" / str(job["id"]))
+        )
+    ).expanduser().resolve()
+    node_root = root / _safe_workspace_component(str(node["node_key"]))
+    node_root.mkdir(parents=True, exist_ok=True)
+    attempt = int(materialization["attempt"])
+    patch_path = node_root / f"attempt-{attempt}.patch"
+    metadata_path = node_root / f"attempt-{attempt}.json"
+    patch_path.write_text(patch, encoding="utf-8")
+    changed_files = [str(value) for value in evidence.get("changed_files") or []]
+    artifact_id = _id("art")
+    payload = {
+        "schema": "runtime_node_contribution_v1",
+        "artifact_id": artifact_id,
+        "node_key": node["node_key"],
+        "integration_owner_node_key": node_metadata.get("contribution_to_node_key"),
+        "base_revision": base_revision,
+        "patch_sha256": patch_sha,
+        "patch_bytes": len(patch.encode("utf-8")),
+        "patch_ref": str(patch_path),
+        "changed_files": changed_files,
+        "file_sha256": _contribution_file_hashes(workspace, changed_files),
+        "scope_status": "verified",
+        "materialization_id": materialization["id"],
+        "materialization_attempt": attempt,
+        "workspace_path": str(workspace),
+    }
+    metadata_path.write_text(_json(payload) + "\n", encoding="utf-8")
+    conn.execute(
+        """
+        INSERT INTO node_artifacts (
+            id, job_id, node_id, artifact_type, path_or_ref, summary,
+            metadata_json, created_at
+        ) VALUES (?, ?, ?, 'runtime_node_contribution', ?, ?, ?, ?)
+        """,
+        (
+            artifact_id,
+            job["id"],
+            node["id"],
+            str(patch_path),
+            f"Frozen contribution from {node['node_key']}",
+            _json(payload),
+            _now(),
+        ),
+    )
+    _event(
+        conn,
+        job["id"],
+        "node_contribution_frozen",
+        payload,
+        node_id=node["id"],
+        task_id=node.get("latest_task_id"),
+        run_id=node.get("latest_run_id"),
+        source="runtime_kernel",
+    )
+    return payload
+
+
+def _verify_integrated_contributions(
+    conn: sqlite3.Connection,
+    job: dict[str, Any],
+    node: dict[str, Any],
+    evidence: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    policy = _loads(job.get("metadata_json")).get("orchestration_policy")
+    if not isinstance(policy, dict) or not policy.get("require_contribution_attribution"):
+        return evidence, []
+    rows = conn.execute(
+        """
+        SELECT artifact.id, artifact.metadata_json
+          FROM execution_dependencies dep
+          JOIN node_artifacts artifact ON artifact.node_id = dep.from_node_id
+         WHERE dep.to_node_id = ?
+           AND artifact.artifact_type = 'runtime_node_contribution'
+        """,
+        (node["id"],),
+    ).fetchall()
+    if not rows:
+        return evidence, []
+    artifacts = {str(row["id"]): _loads(row["metadata_json"]) for row in rows}
+    accepted = set(evidence.get("accepted_contributions") or [])
+    modified = set(evidence.get("modified_contributions") or [])
+    rejected = set(evidence.get("rejected_contributions") or [])
+    changed_files = set(evidence.get("changed_files") or [])
+    task = conn.execute(
+        "SELECT workspace_path FROM tasks WHERE id = ?",
+        (node.get("latest_task_id"),),
+    ).fetchone()
+    workspace = Path(str(task["workspace_path"] or "")).resolve() if task else None
+    violations: list[str] = []
+    classified = accepted | modified | rejected
+    unknown = classified - set(artifacts)
+    for artifact_id in sorted(unknown):
+        violations.append(f"unknown_contribution:{artifact_id}")
+    overlapping = (accepted & modified) | (accepted & rejected) | (modified & rejected)
+    for artifact_id in sorted(overlapping):
+        violations.append(f"contribution_classification_overlap:{artifact_id}")
+    for artifact_id in sorted(set(artifacts) - classified):
+        violations.append(f"contribution_not_classified:{artifact_id}")
+    if workspace is None or not workspace.is_dir():
+        violations.append("integration_workspace_missing")
+    else:
+        for artifact_id in accepted & set(artifacts):
+            payload = artifacts[artifact_id]
+            for relative, expected_hash in (payload.get("file_sha256") or {}).items():
+                path = workspace / str(relative)
+                if expected_hash is None:
+                    if path.exists():
+                        violations.append(f"accepted_contribution_changed:{artifact_id}:{relative}")
+                elif (
+                    not path.is_file()
+                    or path.is_symlink()
+                    or hashlib.sha256(path.read_bytes()).hexdigest() != expected_hash
+                ):
+                    violations.append(f"accepted_contribution_changed:{artifact_id}:{relative}")
+        for artifact_id in modified & set(artifacts):
+            artifact_files = set(artifacts[artifact_id].get("changed_files") or [])
+            if not artifact_files & changed_files:
+                violations.append(f"modified_contribution_not_observed:{artifact_id}")
+    try:
+        minimum = max(0, int(policy.get("minimum_integrated_contributions") or 0))
+    except (TypeError, ValueError):
+        minimum = 0
+    if len(accepted | modified) < minimum:
+        violations.append(
+            f"integrated_contribution_count_below_minimum:{len(accepted | modified)}<{minimum}"
+        )
+    if not violations:
+        return evidence, []
+    result = dict(evidence)
+    claimed = list(result.get("claimed_goal_items") or [])
+    result["claimed_goal_items"] = []
+    result["unmet_goal_items"] = sorted(
+        set(result.get("unmet_goal_items") or []) | set(claimed)
+    )
+    result["verdict"] = "failed"
+    verification = dict(result.get("verification") or {})
+    verification["passed"] = False
+    verification["summary"] = "contribution attribution failed: " + ", ".join(
+        violations
+    )
+    result["verification"] = verification
+    return result, violations
+
+
+def _ingest_runtime_structure_checkpoint(
+    conn: sqlite3.Connection,
+    node: dict[str, Any],
+    materialization: dict[str, Any],
+    snapshot: Any,
+    checkpoint: dict[str, Any],
+) -> bool:
+    job = _job(conn, node["job_id"])
+    policy = _loads(job.get("metadata_json")).get("orchestration_policy")
+    if not isinstance(policy, dict) or policy.get("mode") != "early_structure_assessment":
+        return False
+    if node.get("node_type") == "verification" or int(materialization["attempt"]) != 1:
+        return False
+    prior = conn.execute(
+        """
+        SELECT 1 FROM execution_events
+         WHERE job_id = ? AND node_id = ?
+           AND event_type = 'worker_structure_checkpointed'
+         LIMIT 1
+        """,
+        (node["job_id"], node["id"]),
+    ).fetchone()
+    if prior is not None:
+        return False
+    now = _now()
+    snapshot_run_id = snapshot.run.id if snapshot.run else node.get("latest_run_id")
+    mat_metadata = _loads(materialization.get("metadata_json"))
+    mat_metadata["structure_checkpoint"] = {
+        "schema": STRUCTURE_CHECKPOINT_SCHEMA,
+        "recommendation": checkpoint["recommendation"],
+        "workspace_revision": checkpoint.get("workspace_revision"),
+        "resume_reason": "early_structure_integration",
+    }
+    conn.execute(
+        """
+        UPDATE execution_nodes
+           SET state = 'waiting_structure', output_summary = ?,
+               latest_run_id = COALESCE(?, latest_run_id),
+               completed_at = NULL, updated_at = ?
+         WHERE id = ?
+        """,
+        (checkpoint["summary"], snapshot_run_id, now, node["id"]),
+    )
+    conn.execute(
+        """
+        UPDATE node_materializations
+           SET status = 'structure_checkpoint',
+               run_id = COALESCE(?, run_id), completed_at = ?,
+               terminal_event_id = COALESCE(terminal_event_id, ?),
+               metadata_json = ?
+         WHERE id = ?
+        """,
+        (
+            snapshot_run_id,
+            now,
+            snapshot.last_event.id if snapshot.last_event else None,
+            _json(mat_metadata),
+            materialization["id"],
+        ),
+    )
+    event_id = _event(
+        conn,
+        node["job_id"],
+        "worker_structure_checkpointed",
+        {
+            "node_key": node["node_key"],
+            "materialization_id": materialization["id"],
+            "attempt": int(materialization["attempt"]),
+            "checkpoint": checkpoint,
+        },
+        node_id=node["id"],
+        task_id=node.get("latest_task_id"),
+        run_id=snapshot_run_id,
+        source="kanban_task",
+    )
+    mat_metadata["structure_checkpoint"]["event_id"] = event_id
+    conn.execute(
+        "UPDATE node_materializations SET metadata_json = ? WHERE id = ?",
+        (_json(mat_metadata), materialization["id"]),
+    )
+    _touch_job(conn, node["job_id"], state="waiting_decision")
+    reduce_runtime_job(conn, node["job_id"])
+    return True
+
+
 def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: Optional[str] = None) -> bool:
     node = conn.execute("SELECT * FROM execution_nodes WHERE id = ?", (node_id,)).fetchone()
     if node is None:
@@ -6848,18 +7850,31 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
     if snapshot is None or snapshot.task.status not in {"done", "blocked"}:
         return False
     raw_evidence = dict(snapshot.evidence or {})
+    materialization = conn.execute(
+        "SELECT * FROM node_materializations WHERE node_id = ? AND task_id = ?",
+        (node_id, node["latest_task_id"]),
+    ).fetchone()
+    if materialization is None:
+        return False
+    if _is_codex_lane_evidence(raw_evidence):
+        checkpoint = _runtime_structure_checkpoint_from_evidence(
+            raw_evidence,
+            dict(node),
+        )
+        if checkpoint is not None:
+            return _ingest_runtime_structure_checkpoint(
+                conn,
+                dict(node),
+                dict(materialization),
+                snapshot,
+                checkpoint,
+            )
     metadata = (
         _runtime_receipt_from_evidence(raw_evidence, dict(node), conn=conn)
         if _is_codex_lane_evidence(raw_evidence)
         else raw_evidence
     )
     if metadata is None:
-        return False
-    materialization = conn.execute(
-        "SELECT * FROM node_materializations WHERE node_id = ? AND task_id = ?",
-        (node_id, node["latest_task_id"]),
-    ).fetchone()
-    if materialization is None:
         return False
     metadata = dict(metadata)
     metadata["runtime_materialization_id"] = str(materialization["id"])
@@ -6870,10 +7885,24 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
     if metadata.get("structure_request") is not None and not _structure_request_valid(metadata["structure_request"]):
         return False
     metadata, scope_violations, scope_unverified = _apply_declared_write_scope_check(dict(node), metadata)
+    node_metadata = _loads(node["metadata_json"])
+    if node_metadata.get("non_authoritative_contribution"):
+        claimed = [str(value) for value in metadata.get("claimed_goal_items") or []]
+        metadata["claimed_goal_items"] = []
+        metadata["partial_goal_items"] = sorted(
+            set(metadata.get("partial_goal_items") or []) | set(claimed)
+        )
+    job = _job(conn, node["job_id"])
+    metadata, contribution_violations = _verify_integrated_contributions(
+        conn,
+        job,
+        dict(node),
+        metadata,
+    )
     snapshot_run_id = snapshot.run.id if snapshot.run else node["latest_run_id"]
     verdict = _normalize_verdict(metadata.get("verdict") or snapshot.task.status)
     trusted_evaluator_pending = _trusted_evaluator_pending_candidate(
-        _job(conn, node["job_id"]),
+        job,
         dict(node),
         metadata,
     )
@@ -6898,6 +7927,21 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
     else:
         state = "failed"
         event_type = "node_failed"
+    if (
+        node_metadata.get("non_authoritative_contribution")
+        and state == "succeeded"
+        and not scope_violations
+        and not scope_unverified
+    ):
+        contribution = _freeze_runtime_node_contribution(
+            conn,
+            job,
+            dict(node),
+            dict(materialization),
+            metadata,
+        )
+        if contribution is not None:
+            metadata["runtime_contribution"] = contribution
     assumptions = {
         key: metadata.get(key)
         for key in (
@@ -7007,6 +8051,52 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
             run_id=snapshot_run_id,
             source="kanban_task",
         )
+    if contribution_violations:
+        _event(
+            conn,
+            node["job_id"],
+            "contribution_attribution_failed",
+            {
+                "node_key": node["node_key"],
+                "violations": contribution_violations,
+            },
+            node_id=node_id,
+            task_id=node["latest_task_id"],
+            run_id=snapshot_run_id,
+            source="runtime_kernel",
+        )
+    elif any(
+        metadata.get(key)
+        for key in (
+            "accepted_contributions",
+            "modified_contributions",
+            "rejected_contributions",
+        )
+    ):
+        _event(
+            conn,
+            node["job_id"],
+            "contribution_attribution_verified",
+            {
+                "node_key": node["node_key"],
+                "accepted_contributions": metadata.get(
+                    "accepted_contributions"
+                )
+                or [],
+                "modified_contributions": metadata.get(
+                    "modified_contributions"
+                )
+                or [],
+                "rejected_contributions": metadata.get(
+                    "rejected_contributions"
+                )
+                or [],
+            },
+            node_id=node_id,
+            task_id=node["latest_task_id"],
+            run_id=snapshot_run_id,
+            source="runtime_kernel",
+        )
     if metadata.get("structure_request") is not None:
         _event(
             conn,
@@ -7078,6 +8168,7 @@ def _trusted_evaluator_pending_candidate(
     evidence: dict[str, Any],
 ) -> bool:
     job_metadata = _loads(job.get("metadata_json"))
+    node_metadata = _loads(node.get("metadata_json"))
     policy = job_metadata.get("verification_policy")
     provenance = evidence.get("verification_provenance")
     structure_request = evidence.get("structure_request")
@@ -7090,6 +8181,7 @@ def _trusted_evaluator_pending_candidate(
         isinstance(policy, dict)
         and policy.get("mode") == "required_evaluator"
         and node.get("node_type") != "verification"
+        and not node_metadata.get("non_authoritative_contribution")
         and _normalize_verdict(evidence.get("verdict"))
         in {"candidate_ready", "succeeded", "blocked"}
         and not blocking_structure_request

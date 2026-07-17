@@ -462,6 +462,7 @@ def prepare_isolated_codex_home(
     model: Optional[str] = None,
     worker_uid: int = 65534,
     worker_gid: int = 65534,
+    reasoning_effort_override: Optional[str] = None,
 ) -> dict[str, Any]:
     """Copy only the active base URL/model/API key into an isolated CODEX_HOME."""
 
@@ -486,7 +487,11 @@ def prepare_isolated_codex_home(
         raise ValueError("source Codex provider base_url is missing")
     api_key = str(auth.get("OPENAI_API_KEY") or "").strip()
     selected_model = str(model or config.get("model") or "").strip()
-    reasoning_effort = str(config.get("model_reasoning_effort") or "").strip() or None
+    reasoning_effort = str(
+        reasoning_effort_override
+        if reasoning_effort_override is not None
+        else config.get("model_reasoning_effort") or ""
+    ).strip() or None
     if not api_key:
         raise ValueError("source Codex OPENAI_API_KEY is missing")
     if not selected_model:

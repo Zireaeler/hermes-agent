@@ -214,10 +214,13 @@ worker receipt 后续应支持与现有 terminal verdict 正交的可选 `struct
 已完成但整个 goal 仍需要独立 verifier，也可以与 `blocked` 配合表达当前责任无法在现有
 权限下继续。
 
-这些字段是 evidence，不是 graph mutation 指令。MVP 只接受 terminal receipt 中的
-`structure_request`，不增加 paused worker 或同一 backend session 的中途恢复协议。Runtime
-ingest 将其持久化；Decision Provider 只在 reducer 确认仍需结构变更后读取并提出 patch；
-validator 仍决定 patch 是否可落库。
+这些字段是 evidence，不是 graph mutation 指令。普通执行路径仍只接受 terminal receipt 中的
+`structure_request`。Phase 4G10 对显式启用 `early_structure_assessment` 的初始 primary 增加一条
+更窄的例外：worker 可以在第一次只读仓库审查后返回
+`runtime_worker_structure_checkpoint_v1`。该 checkpoint 使 materialization attempt 结束，但
+execution node 保持非终态并进入 `waiting_structure`；Decision Provider 决定继续单 node 或创建
+checkpoint-backed durable children，之后恢复同一 primary backend session。它不是普通
+`structure_request`，也不能用于任意执行阶段的自由暂停。
 
 ## 8. Graph Patch Decomposition Contract
 
@@ -349,6 +352,13 @@ Decision Provider when structure is needed
 - backend internal subagent policy 下发、继承检查与观测；
 - 任意长时间 primary worker node 的多次 checkpoint/resume soak；
 - backend sandbox/worktree 对 `declared_write_scope` 的执行前强制隔离。
+
+Phase 4G10 正在补齐的扩展：
+
+- 初始 primary 的一次性 early structure checkpoint；
+- `continue_node` 与 checkpoint-backed durable parallelism；
+- child detached worktree 和 frozen contribution patch；
+- primary integration owner 的同 session resume 与 contribution attribution。
 
 因此当前可以称为 policy enforcement MVP，不能称为长期 delegation production complete。
 
