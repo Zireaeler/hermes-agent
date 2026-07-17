@@ -7775,12 +7775,27 @@ def _verify_integrated_contributions(
     modified = set(evidence.get("modified_contributions") or [])
     rejected = set(evidence.get("rejected_contributions") or [])
     changed_files = set(evidence.get("changed_files") or [])
+    prior_modified_lineage: dict[str, int] = {}
+    for row in conn.execute(
+        """
+        SELECT id, payload_json
+          FROM execution_events
+         WHERE job_id = ? AND node_id = ?
+           AND event_type = 'contribution_attribution_verified'
+         ORDER BY created_at DESC, id DESC
+        """,
+        (job["id"], node["id"]),
+    ).fetchall():
+        payload = _loads(row["payload_json"])
+        for artifact_id in payload.get("modified_contributions") or []:
+            prior_modified_lineage.setdefault(str(artifact_id), int(row["id"]))
     task = conn.execute(
         "SELECT workspace_path FROM tasks WHERE id = ?",
         (node.get("latest_task_id"),),
     ).fetchone()
     workspace = Path(str(task["workspace_path"] or "")).resolve() if task else None
     violations: list[str] = []
+    lineage_refs: dict[str, str] = {}
     classified = accepted | modified | rejected
     unknown = classified - set(artifacts)
     for artifact_id in sorted(unknown):
@@ -7808,7 +7823,12 @@ def _verify_integrated_contributions(
                     violations.append(f"accepted_contribution_changed:{artifact_id}:{relative}")
         for artifact_id in modified & set(artifacts):
             artifact_files = set(artifacts[artifact_id].get("changed_files") or [])
-            if not artifact_files & changed_files:
+            if artifact_files & changed_files:
+                continue
+            prior_event_id = prior_modified_lineage.get(artifact_id)
+            if prior_event_id is not None:
+                lineage_refs[artifact_id] = f"event:{prior_event_id}"
+            else:
                 violations.append(f"modified_contribution_not_observed:{artifact_id}")
     try:
         minimum = max(0, int(policy.get("minimum_integrated_contributions") or 0))
@@ -7818,9 +7838,11 @@ def _verify_integrated_contributions(
         violations.append(
             f"integrated_contribution_count_below_minimum:{len(accepted | modified)}<{minimum}"
         )
-    if not violations:
-        return evidence, []
     result = dict(evidence)
+    if lineage_refs:
+        result["contribution_lineage_refs"] = lineage_refs
+    if not violations:
+        return result, []
     claimed = list(result.get("claimed_goal_items") or [])
     result["claimed_goal_items"] = []
     result["unmet_goal_items"] = sorted(
@@ -8172,6 +8194,16 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
                     "rejected_contributions"
                 )
                 or [],
+                "contribution_lineage_refs": metadata.get(
+                    "contribution_lineage_refs"
+                )
+                or {},
+                "runtime_materialization_id": metadata.get(
+                    "runtime_materialization_id"
+                ),
+                "runtime_materialization_attempt": metadata.get(
+                    "runtime_materialization_attempt"
+                ),
             },
             node_id=node_id,
             task_id=node["latest_task_id"],

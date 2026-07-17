@@ -4384,6 +4384,129 @@ def test_primary_integration_rejects_unknown_or_unclassified_contributions(
     assert evidence["claimed_goal_items"] == []
 
 
+def test_primary_integration_preserves_modified_lineage_across_remediation_attempts(
+    conn,
+    tmp_path,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    job_id = rk.create_runtime_job(
+        conn,
+        _root_task(conn),
+        "preserve contribution lineage across remediation",
+        workspace_path=str(workspace),
+        goal_items=[{
+            "item_key": "result",
+            "description": "integrated result",
+            "required": True,
+            "verifier_required": True,
+        }],
+        initialization_mode="fixture",
+        runtime_metadata={
+            "orchestration_policy": {
+                "mode": "early_structure_assessment",
+                "require_contribution_attribution": True,
+                "minimum_integrated_contributions": 2,
+            },
+        },
+    )
+    primary = dict(_node(conn, job_id, "understand-scope"))
+    assert rk.materialize_runtime_node(conn, primary)
+    primary = dict(_node(conn, job_id, "understand-scope"))
+    for index in range(3):
+        child_id = f"rnode_lineage_{index}"
+        artifact_id = f"artifact-lineage-{index}"
+        conn.execute(
+            """
+            INSERT INTO execution_nodes (
+                id, job_id, node_key, node_type, state, title, description,
+                assumptions_json, constraints_json, metadata_json,
+                created_at, updated_at, completed_at
+            ) VALUES (?, ?, ?, 'implementation', 'succeeded', ?, ?, '{}', '{}',
+                      '{"non_authoritative_contribution":true}', 1, 1, 1)
+            """,
+            (child_id, job_id, f"child-{index}", f"child-{index}", f"child-{index}"),
+        )
+        conn.execute(
+            """
+            INSERT INTO execution_dependencies (
+                id, job_id, from_node_id, to_node_id, dependency_type,
+                required, metadata_json, created_at
+            ) VALUES (?, ?, ?, ?, 'depends_on', 1, '{}', 1)
+            """,
+            (f"dep-lineage-{index}", job_id, child_id, primary["id"]),
+        )
+        conn.execute(
+            """
+            INSERT INTO node_artifacts (
+                id, job_id, node_id, artifact_type, path_or_ref, summary,
+                metadata_json, created_at
+            ) VALUES (?, ?, ?, 'runtime_node_contribution', ?, 'contribution', ?, 1)
+            """,
+            (
+                artifact_id,
+                job_id,
+                child_id,
+                str(tmp_path / f"{artifact_id}.patch"),
+                json.dumps({
+                    "changed_files": [f"src/{index}.py"],
+                    "file_sha256": {},
+                }),
+            ),
+        )
+
+    job = dict(conn.execute(
+        "SELECT * FROM runtime_jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone())
+    classifications = [f"artifact-lineage-{index}" for index in range(3)]
+    initial, violations = rk._verify_integrated_contributions(
+        conn,
+        job,
+        primary,
+        {
+            "verdict": "candidate_ready",
+            "modified_contributions": classifications,
+            "accepted_contributions": [],
+            "rejected_contributions": [],
+            "changed_files": ["src/0.py", "src/1.py", "src/2.py"],
+        },
+    )
+    assert violations == []
+    assert "contribution_lineage_refs" not in initial
+    prior_event_id = rk._event(
+        conn,
+        job_id,
+        "contribution_attribution_verified",
+        {
+            "node_key": primary["node_key"],
+            "modified_contributions": classifications,
+            "accepted_contributions": [],
+            "rejected_contributions": [],
+        },
+        node_id=primary["id"],
+    )
+
+    remediated, violations = rk._verify_integrated_contributions(
+        conn,
+        job,
+        primary,
+        {
+            "verdict": "candidate_ready",
+            "modified_contributions": classifications,
+            "accepted_contributions": [],
+            "rejected_contributions": [],
+            "changed_files": ["src/0.py"],
+        },
+    )
+
+    assert violations == []
+    assert remediated["contribution_lineage_refs"] == {
+        "artifact-lineage-1": f"event:{prior_event_id}",
+        "artifact-lineage-2": f"event:{prior_event_id}",
+    }
+
+
 def test_declared_write_scope_violation_prevents_goal_satisfaction(conn):
     job_id = _job(conn)
     assert rk.apply_graph_patch(conn, job_id, _patch(
