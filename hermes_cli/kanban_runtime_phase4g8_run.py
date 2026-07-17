@@ -122,6 +122,11 @@ def run_phase4g8_real_case(
         if resumed_run
         else _prepare_real_layout(root, spec, worker_uid=worker_uid, worker_gid=worker_gid)
     )
+    if orchestration_policy:
+        contribution_root = paths["root"] / "runtime-contributions"
+        contribution_root.mkdir(parents=True, exist_ok=True)
+        os.chmod(contribution_root, 0o755)
+        paths["runtime_contributions"] = contribution_root
     worker_environment_audit = _load_worker_toolchain_manifest(paths["worker_toolchain"])
     boundaries = {
         "daemon_process_started": False,
@@ -1425,6 +1430,9 @@ def _install_isolated_environment(paths: dict[str, Path]) -> dict[str, Optional[
         "CODEX_HOME": str(paths["codex_home"]),
         "PATH": str(paths["worker_toolchain"] / "bin") + os.pathsep + os.environ.get("PATH", ""),
         "PHASE4G8_WORKER_TOOLCHAIN": str(paths["worker_toolchain"]),
+        "HERMES_RUNTIME_CONTRIBUTION_ROOT": str(
+            paths.get("runtime_contributions") or ""
+        ),
     }
     old = {key: os.environ.get(key) for key in values}
     os.environ.update(values)

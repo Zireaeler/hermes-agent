@@ -363,6 +363,65 @@ def test_phase4g8_filesystem_wrapper_exposes_detached_worktree_git_common_dir(tm
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.skipif(
+    os.name == "nt" or os.geteuid() != 0 or shutil.which("bwrap") is None or shutil.which("setpriv") is None,
+    reason="filesystem namespace isolation requires POSIX root, bubblewrap, and setpriv",
+)
+def test_phase4g8_filesystem_wrapper_exposes_runtime_contributions_read_only(tmp_path):
+    workspace = tmp_path / "run" / "workspace"
+    home = tmp_path / "run" / "home"
+    codex_home = tmp_path / "run" / "codex-home"
+    contributions = tmp_path / "run" / "runtime-contributions"
+    protected = tmp_path / "protected"
+    toolchain = tmp_path / "toolchain"
+    for path in (workspace, home, codex_home, contributions, protected, toolchain / "bin"):
+        path.mkdir(parents=True)
+    (contributions / "child.patch").write_text("durable contribution\n", encoding="utf-8")
+    (protected / "oracle.txt").write_text("protected\n", encoding="utf-8")
+    (codex_home / "config.toml").write_text('model = "test"\n', encoding="utf-8")
+    (codex_home / "auth.json").write_text("{}\n", encoding="utf-8")
+    (codex_home / "rules").mkdir()
+    (codex_home / "rules" / "default.rules").write_text("", encoding="utf-8")
+    (toolchain / "bin" / "python").write_text("python\n", encoding="utf-8")
+    worker_uid, worker_gid = 345_678_905, 345_678_906
+    for root in (workspace, home, codex_home):
+        for current, dirs, files in os.walk(root):
+            os.chown(current, worker_uid, worker_gid)
+            for name in dirs:
+                os.chown(Path(current) / name, worker_uid, worker_gid)
+            for name in files:
+                os.chown(Path(current) / name, worker_uid, worker_gid)
+    env = {
+        "HOME": str(home),
+        "CODEX_HOME": str(codex_home),
+        "PHASE4G8_WORKER_TOOLCHAIN": str(toolchain),
+        "HERMES_RUNTIME_CONTRIBUTION_ROOT": str(contributions),
+    }
+    command = [
+        "/bin/sh",
+        "-c",
+        (
+            f"grep -q durable {contributions / 'child.patch'} "
+            f"&& ! printf changed > {contributions / 'child.patch'} "
+            f"&& test ! -e {protected / 'oracle.txt'}"
+        ),
+    ]
+    argv = wrap_codex_network_argv(
+        command,
+        None,
+        uid=worker_uid,
+        gid=worker_gid,
+        workspace=str(workspace),
+        worker_env=env,
+        filesystem_isolation=True,
+    )
+
+    result = subprocess.run(argv, text=True, capture_output=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    assert (contributions / "child.patch").read_text(encoding="utf-8") == "durable contribution\n"
+
+
 def test_dispatcher_uses_external_lane_assignee(kanban_home, monkeypatch):
     from hermes_cli import profiles
 
@@ -1225,6 +1284,52 @@ def test_codex_wrapper_env_does_not_forward_proxy_variables(
     ):
         assert name not in env
     assert env["PHASE4G8_WORKER_TOOLCHAIN"] == str(toolchain)
+
+
+def test_codex_wrapper_env_exposes_contributions_only_to_integration_task(
+    kanban_home, tmp_path, monkeypatch,
+):
+    contributions = tmp_path / "runtime-contributions"
+    contributions.mkdir()
+    monkeypatch.setenv("HERMES_RUNTIME_CONTRIBUTION_ROOT", str(contributions))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    with kb.connect() as conn:
+        child_id = kb.create_task(
+            conn,
+            title="isolated child",
+            body="Implement the bounded child responsibility.",
+            assignee="codex-deep",
+            workspace_kind="dir",
+            workspace_path=str(workspace),
+        )
+        integration_id = kb.create_task(
+            conn,
+            title="integration owner",
+            body="Frozen dependency contributions:\n[]",
+            assignee="codex-deep",
+            workspace_kind="dir",
+            workspace_path=str(workspace),
+        )
+        child = kb.get_task(conn, child_id)
+        integration = kb.get_task(conn, integration_id)
+
+    child_env = _safe_env_for_worker(
+        child,
+        str(workspace),
+        CodexLaneConfig(name="codex-deep"),
+        board=None,
+    )
+    integration_env = _safe_env_for_worker(
+        integration,
+        str(workspace),
+        CodexLaneConfig(name="codex-deep"),
+        board=None,
+    )
+
+    assert "HERMES_RUNTIME_CONTRIBUTION_ROOT" not in child_env
+    assert integration_env["HERMES_RUNTIME_CONTRIBUTION_ROOT"] == str(contributions)
 
 
 def test_collect_git_evidence_preserves_short_status_paths(tmp_path):

@@ -241,6 +241,9 @@ def _safe_env_for_worker(task, workspace: str, cfg: CodexLaneConfig, *, board: O
         env["HERMES_KANBAN_CLAIM_LOCK"] = task.claim_lock
     if task.tenant:
         env["HERMES_TENANT"] = task.tenant
+    contribution_root = os.environ.get("HERMES_RUNTIME_CONTRIBUTION_ROOT")
+    if contribution_root and "Frozen dependency contributions:" in str(task.body or ""):
+        env["HERMES_RUNTIME_CONTRIBUTION_ROOT"] = contribution_root
     if cfg.isolated_codex_home_seed or cfg.isolated_codex_home_root:
         env["CODEX_HOME"] = str(_isolated_codex_home_for_task(task.id, cfg, board=board))
     return env
@@ -337,6 +340,7 @@ def _safe_env_for_codex(workspace: Optional[str] = None) -> dict[str, str]:
         "HERMES_WORKER_LANE",
         "HERMES_WORKER_KIND",
         "PHASE4G8_WORKER_TOOLCHAIN",
+        "HERMES_RUNTIME_CONTRIBUTION_ROOT",
     }
     env = {k: v for k, v in os.environ.items() if k in allowed and v is not None}
     home_writable = _path_is_writable_dir(env.get("HOME"))
@@ -586,6 +590,11 @@ def wrap_codex_network_argv(
             writable_paths.add(str(common_path))
     toolchain = str(worker_env.get("PHASE4G8_WORKER_TOOLCHAIN") or "").strip()
     readonly_paths = {str(Path(toolchain).resolve())} if toolchain else set()
+    contribution_root = str(
+        worker_env.get("HERMES_RUNTIME_CONTRIBUTION_ROOT") or ""
+    ).strip()
+    if contribution_root:
+        readonly_paths.add(str(Path(contribution_root).resolve()))
     for path in writable_paths | readonly_paths:
         if not Path(path).is_dir():
             raise RuntimeError(f"Phase 4G8 isolation path is not a directory: {path}")
