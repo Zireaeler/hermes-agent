@@ -7,9 +7,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import select
 import shutil
 import signal
+import socket
 import sqlite3
+import ssl
 import subprocess
 import sys
 import threading
@@ -36,6 +39,80 @@ FAULT_TRIGGERS = {
     "lease_expired",
 }
 PROCESS_OWNER_ENV = "HERMES_PHASE4G8_RUN_ID"
+PHASE4G8_CODEX_APPROVAL_POLICY = "on-request"
+PHASE4G8_CODEX_APPROVAL_REVIEWER = "auto_review"
+PHASE4G8_CODEX_AUTO_REVIEW_POLICY_VERSION = "phase4g8-dangerous-operations-v1"
+PHASE4G8_CODEX_EXEC_POLICY_VERSION = "phase4g8-exec-policy-v1"
+PHASE4G8_CODEX_AUTO_REVIEW_POLICY = """\
+You review dangerous operations requested by an isolated Hermes Phase 4G8 benchmark worker.
+
+Approve routine repository inspection, workspace-local edits, builds, and tests when their intended
+effects remain inside the current workspace or isolated temporary storage and they use only the
+preinstalled read-only toolchain and normal system runtime.
+
+Deny requests that attempt to read credentials, auth files, API keys, tokens, user-home secrets, or
+unrelated host configuration; access protected benchmark oracle material, gold patches, hidden test
+patches, evaluator sources, or qualification artifacts; escape the current workspace to modify or
+delete host files; use sudo, su, setuid, capabilities, mounts, namespace controls, firewall controls,
+or other privilege-escalation mechanisms; signal unrelated host processes; contact external networks
+from worker tools; or weaken/disable the outer sandbox, network namespace, audit trail, or reviewer.
+
+Allow bounded cleanup only for generated files inside the current workspace or isolated temporary
+storage. Deny recursive deletion of the repository root or source material. When scope, target, or
+side effects are uncertain, deny the request.
+"""
+PHASE4G8_CODEX_EXEC_POLICY = """\
+prefix_rule(
+    pattern = [["sudo", "su", "doas", "pkexec"]],
+    decision = "forbidden",
+    justification = "Phase 4G8 workers cannot elevate privileges.",
+)
+prefix_rule(
+    pattern = [["mount", "umount", "nsenter", "unshare", "ip", "nft", "iptables", "capsh", "setpriv"]],
+    decision = "forbidden",
+    justification = "Phase 4G8 workers cannot alter host isolation or capabilities.",
+)
+prefix_rule(
+    pattern = [["systemctl", "service", "docker", "podman", "reboot", "shutdown"]],
+    decision = "forbidden",
+    justification = "Phase 4G8 workers cannot control host services or runtimes.",
+)
+prefix_rule(
+    pattern = [["curl", "wget", "ssh", "scp", "sftp", "nc", "ncat", "socat"]],
+    decision = "forbidden",
+    justification = "Worker tool network is disabled; model transport uses the isolated proxy.",
+)
+prefix_rule(
+    pattern = ["git", ["push", "fetch", "pull", "clone"]],
+    decision = "forbidden",
+    justification = "Phase 4G8 benchmark workers cannot use Git network operations.",
+)
+prefix_rule(
+    pattern = [["apt", "apt-get", "apk", "dnf", "yum", "brew"]],
+    decision = "forbidden",
+    justification = "The prepared Phase 4G8 toolchain is immutable.",
+)
+prefix_rule(
+    pattern = [["rm", "chmod", "chown", "kill", "pkill", "killall", "truncate", "shred"]],
+    decision = "prompt",
+    justification = "Review destructive or permission-changing operations against the isolated workspace boundary.",
+)
+prefix_rule(
+    pattern = ["git", ["reset", "clean", "restore", "checkout"]],
+    decision = "prompt",
+    justification = "Review Git operations that can discard workspace changes.",
+)
+prefix_rule(
+    pattern = [["pip", "pip3"], "install"],
+    decision = "prompt",
+    justification = "Review attempts to mutate the prepared Python environment.",
+)
+prefix_rule(
+    pattern = [["npm", "pnpm", "yarn"], ["install", "add", "publish"]],
+    decision = "prompt",
+    justification = "Review package installation or publication requests.",
+)
+"""
 
 
 class _ModelProxyHandler(BaseHTTPRequestHandler):
@@ -52,6 +129,11 @@ class _ModelProxyHandler(BaseHTTPRequestHandler):
         if not any(parsed.path == prefix or parsed.path.startswith(prefix + "/") for prefix in self.server.allowed_paths):
             self.send_error(403, "model proxy path denied")
             return
+        if str(self.headers.get("Upgrade") or "").lower() == "websocket":
+            self.server.record_transport_event("websocket_upgrade_attempt_count")
+            self._forward_websocket(parsed)
+            return
+        self.server.record_transport_event("http_request_count")
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length else None
         target = urllib.parse.urlunsplit(
@@ -97,6 +179,69 @@ class _ModelProxyHandler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 return
 
+    def _forward_websocket(self, parsed: urllib.parse.SplitResult) -> None:
+        upstream_socket: Optional[socket.socket] = None
+        response_started = False
+        upgrade_succeeded = False
+        self.close_connection = True
+        try:
+            host = self.server.upstream.hostname
+            if not host:
+                raise RuntimeError("model websocket upstream host is missing")
+            secure = self.server.upstream.scheme == "https"
+            port = self.server.upstream.port or (443 if secure else 80)
+            raw_socket = socket.create_connection(
+                (host, port),
+                timeout=self.server.upstream_timeout_seconds,
+            )
+            if secure:
+                context = ssl.create_default_context()
+                upstream_socket = context.wrap_socket(raw_socket, server_hostname=host)
+            else:
+                upstream_socket = raw_socket
+            target = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+            headers = [
+                f"{self.command} {target} HTTP/1.1",
+                f"Host: {self.server.upstream.netloc}",
+            ]
+            for key, value in self.headers.items():
+                if key.lower() in {"host", "proxy-connection", "content-length"}:
+                    continue
+                headers.append(f"{key}: {value}")
+            upstream_socket.sendall(("\r\n".join(headers) + "\r\n\r\n").encode("latin-1"))
+            handshake = _read_http_header(
+                upstream_socket,
+                max_bytes=64 * 1024,
+            )
+            self.connection.sendall(handshake)
+            response_started = True
+            status_line = handshake.split(b"\r\n", 1)[0]
+            if not status_line.startswith(b"HTTP/") or b" 101 " not in status_line:
+                return
+            self.server.record_transport_event("websocket_101_count")
+            upgrade_succeeded = True
+            _relay_bidirectional(
+                self.connection,
+                upstream_socket,
+                idle_timeout_seconds=self.server.upstream_timeout_seconds,
+            )
+        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+            return
+        except Exception:
+            if not response_started:
+                try:
+                    self.send_error(502, "model websocket transport unavailable")
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+        finally:
+            if not upgrade_succeeded:
+                self.server.record_transport_event("websocket_failure_count")
+            if upstream_socket is not None:
+                try:
+                    upstream_socket.close()
+                except OSError:
+                    pass
+
     def log_message(self, _format: str, *_args: Any) -> None:
         return
 
@@ -114,7 +259,75 @@ class _ModelProxyServer(ThreadingHTTPServer):
             base_path + "/models",
         }
         self.upstream_timeout_seconds = float(timeout_seconds)
+        self._transport_lock = threading.Lock()
+        self._transport_counts = {
+            "http_request_count": 0,
+            "websocket_upgrade_attempt_count": 0,
+            "websocket_101_count": 0,
+            "websocket_failure_count": 0,
+        }
         super().__init__(address, _ModelProxyHandler)
+
+    def record_transport_event(self, key: str) -> None:
+        with self._transport_lock:
+            if key not in self._transport_counts:
+                raise ValueError(f"unknown model transport event {key!r}")
+            self._transport_counts[key] += 1
+
+    def transport_audit(self) -> dict[str, Any]:
+        with self._transport_lock:
+            counts = dict(self._transport_counts)
+        return {
+            "schema": "hermes_phase4g8_model_transport_audit_v1",
+            **counts,
+        }
+
+
+def _read_http_header(connection: socket.socket, *, max_bytes: int) -> bytes:
+    payload = bytearray()
+    while b"\r\n\r\n" not in payload:
+        chunk = connection.recv(min(4096, max_bytes - len(payload)))
+        if not chunk:
+            raise ConnectionError("model websocket upstream closed during handshake")
+        payload.extend(chunk)
+        if len(payload) >= max_bytes and b"\r\n\r\n" not in payload:
+            raise ValueError("model websocket handshake header is too large")
+    return bytes(payload)
+
+
+def _relay_bidirectional(
+    client: socket.socket,
+    upstream: socket.socket,
+    *,
+    idle_timeout_seconds: float,
+) -> None:
+    sockets = (client, upstream)
+    while True:
+        try:
+            readable, _, exceptional = select.select(
+                sockets,
+                [],
+                sockets,
+                max(0.05, min(30.0, float(idle_timeout_seconds))),
+            )
+        except OSError:
+            return
+        if exceptional:
+            return
+        if not readable:
+            continue
+        for source in readable:
+            try:
+                chunk = source.recv(64 * 1024)
+            except OSError:
+                return
+            if not chunk:
+                return
+            destination = upstream if source is client else client
+            try:
+                destination.sendall(chunk)
+            except OSError:
+                return
 
 
 class Phase4G8NetworkNamespace:
@@ -206,6 +419,17 @@ class Phase4G8NetworkNamespace:
             *argv,
         ]
 
+    def transport_audit(self) -> dict[str, Any]:
+        if self.proxy is None:
+            return {
+                "schema": "hermes_phase4g8_model_transport_audit_v1",
+                "http_request_count": 0,
+                "websocket_upgrade_attempt_count": 0,
+                "websocket_101_count": 0,
+                "websocket_failure_count": 0,
+            }
+        return self.proxy.transport_audit()
+
     def close(self) -> None:
         if self.proxy is not None:
             self.proxy.shutdown()
@@ -270,7 +494,12 @@ def prepare_isolated_codex_home(
     target_home.mkdir(parents=True, exist_ok=True)
     os.chmod(target_home, 0o700)
     isolated_provider = "phase4g8_proxy"
-    lines = [f"model = {json.dumps(selected_model)}"]
+    transport_settings = _isolated_provider_transport_settings(provider)
+    lines = [
+        f"model = {json.dumps(selected_model)}",
+        f"approval_policy = {json.dumps(PHASE4G8_CODEX_APPROVAL_POLICY)}",
+        f"approvals_reviewer = {json.dumps(PHASE4G8_CODEX_APPROVAL_REVIEWER)}",
+    ]
     if reasoning_effort:
         lines.append(f"model_reasoning_effort = {json.dumps(reasoning_effort)}")
     lines.extend([
@@ -281,17 +510,40 @@ def prepare_isolated_codex_home(
         f"base_url = {json.dumps(proxy_base_url.rstrip('/'))}",
         f"wire_api = {json.dumps(str(provider.get('wire_api') or 'responses'))}",
         "requires_openai_auth = true",
+    ])
+    lines.extend(
+        f"{key} = {json.dumps(value)}"
+        for key, value in transport_settings.items()
+    )
+    lines.extend([
+        "",
+        "[auto_review]",
+        f"policy = {json.dumps(PHASE4G8_CODEX_AUTO_REVIEW_POLICY.strip())}",
+        "",
+        "[features]",
+        "guardian_approval = true",
         "",
     ])
     target_config = target_home / "config.toml"
     target_auth = target_home / "auth.json"
+    target_rules = target_home / "rules"
+    target_exec_policy = target_rules / "default.rules"
     target_config.write_text("\n".join(lines), encoding="utf-8")
     target_auth.write_text(json.dumps({"OPENAI_API_KEY": api_key}) + "\n", encoding="utf-8")
+    target_rules.mkdir(mode=0o755, exist_ok=True)
+    target_exec_policy.write_text(PHASE4G8_CODEX_EXEC_POLICY.strip() + "\n", encoding="utf-8")
     os.chmod(target_config, 0o600)
     os.chmod(target_auth, 0o600)
+    os.chmod(target_rules, 0o555)
+    os.chmod(target_exec_policy, 0o444)
     os.chown(target_home, int(worker_uid), int(worker_gid))
     os.chown(target_config, int(worker_uid), int(worker_gid))
     os.chown(target_auth, int(worker_uid), int(worker_gid))
+    os.chown(target_rules, int(worker_uid), int(worker_gid))
+    os.chown(target_exec_policy, int(worker_uid), int(worker_gid))
+    approval_audit = audit_phase4g8_codex_auto_review(target_config)
+    if not approval_audit["configured"]:
+        raise RuntimeError("isolated Codex auto-review configuration preflight failed")
     return {
         "source_home": str(source_home),
         "target_home": str(target_home.resolve()),
@@ -299,13 +551,86 @@ def prepare_isolated_codex_home(
         "isolated_hashes": {
             "config.toml": _sha256_file(target_config),
             "auth.json": _sha256_file(target_auth),
+            "rules/default.rules": _sha256_file(target_exec_policy),
         },
         "source_provider": provider_name,
         "isolated_provider": isolated_provider,
         "model": selected_model,
         "reasoning_effort": reasoning_effort,
+        "provider_transport": transport_settings,
         "proxy_base_url": proxy_base_url.rstrip("/"),
         "copied_session_history": False,
+        "approval": approval_audit,
+    }
+
+
+def _isolated_provider_transport_settings(provider: dict[str, Any]) -> dict[str, Any]:
+    settings: dict[str, Any] = {}
+    supports_websockets = provider.get("supports_websockets")
+    if supports_websockets is not None:
+        if not isinstance(supports_websockets, bool):
+            raise ValueError("source Codex supports_websockets must be boolean")
+        settings["supports_websockets"] = supports_websockets
+    for key, minimum, maximum in (
+        ("stream_max_retries", 0, 100),
+        ("websocket_connect_timeout_ms", 100, 300_000),
+    ):
+        value = provider.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+            raise ValueError(f"source Codex {key} is invalid")
+        settings[key] = value
+    return settings
+
+
+def audit_phase4g8_codex_auto_review(config_path: Path) -> dict[str, Any]:
+    """Return a secret-free audit of the effective isolated reviewer config."""
+
+    try:
+        config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError(f"could not parse isolated Codex config: {type(exc).__name__}") from exc
+    auto_review = config.get("auto_review") if isinstance(config.get("auto_review"), dict) else {}
+    features = config.get("features") if isinstance(config.get("features"), dict) else {}
+    policy_text = str(auto_review.get("policy") or "").strip()
+    exec_policy_path = config_path.parent / "rules" / "default.rules"
+    try:
+        exec_policy_text = exec_policy_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        exec_policy_text = ""
+    configured = bool(
+        config.get("approval_policy") == PHASE4G8_CODEX_APPROVAL_POLICY
+        and config.get("approvals_reviewer") == PHASE4G8_CODEX_APPROVAL_REVIEWER
+        and policy_text == PHASE4G8_CODEX_AUTO_REVIEW_POLICY.strip()
+        and exec_policy_text == PHASE4G8_CODEX_EXEC_POLICY.strip()
+        and features.get("guardian_approval") is True
+    )
+    return {
+        "configured": configured,
+        "policy": str(config.get("approval_policy") or ""),
+        "reviewer": str(config.get("approvals_reviewer") or ""),
+        "auto_review_policy_version": (
+            PHASE4G8_CODEX_AUTO_REVIEW_POLICY_VERSION
+            if policy_text == PHASE4G8_CODEX_AUTO_REVIEW_POLICY.strip()
+            else None
+        ),
+        "auto_review_policy_sha256": (
+            hashlib.sha256(policy_text.encode("utf-8")).hexdigest()
+            if policy_text
+            else None
+        ),
+        "guardian_approval_enabled": features.get("guardian_approval") is True,
+        "exec_policy_version": (
+            PHASE4G8_CODEX_EXEC_POLICY_VERSION
+            if exec_policy_text == PHASE4G8_CODEX_EXEC_POLICY.strip()
+            else None
+        ),
+        "exec_policy_sha256": (
+            hashlib.sha256(exec_policy_text.encode("utf-8")).hexdigest()
+            if exec_policy_text
+            else None
+        ),
     }
 
 
@@ -380,11 +705,14 @@ def make_phase4g8_evaluator_lane(config: dict[str, Any]):
     name = normalize_lane_name(str(config.get("name") or "phase4g8-evaluator"))
     spec_path = Path(str(config.get("spec_path") or "")).expanduser().resolve()
     run_id = str(config.get("run_id") or "").strip()
+    expected_environment_sha256 = str(config.get("expected_environment_sha256") or "").strip()
     heartbeat_interval_seconds = float(config.get("heartbeat_interval_seconds") or 10.0)
     if not spec_path.is_file() or not run_id:
         raise ValueError("Phase 4G8 evaluator lane requires spec_path and run_id")
     if heartbeat_interval_seconds <= 0:
         raise ValueError("Phase 4G8 evaluator heartbeat interval must be positive")
+    if expected_environment_sha256 and len(expected_environment_sha256) != 64:
+        raise ValueError("Phase 4G8 evaluator expected environment SHA-256 is invalid")
 
     def spawn(task: Any, workspace: str, *, board: Optional[str] = None) -> Optional[int]:
         from hermes_cli import kanban_db as kb
@@ -421,6 +749,8 @@ def make_phase4g8_evaluator_lane(config: dict[str, Any]):
             package_root + os.pathsep + env["PYTHONPATH"]
             if env.get("PYTHONPATH") else package_root
         )
+        if expected_environment_sha256:
+            env["HERMES_PHASE4G8_EXPECTED_ENVIRONMENT_SHA256"] = expected_environment_sha256
         env[PROCESS_OWNER_ENV] = run_id
         log_path = kb.worker_log_path(task.id, board=board)
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -453,6 +783,7 @@ def make_phase4g8_evaluator_lane(config: dict[str, Any]):
             "spec_path": str(spec_path),
             "run_id": run_id,
             "heartbeat_interval_seconds": heartbeat_interval_seconds,
+            "expected_environment_sha256": expected_environment_sha256,
         },
     )
 
@@ -486,10 +817,10 @@ def build_phase4g8_run_report(
     chain = rd.validate_decision_context_chain(conn, job_id)
     duplicate_terminal = conn.execute(
         """
-        SELECT node_id, COUNT(*) AS count
+        SELECT node_id, task_id, run_id, COUNT(*) AS count
           FROM execution_events
          WHERE job_id = ? AND event_type IN ('node_completed', 'node_failed', 'node_blocked')
-         GROUP BY node_id HAVING COUNT(*) > 1
+         GROUP BY node_id, task_id, run_id HAVING COUNT(*) > 1
         """,
         (job_id,),
     ).fetchall()
@@ -540,10 +871,13 @@ def build_phase4g8_run_report(
         runtime_failures.append("source_codex_config_changed")
     runtime_passed = not runtime_failures
     official_resolved = evaluator_result.get("resolved") is True
+    resource_exhausted = bool((metrics or {}).get("resource_exhausted"))
     capability_passed = runtime_passed and official_resolved and status["job"]["state"] == "done"
     classification = (
         "resolved"
         if capability_passed
+        else "runtime-correct/resource-exhausted"
+        if runtime_passed and resource_exhausted
         else "runtime-correct/task-failed"
         if runtime_passed and not official_resolved
         else "runtime-correct/runtime-incomplete"
@@ -682,6 +1016,19 @@ def validate_qualification_spec(spec: dict[str, Any]) -> None:
     requirements = spec.get("public_requirements") or []
     if not isinstance(requirements, list) or any(not isinstance(item, str) for item in requirements):
         raise ValueError("public_requirements must be a string array")
+    worker_environment = spec.get("worker_environment")
+    if worker_environment is not None:
+        if not isinstance(worker_environment, dict):
+            raise ValueError("worker_environment must be an object")
+        renderer_argv = worker_environment.get("renderer_argv")
+        if (
+            not isinstance(renderer_argv, list)
+            or not renderer_argv
+            or any(not isinstance(value, str) or not value for value in renderer_argv)
+        ):
+            raise ValueError("worker_environment.renderer_argv must be a non-empty string array")
+        if worker_environment.get("env") is not None and not isinstance(worker_environment["env"], dict):
+            raise ValueError("worker_environment.env must be an object")
 
 
 def run_oracle_qualification(
@@ -773,12 +1120,17 @@ def evaluate_fault_trigger(
             SELECT n.id AS node_id, n.node_key, n.latest_task_id, n.latest_run_id, nm.id AS materialization_id
               FROM execution_nodes n
               JOIN node_materializations nm ON nm.node_id = n.id AND nm.task_id = n.latest_task_id
-              JOIN tasks t ON t.id = n.latest_task_id
+             JOIN tasks t ON t.id = n.latest_task_id
              WHERE n.job_id = ? AND n.state = 'running' AND t.status IN ('done', 'blocked')
-               AND NOT EXISTS (SELECT 1 FROM progress_ledger pl WHERE pl.node_id = n.id)
+               AND NOT EXISTS (
+                   SELECT 1 FROM progress_ledger pl
+                    WHERE pl.node_id = n.id
+                      AND pl.evidence_ref = 'node:' || n.id || ':materialization:' || nm.id
+               )
                AND NOT EXISTS (
                    SELECT 1 FROM execution_events ee
-                    WHERE ee.node_id = n.id AND ee.event_type IN ('node_completed', 'node_failed', 'node_blocked')
+                    WHERE ee.node_id = n.id AND ee.task_id = t.id
+                      AND ee.event_type IN ('node_completed', 'node_failed', 'node_blocked')
                )
             """ + node_filter + " ORDER BY nm.attempt DESC LIMIT 1",
             params,
@@ -836,9 +1188,46 @@ def terminate_owned_process_group(
     }
 
 
-def runtime_fact_counts(conn: sqlite3.Connection, job_id: str, node_id: str) -> dict[str, int]:
+def runtime_fact_counts(
+    conn: sqlite3.Connection,
+    job_id: str,
+    node_id: str,
+    *,
+    materialization_id: Optional[str] = None,
+) -> dict[str, int]:
     """Return committed fact counts used after receipt-before-ingest recovery."""
 
+    if materialization_id is not None:
+        materialization = conn.execute(
+            "SELECT task_id FROM node_materializations WHERE job_id = ? AND node_id = ? AND id = ?",
+            (job_id, node_id, materialization_id),
+        ).fetchone()
+        if materialization is None:
+            raise ValueError("unknown node materialization for runtime fact counts")
+        evidence_ref = f"node:{node_id}:materialization:{materialization_id}"
+        task_id = str(materialization["task_id"])
+        return {
+            "ledger": int(conn.execute(
+                "SELECT COUNT(*) FROM progress_ledger WHERE job_id = ? AND node_id = ? AND evidence_ref = ?",
+                (job_id, node_id, evidence_ref),
+            ).fetchone()[0]),
+            "terminal_events": int(conn.execute(
+                """
+                SELECT COUNT(*) FROM execution_events
+                 WHERE job_id = ? AND node_id = ? AND task_id = ?
+                   AND event_type IN ('node_completed', 'node_failed', 'node_blocked')
+                """,
+                (job_id, node_id, task_id),
+            ).fetchone()[0]),
+            "terminal_materializations": int(conn.execute(
+                """
+                SELECT COUNT(*) FROM node_materializations
+                 WHERE job_id = ? AND node_id = ? AND id = ?
+                   AND status IN ('succeeded', 'failed', 'blocked')
+                """,
+                (job_id, node_id, materialization_id),
+            ).fetchone()[0]),
+        }
     return {
         "ledger": int(conn.execute(
             "SELECT COUNT(*) FROM progress_ledger WHERE job_id = ? AND node_id = ?",
@@ -914,6 +1303,15 @@ def _validate_oracle_results(base: dict[str, Any], gold: dict[str, Any]) -> dict
         "gold_pass_to_pass_passes": gold_pass["failed"] == 0 and gold_pass["passed"] == gold_pass["total"],
         "gold_resolved": gold.get("resolved") is True,
     }
+    base_environment = base.get("environment_fingerprint")
+    gold_environment = gold.get("environment_fingerprint")
+    if base_environment is not None or gold_environment is not None:
+        checks["base_gold_environment_match"] = bool(
+            isinstance(base_environment, dict)
+            and isinstance(gold_environment, dict)
+            and base_environment.get("sha256")
+            and base_environment.get("sha256") == gold_environment.get("sha256")
+        )
     failed = [key for key, value in checks.items() if not value]
     if failed:
         raise ValueError("oracle qualification failed: " + ", ".join(failed))

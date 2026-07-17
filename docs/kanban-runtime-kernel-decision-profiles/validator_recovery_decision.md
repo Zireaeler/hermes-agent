@@ -36,6 +36,11 @@ No Markdown fences, no explanatory prose, no comments.
   `target_node_key` or `target_goal_item_key`, include one of those fields.
 - If the rejected reason says `insert_verifier` needs `goal_item_keys` or
   `gap_keys`, add concrete existing goal/gap keys for the verifier node itself.
+- If the rejected reason says the linked goal does not have
+  `verifier_required=true`, do not retry another verifier shape. Recover with
+  one coherent implementation node that owns testing, debugging, and local
+  verification, or return no structural change if that responsibility is
+  already covered.
 - If no valid verifier target is obvious, prefer `create_node` linked to a
   required `goal_item_key` or open `gap_key`.
 - If the rejected reason says a new node lacks goal/gap/human linkage, add

@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import socket
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
 import threading
+import tomllib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -21,7 +23,7 @@ from hermes_cli import kanban_runtime_phase4g8_run as p4g8_run
 from hermes_cli import phase4g8_swe_evo as swe_evo
 from hermes_cli import phase4g8_capability_trace as capability_trace
 from hermes_cli import phase4g8_evaluator
-from hermes_cli.worker_lanes import clear_worker_lanes, register_worker_lane
+from hermes_cli.worker_lanes import clear_worker_lanes, get_worker_lane, register_worker_lane
 
 
 @pytest.fixture
@@ -175,6 +177,24 @@ def test_oracle_qualification_rejects_invalid_base_oracle(tmp_path):
         p4g8.run_oracle_qualification(spec, output_root=tmp_path / "phase4g8", min_free_bytes=0)
 
 
+def test_oracle_validation_rejects_base_gold_environment_drift():
+    base = {
+        "resolved": False,
+        "fail_to_pass": {"passed": 0, "failed": 1, "total": 1},
+        "pass_to_pass": {"passed": 2, "failed": 0, "total": 2},
+        "environment_fingerprint": {"sha256": "a" * 64},
+    }
+    gold = {
+        "resolved": True,
+        "fail_to_pass": {"passed": 1, "failed": 0, "total": 1},
+        "pass_to_pass": {"passed": 2, "failed": 0, "total": 2},
+        "environment_fingerprint": {"sha256": "b" * 64},
+    }
+
+    with pytest.raises(ValueError, match="base_gold_environment_match"):
+        p4g8._validate_oracle_results(base, gold)
+
+
 def test_swe_evo_adapter_writes_protected_inputs_and_spec(tmp_path):
     mirror = tmp_path / "mirror"
     mirror.mkdir()
@@ -203,6 +223,10 @@ def test_swe_evo_adapter_writes_protected_inputs_and_spec(tmp_path):
     evaluator_instance = json.loads((protected / "swe-evo-instance.json").read_text(encoding="utf-8"))
     assert evaluator_instance["test_patch_path"] == str(protected / "test.patch")
     assert "patch" not in evaluator_instance
+    assert spec["worker_environment"]["renderer_argv"][-2:] == [
+        "--instance",
+        str(protected / "swe-evo-instance.json"),
+    ]
     assert spec_path.stat().st_mode & 0o077 == 0
     assert (protected / "gold.patch").stat().st_mode & 0o077 == 0
     assert (protected / "test.patch").stat().st_mode & 0o077 == 0
@@ -217,27 +241,280 @@ def test_swe_evo_adapter_writes_protected_inputs_and_spec(tmp_path):
         )
 
 
-def test_pytest_failure_diagnostics_excludes_patch_source_and_keeps_assertion_diff(tmp_path):
+def test_pytest_failure_diagnostics_are_case_bounded_and_exclude_protected_source(tmp_path):
     output = tmp_path / "test_output.txt"
     output.write_text(
         "git apply output\n+def hidden_fixture():\n+    return 'do-not-leak'\n"
         "=================================== FAILURES ===================================\n"
-        "_ test_schema _\n"
-        "tests/test_hidden.py:42: in test_schema\n"
+        "____________________________ test_index_name ____________________________\n"
+        "tests/test_hidden.py:42: in test_index_name\n"
         "    assert actual == expected\n"
-        "E   AssertionError: assert {'oneOf': []} == {'discriminator': {'propertyName': 'type'}}\n"
-        "E   Differing items:\n"
+        "E   AssertionError: assert 'getitem' == 'from_pandas-index'\n"
+        "_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\n"
+        "E   - from_pandas-index\n"
+        "E   + getitem\n"
+        f"E   evaluator artifact: {tmp_path}/gold.patch\n"
+        "____________________________ test_warning_text ____________________________\n"
+        "tests/test_hidden.py:77: in test_warning_text\n"
+        "E   Failed: DID NOT WARN. No warnings of type (<class 'FutureWarning'>,) were emitted.\n"
+        "E   Regex: 'must use shuffl'\n"
+        "E   Input: 'Median must use a shuffle operation'\n"
+        "E   Emitted warnings: [UserWarning('different warning')]\n"
+        "E   /testbed/tests/test_hidden.py contains protected source\n"
+        "________________________ test_shuffle_false_rejected ________________________\n"
+        "tests/test_hidden.py:91: in test_shuffle_false_rejected\n"
+        "    with pytest.raises(ValueError, match='must use shuffl'):\n"
+        "        grouped.aggregate(spec, shuffle=False)\n"
+        "E   Failed: DID NOT RAISE <class 'ValueError'>\n"
         "=========================== short test summary info ============================\n",
         encoding="utf-8",
     )
 
-    diagnostic = swe_evo._extract_pytest_failure_diagnostics(output)
+    failed_test_ids = [
+        "tests/test_hidden.py::test_index_name",
+        "tests/test_hidden.py::test_warning_text",
+        "tests/test_hidden.py::test_shuffle_false_rejected",
+    ]
+    diagnostic = swe_evo._extract_pytest_failure_diagnostics(
+        output,
+        failed_test_ids=failed_test_ids,
+        max_chars_per_case=700,
+    )
 
-    assert diagnostic["schema"] == "hermes_phase4g8_pytest_failure_diagnostics_v1"
-    assert "assert actual == expected" in diagnostic["text"]
-    assert "discriminator" in diagnostic["text"]
-    assert "hidden_fixture" not in diagnostic["text"]
-    assert "do-not-leak" not in diagnostic["text"]
+    assert diagnostic["schema"] == swe_evo.PYTEST_FAILURE_DIAGNOSTICS_SCHEMA
+    assert [case["test_id"] for case in diagnostic["cases"]] == failed_test_ids
+    first, second, third = diagnostic["cases"]
+    assert first["failure_kind"] == "assertion_comparison_failed"
+    assert first["comparisons"] == [{
+        "operator": "==",
+        "left": "'getitem'",
+        "right": "'from_pandas-index'",
+        "required_relation": "equal",
+    }]
+    assert first["expected"] == []
+    assert first["actual"] == []
+    assert second["failure_kind"] == "expected_warning_not_emitted"
+    assert second["regex"] == ["'must use shuffl'"]
+    assert second["actual"] == ["'Median must use a shuffle operation'"]
+    assert second["emitted_warnings"] == ["[UserWarning('different warning')]"]
+    assert second["exception_summary"]
+    assert third["failure_kind"] == "expected_exception_not_raised"
+    assert third["conditions"] == ["match='must use shuffl'", "shuffle=False"]
+    encoded = json.dumps(diagnostic)
+    assert "assert actual == expected" not in encoded
+    assert "hidden_fixture" not in encoded
+    assert "do-not-leak" not in encoded
+    assert str(tmp_path) not in encoded
+    assert "gold.patch" not in encoded
+    assert "/testbed" not in encoded
+
+
+def test_pytest_failure_diagnostics_prioritize_every_official_failed_test(tmp_path):
+    output = tmp_path / "test_output.txt"
+    unrelated = "".join(
+        f"____________________________ test_unrelated_{index} ____________________________\n"
+        f"tests/test_unrelated.py:{index + 1}: in test_unrelated_{index}\n"
+        f"E   AssertionError: unrelated failure {index}\n"
+        for index in range(30)
+    )
+    cli_failures = (
+        "____________________________ test_register_command_ep ____________________________\n"
+        "dask/tests/test_cli.py:80: in test_register_command_ep\n"
+        "E   Failed: DID NOT WARN. No warnings were emitted.\n"
+        "E   Regex: 'must be instances of'\n"
+        "______________________ test_repeated_name_registration_warn ______________________\n"
+        "dask/tests/test_cli.py:108: in test_repeated_name_registration_warn\n"
+        "E   Failed: DID NOT WARN. No warnings were emitted.\n"
+        "E   Regex: 'While registering the command with name'\n"
+        "________________________________ test_version _________________________________\n"
+        "dask/tests/test_cli.py:20: in test_version\n"
+        "E   AssertionError: assert 'dask, version 1.0' == 'cli, version 1.0'\n"
+    )
+    output.write_text(
+        "=================================== FAILURES ===================================\n"
+        + unrelated
+        + cli_failures
+        + "=========================== short test summary info ============================\n",
+        encoding="utf-8",
+    )
+    failed_test_ids = [
+        "dask/tests/test_cli.py::test_register_command_ep",
+        "dask/tests/test_cli.py::test_repeated_name_registration_warn",
+        "dask/tests/test_cli.py::test_version",
+    ]
+
+    extracted = swe_evo._extract_pytest_failure_diagnostics(
+        output,
+        failed_test_ids=failed_test_ids,
+        max_cases=3,
+    )
+    projected = rk._safe_evaluator_failure_diagnostics(
+        extracted,
+        allowed_test_ids=set(failed_test_ids),
+        policy={
+            "max_diagnostic_cases": 3,
+            "max_diagnostics_chars_per_case": 2500,
+            "max_diagnostics_chars": 7500,
+        },
+    )
+
+    assert [case["test_id"] for case in extracted["cases"]] == failed_test_ids
+    assert extracted["missing_test_ids"] == []
+    assert extracted["omitted_case_count"] == 0
+    assert [case["test_id"] for case in projected["cases"]] == failed_test_ids
+    assert projected["missing_test_ids"] == []
+    encoded = json.dumps(projected)
+    assert "test_unrelated" not in encoded
+    assert "must be instances of" in encoded
+    assert "While registering the command with name" in encoded
+    assert "'dask, version 1.0'" in encoded
+    assert "'cli, version 1.0'" in encoded
+
+
+def test_pytest_failure_diagnostics_preserve_test_id_when_detail_is_missing(tmp_path):
+    output = tmp_path / "test_output.txt"
+    output.write_text(
+        "=================================== FAILURES ===================================\n"
+        "____________________________ test_other ____________________________\n"
+        "tests/test_other.py:1: in test_other\n"
+        "E   AssertionError: other\n"
+        "=========================== short test summary info ============================\n",
+        encoding="utf-8",
+    )
+    missing = "dask/tests/test_cli.py::test_version"
+
+    diagnostic = swe_evo._extract_pytest_failure_diagnostics(
+        output,
+        failed_test_ids=[missing],
+    )
+
+    assert [case["test_id"] for case in diagnostic["cases"]] == [missing]
+    assert diagnostic["cases"][0]["detail_status"] == "test_id_only"
+    assert diagnostic["missing_test_ids"] == []
+    assert diagnostic["truncated"] is False
+
+    coverage = swe_evo._evaluator_feedback_coverage(
+        [missing], diagnostic, expected_failed_count=1
+    )
+    assert coverage == {
+        "official_failed_test_count": 1,
+        "required_case_count": 1,
+        "covered_official_test_count": 1,
+        "status": "current_failure_complete",
+        "missing_test_ids": [],
+        "unidentified_failed_test_count": 0,
+        "uncovered_due_to_budget_count": 0,
+    }
+
+
+def test_evaluator_feedback_is_incomplete_when_official_ids_are_truncated(tmp_path):
+    failed_test_id = "tests/test_feature.py::test_known_failure"
+    output = tmp_path / "test_output.txt"
+    output.write_text(
+        "=================================== FAILURES ===================================\n"
+        "________________ test_known_failure ________________\n"
+        "tests/test_feature.py:1: in test_known_failure\n"
+        "E   AssertionError: known failure\n"
+        "================ short test summary info ================\n",
+        encoding="utf-8",
+    )
+    diagnostics = swe_evo._extract_pytest_failure_diagnostics(
+        output,
+        failed_test_ids=[failed_test_id],
+    )
+
+    coverage = swe_evo._evaluator_feedback_coverage(
+        [failed_test_id],
+        diagnostics,
+        expected_failed_count=2,
+    )
+
+    assert coverage["status"] == "extraction_incomplete"
+    assert coverage["missing_test_ids"] == []
+    assert coverage["unidentified_failed_test_count"] == 1
+
+
+def test_evaluator_feedback_coverage_requires_every_current_failure():
+    failed_test_ids = [f"tests/test_feature.py::test_{index}" for index in range(4)]
+    diagnostics = {
+        "cases": [{"test_id": test_id} for test_id in failed_test_ids[:3]],
+    }
+
+    coverage = swe_evo._evaluator_feedback_coverage(
+        failed_test_ids,
+        diagnostics,
+        max_cases=3,
+    )
+
+    assert coverage["status"] == "extraction_incomplete"
+    assert coverage["required_case_count"] == 4
+    assert coverage["covered_official_test_count"] == 3
+    assert coverage["missing_test_ids"] == [failed_test_ids[-1]]
+    assert coverage["unidentified_failed_test_count"] == 0
+    assert coverage["uncovered_due_to_budget_count"] == 0
+
+
+def test_evaluator_preserves_and_batches_more_than_twenty_current_failures(tmp_path):
+    failed_test_ids = [f"tests/test_feature.py::test_{index}" for index in range(65)]
+    sections = "".join(
+        "________________ test_{index} ________________\n"
+        "tests/test_feature.py:{line}: in test_{index}\n"
+        "E   AssertionError: assert {index} == {expected}\n".format(
+            index=index,
+            line=index + 1,
+            expected=index + 1,
+        )
+        for index in range(65)
+    )
+    output = tmp_path / "test_output.txt"
+    output.write_text(
+        "=================================== FAILURES ===================================\n"
+        + sections
+        + "================ short test summary info ================\n",
+        encoding="utf-8",
+    )
+
+    diagnostics = swe_evo._extract_pytest_failure_diagnostics(
+        output,
+        failed_test_ids=failed_test_ids,
+        batch_size=20,
+    )
+    coverage = swe_evo._evaluator_feedback_coverage(failed_test_ids, diagnostics)
+    projected = rk._safe_evaluator_failure_diagnostics(
+        diagnostics,
+        allowed_test_ids=set(failed_test_ids),
+        policy={
+            "diagnostic_batch_size": 20,
+            "max_diagnostics_chars_per_case": 4000,
+        },
+    )
+
+    assert diagnostics["case_count"] == 65
+    assert diagnostics["batch_count"] == 4
+    assert diagnostics["missing_test_ids"] == []
+    assert coverage["status"] == "current_failure_complete"
+    assert coverage["covered_official_test_count"] == 65
+    assert projected["case_count"] == 65
+    assert projected["batch_count"] == 4
+    assert projected["missing_test_ids"] == []
+    assert [case["test_id"] for case in projected["cases"]] == failed_test_ids
+
+
+def test_swe_evo_pytest_verbosity_preserves_protected_test_command():
+    script = (
+        "#!/bin/bash\n"
+        "set -uxo pipefail\n"
+        "pytest -rA tests/test_hidden.py::test_behavior\n"
+    )
+
+    verbose = swe_evo._with_pytest_diagnostic_verbosity(script)
+
+    assert 'export PYTEST_ADDOPTS="${PYTEST_ADDOPTS:-} -vv"' in verbose
+    assert verbose.count("pytest -rA tests/test_hidden.py::test_behavior") == 1
+    assert verbose.index("PYTEST_ADDOPTS") < verbose.index("pytest -rA")
+    assert swe_evo._with_pytest_diagnostic_verbosity("#!/bin/bash\nnose tests\n") == (
+        "#!/bin/bash\nnose tests\n"
+    )
 
 
 def test_swe_evo_candidate_patch_includes_tracked_and_untracked_files(tmp_path):
@@ -378,6 +655,133 @@ def test_swe_evo_locked_image_script_removes_only_install_command():
     assert "pytest -rA" in locked
 
 
+def test_swe_evo_worker_environment_setup_keeps_hotfix_and_excludes_test_command():
+    script = (
+        "#!/bin/bash\n"
+        "set -uxo pipefail\n"
+        "conda activate testbed\n"
+        "pip install 'pandas<2.0'\n"
+        ": '>>>>> Start Test Output'\n"
+        "pytest -rA tests/test_hidden.py\n"
+        ": '>>>>> End Test Output'\n"
+    )
+
+    setup = swe_evo._worker_environment_setup_script(script)
+
+    assert "pip install 'pandas<2.0'" in setup
+    assert "pytest" not in setup
+    assert "test_hidden.py" not in setup
+    assert "Start Test Output" not in setup
+
+
+def test_worker_toolchain_cache_identity_includes_image_setup_and_environment():
+    image_identity = {
+        "content_identity": "sha256:image-a",
+        "image_id": "sha256:image-a",
+        "repo_digests": [],
+    }
+
+    baseline, baseline_env = p4g8_run._worker_toolchain_cache_identity(
+        "example/image:tag",
+        image_identity,
+        "a" * 64,
+        {"PIP_INDEX_URL": "https://index-a.invalid/simple"},
+    )
+    changed_setup, _ = p4g8_run._worker_toolchain_cache_identity(
+        "example/image:tag",
+        image_identity,
+        "b" * 64,
+        {"PIP_INDEX_URL": "https://index-a.invalid/simple"},
+    )
+    changed_env, changed_env_hash = p4g8_run._worker_toolchain_cache_identity(
+        "example/image:tag",
+        image_identity,
+        "a" * 64,
+        {"PIP_INDEX_URL": "https://index-b.invalid/simple"},
+    )
+    changed_image, _ = p4g8_run._worker_toolchain_cache_identity(
+        "example/image:tag",
+        {**image_identity, "content_identity": "sha256:image-b"},
+        "a" * 64,
+        {"PIP_INDEX_URL": "https://index-a.invalid/simple"},
+    )
+    changed_resolution, _ = p4g8_run._worker_toolchain_cache_identity(
+        "example/image:tag",
+        image_identity,
+        "a" * 64,
+        {"PIP_INDEX_URL": "https://index-a.invalid/simple"},
+        "resolved-environment-b",
+    )
+
+    assert len(baseline) == 20
+    assert baseline != changed_setup
+    assert baseline != changed_env
+    assert baseline != changed_image
+    assert baseline != changed_resolution
+    assert baseline_env != changed_env_hash
+
+
+def test_worker_isolation_preflight_executes_toolchain_and_compares_fingerprint(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    toolchain = tmp_path / "toolchain"
+    home = tmp_path / "home"
+    codex_home = tmp_path / "codex-home"
+    for path in (workspace, toolchain / "bin", home, codex_home):
+        path.mkdir(parents=True)
+    (toolchain / "bin" / "python").write_text("fixture\n", encoding="utf-8")
+    fingerprint = {
+        "schema": swe_evo.ENVIRONMENT_FINGERPRINT_SCHEMA,
+        "sha256": "a" * 64,
+        "python_implementation": "CPython",
+        "python_version": "3.10.14",
+        "package_count": 1,
+        "selected_packages": {"pandas": "1.5.3"},
+    }
+    (toolchain / ".hermes-phase4g8-toolchain.json").write_text(
+        json.dumps({
+            "schema": p4g8_run.WORKER_TOOLCHAIN_MANIFEST_SCHEMA,
+            "parity_status": "passed",
+            "resolved_environment_sha256": fingerprint["sha256"],
+            "environment_fingerprint": fingerprint,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("PHASE4G8_WORKER_TOOLCHAIN", str(toolchain))
+    captured = {}
+
+    def fake_wrap(argv, *_args, **_kwargs):
+        captured["argv"] = argv
+        return argv
+
+    def fake_run(argv, **_kwargs):
+        captured["run_argv"] = argv
+        return type("Completed", (), {
+            "returncode": 0,
+            "stdout": json.dumps(fingerprint),
+            "stderr": "",
+        })()
+
+    monkeypatch.setattr(p4g8_run, "wrap_codex_network_argv", fake_wrap)
+    monkeypatch.setattr(p4g8_run.subprocess, "run", fake_run)
+
+    result = p4g8_run._assert_worker_filesystem_isolation(
+        {
+            "workspace": workspace,
+            "worker_toolchain": toolchain,
+        },
+        namespace="h4g8-12345678",
+        worker_uid=1234,
+        worker_gid=1234,
+        qualification_spec_path=tmp_path / "protected" / "spec.json",
+        source_mirror=tmp_path / "protected" / "mirror",
+    )
+
+    assert result == fingerprint
+    assert "/opt/miniconda3/envs/testbed/bin/python -c" in captured["argv"][2]
+
+
 def test_swe_evo_standard_report_preserves_empty_failure_lists():
     row = _swe_evo_row("a" * 40)
     report = {
@@ -408,7 +812,7 @@ def test_swe_evo_standard_report_preserves_empty_failure_lists():
     }
 
 
-def test_swe_evo_standard_report_bounds_failed_test_identifiers():
+def test_swe_evo_standard_report_preserves_all_failed_test_identifiers():
     row = _swe_evo_row("a" * 40)
     failures = [f"tests/test_feature.py::test_{index}" for index in range(25)]
     row["FAIL_TO_PASS"] = failures
@@ -423,8 +827,8 @@ def test_swe_evo_standard_report_bounds_failed_test_identifiers():
 
     result = swe_evo._standardize_report(report, row)
 
-    assert result["fail_to_pass"]["failed_tests"] == failures[:20]
-    assert result["fail_to_pass"]["failed_tests_truncated"] == 5
+    assert result["fail_to_pass"]["failed_tests"] == failures
+    assert result["fail_to_pass"]["failed_tests_truncated"] == 0
 
 
 def test_phase4g8_real_case_requires_explicit_execution(tmp_path):
@@ -436,6 +840,963 @@ def test_phase4g8_real_case_requires_explicit_execution(tmp_path):
             case_size="small",
             execute_real=False,
         )
+
+
+def test_phase4g8_real_case_requires_exactly_one_run_target(tmp_path):
+    with pytest.raises(ValueError, match="exactly one of run_root or resume_run"):
+        p4g8_run.run_phase4g8_real_case(
+            qualification_spec_path=tmp_path / "missing.json",
+            run_root=None,
+            resume_run=None,
+            source_codex_home=tmp_path / "codex",
+            case_size="small",
+            execute_real=True,
+        )
+
+
+def test_completed_evaluator_raw_artifacts_are_removed_after_extraction(tmp_path):
+    run_root = tmp_path / "protected" / "evaluator-runs" / "eval-1"
+    run_root.mkdir(parents=True)
+    (run_root / "combined.patch").write_bytes(b"patch-data")
+    (run_root / "test_output.txt").write_bytes(b"test-output")
+
+    cleanup = swe_evo._remove_completed_evaluator_artifacts(run_root)
+
+    assert cleanup["status"] == "removed_after_evidence_extraction"
+    assert cleanup["bytes_removed"] == len(b"patch-data") + len(b"test-output")
+    assert not run_root.exists()
+
+
+def test_incomplete_evaluator_feedback_retains_protected_raw_artifacts(tmp_path):
+    run_root = tmp_path / "protected" / "evaluator-runs" / "eval-incomplete"
+    run_root.mkdir(parents=True)
+    (run_root / "combined.patch").write_bytes(b"protected-patch")
+    (run_root / "test_output.txt").write_bytes(b"unparsed-output")
+
+    cleanup = swe_evo._finalize_evaluator_artifacts(
+        run_root,
+        {"status": "extraction_incomplete"},
+    )
+
+    assert cleanup == {
+        "status": "retained_for_incomplete_feedback",
+        "bytes_retained": len(b"protected-patch") + len(b"unparsed-output"),
+        "protected": True,
+    }
+    assert (run_root / "combined.patch").is_file()
+    assert (run_root / "test_output.txt").is_file()
+    assert phase4g8_evaluator._is_evaluator_infrastructure_invalid({
+        "feedback_coverage": {"status": "extraction_incomplete"},
+    }) is True
+
+
+def test_fresh_run_compacts_reported_prior_runs_but_preserves_active_runs(tmp_path):
+    instance_root = tmp_path / "dask-instance"
+    completed = instance_root / "phase4g8-medium-completed"
+    active = instance_root / "phase4g8-medium-active"
+    reports = completed / "reports"
+    reports.mkdir(parents=True)
+    (completed / "workspace").mkdir()
+    (completed / "workspace" / "large.bin").write_bytes(b"x" * 4096)
+    (completed / "hermes-home").mkdir()
+    (completed / "hermes-home" / "kanban.db").write_bytes(b"db")
+    (completed / "codex-homes").mkdir()
+    (completed / "codex-homes" / "state.sqlite").write_bytes(b"session")
+    (reports / "run-report.json").write_text(
+        json.dumps({
+            "schema": p4g8_run.REAL_CASE_REPORT_SCHEMA,
+            "termination": {"reason": "runtime_terminal"},
+            "run_report": {"classification": "runtime-correct/task-failed"},
+        }),
+        encoding="utf-8",
+    )
+    (reports / "capability-trace.md").write_text("summary\n", encoding="utf-8")
+    (active / "workspace").mkdir(parents=True)
+    (active / "workspace" / "keep.bin").write_bytes(b"active")
+
+    first = p4g8_run._compact_completed_phase4g8_runs(instance_root)
+    second = p4g8_run._compact_completed_phase4g8_runs(instance_root)
+
+    assert len(first) == 1
+    assert first[0]["status"] == "compacted_after_report_persisted"
+    assert first[0]["bytes_removed"] >= 4096
+    assert not (completed / "workspace").exists()
+    assert not (completed / "hermes-home").exists()
+    assert not (completed / "codex-homes").exists()
+    assert (reports / "run-report.json").is_file()
+    assert (reports / "capability-trace.md").is_file()
+    retention = json.loads((reports / "retention.json").read_text(encoding="utf-8"))
+    assert retention["preserved_entries"] == ["reports"]
+    assert (active / "workspace" / "keep.bin").is_file()
+    assert second == []
+
+
+def test_candidate_patch_evidence_survives_completed_run_compaction(tmp_path):
+    instance_root = tmp_path / "dask-instance"
+    completed = instance_root / "phase4g8-medium-completed"
+    workspace = completed / "workspace"
+    reports = completed / "reports"
+    workspace.mkdir(parents=True)
+    reports.mkdir()
+    _run("git", "init", "--quiet", cwd=workspace)
+    _run("git", "config", "user.email", "phase4g8@example.invalid", cwd=workspace)
+    _run("git", "config", "user.name", "Phase4G8 Test", cwd=workspace)
+    (workspace / "tracked.txt").write_text("base\n", encoding="utf-8")
+    _run("git", "add", "tracked.txt", cwd=workspace)
+    _run("git", "commit", "--quiet", "-m", "base", cwd=workspace)
+    base_commit = _run("git", "rev-parse", "HEAD", cwd=workspace)
+    (workspace / "tracked.txt").write_text("candidate\n", encoding="utf-8")
+    (workspace / "new.txt").write_text("new candidate file\n", encoding="utf-8")
+
+    evidence = p4g8_run._archive_candidate_evidence(
+        reports,
+        workspace,
+        base_commit=base_commit,
+    )
+    (reports / "run-report.json").write_text(
+        json.dumps({
+            "schema": p4g8_run.REAL_CASE_REPORT_SCHEMA,
+            "termination": {"reason": "runtime_terminal"},
+            "candidate_evidence": evidence,
+        }),
+        encoding="utf-8",
+    )
+
+    compacted = p4g8_run._compact_completed_phase4g8_runs(instance_root)
+
+    patch = (reports / "candidate.patch").read_bytes()
+    persisted = json.loads((reports / "candidate-evidence.json").read_text(encoding="utf-8"))
+    assert compacted[0]["status"] == "compacted_after_report_persisted"
+    assert not workspace.exists()
+    assert b"tracked.txt" in patch
+    assert b"new.txt" in patch
+    assert persisted["patch_sha256"] == evidence["patch_sha256"]
+    assert persisted["patch_bytes"] == len(patch)
+    assert persisted["protected_oracle_included"] is False
+
+
+def test_refresh_existing_node_codex_homes_preserves_session_state(tmp_path):
+    seed = tmp_path / "seed"
+    root = tmp_path / "nodes"
+    node = root / "node-existing"
+    (seed / "rules").mkdir(parents=True)
+    node.mkdir(parents=True)
+    (node / "rules").mkdir()
+    (seed / "config.toml").write_text('base_url = "new-proxy"\n', encoding="utf-8")
+    (seed / "auth.json").write_text('{"OPENAI_API_KEY":"new"}\n', encoding="utf-8")
+    (seed / "rules" / "default.rules").write_text("new policy\n", encoding="utf-8")
+    (node / ".execution-node").write_text("rnode_test\n", encoding="utf-8")
+    (node / "config.toml").write_text('base_url = "old-proxy"\n', encoding="utf-8")
+    (node / "auth.json").write_text('{"OPENAI_API_KEY":"old"}\n', encoding="utf-8")
+    (node / "rules" / "default.rules").write_text("old policy\n", encoding="utf-8")
+    state = node / "state_5.sqlite"
+    state.write_bytes(b"durable-session-state")
+
+    audit = p4g8_run._refresh_existing_node_codex_homes(
+        {"codex_home": seed, "node_codex_homes": root},
+        worker_uid=os.geteuid(),
+        worker_gid=os.getegid(),
+    )
+
+    assert audit == {
+        "refreshed": ["node-existing"],
+        "refreshed_count": 1,
+        "preserved_state_file_count": 1,
+    }
+    assert (node / "config.toml").read_text(encoding="utf-8") == 'base_url = "new-proxy"\n'
+    assert (node / "auth.json").read_text(encoding="utf-8") == '{"OPENAI_API_KEY":"new"}\n'
+    assert (node / "rules" / "default.rules").read_text(encoding="utf-8") == "new policy\n"
+    assert state.read_bytes() == b"durable-session-state"
+
+
+def test_reconstruct_resume_state_recovers_dead_worker_and_session(kanban_home):
+    with kb.connect() as conn:
+        root = kb.create_task(conn, title="phase4g8 resume", initial_status="running")
+        job_id = rk.create_runtime_job(
+            conn,
+            root,
+            "resume one coherent worker",
+            goal_items=[{"item_key": "result", "description": "result", "required": True}],
+            initialization_mode="fixture",
+        )
+        rk.advance_runtime_job(conn, job_id, create_tasks=True)
+        node = conn.execute(
+            "SELECT * FROM execution_nodes WHERE job_id = ? ORDER BY created_at LIMIT 1",
+            (job_id,),
+        ).fetchone()
+        materialization = conn.execute(
+            "SELECT * FROM node_materializations WHERE node_id = ?",
+            (node["id"],),
+        ).fetchone()
+        conn.execute(
+            "UPDATE tasks SET status = 'running', worker_pid = 99999999, claim_lock = ? WHERE id = ?",
+            (kb._claimer_id(), materialization["task_id"]),
+        )
+        conn.execute(
+            "UPDATE node_materializations SET status = 'crashed' WHERE id = ?",
+            (materialization["id"],),
+        )
+        now = int(time.time())
+        conn.execute(
+            """
+            INSERT INTO backend_worker_sessions (
+                id, job_id, node_id, backend_kind, backend_session_key, status,
+                initial_materialization_id, latest_materialization_id,
+                capability_fingerprint, node_contract_fingerprint,
+                resume_count, created_at, updated_at
+            ) VALUES (?, ?, ?, 'codex_cli', ?, 'active', ?, ?, 'cap', 'contract', 1, ?, ?)
+            """,
+            (
+                "bws_resume",
+                job_id,
+                node["id"],
+                "codex-session-resume",
+                materialization["id"],
+                materialization["id"],
+                now,
+                now,
+            ),
+        )
+
+    recovered = p4g8_run._reconstruct_resume_state(job_id, case_size="medium")
+
+    assert recovered["worker_interrupted"] is True
+    assert recovered["dead_running_task_id"] == materialization["task_id"]
+    assert recovered["prior_materialization_count"] == 1
+    assert recovered["prior_session_resume_count"] == 1
+    assert recovered["boundaries"]["daemon_restarted"] is True
+    assert recovered["boundaries"]["worker_process_interrupted"] is True
+    assert recovered["boundaries"]["worker_backend_session_resumed"] is True
+
+    recovery = p4g8_run._prepare_resumed_runtime_job(job_id)
+
+    assert recovery["detected_crashed_tasks"] == [materialization["task_id"]]
+    assert recovery["resumed_nodes"] == [node["node_key"]]
+    with kb.connect() as conn:
+        refreshed_node = conn.execute(
+            "SELECT state, latest_task_id FROM execution_nodes WHERE id = ?",
+            (node["id"],),
+        ).fetchone()
+        refreshed_task = conn.execute(
+            "SELECT status FROM tasks WHERE id = ?",
+            (materialization["task_id"],),
+        ).fetchone()
+        refreshed_materialization = conn.execute(
+            "SELECT status FROM node_materializations WHERE id = ?",
+            (materialization["id"],),
+        ).fetchone()
+        refreshed_session = conn.execute(
+            "SELECT status FROM backend_worker_sessions WHERE id = 'bws_resume'",
+        ).fetchone()
+    assert dict(refreshed_node) == {"state": "ready", "latest_task_id": None}
+    assert refreshed_task["status"] == "blocked"
+    assert refreshed_materialization["status"] == "crashed"
+    assert refreshed_session["status"] == "interrupted"
+
+
+def test_resume_requeues_incomplete_fixed_target_evaluator(kanban_home):
+    with kb.connect() as conn:
+        root = kb.create_task(conn, title="phase4g8 evaluator resume", initial_status="running")
+        job_id = rk.create_runtime_job(
+            conn,
+            root,
+            "retry evaluator feedback extraction",
+            initialization_mode="provider_first",
+        )
+        task_id = kb.create_task(
+            conn,
+            title="fixed target evaluator",
+            assignee="phase4g8-evaluator",
+            initial_status="blocked",
+            tenant=f"runtime:{job_id}",
+        )
+        now = int(time.time())
+        receipt = {
+            "infrastructure_invalid": True,
+            "official_evaluator_result": {
+                "error": "evaluator_feedback_extraction_incomplete",
+                "feedback_coverage": {"status": "extraction_incomplete"},
+            },
+        }
+        run = conn.execute(
+            """
+            INSERT INTO task_runs (
+                task_id, status, started_at, ended_at, outcome, metadata
+            ) VALUES (?, 'done', ?, ?, 'completed', ?)
+            """,
+            (task_id, now, now, json.dumps(receipt)),
+        )
+        conn.execute(
+            "UPDATE tasks SET status = 'done', current_run_id = ?, completed_at = ? WHERE id = ?",
+            (int(run.lastrowid), now, task_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO execution_nodes (
+                id, job_id, node_key, node_type, state, title, description,
+                assignee, latest_task_id, assumptions_json, constraints_json,
+                metadata_json, created_at, updated_at, completed_at
+            ) VALUES (
+                'rnode_incomplete_evaluator', ?, 'verify-fixed-target', 'verification',
+                'blocked', 'verify', 'verify fixed candidate', 'phase4g8-evaluator',
+                ?, '{}', '{}', '{}', ?, ?, ?
+            )
+            """,
+            (job_id, task_id, now, now, now),
+        )
+        conn.execute(
+            "UPDATE runtime_jobs SET state = 'waiting_decision' WHERE id = ?",
+            (job_id,),
+        )
+
+    recovery = p4g8_run._prepare_resumed_runtime_job(job_id)
+
+    assert recovery["requeued_incomplete_evaluators"] == ["verify-fixed-target"]
+    with kb.connect() as conn:
+        node = conn.execute(
+            "SELECT state, latest_task_id, completed_at FROM execution_nodes WHERE id = 'rnode_incomplete_evaluator'"
+        ).fetchone()
+        job = conn.execute("SELECT state FROM runtime_jobs WHERE id = ?", (job_id,)).fetchone()
+        event = conn.execute(
+            """
+            SELECT 1 FROM execution_events
+             WHERE job_id = ? AND event_type = 'phase4g8_incomplete_evaluator_requeued'
+            """,
+            (job_id,),
+        ).fetchone()
+    assert dict(node) == {"state": "ready", "latest_task_id": None, "completed_at": None}
+    assert job["state"] == "active"
+    assert event is not None
+
+
+def test_resume_repairs_receipt_budget_mixed_with_prior_infra_failure(
+    kanban_home,
+    tmp_path,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _run("git", "init", "--quiet", cwd=workspace)
+    _run("git", "config", "user.email", "phase4g8@example.invalid", cwd=workspace)
+    _run("git", "config", "user.name", "Phase4G8 Test", cwd=workspace)
+    (workspace / "result.txt").write_text("base\n", encoding="utf-8")
+    _run("git", "add", "result.txt", cwd=workspace)
+    _run("git", "commit", "--quiet", "-m", "base", cwd=workspace)
+    (workspace / "result.txt").write_text("candidate\n", encoding="utf-8")
+    candidate_revision = p4g8_run.collect_git_evidence(str(workspace))[
+        "workspace_revision"
+    ]
+    with kb.connect() as conn:
+        root = kb.create_task(
+            conn,
+            title="phase4g8 mixed receipt budget",
+            initial_status="running",
+        )
+        job_id = rk.create_runtime_job(
+            conn,
+            root,
+            "recover a valid workspace after malformed receipt",
+            goal_items=[
+                {
+                    "item_key": "result",
+                    "description": "produce the result",
+                    "required": True,
+                    "verifier_required": True,
+                }
+            ],
+            initialization_mode="fixture",
+            workspace_path=str(workspace),
+            runtime_metadata={"phase4g8_run_id": "phase4g8-receipt-repair"},
+        )
+        rk.advance_runtime_job(conn, job_id, create_tasks=True)
+        node = conn.execute(
+            "SELECT * FROM execution_nodes WHERE job_id = ? ORDER BY created_at LIMIT 1",
+            (job_id,),
+        ).fetchone()
+        first = conn.execute(
+            "SELECT * FROM node_materializations WHERE node_id = ?",
+            (node["id"],),
+        ).fetchone()
+        now = int(time.time())
+        conn.execute(
+            "UPDATE node_materializations SET status = 'crashed', completed_at = ? WHERE id = ?",
+            (now - 10, first["id"]),
+        )
+        conn.execute(
+            "UPDATE tasks SET status = 'blocked', completed_at = ? WHERE id = ?",
+            (now - 10, first["task_id"]),
+        )
+        second_task = kb.create_task(
+            conn,
+            title="receipt recovery attempt",
+            assignee="phase4g8-codex",
+            initial_status="blocked",
+            tenant=f"runtime:{job_id}",
+        )
+        second_run = conn.execute(
+            """
+            INSERT INTO task_runs (
+                task_id, status, started_at, ended_at, outcome, metadata
+            ) VALUES (?, 'blocked', ?, ?, 'blocked', ?)
+            """,
+            (
+                second_task,
+                now,
+                now,
+                json.dumps(
+                    {
+                        "runtime_receipt": {
+                            "schema": "runtime_worker_receipt_v1",
+                            "status": "completed",
+                            "workspace_revision": candidate_revision,
+                        }
+                    }
+                ),
+            ),
+        )
+        conn.execute(
+            "UPDATE tasks SET current_run_id = ? WHERE id = ?",
+            (int(second_run.lastrowid), second_task),
+        )
+        second_materialization_id = "mat_receipt_invalid"
+        conn.execute(
+            """
+            INSERT INTO node_materializations (
+                id, job_id, node_id, attempt, task_id, worker_lane, status,
+                created_at, completed_at, metadata_json
+            ) VALUES (?, ?, ?, 2, ?, 'phase4g8-codex', 'receipt_invalid', ?, ?, '{}')
+            """,
+            (
+                second_materialization_id,
+                job_id,
+                node["id"],
+                second_task,
+                now,
+                now,
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE execution_nodes
+               SET state = 'failed', latest_task_id = ?,
+                   output_summary = 'Runtime recovery marked node failed: receipt_invalid',
+                   completed_at = ?, updated_at = ?
+             WHERE id = ?
+            """,
+            (second_task, now, now, node["id"]),
+        )
+        conn.execute(
+            "UPDATE runtime_jobs SET state = 'waiting_decision' WHERE id = ?",
+            (job_id,),
+        )
+        rk._event(
+            conn,
+            job_id,
+            "node_recovery_not_retryable",
+            {
+                "node_key": node["node_key"],
+                "materialization_id": second_materialization_id,
+                "attempt": 2,
+                "task_id": second_task,
+                "recovery_reason": "receipt_invalid",
+                "retryable": False,
+                "policy_decision": "mark_failed",
+                "retry_limit": 1,
+            },
+            node_id=node["id"],
+            task_id=second_task,
+        )
+        strategy_task = kb.create_task(
+            conn,
+            title="speculative strategy branch",
+            assignee="phase4g8-codex",
+            initial_status="blocked",
+            tenant=f"runtime:{job_id}",
+        )
+        conn.execute(
+            """
+            INSERT INTO execution_nodes (
+                id, job_id, node_key, node_type, state, title, description,
+                assignee, latest_task_id, assumptions_json, constraints_json,
+                metadata_json, created_at, updated_at
+            ) VALUES (
+                'rnode_speculative_receipt_branch', ?, 'speculative-repair',
+                'strategy_update', 'running', 'speculative repair',
+                'incorrectly created from receipt failure', 'phase4g8-codex',
+                ?, '{}', '{}', '{}', ?, ?
+            )
+            """,
+            (job_id, strategy_task, now + 1, now + 1),
+        )
+        conn.execute(
+            """
+            INSERT INTO node_materializations (
+                id, job_id, node_id, attempt, task_id, worker_lane, status,
+                created_at, metadata_json
+            ) VALUES (
+                'mat_speculative_receipt_branch', ?,
+                'rnode_speculative_receipt_branch', 1, ?,
+                'phase4g8-codex', 'running', ?, '{}'
+            )
+            """,
+            (job_id, strategy_task, now + 1),
+        )
+
+    recovery = p4g8_run._prepare_resumed_runtime_job(job_id)
+
+    assert recovery["requeued_receipt_recoveries"] == [node["node_key"]]
+    assert recovery["receipt_branch_repair"]["repaired"] is True
+    assert recovery["receipt_branch_repair"]["superseded_nodes"] == [
+        "speculative-repair"
+    ]
+    with kb.connect() as conn:
+        refreshed_node = conn.execute(
+            "SELECT state, latest_task_id, completed_at FROM execution_nodes WHERE id = ?",
+            (node["id"],),
+        ).fetchone()
+        job = conn.execute(
+            "SELECT state FROM runtime_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        event = conn.execute(
+            """
+            SELECT payload_json FROM execution_events
+             WHERE job_id = ? AND event_type = 'phase4g8_receipt_recovery_requeued'
+            """,
+            (job_id,),
+        ).fetchone()
+        strategy = conn.execute(
+            """
+            SELECT state, latest_task_id, output_summary
+              FROM execution_nodes
+             WHERE id = 'rnode_speculative_receipt_branch'
+            """
+        ).fetchone()
+        strategy_task_status = conn.execute(
+            "SELECT status FROM tasks WHERE id = ?",
+            (strategy_task,),
+        ).fetchone()["status"]
+    assert dict(refreshed_node) == {
+        "state": "ready",
+        "latest_task_id": None,
+        "completed_at": None,
+    }
+    assert job["state"] == "active"
+    assert json.loads(event["payload_json"])["reason"] == (
+        "recovery_budget_category_repair"
+    )
+    assert dict(strategy) == {
+        "state": "superseded",
+        "latest_task_id": None,
+        "output_summary": "Superseded after receipt recovery branch repair.",
+    }
+    assert strategy_task_status == "archived"
+    with kb.connect() as conn:
+        advanced = rk.advance_runtime_job(conn, job_id, create_tasks=True)
+        assert advanced.materialized_nodes == [node["node_key"]]
+        retried = conn.execute(
+            "SELECT body FROM tasks WHERE id = (SELECT latest_task_id FROM execution_nodes WHERE id = ?)",
+            (node["id"],),
+        ).fetchone()
+    assert "Receipt protocol recovery" in retried["body"]
+    assert "verdict=candidate_ready" in retried["body"]
+
+
+def test_phase4g8_adapts_legacy_candidate_shape_without_granting_completion(
+    kanban_home,
+    tmp_path,
+):
+    workspace = tmp_path / "candidate-workspace"
+    workspace.mkdir()
+    _run("git", "init", "--quiet", cwd=workspace)
+    _run("git", "config", "user.email", "phase4g8@example.invalid", cwd=workspace)
+    _run("git", "config", "user.name", "Phase4G8 Test", cwd=workspace)
+    (workspace / "result.txt").write_text("candidate\n", encoding="utf-8")
+    _run("git", "add", "result.txt", cwd=workspace)
+    _run("git", "commit", "--quiet", "-m", "candidate", cwd=workspace)
+    revision = p4g8_run.collect_git_evidence(str(workspace))["workspace_revision"]
+    with kb.connect() as conn:
+        root = kb.create_task(
+            conn,
+            title="phase4g8 legacy candidate receipt",
+            initial_status="running",
+        )
+        job_id = rk.create_runtime_job(
+            conn,
+            root,
+            "adapt a candidate receipt but require independent evaluation",
+            goal_items=[
+                {
+                    "item_key": "result",
+                    "description": "produce the result",
+                    "required": True,
+                    "verifier_required": True,
+                }
+            ],
+            initialization_mode="fixture",
+            workspace_path=str(workspace),
+            runtime_metadata={
+                "phase4g8_run_id": "phase4g8-candidate-adapter",
+                "verification_policy": {
+                    "mode": "required_evaluator",
+                    "assignee": "phase4g8-evaluator",
+                    "require_workspace_revision": True,
+                },
+            },
+        )
+        rk.advance_runtime_job(conn, job_id, create_tasks=True)
+        node = conn.execute(
+            "SELECT * FROM execution_nodes WHERE job_id = ? ORDER BY created_at LIMIT 1",
+            (job_id,),
+        ).fetchone()
+        kb.complete_task(
+            conn,
+            node["latest_task_id"],
+            result="legacy candidate shape",
+            summary="legacy candidate shape",
+            metadata={
+                "worker_lane": {"kind": "codex_cli", "name": "phase4g8-codex"},
+                "runtime_receipt": {
+                    "schema": "runtime_worker_receipt_v1",
+                    "status": "completed",
+                    "outcome": "implementation_ready",
+                    "verification": [
+                        {
+                            "name": "unit",
+                            "result": "passed",
+                            "details": "12 passed",
+                        },
+                        {"name": "lint", "result": "passed"},
+                    ],
+                    "changed_files": ["result.txt"],
+                    "workspace_revision": revision,
+                    "independent_evaluation_run": False,
+                    "structure_request": None,
+                },
+            },
+        )
+
+        now = int(time.time())
+        conn.execute(
+            """
+            UPDATE node_materializations
+               SET status = 'receipt_invalid', completed_at = ?
+             WHERE node_id = ? AND task_id = ?
+            """,
+            (now, node["id"], node["latest_task_id"]),
+        )
+        conn.execute(
+            """
+            UPDATE execution_nodes
+               SET state = 'failed', output_summary = 'receipt invalid',
+                   completed_at = ?, updated_at = ?
+             WHERE id = ?
+            """,
+            (now, now, node["id"]),
+        )
+        conn.execute(
+            "UPDATE runtime_jobs SET state = 'waiting_decision' WHERE id = ?",
+            (job_id,),
+        )
+
+    recovery = p4g8_run._prepare_resumed_runtime_job(job_id)
+
+    assert recovery["adapted_candidate_receipts"] == [node["node_key"]]
+    with kb.connect() as conn:
+        refreshed = conn.execute(
+            "SELECT state, output_summary FROM execution_nodes WHERE id = ?",
+            (node["id"],),
+        ).fetchone()
+        job = conn.execute(
+            "SELECT state FROM runtime_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        adapter_event = conn.execute(
+            """
+            SELECT payload_json FROM execution_events
+             WHERE job_id = ? AND event_type = 'runtime_receipt_adapted'
+            """,
+            (job_id,),
+        ).fetchone()
+        ledger = conn.execute(
+            "SELECT satisfaction, verification_state FROM progress_ledger WHERE node_id = ?",
+            (node["id"],),
+        ).fetchone()
+
+    assert refreshed["state"] == "candidate_ready"
+    assert "candidate reported ready" in refreshed["output_summary"]
+    assert job["state"] != "done"
+    assert dict(ledger) == {
+        "satisfaction": "full",
+        "verification_state": "implementation_verified",
+    }
+    payload = json.loads(adapter_event["payload_json"])
+    assert payload["adapter"] == "phase4g8_candidate_shape_v1"
+    assert payload["resulting_verdict"] == "candidate_ready"
+    assert payload["independent_evaluator_still_required"] is True
+
+
+def test_phase4g8_adapts_legacy_structure_request_as_blocked(
+    kanban_home,
+    tmp_path,
+):
+    workspace = tmp_path / "structure-request-workspace"
+    workspace.mkdir()
+    _run("git", "init", "--quiet", cwd=workspace)
+    _run("git", "config", "user.email", "phase4g8@example.invalid", cwd=workspace)
+    _run("git", "config", "user.name", "Phase4G8 Test", cwd=workspace)
+    (workspace / "result.txt").write_text("blocked\n", encoding="utf-8")
+    _run("git", "add", "result.txt", cwd=workspace)
+    _run("git", "commit", "--quiet", "-m", "blocked", cwd=workspace)
+    revision = p4g8_run.collect_git_evidence(str(workspace))["workspace_revision"]
+    with kb.connect() as conn:
+        root = kb.create_task(
+            conn,
+            title="phase4g8 legacy structure request",
+            initial_status="running",
+        )
+        job_id = rk.create_runtime_job(
+            conn,
+            root,
+            "adapt a bounded structure request",
+            goal_items=[
+                {
+                    "item_key": "result",
+                    "description": "produce the result",
+                    "required": True,
+                    "verifier_required": True,
+                }
+            ],
+            initialization_mode="fixture",
+            workspace_path=str(workspace),
+            runtime_metadata={
+                "phase4g8_run_id": "phase4g8-structure-request-adapter",
+                "verification_policy": {
+                    "mode": "required_evaluator",
+                    "assignee": "phase4g8-evaluator",
+                    "require_workspace_revision": True,
+                },
+            },
+        )
+        rk.advance_runtime_job(conn, job_id, create_tasks=True)
+        node = conn.execute(
+            "SELECT * FROM execution_nodes WHERE job_id = ? ORDER BY created_at LIMIT 1",
+            (job_id,),
+        ).fetchone()
+        kb.complete_task(
+            conn,
+            node["latest_task_id"],
+            result="legacy structure request",
+            summary="legacy structure request",
+            metadata={
+                "worker_lane": {"kind": "codex_cli", "name": "phase4g8-codex"},
+                "runtime_receipt": {
+                    "schema": "runtime_worker_receipt_v1",
+                    "status": "structure_request",
+                    "outcome": "blocked_independent_verification",
+                    "verification": [
+                        {
+                            "name": "focused",
+                            "result": "passed",
+                            "details": "30 passed",
+                        },
+                        {"name": "lint", "result": "passed"},
+                    ],
+                    "changed_files": ["result.txt"],
+                    "workspace_revision": revision,
+                    "independent_evaluation_run": False,
+                    "structure_request": {
+                        "type": "independent_verification",
+                        "reason": "Evaluator diagnostics are test-id only.",
+                        "failure_signature": "efsig_test",
+                        "no_progress_streak": 2,
+                        "requested_evidence": [
+                            "One bounded assertion or traceback",
+                        ],
+                        "protected_source_access_requested": False,
+                    },
+                },
+            },
+        )
+        now = int(time.time())
+        conn.execute(
+            """
+            UPDATE node_materializations
+               SET status = 'receipt_invalid', completed_at = ?
+             WHERE node_id = ? AND task_id = ?
+            """,
+            (now, node["id"], node["latest_task_id"]),
+        )
+        conn.execute(
+            """
+            UPDATE execution_nodes
+               SET state = 'failed', output_summary = 'receipt invalid',
+                   completed_at = ?, updated_at = ?
+             WHERE id = ?
+            """,
+            (now, now, node["id"]),
+        )
+        conn.execute(
+            "UPDATE runtime_jobs SET state = 'waiting_decision' WHERE id = ?",
+            (job_id,),
+        )
+        strategy_task = kb.create_task(
+            conn,
+            title="speculative structure-request strategy",
+            assignee="phase4g8-codex",
+            initial_status="blocked",
+            tenant=f"runtime:{job_id}",
+        )
+        conn.execute(
+            "UPDATE tasks SET status = 'ready' WHERE id = ?",
+            (strategy_task,),
+        )
+        conn.execute(
+            """
+            INSERT INTO execution_nodes (
+                id, job_id, node_key, node_type, state, title, description,
+                assignee, latest_task_id, assumptions_json, constraints_json,
+                metadata_json, created_at, updated_at
+            ) VALUES (
+                'rnode_speculative_structure_branch', ?,
+                'speculative-structure-repair', 'strategy_update', 'running',
+                'speculative structure repair',
+                'created before the structure receipt was adapted',
+                'phase4g8-codex', ?, '{}', '{}', '{}', ?, ?
+            )
+            """,
+            (job_id, strategy_task, now + 1, now + 1),
+        )
+
+    recovery = p4g8_run._prepare_resumed_runtime_job(job_id)
+
+    assert recovery["adapted_structure_request_receipts"] == [node["node_key"]]
+    assert recovery["structure_request_branch_repair"] == {
+        "repaired": True,
+        "consumed": True,
+        "reason": "accepted_structure_request",
+        "superseded_nodes": ["speculative-structure-repair"],
+    }
+    with kb.connect() as conn:
+        refreshed = conn.execute(
+            "SELECT state, output_summary FROM execution_nodes WHERE id = ?",
+            (node["id"],),
+        ).fetchone()
+        job = conn.execute(
+            "SELECT state FROM runtime_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        adapter_event = conn.execute(
+            """
+            SELECT payload_json FROM execution_events
+             WHERE job_id = ? AND event_type = 'runtime_receipt_adapted'
+            """,
+            (job_id,),
+        ).fetchone()
+        request_event = conn.execute(
+            """
+            SELECT payload_json FROM execution_events
+             WHERE job_id = ? AND event_type = 'worker_structure_requested'
+            """,
+            (job_id,),
+        ).fetchone()
+        strategy = conn.execute(
+            """
+            SELECT state, latest_task_id, output_summary
+              FROM execution_nodes
+             WHERE id = 'rnode_speculative_structure_branch'
+            """
+        ).fetchone()
+
+    assert refreshed["state"] == "blocked"
+    assert refreshed["output_summary"] == "Evaluator diagnostics are test-id only."
+    assert job["state"] == "active"
+    adapter_payload = json.loads(adapter_event["payload_json"])
+    assert adapter_payload["adapter"] == "phase4g8_structure_request_shape_v1"
+    assert adapter_payload["resulting_verdict"] == "blocked"
+    request_payload = json.loads(request_event["payload_json"])
+    assert request_payload["structure_request"]["reason_type"] == (
+        "independent_verification"
+    )
+    assert request_payload["structure_request"]["failure_signature"] == (
+        "efsig_test"
+    )
+    assert dict(strategy) == {
+        "state": "superseded",
+        "latest_task_id": None,
+        "output_summary": (
+            "Superseded after worker structure request acceptance."
+        ),
+    }
+
+
+def test_resume_reclaims_only_dead_phase4g8_daemon_advance_lock(kanban_home):
+    with kb.connect() as conn:
+        root = kb.create_task(conn, title="phase4g8 dead lock", initial_status="running")
+        job_id = rk.create_runtime_job(
+            conn,
+            root,
+            "recover dead daemon lock",
+            initialization_mode="provider_first",
+            runtime_metadata={"phase4g8_run_id": "phase4g8-lock-test"},
+        )
+        conn.execute(
+            """
+            UPDATE runtime_jobs
+               SET advance_lock = 'runtime-daemon:test-host:99999999:test-token',
+                   claim_expires_at = ?
+             WHERE id = ?
+            """,
+            (int(time.time()) + 900, job_id),
+        )
+
+    recovery = p4g8_run._prepare_resumed_runtime_job(job_id)
+
+    assert recovery["reclaimed_dead_advance_lock"]["reclaimed"] is True
+    assert recovery["reclaimed_dead_advance_lock"]["owner_pid"] == 99999999
+    with kb.connect() as conn:
+        job = conn.execute(
+            "SELECT advance_lock, claim_expires_at FROM runtime_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        event = conn.execute(
+            """
+            SELECT 1 FROM execution_events
+             WHERE job_id = ? AND event_type = 'phase4g8_dead_advance_lock_reclaimed'
+            """,
+            (job_id,),
+        ).fetchone()
+    assert dict(job) == {"advance_lock": None, "claim_expires_at": None}
+    assert event is not None
+
+
+def test_resume_preserves_live_phase4g8_daemon_advance_lock(kanban_home):
+    with kb.connect() as conn:
+        root = kb.create_task(conn, title="phase4g8 live lock", initial_status="running")
+        job_id = rk.create_runtime_job(
+            conn,
+            root,
+            "preserve live daemon lock",
+            initialization_mode="provider_first",
+            runtime_metadata={"phase4g8_run_id": "phase4g8-lock-test"},
+        )
+        owner = f"runtime-daemon:test-host:{os.getpid()}:test-token"
+        conn.execute(
+            "UPDATE runtime_jobs SET advance_lock = ?, claim_expires_at = ? WHERE id = ?",
+            (owner, int(time.time()) + 900, job_id),
+        )
+
+    recovery = p4g8_run._prepare_resumed_runtime_job(job_id)
+
+    assert recovery["reclaimed_dead_advance_lock"] == {
+        "reclaimed": False,
+        "reason": "lock_owner_alive",
+        "owner_pid": os.getpid(),
+    }
+    with kb.connect() as conn:
+        assert conn.execute(
+            "SELECT advance_lock FROM runtime_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()["advance_lock"] == owner
 
 
 def test_phase4g8_real_workspace_contains_only_shallow_base_without_target_refs(tmp_path):
@@ -590,6 +1951,90 @@ def test_fault_trigger_requires_exact_receipt_before_ingest_state(kanban_home):
         assert trigger["facts"]["node_id"] == node["id"]
         assert rk.ingest_runtime_node_evidence(conn, node["id"])
         assert p4g8.evaluate_fault_trigger(conn, job_id, "receipt_before_ingest")["ready"] is False
+
+
+def test_receipt_before_ingest_trigger_and_counts_are_materialization_scoped(kanban_home):
+    with kb.connect() as conn:
+        root = kb.create_task(conn, title="phase4g8 retry trigger", initial_status="running")
+        job_id = rk.create_runtime_job(
+            conn,
+            root,
+            "retry the same runtime node",
+            goal_items=[{"item_key": "result", "description": "result", "required": True}],
+            initialization_mode="fixture",
+        )
+        rk.advance_runtime_job(conn, job_id, create_tasks=True)
+        node = conn.execute(
+            "SELECT * FROM execution_nodes WHERE job_id = ? AND node_key = 'understand-scope'",
+            (job_id,),
+        ).fetchone()
+        kb.complete_task(
+            conn,
+            node["latest_task_id"],
+            result="first receipt",
+            summary="first receipt",
+            metadata={
+                "verdict": "succeeded",
+                "summary": "first receipt",
+                "claimed_goal_items": ["result"],
+                "verification": {"passed": True},
+            },
+        )
+        assert rk.ingest_runtime_node_evidence(conn, node["id"])
+        conn.execute(
+            """
+            UPDATE execution_nodes
+               SET state = 'ready', latest_task_id = NULL, latest_run_id = NULL,
+                   completed_at = NULL
+             WHERE id = ?
+            """,
+            (node["id"],),
+        )
+        retry_node = conn.execute(
+            "SELECT * FROM execution_nodes WHERE id = ?",
+            (node["id"],),
+        ).fetchone()
+        retry_task = rk.materialize_runtime_node(conn, dict(retry_node))
+        retry_node = conn.execute(
+            "SELECT * FROM execution_nodes WHERE id = ?",
+            (node["id"],),
+        ).fetchone()
+        retry_materialization = conn.execute(
+            "SELECT * FROM node_materializations WHERE task_id = ?",
+            (retry_task,),
+        ).fetchone()
+        kb.complete_task(
+            conn,
+            retry_task,
+            result="second receipt",
+            summary="second receipt",
+            metadata={
+                "verdict": "succeeded",
+                "summary": "second receipt",
+                "claimed_goal_items": ["result"],
+                "verification": {"passed": True},
+            },
+        )
+
+        trigger = p4g8.evaluate_fault_trigger(conn, job_id, "receipt_before_ingest")
+        before = p4g8.runtime_fact_counts(
+            conn,
+            job_id,
+            node["id"],
+            materialization_id=retry_materialization["id"],
+        )
+
+        assert trigger["ready"] is True
+        assert trigger["facts"]["materialization_id"] == retry_materialization["id"]
+        assert before == {"ledger": 0, "terminal_events": 0, "terminal_materializations": 0}
+        assert rk.ingest_runtime_node_evidence(conn, retry_node["id"])
+        after = p4g8.runtime_fact_counts(
+            conn,
+            job_id,
+            node["id"],
+            materialization_id=retry_materialization["id"],
+        )
+        assert after == {"ledger": 1, "terminal_events": 1, "terminal_materializations": 1}
 
 
 def test_fault_trigger_detects_only_expired_lease(kanban_home):
@@ -813,6 +2258,99 @@ def test_network_namespace_allows_only_model_proxy():
         thread.join(timeout=5)
 
 
+def test_model_proxy_forwards_websocket_upgrade_and_bidirectional_bytes():
+    observed = {}
+
+    class WebSocketUpstreamHandler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self):  # noqa: N802
+            observed["path"] = self.path
+            observed["upgrade"] = self.headers.get("Upgrade")
+            observed["connection"] = self.headers.get("Connection")
+            self.send_response(101, "Switching Protocols")
+            self.send_header("Upgrade", "websocket")
+            self.send_header("Connection", "Upgrade")
+            self.end_headers()
+            self.wfile.flush()
+            frame = self.rfile.read(6)
+            observed["frame"] = frame
+            self.wfile.write(frame)
+            self.wfile.flush()
+
+        def log_message(self, _format, *_args):
+            return
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), WebSocketUpstreamHandler)
+    upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+    upstream_thread.start()
+    proxy = p4g8._ModelProxyServer(
+        ("127.0.0.1", 0),
+        f"http://127.0.0.1:{upstream.server_address[1]}/v1",
+        5,
+    )
+    proxy_thread = threading.Thread(target=proxy.serve_forever, daemon=True)
+    proxy_thread.start()
+    try:
+        with socket.create_connection(proxy.server_address, timeout=5) as client:
+            client.sendall(
+                b"GET /v1/responses HTTP/1.1\r\n"
+                b"Host: phase4g8-proxy\r\n"
+                b"Upgrade: websocket\r\n"
+                b"Connection: Upgrade\r\n"
+                b"Sec-WebSocket-Version: 13\r\n"
+                b"Sec-WebSocket-Key: dGVzdC1rZXk=\r\n\r\n"
+            )
+            handshake = p4g8._read_http_header(client, max_bytes=64 * 1024)
+            assert handshake.startswith(b"HTTP/1.1 101 Switching Protocols\r\n")
+            frame = b"\x81\x04ping"
+            client.sendall(frame)
+            assert client.recv(len(frame)) == frame
+        assert observed == {
+            "path": "/v1/responses",
+            "upgrade": "websocket",
+            "connection": "Upgrade",
+            "frame": b"\x81\x04ping",
+        }
+        assert proxy.transport_audit() == {
+            "schema": "hermes_phase4g8_model_transport_audit_v1",
+            "http_request_count": 0,
+            "websocket_upgrade_attempt_count": 1,
+            "websocket_101_count": 1,
+            "websocket_failure_count": 0,
+        }
+    finally:
+        proxy.shutdown()
+        proxy.server_close()
+        proxy_thread.join(timeout=5)
+        upstream.shutdown()
+        upstream.server_close()
+        upstream_thread.join(timeout=5)
+
+
+def test_websocket_relay_does_not_treat_idle_poll_as_connection_ttl():
+    client_peer, proxy_client = socket.socketpair()
+    upstream_peer, proxy_upstream = socket.socketpair()
+    relay = threading.Thread(
+        target=p4g8._relay_bidirectional,
+        args=(proxy_client, proxy_upstream),
+        kwargs={"idle_timeout_seconds": 0.05},
+        daemon=True,
+    )
+    relay.start()
+    try:
+        time.sleep(0.15)
+        assert relay.is_alive()
+        client_peer.sendall(b"after-idle")
+        assert upstream_peer.recv(10) == b"after-idle"
+    finally:
+        client_peer.close()
+        upstream_peer.close()
+        proxy_client.close()
+        proxy_upstream.close()
+        relay.join(timeout=2)
+
+
 def test_isolated_codex_home_copies_only_model_source_and_preserves_source(tmp_path):
     source = tmp_path / "source-codex"
     target = tmp_path / "isolated-codex"
@@ -824,7 +2362,10 @@ def test_isolated_codex_home_copies_only_model_source_and_preserves_source(tmp_p
         '[model_providers.private]\n'
         'name = "Private"\n'
         'base_url = "https://model.example.invalid/v1"\n'
-        'wire_api = "responses"\n',
+        'wire_api = "responses"\n'
+        'supports_websockets = true\n'
+        'stream_max_retries = 20\n'
+        'websocket_connect_timeout_ms = 8000\n',
         encoding="utf-8",
     )
     (source / "auth.json").write_text(
@@ -841,15 +2382,41 @@ def test_isolated_codex_home_copies_only_model_source_and_preserves_source(tmp_p
     )
 
     isolated_config = (target / "config.toml").read_text(encoding="utf-8")
+    parsed_config = tomllib.loads(isolated_config)
     isolated_auth = json.loads((target / "auth.json").read_text(encoding="utf-8"))
     assert "http://10.203.20.1:43210/v1" in isolated_config
     assert "https://model.example.invalid/v1" not in isolated_config
     assert 'model_reasoning_effort = "high"' in isolated_config
+    assert parsed_config["approval_policy"] == "on-request"
+    assert parsed_config["approvals_reviewer"] == "auto_review"
+    assert parsed_config["features"]["guardian_approval"] is True
+    isolated_provider = parsed_config["model_providers"]["phase4g8_proxy"]
+    assert isolated_provider["supports_websockets"] is True
+    assert isolated_provider["stream_max_retries"] == 20
+    assert isolated_provider["websocket_connect_timeout_ms"] == 8000
+    assert "protected benchmark oracle material" in parsed_config["auto_review"]["policy"]
+    exec_policy = (target / "rules" / "default.rules").read_text(encoding="utf-8")
+    assert 'pattern = [["sudo", "su", "doas", "pkexec"]]' in exec_policy
+    assert 'pattern = [["rm", "chmod", "chown"' in exec_policy
+    assert 'decision = "prompt"' in exec_policy
     assert isolated_auth["OPENAI_API_KEY"] == "sk-phase4g8-isolation-secret"
     assert not (target / "sessions").exists()
     assert (target / "config.toml").stat().st_mode & 0o077 == 0
     assert (target / "auth.json").stat().st_mode & 0o077 == 0
     assert report["copied_session_history"] is False
+    assert report["provider_transport"] == {
+        "supports_websockets": True,
+        "stream_max_retries": 20,
+        "websocket_connect_timeout_ms": 8000,
+    }
+    assert report["approval"] == p4g8.audit_phase4g8_codex_auto_review(target / "config.toml")
+    assert report["approval"]["configured"] is True
+    assert report["approval"]["policy"] == "on-request"
+    assert report["approval"]["reviewer"] == "auto_review"
+    assert report["approval"]["auto_review_policy_version"] == "phase4g8-dangerous-operations-v1"
+    assert report["approval"]["exec_policy_version"] == "phase4g8-exec-policy-v1"
+    assert len(report["approval"]["exec_policy_sha256"]) == 64
+    assert "protected benchmark oracle material" not in json.dumps(report["approval"])
     assert p4g8.verify_codex_source_unchanged(source, report["source_hashes"]) is True
 
     model_source = p4g8.load_codex_model_source(source)
@@ -859,6 +2426,36 @@ def test_isolated_codex_home_copies_only_model_source_and_preserves_source(tmp_p
     assert model_source["explicit_base_url"] == "https://model.example.invalid/v1"
     assert model_source["explicit_api_key"] == "sk-phase4g8-isolation-secret"
     assert "sk-phase4g8-isolation-secret" not in json.dumps(model_source["summary"])
+
+
+def test_real_case_codex_lane_enables_isolated_auto_review(tmp_path):
+    evaluator_spec = tmp_path / "qualification.json"
+    evaluator_spec.write_text("{}\n", encoding="utf-8")
+    codex_seed = tmp_path / "codex-seed"
+    codex_seed.mkdir()
+    codex_root = tmp_path / "codex-homes"
+
+    try:
+        p4g8_run._register_real_case_lanes(
+            run_id="phase4g8-small-1234567890",
+            model="gpt-5.4",
+            namespace="h4g8-1234abcd",
+            worker_timeout_seconds=60,
+            evaluator_spec=evaluator_spec,
+            expected_environment_sha256="a" * 64,
+            worker_uid=os.geteuid(),
+            worker_gid=os.getegid(),
+            codex_home_seed=codex_seed,
+            codex_home_root=codex_root,
+        )
+
+        lane = get_worker_lane("phase4g8-codex")
+        assert lane is not None
+        assert lane.config["sandbox"] == "danger-full-access"
+        assert lane.config["approval"] == "on-request"
+        assert lane.config["isolated_codex_home_seed"] == str(codex_seed)
+    finally:
+        clear_worker_lanes()
 
 
 def test_run_report_separates_runtime_correctness_from_task_quality(kanban_home):
@@ -895,7 +2492,40 @@ def test_run_report_separates_runtime_correctness_from_task_quality(kanban_home)
     assert report["classification"] == "runtime-correct/task-failed"
 
 
-def test_evaluator_failure_budget_stops_only_after_latest_unresolved_attempt():
+def test_run_report_separates_resource_exhaustion(kanban_home):
+    with kb.connect() as conn:
+        job_id = rk.create_runtime_job(
+            conn,
+            kb.create_task(conn, title="resource exhaustion root", initial_status="running"),
+            "report resource exhaustion separately",
+            goal_items=[{
+                "item_key": "result",
+                "description": "result",
+                "required": True,
+                "verifier_required": True,
+            }],
+            initialization_mode="provider_first",
+        )
+        evaluator = {
+            "schema": p4g8.EVALUATOR_RESULT_SCHEMA,
+            "resolved": False,
+            "fail_to_pass": {"passed": 0, "failed": 1, "total": 1},
+            "pass_to_pass": {"passed": 2, "failed": 0, "total": 2},
+        }
+        report = p4g8.build_phase4g8_run_report(
+            conn,
+            job_id,
+            instance_id="medium",
+            evaluator_result=evaluator,
+            process_boundaries={"daemon_restart": True, "independent_evaluator": True},
+            metrics={"resource_exhausted": True},
+        )
+
+    assert report["runtime_validation"]["passed"] is True
+    assert report["classification"] == "runtime-correct/resource-exhausted"
+
+
+def test_fixed_evaluator_attempt_budget_is_ignored_while_feedback_can_progress():
     failures = [
         {"result": {"resolved": False}},
         {"result": {"resolved": False}},
@@ -907,13 +2537,13 @@ def test_evaluator_failure_budget_stops_only_after_latest_unresolved_attempt():
         max_unresolved_evaluator_attempts=3,
     )
 
-    assert status == {
-        "attempt_count": 3,
-        "failure_count": 3,
-        "max_unresolved_evaluator_attempts": 3,
-        "latest_resolved": False,
-        "exhausted": True,
-    }
+    assert status["attempt_count"] == 3
+    assert status["failure_count"] == 3
+    assert status["max_unresolved_evaluator_attempts"] == 3
+    assert status["latest_resolved"] is False
+    assert status["latest_feedback_extraction_incomplete"] is False
+    assert status["deprecated_fixed_attempt_budget_ignored"] is True
+    assert status["exhausted"] is False
     resolved = p4g8_run._evaluator_failure_budget_status(
         [*failures, {"result": {"resolved": True}}],
         max_unresolved_evaluator_attempts=3,
@@ -931,6 +2561,62 @@ def test_evaluator_failure_budget_stops_only_after_latest_unresolved_attempt():
     assert infrastructure_invalid["attempt_count"] == 2
     assert infrastructure_invalid["failure_count"] == 1
     assert infrastructure_invalid["exhausted"] is False
+    incomplete = p4g8_run._evaluator_failure_budget_status(
+        [{
+            "result": {
+                "resolved": False,
+                "feedback_coverage": {"status": "extraction_incomplete"},
+            },
+        }],
+        max_unresolved_evaluator_attempts=1,
+    )
+    assert incomplete["failure_count"] == 0
+    assert incomplete["exhausted"] is False
+    assert incomplete["latest_feedback_extraction_incomplete"] is True
+
+
+def test_evaluator_progress_tracks_deeper_signature_and_feedback_consumption():
+    test_id = "tests/test_feature.py::test_contract"
+
+    def attempt(passed, expected, *, consumed):
+        return {
+            "node_id": f"verifier-{expected}",
+            "feedback_consumed": consumed,
+            "result": {
+                "resolved": False,
+                "fail_to_pass": {
+                    "passed": passed,
+                    "failed": 1,
+                    "total": passed + 1,
+                    "failed_tests": [test_id],
+                },
+                "pass_to_pass": {
+                    "passed": 10,
+                    "failed": 0,
+                    "total": 10,
+                    "failed_tests": [],
+                },
+                "failure_diagnostics": {
+                    "cases": [{
+                        "test_id": test_id,
+                        "failure_kind": "assertion_comparison_failed",
+                        "expected": [expected],
+                    }],
+                },
+            },
+        }
+
+    status = p4g8_run._evaluator_progress_status([
+        attempt(0, "first assertion", consumed=True),
+        attempt(0, "deeper assertion", consumed=True),
+        attempt(0, "deeper assertion", consumed=False),
+    ])
+
+    assert status["history"][1]["signature_changed"] is True
+    assert status["history"][1]["progress"] is True
+    assert status["history"][2]["progress"] is False
+    assert status["no_progress_streak"] == 1
+    assert status["latest_feedback_consumed"] is False
 
 
 def test_official_evaluator_heartbeat_loop_stops_when_run_is_superseded(monkeypatch):
@@ -992,7 +2678,39 @@ def test_aggregate_requires_runtime_three_of_three_separately_from_resolved_thre
     assert aggregate["capability_validation"] == {"passed": False, "resolved_instances": 2, "total_instances": 3}
 
 
-def test_official_evaluator_lane_completes_goal_through_task_receipt(kanban_home, tmp_path):
+def test_official_evaluator_lane_forwards_expected_environment_fingerprint(tmp_path, monkeypatch):
+    spec_path = tmp_path / "qualification-spec.json"
+    spec_path.write_text("{}\n", encoding="utf-8")
+    expected = "a" * 64
+    captured = {}
+
+    class FakeProcess:
+        pid = 12345
+
+    def fake_popen(command, **kwargs):
+        captured["command"] = command
+        captured.update(kwargs)
+        return FakeProcess()
+
+    monkeypatch.setattr(p4g8.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(kb, "worker_log_path", lambda *_args, **_kwargs: tmp_path / "evaluator.log")
+    lane = p4g8.make_phase4g8_evaluator_lane({
+        "name": "phase4g8-evaluator",
+        "spec_path": str(spec_path),
+        "run_id": "phase4g8-environment-test",
+        "expected_environment_sha256": expected,
+    })
+    task = type("Task", (), {"id": "task-environment", "current_run_id": None})()
+
+    assert lane.spawn_fn(task, str(tmp_path), board="default") == 12345
+    assert captured["env"]["HERMES_PHASE4G8_EXPECTED_ENVIRONMENT_SHA256"] == expected
+
+
+def test_official_evaluator_lane_completes_goal_through_task_receipt(
+    kanban_home,
+    tmp_path,
+    monkeypatch,
+):
     clear_worker_lanes()
     spec, _ = _qualified_fixture(tmp_path)
     spec_path = tmp_path / "protected-spec.json"
@@ -1131,7 +2849,7 @@ def test_official_evaluator_lane_completes_goal_through_task_receipt(kanban_home
                 "SELECT * FROM backend_worker_sessions WHERE node_id = ?",
                 (verifier["id"],),
             ).fetchone()
-            assert session["status"] == "active"
+            assert session["status"] == "completed"
             durable_counts_before = {
                 "patches": conn.execute(
                     "SELECT COUNT(*) FROM graph_patches WHERE job_id = ?",
@@ -1169,6 +2887,16 @@ def test_official_evaluator_lane_completes_goal_through_task_receipt(kanban_home
                     (job_id,),
                 ).fetchone()[0],
             }
+            original_node_trace = capability_trace._node_trace
+
+            def node_trace_with_resume(*args, **kwargs):
+                node_trace = original_node_trace(*args, **kwargs)
+                if node_trace["node_type"] != "verification":
+                    node_trace["resume_count"] = 2
+                    node_trace["backend_session_keys"] = ["worker-thread"]
+                return node_trace
+
+            monkeypatch.setattr(capability_trace, "_node_trace", node_trace_with_resume)
             trace = capability_trace.build_capability_trace(
                 conn,
                 job_id,
@@ -1190,8 +2918,42 @@ def test_official_evaluator_lane_completes_goal_through_task_receipt(kanban_home
             )
             assert trace["schema"] == capability_trace.CAPABILITY_TRACE_SCHEMA
             assert trace["counts"]["worker_nodes"] == 1
+            assert trace["counts"]["superseded_worker_nodes"] == 0
             assert trace["counts"]["evaluator_attempts"] == 1
+            continuity = next(
+                item for item in trace["observations"]
+                if item["category"] == "context_continuity"
+            )
+            assert continuity["assessment"] == "preserved"
+            assert "session_resume_count=2" in continuity["evidence"]
             assert any(item["kind"] == "evaluator" for item in trace["timeline"])
+
+            def node_trace_as_superseded(*args, **kwargs):
+                node_trace = original_node_trace(*args, **kwargs)
+                if node_trace["node_type"] != "verification":
+                    node_trace["state"] = "superseded"
+                return node_trace
+
+            monkeypatch.setattr(capability_trace, "_node_trace", node_trace_as_superseded)
+            superseded_trace = capability_trace.build_capability_trace(
+                conn,
+                job_id,
+                run_id="official-evaluator-control",
+                instance_id="toy-evolution",
+                case_size="small",
+                run_report={
+                    "classification": "resolved",
+                    "runtime_validation": {"passed": True},
+                    "capability_validation": {"passed": True, "official_resolved": True},
+                    "metrics": {},
+                },
+            )
+            assert superseded_trace["counts"]["worker_nodes"] == 0
+            assert superseded_trace["counts"]["superseded_worker_nodes"] == 1
+            assert not any(
+                item["category"] == "context_continuity"
+                for item in superseded_trace["observations"]
+            )
             rendered = capability_trace.render_capability_trace_markdown(trace)
             assert "实际能力过程记录" in rendered
             assert "Runtime Validation：通过" in rendered

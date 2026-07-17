@@ -97,21 +97,37 @@ def run_official_evaluator(
     after = collect_git_evidence(str(workspace))
     workspace_unchanged = before.get("workspace_revision") == after.get("workspace_revision")
     passed = result.get("resolved") is True and workspace_unchanged
-    infrastructure_invalid = result.get("error") in {"stale_target_revision"}
+    feedback_coverage = result.get("feedback_coverage")
+    feedback_extraction_incomplete = bool(
+        isinstance(feedback_coverage, dict)
+        and feedback_coverage.get("status") == "extraction_incomplete"
+    )
+    infrastructure_invalid = _is_evaluator_infrastructure_invalid(result)
     failed_tests = [
         str(test_id)
         for section in (result.get("fail_to_pass") or {}, result.get("pass_to_pass") or {})
         for test_id in section.get("failed_tests") or []
-    ][:20]
-    failure_detail = ", ".join(failed_tests)
+    ]
+    displayed_failed_tests = failed_tests[:20]
+    failure_detail = ", ".join(displayed_failed_tests)
+    if len(failed_tests) > len(displayed_failed_tests):
+        failure_detail += f" (+{len(failed_tests) - len(displayed_failed_tests)} more in structured result)"
     failure_summary = (
         f"official evaluator did not resolve fixed target; failed tests: {failure_detail}"
         if failure_detail
         else "official evaluator did not resolve fixed target"
     )
+    if feedback_extraction_incomplete:
+        failure_summary = (
+            "official evaluator feedback extraction was incomplete; protected raw artifacts "
+            "were retained for local infrastructure diagnosis"
+        )
     diagnostics = result.get("failure_diagnostics")
     if isinstance(diagnostics, dict) and diagnostics.get("text"):
-        failure_summary += "\nFailure diagnostics:\n" + str(diagnostics["text"])
+        diagnostic_summary = str(diagnostics["text"])
+        failure_summary += "\nFailure diagnostics (summary):\n" + diagnostic_summary[:4000]
+        if len(diagnostic_summary) > 4000:
+            failure_summary += "\n[additional diagnostics retained in structured result]"
     receipt = {
         "schema": "runtime_worker_receipt_v1",
         "verdict": "pass" if passed else ("blocked" if infrastructure_invalid else "failed"),
@@ -127,6 +143,7 @@ def run_official_evaluator(
             "summary": "official evaluator result" if passed else failure_summary,
             "workspace_unchanged": workspace_unchanged,
             "infrastructure_invalid": infrastructure_invalid,
+            "environment_fingerprint": result.get("environment_fingerprint"),
         },
         "verification_provenance": provenance,
         "artifacts": [{
@@ -153,10 +170,27 @@ def run_official_evaluator(
                 "workspace_unchanged": workspace_unchanged,
                 "target_revision": target["target_revision"],
                 "result_ref": receipt["artifacts"][0]["path_or_ref"],
+                "environment_sha256": (
+                    (result.get("environment_fingerprint") or {}).get("sha256")
+                ),
             },
             run_id=task_run_id,
         )
     return receipt
+
+
+def _is_evaluator_infrastructure_invalid(result: dict[str, Any]) -> bool:
+    coverage = result.get("feedback_coverage")
+    return bool(
+        result.get("error") in {
+            "stale_target_revision",
+            "evaluator_feedback_extraction_incomplete",
+        }
+        or (
+            isinstance(coverage, dict)
+            and coverage.get("status") == "extraction_incomplete"
+        )
+    )
 
 
 def _heartbeat_evaluator(

@@ -1,0 +1,18 @@
+{
+  "schema": "hermes_phase4g8_run_retention_v1",
+  "run_id": "phase4g8-medium-85eef83bdd",
+  "status": "compacted_after_report_persisted",
+  "bytes_removed": 40505452,
+  "removed_entries": [
+    "codex-home-seed",
+    "codex-homes",
+    "hermes-home",
+    "home",
+    "service",
+    "workspace"
+  ],
+  "preserved_entries": [
+    "reports"
+  ],
+  "compacted_at": 1784123362
+}

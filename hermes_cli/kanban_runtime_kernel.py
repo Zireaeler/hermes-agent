@@ -13,22 +13,27 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import subprocess
 import time
 import uuid
 from typing import Any, Callable, Iterable, Optional
 
+from agent.redact import redact_sensitive_text
 from hermes_cli import kanban_db as kb
 
 
 PATCH_SCHEMA = "runtime_graph_patch_v1"
+EVALUATOR_FAILURE_BUNDLE_SCHEMA = "runtime_evaluator_failure_bundle_v1"
+OFFICIAL_EVALUATOR_RESULT_SCHEMA = "hermes_phase4g8_evaluator_result_v1"
 
 NODE_STATES = {
     "planned",
     "waiting_dependency",
     "ready",
     "running",
+    "candidate_ready",
     "succeeded",
     "failed",
     "blocked",
@@ -105,7 +110,14 @@ HUMAN_DECISION_TYPES = {
     "legal_or_policy",
 }
 TERMINAL_NODE_STATES = {"succeeded", "failed", "blocked", "cancelled", "superseded"}
-OPEN_NODE_STATES = {"planned", "waiting_dependency", "ready", "running", "waiting_human"}
+OPEN_NODE_STATES = {
+    "planned",
+    "waiting_dependency",
+    "ready",
+    "running",
+    "candidate_ready",
+    "waiting_human",
+}
 
 
 @dataclass
@@ -151,6 +163,10 @@ RECOVERY_EVENT_TYPES = {
     "worker_session_fallback_fresh",
     "worker_context_reacquired",
     "worker_session_identity_conflict",
+    "evaluator_failure_bundle_created",
+    "required_evaluator_remediation_scheduled",
+    "required_evaluator_remediation_not_resumable",
+    "required_evaluator_remediation_budget_exhausted",
 }
 
 WORKER_SESSION_EVENT_TYPES = {
@@ -203,14 +219,21 @@ CAPABILITY_EVENT_TYPES = {
     "capability_policy_blocked",
 }
 
-RECOVERY_FAILURE_STATUSES = {
+INFRA_RECOVERY_FAILURE_STATUSES = {
     "lost",
     "stale",
     "timed_out",
     "crashed",
+}
+
+RECEIPT_RECOVERY_FAILURE_STATUSES = {
     "receipt_missing",
     "receipt_invalid",
 }
+
+RECOVERY_FAILURE_STATUSES = (
+    INFRA_RECOVERY_FAILURE_STATUSES | RECEIPT_RECOVERY_FAILURE_STATUSES
+)
 
 DEFAULT_RUNTIME_RECOVERY_POLICY = {
     "infra_retry_limit": 1,
@@ -1221,7 +1244,7 @@ def create_runtime_job(
                 "kind": "phase1-fixture" if initialization_mode == "fixture" else "runtime-objective"
             },
             "evidence_requirements": {"requires_verification": True},
-            "verifier_required": True,
+            "verifier_required": initialization_mode == "fixture",
         }
     ]
     prefix_hash = hashlib.sha256(
@@ -1860,13 +1883,31 @@ def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]
                 raise PatchValidationError("dependency would create a cycle")
         elif name == "insert_verifier":
             target_key = op.get("target_node_key")
+            target_node = None
             if target_key:
-                _node_by_key(conn, job_id, str(target_key))
+                target_node = _node_by_key(conn, job_id, str(target_key))
             goal_key = op.get("target_goal_item_key")
             if goal_key:
                 _goal_item_by_key(conn, job_id, str(goal_key))
             if not target_key and not goal_key:
                 raise PatchValidationError("insert_verifier requires target_node_key or target_goal_item_key")
+            linked_goal_keys = {
+                str(key)
+                for key in (op.get("goal_item_keys") or [])
+                if str(key).strip()
+            }
+            if goal_key:
+                linked_goal_keys.add(str(goal_key))
+            if target_node is not None:
+                linked_goal_keys.update(_node_linked_goal_item_keys(conn, target_node))
+            linked_goal_items = [
+                _goal_item_by_key(conn, job_id, key)
+                for key in sorted(linked_goal_keys)
+            ]
+            if not any(bool(item["verifier_required"]) for item in linked_goal_items):
+                raise PatchValidationError(
+                    "insert_verifier requires a linked goal item with verifier_required=true"
+                )
             if not any(op.get(field) not in {None, ""} for field in VERIFIER_TARGET_FIELDS):
                 raise PatchValidationError("insert_verifier requires a fixed target evidence/materialization/artifact/workspace reference")
             if op.get("target_evidence_ref"):
@@ -2086,7 +2127,8 @@ def _apply_op(conn: sqlite3.Connection, job_id: str, op: dict[str, Any]) -> None
             "assignee": op.get("assignee"),
             "depends_on": (
                 [op["target_node_key"]]
-                if target_node is not None and target_node["state"] not in TERMINAL_NODE_STATES
+                if target_node is not None
+                and target_node["state"] not in TERMINAL_NODE_STATES | {"candidate_ready"}
                 else []
             ),
             "requested_capabilities": op.get("requested_capabilities") or [],
@@ -2231,6 +2273,7 @@ def summarize_active_frontier(conn: sqlite3.Connection, job_id: str) -> dict[str
         "running": [],
         "waiting_human": [],
         "waiting_dependency": [],
+        "candidate_ready": [],
         "planned": [],
         "failed": [],
         "succeeded": [],
@@ -2255,6 +2298,7 @@ def summarize_active_frontier(conn: sqlite3.Connection, job_id: str) -> dict[str
         "has_legal_wait": bool(
             buckets["running"]
             or buckets["waiting_human"]
+            or buckets["candidate_ready"]
             or _has_pending_decision(conn, job_id)
             or waiting_decision
         ),
@@ -2954,9 +2998,30 @@ def _plan_worker_execution_continuity(
         reasons.append("capability_fingerprint_mismatch")
     if session.get("node_contract_fingerprint") != _node_contract_fingerprint(node):
         reasons.append("node_contract_fingerprint_mismatch")
-    if int(session.get("resume_count") or 0) >= WORKER_SESSION_RESUME_LIMIT:
+    job_metadata = _loads(job.get("metadata_json"))
+    verification_policy = job_metadata.get("verification_policy")
+    remediation_policy = (
+        verification_policy.get("remediation")
+        if isinstance(verification_policy, dict)
+        and isinstance(verification_policy.get("remediation"), dict)
+        else {}
+    )
+    evaluator_remediation = remediation_policy.get("mode") == "resume_target_session"
+    try:
+        resume_limit = (
+            None
+            if evaluator_remediation
+            else max(
+                1,
+                int(remediation_policy.get("max_session_resumes") or WORKER_SESSION_RESUME_LIMIT),
+            )
+        )
+    except (TypeError, ValueError):
+        resume_limit = WORKER_SESSION_RESUME_LIMIT
+    if resume_limit is not None and int(session.get("resume_count") or 0) >= resume_limit:
         reasons.append("resume_limit_exhausted")
 
+    checkpoint = _loads(session.get("checkpoint_json"))
     common = {
         "backend_session_record_id": session["id"],
         "resume_session_id": session["backend_session_key"],
@@ -2966,7 +3031,12 @@ def _plan_worker_execution_continuity(
         "worker_lane": assignee,
         "capability_fingerprint": _node_capability_fingerprint(node),
         "node_contract_fingerprint": _node_contract_fingerprint(node),
+        "resume_limit": resume_limit,
     }
+    if checkpoint.get("resume_reason"):
+        common["resume_reason"] = checkpoint["resume_reason"]
+    if isinstance(checkpoint.get("remediation_bundle"), dict):
+        common["remediation_bundle"] = checkpoint["remediation_bundle"]
     if not reasons:
         return {
             "mode": "resume",
@@ -3070,15 +3140,25 @@ def _update_materialization_recovery_status(
     )
 
 
-def _recovery_failure_count(conn: sqlite3.Connection, node_id: str) -> int:
-    placeholders = ",".join("?" for _ in RECOVERY_FAILURE_STATUSES)
+def _recovery_failure_count(
+    conn: sqlite3.Connection,
+    node_id: str,
+    *,
+    failure_type: str,
+) -> int:
+    statuses = (
+        RECEIPT_RECOVERY_FAILURE_STATUSES
+        if failure_type in {"receipt_missing", "receipt_invalid"}
+        else INFRA_RECOVERY_FAILURE_STATUSES
+    )
+    placeholders = ",".join("?" for _ in statuses)
     row = conn.execute(
         f"""
         SELECT COUNT(*) AS count
           FROM node_materializations
          WHERE node_id = ? AND status IN ({placeholders})
         """,
-        (node_id, *sorted(RECOVERY_FAILURE_STATUSES)),
+        (node_id, *sorted(statuses)),
     ).fetchone()
     return int(row["count"] or 0)
 
@@ -3137,6 +3217,215 @@ def _node_linked_goal_item_keys(
     return allowed
 
 
+def _adapt_phase4g8_candidate_receipt(
+    conn: Optional[sqlite3.Connection],
+    node: Optional[dict[str, Any]],
+    receipt: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    """Normalize one legacy candidate shape without granting completion."""
+
+    if conn is None or node is None or node.get("node_type") == "verification":
+        return None
+    job = conn.execute(
+        "SELECT metadata_json FROM runtime_jobs WHERE id = ?",
+        (node["job_id"],),
+    ).fetchone()
+    if job is None:
+        return None
+    job_metadata = _loads(job["metadata_json"])
+    verification_policy = job_metadata.get("verification_policy")
+    if not (
+        job_metadata.get("phase4g8_run_id")
+        and isinstance(verification_policy, dict)
+        and verification_policy.get("mode") == "required_evaluator"
+    ):
+        return None
+    if receipt.get("verdict") is not None or receipt.get("summary") is not None:
+        return None
+    if not (
+        receipt.get("status") == "completed"
+        and receipt.get("outcome") == "implementation_ready"
+        and receipt.get("independent_evaluation_run") is False
+    ):
+        return None
+    structure_request = receipt.get("structure_request")
+    if structure_request is not None and structure_request is not False:
+        return None
+    checks = receipt.get("verification")
+    if not isinstance(checks, list) or not checks:
+        return None
+    normalized_checks: list[str] = []
+    for check in checks:
+        if not isinstance(check, dict):
+            return None
+        result = str(check.get("result") or check.get("status") or "").lower()
+        if result not in {"pass", "passed", "success", "succeeded"}:
+            return None
+        name = str(check.get("name") or "local verification").strip()
+        details = str(check.get("details") or "").strip()
+        normalized_checks.append(
+            f"{name}: passed" + (f" ({details})" if details else "")
+        )
+    goal_keys = sorted(_node_linked_goal_item_keys(conn, node))
+    if not goal_keys:
+        return None
+    adapted = dict(receipt)
+    adapted.update(
+        {
+            "verdict": "candidate_ready",
+            "summary": (
+                "Phase 4G8 implementation candidate reported ready after "
+                f"{len(normalized_checks)} passing local verification checks."
+            ),
+            "claimed_goal_items": goal_keys,
+            "partial_goal_items": [],
+            "unmet_goal_items": [],
+            "contradicted_goal_items": [],
+            "verification": {
+                "passed": True,
+                "summary": "; ".join(normalized_checks)[:2000],
+                "adapter_requires_independent_verification": True,
+            },
+            "verification_provenance": {
+                "kind": "worker_local",
+                "official_evaluator": "required_external",
+                "source": "phase4g8_candidate_shape_adapter",
+            },
+            "artifacts": (
+                receipt.get("artifacts")
+                if isinstance(receipt.get("artifacts"), list)
+                else []
+            ),
+            "receipt_adapter": "phase4g8_candidate_shape_v1",
+        }
+    )
+    return adapted
+
+
+def _adapt_phase4g8_structure_request_receipt(
+    conn: Optional[sqlite3.Connection],
+    node: Optional[dict[str, Any]],
+    receipt: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    """Normalize the bounded legacy structure-request shape as blocked."""
+
+    if conn is None or node is None or node.get("node_type") == "verification":
+        return None
+    job = conn.execute(
+        "SELECT metadata_json FROM runtime_jobs WHERE id = ?",
+        (node["job_id"],),
+    ).fetchone()
+    if job is None:
+        return None
+    job_metadata = _loads(job["metadata_json"])
+    verification_policy = job_metadata.get("verification_policy")
+    if not (
+        job_metadata.get("phase4g8_run_id")
+        and isinstance(verification_policy, dict)
+        and verification_policy.get("mode") == "required_evaluator"
+    ):
+        return None
+    if receipt.get("verdict") is not None or receipt.get("summary") is not None:
+        return None
+    if not (
+        receipt.get("status") == "structure_request"
+        and receipt.get("outcome") == "blocked_independent_verification"
+        and receipt.get("independent_evaluation_run") is False
+    ):
+        return None
+    request = receipt.get("structure_request")
+    if not (
+        isinstance(request, dict)
+        and request.get("type") == "independent_verification"
+        and request.get("protected_source_access_requested") is False
+    ):
+        return None
+    reason = str(request.get("reason") or "").strip()
+    failure_signature = str(request.get("failure_signature") or "").strip()
+    requested_evidence = request.get("requested_evidence")
+    if not (
+        reason
+        and failure_signature
+        and isinstance(requested_evidence, list)
+        and requested_evidence
+        and all(isinstance(value, str) and value.strip() for value in requested_evidence)
+    ):
+        return None
+    checks = receipt.get("verification")
+    if not isinstance(checks, list) or not checks:
+        return None
+    normalized_checks: list[str] = []
+    for check in checks:
+        if not isinstance(check, dict):
+            return None
+        result = str(check.get("result") or check.get("status") or "").lower()
+        if result not in {"pass", "passed", "success", "succeeded"}:
+            return None
+        name = str(check.get("name") or "local verification").strip()
+        details = str(check.get("details") or "").strip()
+        normalized_checks.append(
+            f"{name}: passed" + (f" ({details})" if details else "")
+        )
+    goal_keys = sorted(_node_linked_goal_item_keys(conn, node))
+    if not goal_keys:
+        return None
+    completed_scope = [
+        value.strip()
+        for value in receipt.get("changes") or []
+        if isinstance(value, str) and value.strip()
+    ]
+    canonical_request = {
+        "required": True,
+        "blocking": True,
+        "reason_type": "independent_verification",
+        "completed_scope": completed_scope,
+        "discovered_gaps": [
+            {
+                "gap_key": f"independent-verification:{failure_signature}",
+                "description": reason,
+                "evidence_refs": [
+                    f"evaluator-failure-signature:{failure_signature}"
+                ],
+            }
+        ],
+        "suggested_nodes": [],
+        "failure_signature": failure_signature,
+        "requested_evidence": [value.strip() for value in requested_evidence],
+        "protected_source_access_requested": False,
+    }
+    adapted = dict(receipt)
+    adapted.update(
+        {
+            "verdict": "blocked",
+            "summary": reason,
+            "claimed_goal_items": [],
+            "partial_goal_items": [],
+            "unmet_goal_items": goal_keys,
+            "contradicted_goal_items": [],
+            "verification": {
+                "passed": True,
+                "summary": "; ".join(normalized_checks)[:2000],
+            },
+            "verification_provenance": {
+                "kind": "worker_local",
+                "official_evaluator": "diagnostics_required",
+                "source": "phase4g8_structure_request_shape_adapter",
+            },
+            "artifacts": (
+                receipt.get("artifacts")
+                if isinstance(receipt.get("artifacts"), list)
+                else []
+            ),
+            "known_failure_boundaries": [
+                value.strip() for value in requested_evidence
+            ],
+            "structure_request": canonical_request,
+            "receipt_adapter": "phase4g8_structure_request_shape_v1",
+        }
+    )
+    return adapted
+
+
 def _runtime_receipt_from_evidence(
     evidence: Any,
     node: Optional[dict[str, Any]] = None,
@@ -3149,12 +3438,34 @@ def _runtime_receipt_from_evidence(
     receipt = evidence.get("runtime_receipt")
     if not isinstance(receipt, dict) or receipt.get("schema") != "runtime_worker_receipt_v1":
         return None
+    adapted_receipt = _adapt_phase4g8_structure_request_receipt(
+        conn,
+        node,
+        receipt,
+    )
+    if adapted_receipt is None:
+        adapted_receipt = _adapt_phase4g8_candidate_receipt(conn, node, receipt)
+    if adapted_receipt is not None:
+        receipt = adapted_receipt
     if not isinstance(receipt.get("summary"), str) or not receipt["summary"].strip():
         return None
     if not isinstance(receipt.get("verification"), dict) or not isinstance(receipt["verification"].get("passed"), bool):
         return None
     verdict = str(receipt.get("verdict") or "").strip().lower()
-    if verdict not in {"pass", "passed", "success", "succeeded", "failed", "fail", "blocked", "human_required", "uncertain"}:
+    if verdict not in {
+        "pass",
+        "passed",
+        "success",
+        "succeeded",
+        "candidate_ready",
+        "ready_for_evaluation",
+        "ready_for_independent_evaluation",
+        "failed",
+        "fail",
+        "blocked",
+        "human_required",
+        "uncertain",
+    }:
         return None
     result = dict(receipt)
     keys = ("claimed_goal_items", "partial_goal_items", "unmet_goal_items", "contradicted_goal_items")
@@ -3239,7 +3550,15 @@ def _schedule_recovery_retry_or_fail(
     retryable_types = {str(item) for item in policy.get("retryable_failure_types") or []}
     retry_limit_key = "receipt_recovery_limit" if failure_type in {"receipt_missing", "receipt_invalid"} else "infra_retry_limit"
     retry_limit = int(policy.get(retry_limit_key) or 0)
-    retryable = failure_type in retryable_types and _recovery_failure_count(conn, node["id"]) <= retry_limit
+    retryable = (
+        failure_type in retryable_types
+        and _recovery_failure_count(
+            conn,
+            node["id"],
+            failure_type=failure_type,
+        )
+        <= retry_limit
+    )
     payload = {
         "node_key": node["node_key"],
         "materialization_id": materialization["id"] if materialization else None,
@@ -4176,6 +4495,7 @@ def reduce_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
     has_human = counts.get("waiting_human", 0) > 0
     has_running = counts.get("running", 0) > 0
     has_ready = counts.get("ready", 0) > 0
+    has_candidate_ready = counts.get("candidate_ready", 0) > 0
     complete = _completion_satisfied(conn, job_id)
     capability_summary = summarize_runtime_capabilities(conn, job_id, limit=5)
     has_pending_capability_authorization = bool(capability_summary["pending_authorizations"])
@@ -4190,6 +4510,8 @@ def reduce_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
     elif has_running:
         state = "waiting_worker"
     elif has_ready:
+        state = "active"
+    elif has_candidate_ready:
         state = "active"
     elif has_pending_capability_authorization:
         state = "waiting_human"
@@ -4278,7 +4600,7 @@ def detect_goal_gaps(conn: sqlite3.Connection, job_id: str) -> list[dict[str, An
     runnable = conn.execute(
         """
         SELECT 1 FROM execution_nodes
-         WHERE job_id = ? AND state IN ('ready', 'running', 'waiting_human')
+         WHERE job_id = ? AND state IN ('ready', 'running', 'candidate_ready', 'waiting_human')
          LIMIT 1
         """,
         (job_id,),
@@ -4593,6 +4915,14 @@ def advance_runtime_job(
     ).fetchall():
         if ingest_runtime_node_evidence(conn, node["id"], board=board):
             ingested.append(node["node_key"])
+    if ingested:
+        recovery["worker_sessions_post_ingest"] = sync_runtime_backend_sessions(
+            conn,
+            job_id,
+            board=board,
+        )
+    evaluator_remediation = schedule_required_evaluator_remediation(conn, job_id)
+    recovery["evaluator_remediation"] = evaluator_remediation
     reduction = reduce_runtime_job(conn, job_id)
     ensured_verifiers = ensure_required_evaluator_nodes(conn, job_id)
     if ensured_verifiers:
@@ -4608,7 +4938,10 @@ def advance_runtime_job(
                 materialized.append(node["node_key"])
     reduction = reduce_runtime_job(conn, job_id)
     patch_status = None
-    decision_requested = reduction["state"] == "waiting_decision"
+    decision_requested = bool(
+        reduction["state"] == "waiting_decision"
+        and not evaluator_remediation.get("decision_suppressed")
+    )
     if decision_provider and decision_requested and max_patches > 0:
         from hermes_cli import kanban_runtime_decision as rd
         from hermes_cli import kanban_runtime_memory as rm
@@ -4939,6 +5272,741 @@ def advance_runtime_job(
     )
 
 
+def _required_evaluator_remediation_policy(job: dict[str, Any]) -> Optional[dict[str, Any]]:
+    job_metadata = _loads(job.get("metadata_json"))
+    verification_policy = job_metadata.get("verification_policy")
+    if not isinstance(verification_policy, dict):
+        return None
+    remediation = verification_policy.get("remediation")
+    if not isinstance(remediation, dict) or remediation.get("mode") != "resume_target_session":
+        return None
+
+    def bounded_int(key: str, default: int, minimum: int, maximum: int) -> int:
+        try:
+            return max(minimum, min(maximum, int(remediation.get(key) or default)))
+        except (TypeError, ValueError):
+            return default
+
+    return {
+        "mode": "resume_target_session",
+        "max_no_progress_streak": bounded_int("max_no_progress_streak", 2, 1, 20),
+        "diagnostic_batch_size": bounded_int("diagnostic_batch_size", 20, 1, 100),
+        "max_diagnostics_chars_per_case": bounded_int(
+            "max_diagnostics_chars_per_case", 4000, 256, 16000
+        ),
+    }
+
+
+def _official_evaluator_receipts(
+    conn: sqlite3.Connection,
+    job_id: str,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT * FROM execution_nodes
+         WHERE job_id = ? AND node_type = 'verification' AND latest_task_id IS NOT NULL
+         ORDER BY created_at, rowid
+        """,
+        (job_id,),
+    ).fetchall()
+    receipts: list[dict[str, Any]] = []
+    job = _job(conn, job_id)
+    for row in rows:
+        snapshot = kb.task_progress_snapshot(
+            conn,
+            row["latest_task_id"],
+            board=job.get("board"),
+        )
+        if snapshot is None or snapshot.task.status not in {"done", "blocked"}:
+            continue
+        evidence = dict(snapshot.evidence or {})
+        result = evidence.get("official_evaluator_result")
+        provenance = evidence.get("verification_provenance")
+        if (
+            not isinstance(result, dict)
+            or result.get("schema") != OFFICIAL_EVALUATOR_RESULT_SCHEMA
+            or not isinstance(provenance, dict)
+            or provenance.get("producer_kind") != "official_evaluator"
+        ):
+            continue
+        receipts.append(
+            {
+                "node": dict(row),
+                "task_id": str(row["latest_task_id"]),
+                "run_id": snapshot.run.id if snapshot.run else row["latest_run_id"],
+                "evidence": evidence,
+                "result": result,
+                "provenance": provenance,
+            }
+        )
+    return receipts
+
+
+def _valid_unresolved_evaluator_receipt(receipt: dict[str, Any]) -> bool:
+    result = receipt["result"]
+    return bool(
+        result.get("resolved") is not True
+        and not _evaluator_result_infrastructure_invalid(result)
+        and receipt["evidence"].get("infrastructure_invalid") is not True
+        and (receipt["evidence"].get("verification") or {}).get("infrastructure_invalid")
+        is not True
+    )
+
+
+def _evaluator_result_infrastructure_invalid(result: dict[str, Any]) -> bool:
+    coverage = result.get("feedback_coverage")
+    return bool(
+        result.get("error") in {
+            "stale_target_revision",
+            "evaluator_feedback_extraction_incomplete",
+        }
+        or (
+            isinstance(coverage, dict)
+            and coverage.get("status") == "extraction_incomplete"
+        )
+    )
+
+
+def _build_evaluator_failure_bundle(
+    receipt: dict[str, Any],
+    target: dict[str, Any],
+    *,
+    failure_ordinal: int,
+    policy: dict[str, Any],
+) -> dict[str, Any]:
+    result = receipt["result"]
+    def section(name: str) -> dict[str, Any]:
+        raw = result.get(name) if isinstance(result.get(name), dict) else {}
+        failed_tests = []
+        for value in raw.get("failed_tests") or []:
+            redacted = redact_sensitive_text(str(value)).strip()[:500]
+            if redacted:
+                failed_tests.append(redacted)
+        return {
+            "passed": int(raw.get("passed") or 0),
+            "failed": int(raw.get("failed") or 0),
+            "total": int(raw.get("total") or 0),
+            "failed_tests": failed_tests,
+            "failed_tests_truncated": int(raw.get("failed_tests_truncated") or 0),
+        }
+
+    diagnostics_raw = (
+        result.get("failure_diagnostics")
+        if isinstance(result.get("failure_diagnostics"), dict)
+        else {}
+    )
+    fail_to_pass = section("fail_to_pass")
+    pass_to_pass = section("pass_to_pass")
+    allowed_test_ids = {
+        test_id
+        for selected in (fail_to_pass, pass_to_pass)
+        for test_id in selected["failed_tests"]
+    }
+    diagnostics = _safe_evaluator_failure_diagnostics(
+        diagnostics_raw,
+        allowed_test_ids=allowed_test_ids,
+        policy=policy,
+    )
+    artifact = next(
+        (
+            item
+            for item in receipt["evidence"].get("artifacts") or []
+            if isinstance(item, dict) and item.get("artifact_type") == "official_evaluator_result"
+        ),
+        {},
+    )
+    payload = {
+        "schema": EVALUATOR_FAILURE_BUNDLE_SCHEMA,
+        "failure_ordinal": int(failure_ordinal),
+        "source_verifier_node_id": receipt["node"]["id"],
+        "source_task_id": receipt["task_id"],
+        "source_run_id": receipt.get("run_id"),
+        "target_node_id": target["target_node_id"],
+        "target_materialization_id": target["target_materialization"]["id"],
+        "target_revision": target["target_revision"],
+        "target_evidence_ref": target["target_evidence_ref"],
+        "fail_to_pass": fail_to_pass,
+        "pass_to_pass": pass_to_pass,
+        "failure_diagnostics": diagnostics,
+        "environment_sha256": str(
+            (result.get("environment_fingerprint") or {}).get("sha256") or ""
+        ),
+        "result_ref": _safe_evaluator_result_ref(artifact.get("path_or_ref")),
+    }
+    payload["bundle_id"] = "efb_" + _stable_fingerprint(payload)[:24]
+    return payload
+
+
+def _safe_evaluator_failure_diagnostics(
+    diagnostics_raw: dict[str, Any],
+    *,
+    allowed_test_ids: set[str],
+    policy: dict[str, Any],
+) -> dict[str, Any]:
+    max_per_case = int(policy.get("max_diagnostics_chars_per_case") or 4000)
+    batch_size = int(
+        policy.get("diagnostic_batch_size")
+        or policy.get("max_diagnostic_cases")
+        or 20
+    )
+    source_sha256 = str(diagnostics_raw.get("source_sha256") or "")
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", source_sha256):
+        source_sha256 = ""
+    cases: list[dict[str, Any]] = []
+    omitted = 0
+    selected_test_ids: set[str] = set()
+    allowed_fields = (
+        "expected",
+        "actual",
+        "regex",
+        "emitted_warnings",
+        "exception_summary",
+    )
+    allowed_failure_kinds = {
+        "test_failed",
+        "assertion_comparison_failed",
+        "expected_exception_not_raised",
+        "expected_warning_not_emitted",
+        "exception_raised",
+    }
+    raw_cases = diagnostics_raw.get("cases")
+    if isinstance(raw_cases, list):
+        for raw_case in raw_cases:
+            if not isinstance(raw_case, dict):
+                omitted += 1
+                continue
+            test_id = _sanitize_evaluator_diagnostic_value(raw_case.get("test_id"), 500)
+            if not test_id or test_id not in allowed_test_ids:
+                omitted += 1
+                continue
+            if test_id in selected_test_ids:
+                omitted += 1
+                continue
+            case_budget = max_per_case
+            case: dict[str, Any] = {
+                "test_id": test_id,
+                "failure_kind": (
+                    str(raw_case.get("failure_kind"))
+                    if raw_case.get("failure_kind") in allowed_failure_kinds
+                    else "test_failed"
+                ),
+                "detail_status": (
+                    str(raw_case.get("detail_status"))
+                    if raw_case.get("detail_status") in {"extracted", "test_id_only"}
+                    else "extracted"
+                ),
+                "comparisons": [],
+                "conditions": [],
+                "expected": [],
+                "actual": [],
+                "regex": [],
+                "emitted_warnings": [],
+                "exception_summary": [],
+                "diagnostic_excerpt": "",
+                "truncated": bool(raw_case.get("truncated")),
+            }
+            remaining = case_budget
+            raw_comparisons = raw_case.get("comparisons")
+            if isinstance(raw_comparisons, list):
+                for raw_comparison in raw_comparisons:
+                    if remaining <= 0:
+                        case["truncated"] = True
+                        break
+                    if not isinstance(raw_comparison, dict):
+                        continue
+                    if (
+                        raw_comparison.get("operator") != "=="
+                        or raw_comparison.get("required_relation") != "equal"
+                    ):
+                        continue
+                    left = _sanitize_evaluator_diagnostic_value(
+                        raw_comparison.get("left"), min(1000, remaining)
+                    )
+                    remaining -= len(left)
+                    right = _sanitize_evaluator_diagnostic_value(
+                        raw_comparison.get("right"), min(1000, remaining)
+                    )
+                    remaining -= len(right)
+                    if left and right:
+                        case["comparisons"].append({
+                            "operator": "==",
+                            "left": left,
+                            "right": right,
+                            "required_relation": "equal",
+                        })
+            raw_conditions = raw_case.get("conditions")
+            if isinstance(raw_conditions, list):
+                for raw_condition in raw_conditions:
+                    if remaining <= 0:
+                        case["truncated"] = True
+                        break
+                    condition = _safe_evaluator_call_condition(
+                        raw_condition, min(500, remaining)
+                    )
+                    if condition:
+                        case["conditions"].append(condition)
+                        remaining -= len(condition)
+            for field in allowed_fields:
+                raw_values = raw_case.get(field)
+                if not isinstance(raw_values, list):
+                    continue
+                for raw_value in raw_values:
+                    value = _sanitize_evaluator_diagnostic_value(raw_value, min(2000, remaining))
+                    if not value:
+                        continue
+                    case[field].append(value)
+                    remaining -= len(value)
+                    if remaining <= 0:
+                        case["truncated"] = True
+                        break
+                if remaining <= 0:
+                    break
+            if remaining > 0:
+                excerpt = _sanitize_evaluator_diagnostic_value(
+                    raw_case.get("diagnostic_excerpt"), remaining
+                )
+                case["diagnostic_excerpt"] = excerpt
+                remaining -= len(excerpt)
+            case["batch_index"] = len(cases) // max(1, batch_size)
+            cases.append(case)
+            selected_test_ids.add(test_id)
+    if isinstance(raw_cases, list):
+        missing_test_ids = sorted(allowed_test_ids - selected_test_ids)
+        return {
+            "schema": (
+                "runtime_evaluator_failure_diagnostics_v4"
+                if diagnostics_raw.get("schema")
+                == "hermes_phase4g8_pytest_failure_diagnostics_v3"
+                else "runtime_evaluator_failure_diagnostics_v2"
+            ),
+            "cases": cases,
+            "case_count": len(cases),
+            "batch_size": max(1, batch_size),
+            "batch_count": (
+                (len(cases) + max(1, batch_size) - 1) // max(1, batch_size)
+            ),
+            "omitted_duplicate_or_unrelated_case_count": omitted,
+            "omitted_case_count": 0,
+            "missing_test_ids": missing_test_ids,
+            "detail_bounded": any(case["truncated"] for case in cases),
+            "truncated": bool(missing_test_ids),
+            "source_sha256": source_sha256,
+        }
+
+    legacy_text = _sanitize_evaluator_diagnostic_value(
+        diagnostics_raw.get("text"), max_per_case
+    )
+    return {
+        "schema": "runtime_evaluator_failure_diagnostics_v1",
+        "text": legacy_text,
+        "truncated": bool(
+            diagnostics_raw.get("truncated")
+            or len(str(diagnostics_raw.get("text") or "")) > len(legacy_text)
+        ),
+        "source_sha256": source_sha256,
+    }
+
+
+def _safe_evaluator_call_condition(value: Any, limit: int) -> str:
+    selected = _sanitize_evaluator_diagnostic_value(value, limit)
+    match = re.fullmatch(
+        r"(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>None|True|False|-?\d+(?:\.\d+)?|'[^'\n]{0,300}'|\"[^\"\n]{0,300}\")",
+        selected,
+    )
+    if match is None or re.search(
+        r"(?i)(?:secret|token|password|credential|api_?key|auth|url|uri|path|file)",
+        match.group("key"),
+    ):
+        return ""
+    return selected
+
+
+def _sanitize_evaluator_diagnostic_value(value: Any, limit: int) -> str:
+    if limit <= 0:
+        return ""
+    selected = redact_sensitive_text(str(value or ""))
+    selected = re.sub(
+        r"(?i)(?:/[^\s:'\"`]+/)*(?:gold|test)\.patch\b|\bhidden test (?:source|patch)\b",
+        "<protected-artifact>",
+        selected,
+    )
+    selected = re.sub(
+        r"(?i)(?:/testbed|/workspace)(?:/[^\s:'\"`]+)*",
+        "<protected-path>",
+        selected,
+    )
+    return selected.strip()[:limit]
+
+
+def _safe_evaluator_result_ref(value: Any) -> str:
+    selected = str(value or "").strip()
+    if not selected:
+        return ""
+    if selected.startswith(("/", "file:")) or "\\" in selected:
+        return "sha256:" + hashlib.sha256(selected.encode("utf-8")).hexdigest()
+    return _sanitize_evaluator_diagnostic_value(selected, 500)
+
+
+def _evaluator_remediation_rejection_reasons(
+    conn: sqlite3.Connection,
+    job: dict[str, Any],
+    target_node: dict[str, Any],
+    target_materialization: dict[str, Any],
+    session: Optional[dict[str, Any]],
+    policy: dict[str, Any],
+) -> list[str]:
+    reasons: list[str] = []
+    if target_node.get("node_type") == "verification":
+        reasons.append("target_is_verification_node")
+    if target_node.get("state") not in {"candidate_ready", "succeeded", "blocked", "failed"}:
+        reasons.append(f"target_state_{target_node.get('state')}")
+    if _active_materialization(conn, target_node["id"]) is not None:
+        reasons.append("target_has_active_materialization")
+    if session is None:
+        return [*reasons, "backend_session_missing"]
+    if session.get("status") != "completed":
+        reasons.append(f"session_status_{session.get('status')}")
+    if session.get("backend_kind") != "codex_cli":
+        reasons.append("backend_resume_unsupported")
+    if session.get("latest_materialization_id") != target_materialization.get("id"):
+        reasons.append("session_materialization_mismatch")
+    if _canonical_workspace_path(session.get("workspace_path")) != _canonical_workspace_path(
+        job.get("workspace_path")
+    ):
+        reasons.append("workspace_path_mismatch")
+    if session.get("workspace_revision") != _workspace_revision(job.get("workspace_path")):
+        reasons.append("workspace_revision_mismatch")
+    expected_lane = target_node.get("assignee") or _loads(job.get("metadata_json")).get(
+        "default_worker_lane"
+    )
+    if (session.get("worker_lane") or "") != (expected_lane or ""):
+        reasons.append("worker_lane_mismatch")
+    if session.get("capability_fingerprint") != _node_capability_fingerprint(target_node):
+        reasons.append("capability_fingerprint_mismatch")
+    if session.get("node_contract_fingerprint") != _node_contract_fingerprint(target_node):
+        reasons.append("node_contract_fingerprint_mismatch")
+    return reasons
+
+
+def _evaluator_failure_signature(result: dict[str, Any]) -> str:
+    diagnostics = result.get("failure_diagnostics")
+    raw_cases = diagnostics.get("cases") if isinstance(diagnostics, dict) else []
+    cases = []
+    for raw in raw_cases or []:
+        if not isinstance(raw, dict):
+            continue
+        cases.append({
+            key: raw.get(key)
+            for key in (
+                "test_id",
+                "failure_kind",
+                "comparisons",
+                "conditions",
+                "expected",
+                "actual",
+                "regex",
+                "emitted_warnings",
+                "exception_summary",
+            )
+        })
+    payload = {
+        name: list((result.get(name) or {}).get("failed_tests") or [])
+        for name in ("fail_to_pass", "pass_to_pass")
+    }
+    payload["cases"] = cases
+    return "efsig_" + _stable_fingerprint(payload)[:24]
+
+
+def _evaluator_progress_summary(failures: list[dict[str, Any]]) -> dict[str, Any]:
+    history: list[dict[str, Any]] = []
+    no_progress_streak = 0
+    previous: Optional[dict[str, Any]] = None
+    for receipt in failures:
+        result = receipt["result"]
+        current = {
+            "source_verifier_node_id": receipt["node"]["id"],
+            "fail_to_pass_passed": int((result.get("fail_to_pass") or {}).get("passed") or 0),
+            "pass_to_pass_passed": int((result.get("pass_to_pass") or {}).get("passed") or 0),
+            "failure_signature": _evaluator_failure_signature(result),
+        }
+        if previous is None:
+            current.update({
+                "count_progress": False,
+                "signature_changed": False,
+                "progress": True,
+            })
+            no_progress_streak = 0
+        else:
+            count_progress = bool(
+                current["fail_to_pass_passed"] >= previous["fail_to_pass_passed"]
+                and current["pass_to_pass_passed"] >= previous["pass_to_pass_passed"]
+                and (
+                    current["fail_to_pass_passed"] > previous["fail_to_pass_passed"]
+                    or current["pass_to_pass_passed"] > previous["pass_to_pass_passed"]
+                )
+            )
+            signature_changed = bool(
+                current["failure_signature"] != previous["failure_signature"]
+            )
+            progress = count_progress or signature_changed
+            no_progress_streak = 0 if progress else no_progress_streak + 1
+            current.update({
+                "count_progress": count_progress,
+                "signature_changed": signature_changed,
+                "progress": progress,
+            })
+        current["no_progress_streak"] = no_progress_streak
+        history.append(current)
+        previous = current
+    return {
+        "history": history,
+        "latest": history[-1] if history else {},
+        "no_progress_streak": no_progress_streak,
+    }
+
+
+def schedule_required_evaluator_remediation(
+    conn: sqlite3.Connection,
+    job_id: str,
+) -> dict[str, Any]:
+    """Reopen one fixed-target implementation responsibility after evaluator failure."""
+
+    job = _job(conn, job_id)
+    policy = _required_evaluator_remediation_policy(job)
+    summary: dict[str, Any] = {
+        "enabled": policy is not None,
+        "scheduled": [],
+        "not_resumable": [],
+        "failure_count": 0,
+        "progress": {},
+        "latest_feedback_consumed": False,
+        "budget_exhausted": False,
+        "decision_suppressed": False,
+    }
+    if policy is None:
+        return summary
+    receipts = _official_evaluator_receipts(conn, job_id)
+    effective = [
+        receipt
+        for receipt in receipts
+        if not _evaluator_result_infrastructure_invalid(receipt["result"])
+        and receipt["evidence"].get("infrastructure_invalid") is not True
+        and (receipt["evidence"].get("verification") or {}).get(
+            "infrastructure_invalid"
+        )
+        is not True
+    ]
+    if not effective or effective[-1]["result"].get("resolved") is True:
+        return summary
+    unresolved = [
+        receipt for receipt in effective if _valid_unresolved_evaluator_receipt(receipt)
+    ]
+    if not unresolved:
+        return summary
+    latest = unresolved[-1]
+    provenance_results = {
+        receipt["node"]["id"]: _validate_independent_verification_provenance(
+            conn,
+            receipt["node"],
+            receipt["evidence"],
+        )
+        for receipt in unresolved
+    }
+    failures = [
+        receipt
+        for receipt in unresolved
+        if provenance_results[receipt["node"]["id"]].get("valid")
+    ]
+    summary["failure_count"] = len(failures)
+    progress = _evaluator_progress_summary(failures)
+    summary["progress"] = progress
+    provenance_result = provenance_results[latest["node"]["id"]]
+    if not provenance_result.get("valid"):
+        reasons = ["verification_provenance_invalid"]
+        summary["not_resumable"].append(
+            {"source_verifier_node_id": latest["node"]["id"], "reasons": reasons}
+        )
+        _event_once(
+            conn,
+            job_id,
+            "required_evaluator_remediation_not_resumable",
+            f"evaluator-remediation-ineligible:{latest['node']['id']}",
+            {
+                "source_verifier_node_id": latest["node"]["id"],
+                "reasons": reasons,
+                "provenance_reason": provenance_result.get("reason"),
+            },
+            node_id=latest["node"]["id"],
+            source="verification_policy",
+        )
+        return summary
+    if progress["no_progress_streak"] >= int(policy["max_no_progress_streak"]):
+        _event_once(
+            conn,
+            job_id,
+            "required_evaluator_remediation_no_progress",
+            f"evaluator-remediation-no-progress:{latest['node']['id']}",
+            {
+                "source_verifier_node_id": latest["node"]["id"],
+                "failure_count": len(failures),
+                "no_progress_streak": progress["no_progress_streak"],
+                "failure_signature": progress["latest"].get("failure_signature"),
+            },
+            node_id=latest["node"]["id"],
+            source="verification_policy",
+        )
+
+    try:
+        target = _independent_verification_target(conn, latest["node"])
+    except ValueError as exc:
+        reasons = ["fixed_target_invalid"]
+        summary["not_resumable"].append(
+            {"source_verifier_node_id": latest["node"]["id"], "reasons": reasons}
+        )
+        _event_once(
+            conn,
+            job_id,
+            "required_evaluator_remediation_not_resumable",
+            f"evaluator-remediation-target-invalid:{latest['node']['id']}",
+            {
+                "source_verifier_node_id": latest["node"]["id"],
+                "reasons": reasons,
+                "target_reason": str(exc),
+            },
+            node_id=latest["node"]["id"],
+            source="verification_policy",
+        )
+        return summary
+
+    target_row = conn.execute(
+        "SELECT * FROM execution_nodes WHERE id = ?",
+        (target["target_node_id"],),
+    ).fetchone()
+    if target_row is None:
+        return summary
+    target_node = dict(target_row)
+    bundle = _build_evaluator_failure_bundle(
+        latest,
+        target,
+        failure_ordinal=len(failures),
+        policy=policy,
+    )
+    bundle["progress"] = progress["latest"]
+    bundle["bundle_id"] = "efb_" + _stable_fingerprint(
+        {key: value for key, value in bundle.items() if key != "bundle_id"}
+    )[:24]
+    target_metadata = _loads(target_node.get("metadata_json"))
+    prior_remediation = target_metadata.get("evaluator_remediation")
+    if (
+        isinstance(prior_remediation, dict)
+        and prior_remediation.get("bundle_id") == bundle["bundle_id"]
+    ):
+        summary["latest_feedback_consumed"] = prior_remediation.get("status") == "consumed"
+        if target_node.get("state") in {"ready", "running"}:
+            summary["decision_suppressed"] = True
+        return summary
+
+    session = _latest_backend_worker_session(conn, target_node["id"])
+    reasons = _evaluator_remediation_rejection_reasons(
+        conn,
+        job,
+        target_node,
+        target["target_materialization"],
+        session,
+        policy,
+    )
+    if reasons:
+        summary["not_resumable"].append(
+            {
+                "source_verifier_node_id": latest["node"]["id"],
+                "target_node_id": target_node["id"],
+                "reasons": reasons,
+            }
+        )
+        _event_once(
+            conn,
+            job_id,
+            "required_evaluator_remediation_not_resumable",
+            f"evaluator-remediation-ineligible:{bundle['bundle_id']}",
+            {
+                "bundle_id": bundle["bundle_id"],
+                "source_verifier_node_id": latest["node"]["id"],
+                "target_node_id": target_node["id"],
+                "target_materialization_id": target["target_materialization"]["id"],
+                "reasons": reasons,
+            },
+            node_id=target_node["id"],
+            source="verification_policy",
+        )
+        return summary
+
+    now = _now()
+    target_metadata["evaluator_remediation"] = {
+        "status": "scheduled",
+        "bundle_id": bundle["bundle_id"],
+        "failure_ordinal": len(failures),
+        "source_verifier_node_id": latest["node"]["id"],
+        "target_materialization_id": target["target_materialization"]["id"],
+        "scheduled_at": now,
+        "failure_signature": progress["latest"].get("failure_signature"),
+        "no_progress_streak": progress["no_progress_streak"],
+    }
+    checkpoint = _loads(session.get("checkpoint_json")) if session else {}
+    checkpoint.update(
+        {
+            "resume_reason": "official_evaluator_failure",
+            "remediation_bundle": bundle,
+            "interrupted_materialization_id": target["target_materialization"]["id"],
+        }
+    )
+    conn.execute(
+        """
+        UPDATE backend_worker_sessions
+           SET status = 'interrupted', checkpoint_json = ?, completed_at = NULL, updated_at = ?
+         WHERE id = ? AND status = 'completed'
+        """,
+        (_json(checkpoint), now, session["id"]),
+    )
+    conn.execute(
+        """
+        UPDATE execution_nodes
+           SET state = 'ready', latest_task_id = NULL, latest_run_id = NULL,
+               metadata_json = ?, completed_at = NULL, updated_at = ?
+         WHERE id = ? AND state IN ('candidate_ready', 'succeeded', 'blocked', 'failed')
+        """,
+        (_json(target_metadata), now, target_node["id"]),
+    )
+    _event_once(
+        conn,
+        job_id,
+        "evaluator_failure_bundle_created",
+        bundle["bundle_id"],
+        bundle,
+        node_id=target_node["id"],
+        source="verification_policy",
+    )
+    _event_once(
+        conn,
+        job_id,
+        "required_evaluator_remediation_scheduled",
+        f"evaluator-remediation:{bundle['bundle_id']}",
+        {
+            "bundle_id": bundle["bundle_id"],
+            "failure_ordinal": len(failures),
+            "no_progress_streak": progress["no_progress_streak"],
+            "source_verifier_node_id": latest["node"]["id"],
+            "target_node_id": target_node["id"],
+            "target_materialization_id": target["target_materialization"]["id"],
+            "backend_session_record_id": session["id"],
+        },
+        node_id=target_node["id"],
+        source="verification_policy",
+    )
+    summary["scheduled"].append(target_node["node_key"])
+    summary["decision_suppressed"] = True
+    return summary
+
+
 def ensure_required_evaluator_nodes(conn: sqlite3.Connection, job_id: str) -> list[str]:
     """Deterministically create fixed-target evaluator nodes for opted-in jobs."""
 
@@ -4963,14 +6031,18 @@ def ensure_required_evaluator_nodes(conn: sqlite3.Connection, job_id: str) -> li
         target_materialization = candidate["materialization"]
         existing = conn.execute(
             """
-            SELECT verifier.node_key
+            SELECT verifier.node_key, nr.metadata_json
               FROM node_relations nr
               JOIN execution_nodes verifier ON verifier.id = nr.from_node_id
              WHERE nr.job_id = ? AND nr.to_node_id = ? AND nr.relation_type = 'verifies'
             """,
             (job_id, target_node["id"]),
         ).fetchall()
-        if existing:
+        if any(
+            int(_loads(row["metadata_json"]).get("target_materialization_attempt") or -1)
+            == int(target_materialization["attempt"])
+            for row in existing
+        ):
             continue
         workspace_revision = candidate.get("workspace_revision")
         if policy.get("require_workspace_revision", False) and not workspace_revision:
@@ -5002,6 +6074,7 @@ def ensure_required_evaluator_nodes(conn: sqlite3.Connection, job_id: str) -> li
             {
                 "op": "insert_verifier",
                 "target_node_key": target_node["node_key"],
+                "target_evidence_ref": candidate["evidence_ref"],
                 "target_materialization_attempt": int(target_materialization["attempt"]),
                 "target_workspace_revision": target_revision,
                 "verifier_node_key": verifier_key,
@@ -5044,26 +6117,32 @@ def _required_evaluator_candidate(
 ) -> Optional[dict[str, Any]]:
     latest_contradiction = conn.execute(
         """
-        SELECT * FROM progress_ledger
+        SELECT rowid AS ledger_rowid, * FROM progress_ledger
          WHERE goal_item_id = ? AND satisfaction = 'contradicted'
          ORDER BY created_at DESC, rowid DESC LIMIT 1
         """,
         (item["id"],),
     ).fetchone()
     contradiction_at = int(latest_contradiction["created_at"]) if latest_contradiction else -1
+    contradiction_rowid = int(latest_contradiction["ledger_rowid"]) if latest_contradiction else -1
     ledger = conn.execute(
         """
         SELECT * FROM progress_ledger
-         WHERE goal_item_id = ? AND satisfaction = 'full' AND created_at > ?
+         WHERE goal_item_id = ? AND satisfaction IN ('full', 'partial')
+           AND (created_at > ? OR (created_at = ? AND rowid > ?))
          ORDER BY created_at DESC, rowid DESC LIMIT 1
         """,
-        (item["id"], contradiction_at),
+        (item["id"], contradiction_at, contradiction_at, contradiction_rowid),
     ).fetchone()
     if ledger is not None and ledger["node_id"]:
         target_node = conn.execute(
             "SELECT * FROM execution_nodes WHERE id = ?",
             (ledger["node_id"],),
         ).fetchone()
+        if ledger["satisfaction"] == "partial" and (
+            target_node is None or target_node["state"] != "candidate_ready"
+        ):
+            target_node = None
         candidate = _evaluator_candidate_from_node(conn, job, dict(item), target_node)
         if candidate is not None:
             ledger_metadata = _loads(ledger["metadata_json"])
@@ -5072,6 +6151,7 @@ def _required_evaluator_candidate(
             if workspace_revision is None and isinstance(verification, dict):
                 workspace_revision = verification.get("workspace_revision")
             candidate["workspace_revision"] = workspace_revision
+            candidate["evidence_ref"] = str(ledger["evidence_ref"])
             candidate["source"] = "progress_ledger"
             return candidate
     if latest_contradiction is None:
@@ -5119,6 +6199,10 @@ def _required_evaluator_candidate(
         if not receipt_is_candidate or not receipt.get("workspace_revision"):
             continue
         candidate["workspace_revision"] = receipt["workspace_revision"]
+        candidate["evidence_ref"] = str(
+            receipt.get("runtime_evidence_ref")
+            or f"node:{linked_node['id']}:materialization:{candidate['materialization']['id']}"
+        )
         candidate["source"] = "gap_linked_terminal_receipt"
         return candidate
     return None
@@ -5130,12 +6214,16 @@ def _evaluator_candidate_from_node(
     item: dict[str, Any],
     node: Any,
 ) -> Optional[dict[str, Any]]:
-    if node is None or node["node_type"] == "verification" or node["state"] not in {"succeeded", "blocked"}:
+    if (
+        node is None
+        or node["node_type"] == "verification"
+        or node["state"] not in {"candidate_ready", "succeeded", "blocked"}
+    ):
         return None
     materialization = conn.execute(
         """
         SELECT * FROM node_materializations
-         WHERE node_id = ? AND status IN ('succeeded', 'blocked')
+         WHERE node_id = ? AND status IN ('candidate_ready', 'succeeded', 'blocked')
          ORDER BY attempt DESC LIMIT 1
         """,
         (node["id"],),
@@ -5497,6 +6585,10 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
                 "materialization_id": materialization_id,
                 "resume_from_materialization_id": continuity["resume_from_materialization_id"],
                 "attempt": attempt,
+                "resume_reason": continuity.get("resume_reason") or "infrastructure_failure",
+                "remediation_bundle_id": (
+                    (continuity.get("remediation_bundle") or {}).get("bundle_id")
+                ),
             },
             node_id=node["id"],
             task_id=task_id,
@@ -5625,6 +6717,72 @@ def _worker_context(
             "provided in this node context. Fix repository source and tests; do not alter the evaluator "
             "environment, toolchain, or harness to make evidence pass.\n\n"
         )
+    receipt_recovery_instruction = ""
+    resume_from_materialization_id = (continuity or {}).get(
+        "resume_from_materialization_id"
+    )
+    prior_materialization = None
+    if resume_from_materialization_id:
+        prior_materialization = conn.execute(
+            "SELECT status FROM node_materializations WHERE id = ? AND node_id = ?",
+            (resume_from_materialization_id, node["id"]),
+        ).fetchone()
+    if prior_materialization is None:
+        prior_materialization = conn.execute(
+            """
+            SELECT status FROM node_materializations
+             WHERE node_id = ? AND id != ?
+             ORDER BY attempt DESC LIMIT 1
+            """,
+            (node["id"], materialization_id),
+        ).fetchone()
+    if (
+        prior_materialization is None
+        or prior_materialization["status"]
+        not in RECEIPT_RECOVERY_FAILURE_STATUSES
+    ):
+        unresolved_receipt_failure = conn.execute(
+            """
+            SELECT failed.status
+              FROM node_materializations failed
+             WHERE failed.node_id = ? AND failed.id != ?
+               AND failed.status IN ('receipt_missing', 'receipt_invalid')
+               AND failed.attempt > COALESCE((
+                   SELECT MAX(valid.attempt)
+                     FROM node_materializations valid
+                    WHERE valid.node_id = failed.node_id
+                      AND valid.status IN ('candidate_ready', 'succeeded', 'failed', 'blocked')
+               ), 0)
+             ORDER BY failed.attempt DESC LIMIT 1
+            """,
+            (node["id"], materialization_id),
+        ).fetchone()
+        if unresolved_receipt_failure is not None:
+            prior_materialization = unresolved_receipt_failure
+    if (
+        prior_materialization is not None
+        and prior_materialization["status"]
+        in RECEIPT_RECOVERY_FAILURE_STATUSES
+    ):
+        linked_goal_keys = sorted(_node_linked_goal_item_keys(conn, node))
+        verdict_instruction = (
+            "For this Phase 4G8 implementation candidate use "
+            "verdict=candidate_ready; "
+            if job_metadata.get("phase4g8_run_id")
+            and node.get("node_type") != "verification"
+            else "Use the verdict that truthfully describes the node outcome; "
+        )
+        receipt_recovery_instruction = (
+            "Receipt protocol recovery: the prior worker turn completed but its Runtime "
+            "receipt was missing or invalid. Preserve the current workspace and do not redo "
+            "completed implementation merely to recover the protocol. Emit a new terminal "
+            "runtime_worker_receipt_v1 object with verdict, a non-empty summary, "
+            f"claimed_goal_items using only {json.dumps(linked_goal_keys)}, "
+            "partial_goal_items, unmet_goal_items, changed_files, a verification object "
+            "with boolean passed and string summary, and artifacts. "
+            f"{verdict_instruction}do not substitute "
+            "status/outcome fields or a verification list.\n\n"
+        )
     return (
         f"# Runtime node\n\n"
         f"Objective: {job['objective']}\n\n"
@@ -5635,6 +6793,7 @@ def _worker_context(
         f"Node contract: {json.dumps(constraints.get('contract') or {}, sort_keys=True)}\n\n"
         f"Dependencies:\n{deps}\n\n"
         f"{phase4g8_worker_boundary}"
+        f"{receipt_recovery_instruction}"
         "Expected receipt fields: verdict, summary, claimed_goal_items, "
         "partial_goal_items, unmet_goal_items, verification, artifacts, "
         "active_assumptions, rejected_approaches, known_failure_boundaries, "
@@ -5696,6 +6855,18 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
     )
     if metadata is None:
         return False
+    materialization = conn.execute(
+        "SELECT * FROM node_materializations WHERE node_id = ? AND task_id = ?",
+        (node_id, node["latest_task_id"]),
+    ).fetchone()
+    if materialization is None:
+        return False
+    metadata = dict(metadata)
+    metadata["runtime_materialization_id"] = str(materialization["id"])
+    metadata["runtime_materialization_attempt"] = int(materialization["attempt"])
+    metadata["runtime_evidence_ref"] = (
+        f"node:{node_id}:materialization:{materialization['id']}"
+    )
     if metadata.get("structure_request") is not None and not _structure_request_valid(metadata["structure_request"]):
         return False
     metadata, scope_violations, scope_unverified = _apply_declared_write_scope_check(dict(node), metadata)
@@ -5709,7 +6880,10 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
     if node["state"] in TERMINAL_NODE_STATES:
         return False
     now = _now()
-    if verdict == "succeeded" or trusted_evaluator_pending:
+    if trusted_evaluator_pending:
+        state = "candidate_ready"
+        event_type = "node_candidate_ready"
+    elif verdict == "succeeded":
         state = "succeeded"
         event_type = "node_completed"
     elif verdict == "waiting_human":
@@ -5770,6 +6944,26 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
             node["latest_task_id"],
         ),
     )
+    if metadata.get("receipt_adapter"):
+        _event(
+            conn,
+            node["job_id"],
+            "runtime_receipt_adapted",
+            {
+                "node_key": node["node_key"],
+                "adapter": metadata["receipt_adapter"],
+                "resulting_verdict": metadata.get("verdict"),
+                "independent_evaluator_still_required": bool(
+                    metadata.get("verification", {}).get(
+                        "adapter_requires_independent_verification"
+                    )
+                ),
+            },
+            node_id=node_id,
+            task_id=node["latest_task_id"],
+            run_id=snapshot_run_id,
+            source="receipt_adapter",
+        )
     update_progress_ledger(conn, node_id, metadata)
     for artifact in metadata.get("artifacts") or []:
         if isinstance(artifact, dict) and artifact.get("path_or_ref"):
@@ -5839,6 +7033,40 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
             run_id=snapshot_run_id,
             source="verification_policy",
         )
+        continuity = _loads(materialization["metadata_json"]).get("execution_continuity") or {}
+        consumed_bundle = continuity.get("remediation_bundle")
+        if isinstance(consumed_bundle, dict) and consumed_bundle.get("bundle_id"):
+            bundle_id = str(consumed_bundle["bundle_id"])
+            refreshed = dict(
+                conn.execute("SELECT metadata_json FROM execution_nodes WHERE id = ?", (node_id,)).fetchone()
+            )
+            node_metadata = _loads(refreshed.get("metadata_json"))
+            remediation = node_metadata.get("evaluator_remediation")
+            if isinstance(remediation, dict) and remediation.get("bundle_id") == bundle_id:
+                remediation.update({
+                    "status": "consumed",
+                    "consumed_materialization_id": str(materialization["id"]),
+                    "consumed_at": now,
+                })
+                node_metadata["evaluator_remediation"] = remediation
+                conn.execute(
+                    "UPDATE execution_nodes SET metadata_json = ?, updated_at = ? WHERE id = ?",
+                    (_json(node_metadata), now, node_id),
+                )
+            _event_once(
+                conn,
+                node["job_id"],
+                "evaluator_failure_feedback_consumed",
+                f"feedback-consumed:{bundle_id}:{materialization['id']}",
+                {
+                    "bundle_id": bundle_id,
+                    "source_verifier_node_id": consumed_bundle.get("source_verifier_node_id"),
+                    "consumer_node_id": node_id,
+                    "consumer_materialization_id": str(materialization["id"]),
+                },
+                node_id=node_id,
+                source="verification_policy",
+            )
     _event(conn, node["job_id"], event_type, {"node_key": node["node_key"], "verdict": verdict}, node_id=node_id, task_id=node["latest_task_id"], run_id=snapshot_run_id, source="kanban_task")
     reduce_runtime_job(conn, node["job_id"])
     return True
@@ -5852,17 +7080,23 @@ def _trusted_evaluator_pending_candidate(
     job_metadata = _loads(job.get("metadata_json"))
     policy = job_metadata.get("verification_policy")
     provenance = evidence.get("verification_provenance")
+    structure_request = evidence.get("structure_request")
+    blocking_structure_request = bool(
+        isinstance(structure_request, dict)
+        and structure_request.get("required") is True
+        and structure_request.get("blocking") is True
+    )
     return bool(
-        job_metadata.get("phase4g8_run_id")
-        and isinstance(policy, dict)
+        isinstance(policy, dict)
         and policy.get("mode") == "required_evaluator"
         and node.get("node_type") != "verification"
-        and _normalize_verdict(evidence.get("verdict")) == "blocked"
+        and _normalize_verdict(evidence.get("verdict"))
+        in {"candidate_ready", "succeeded", "blocked"}
+        and not blocking_structure_request
         and isinstance(provenance, dict)
         and str(provenance.get("kind") or "").strip() in {"worker_local", "workspace_process"}
         and evidence.get("workspace_revision")
         and isinstance(evidence.get("changed_files"), list)
-        and bool(evidence.get("changed_files"))
     )
 
 
@@ -5870,6 +7104,8 @@ def _normalize_verdict(verdict: Any) -> str:
     value = str(verdict or "").strip().lower()
     if value in {"pass", "approved", "success", "succeeded", "done", "completed"}:
         return "succeeded"
+    if value in {"candidate_ready", "ready_for_evaluation", "ready_for_independent_evaluation"}:
+        return "candidate_ready"
     if value in {"blocked"}:
         return "blocked"
     if value in {"human_required", "requires_human", "waiting_human"}:
@@ -6031,13 +7267,17 @@ def _verification_state_from_evidence(
             "reason": "implementation verification is not independent",
             "producer_node_id": node.get("id"),
         }
-    if node.get("node_type") == "verification" and (verification or verdict == "failed"):
+    if isinstance(verification, dict) and verification.get("passed") is False:
         return "failed", {
             "valid": False,
-            "reason": "independent verifier reported failure",
+            "reason": (
+                "independent verifier reported failure"
+                if node.get("node_type") == "verification"
+                else "implementation verification reported failure"
+            ),
             "producer_node_id": node.get("id"),
         }
-    if isinstance(verification, dict) and verification.get("passed") is False and node.get("node_type") == "verification":
+    if node.get("node_type") == "verification" and (verification or verdict == "failed"):
         return "failed", {
             "valid": False,
             "reason": "independent verifier reported failure",
@@ -6182,15 +7422,24 @@ def _independent_verification_target(conn: sqlite3.Connection, node: dict[str, A
     if target_materialization is None:
         raise ValueError("fixed target materialization does not exist")
 
-    target_ledger = conn.execute(
-        """
-        SELECT evidence_ref FROM progress_ledger
-         WHERE job_id = ? AND node_id = ?
-         ORDER BY created_at DESC, rowid DESC LIMIT 1
-        """,
-        (node["job_id"], relation["target_node_id"]),
-    ).fetchone()
-    expected_evidence_ref = str(target_ledger["evidence_ref"]) if target_ledger else f"node:{relation['target_node_id']}"
+    expected_evidence_ref = target_metadata.get("target_evidence_ref")
+    if not expected_evidence_ref:
+        fixed_materialization_ref = (
+            f"node:{relation['target_node_id']}:materialization:{target_materialization['id']}"
+        )
+        target_ledger = conn.execute(
+            """
+            SELECT evidence_ref FROM progress_ledger
+             WHERE job_id = ? AND node_id = ? AND evidence_ref = ?
+             ORDER BY created_at DESC, rowid DESC LIMIT 1
+            """,
+            (node["job_id"], relation["target_node_id"], fixed_materialization_ref),
+        ).fetchone()
+        expected_evidence_ref = (
+            str(target_ledger["evidence_ref"])
+            if target_ledger
+            else fixed_materialization_ref
+        )
     expected_revision = target_metadata.get("target_workspace_revision")
     if expected_revision is None:
         expected_revision = f"materialization:{target_materialization['id']}"
@@ -6257,7 +7506,7 @@ def bind_runtime_receipt_provenance(
     backend_session_id: Optional[str] = None,
     producer_kind: str = "runtime_evaluator",
 ) -> Optional[dict[str, Any]]:
-    """Attach trusted local identity fields to a verification receipt."""
+    """Attach trusted local identity fields without changing evidence authority."""
 
     if not isinstance(runtime_receipt, dict):
         return runtime_receipt
@@ -6265,18 +7514,41 @@ def bind_runtime_receipt_provenance(
         "SELECT * FROM execution_nodes WHERE latest_task_id = ?",
         (task_id,),
     ).fetchone()
-    if node is None or node["node_type"] != "verification":
+    if node is None:
         return runtime_receipt
     verification = runtime_receipt.get("verification")
     if not isinstance(verification, dict) or verification.get("passed") is not True:
         return runtime_receipt
     result = dict(runtime_receipt)
-    result["verification_provenance"] = build_independent_verification_provenance(
-        conn,
-        node["id"],
-        producer_kind=producer_kind,
-        producer_session_id=backend_session_id,
-    )
+    if node["node_type"] == "verification":
+        result["verification_provenance"] = build_independent_verification_provenance(
+            conn,
+            node["id"],
+            producer_kind=producer_kind,
+            producer_session_id=backend_session_id,
+        )
+        return result
+    job = _job(conn, node["job_id"])
+    verification_policy = _loads(job.get("metadata_json")).get("verification_policy")
+    verdict = _normalize_verdict(result.get("verdict"))
+    if (
+        isinstance(verification_policy, dict)
+        and verification_policy.get("mode") == "required_evaluator"
+        and verdict in {"candidate_ready", "succeeded", "blocked"}
+    ):
+        materialization = conn.execute(
+            "SELECT id FROM node_materializations WHERE node_id = ? AND task_id = ?",
+            (node["id"], task_id),
+        ).fetchone()
+        result["verification_provenance"] = {
+            "kind": "worker_local",
+            "producer_node_id": str(node["id"]),
+            "producer_materialization_id": (
+                str(materialization["id"]) if materialization is not None else ""
+            ),
+            "producer_session_id": str(backend_session_id or ""),
+            "independent": False,
+        }
     return result
 
 
@@ -6304,6 +7576,9 @@ def _ledger_metadata(evidence: dict[str, Any]) -> dict[str, Any]:
         "known_failure_boundaries",
         "open_questions",
         "risk_notes",
+        "runtime_materialization_id",
+        "runtime_materialization_attempt",
+        "runtime_evidence_ref",
     )
     return {key: evidence.get(key) for key in keys if evidence.get(key)}
 
@@ -6333,7 +7608,7 @@ def _insert_ledger(
             contract_id,
             goal_item_id,
             node_id,
-            f"node:{node_id}",
+            str((metadata or {}).get("runtime_evidence_ref") or f"node:{node_id}"),
             satisfaction,
             verification_state,
             1.0 if satisfaction == "full" else 0.5,

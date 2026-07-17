@@ -1,0 +1,1526 @@
+diff --git a/dask/array/__init__.py b/dask/array/__init__.py
+index 0d6d453..0f995f6 100644
+--- a/dask/array/__init__.py
++++ b/dask/array/__init__.py
+@@ -1,4 +1,6 @@
+ try:
++    from functools import update_wrapper
++
+     from dask.array import backends, fft, lib, linalg, ma, overlap, random
+     from dask.array.blockwise import atop, blockwise
+     from dask.array.chunk_types import register_chunk_type
+@@ -261,6 +263,20 @@ try:
+     from dask.array.wrap import empty, full, ones, zeros
+     from dask.base import compute
+ 
++    # Creation functions support explicit ``backend=`` dispatch as well as
++    # the ``array.backend`` configuration value.
++    array = update_wrapper(backends.array_creation_dispatch.array, array)
++    asarray = update_wrapper(backends.array_creation_dispatch.asarray, asarray)
++    asanyarray = update_wrapper(backends.array_creation_dispatch.asanyarray, asanyarray)
++    arange = update_wrapper(backends.array_creation_dispatch.arange, arange)
++    linspace = update_wrapper(backends.array_creation_dispatch.linspace, linspace)
++    from_array = update_wrapper(backends.array_creation_dispatch.from_array, from_array)
++    from_zarr = update_wrapper(backends.array_creation_dispatch.from_zarr, from_zarr)
++    empty = update_wrapper(backends.array_creation_dispatch.empty, empty)
++    full = update_wrapper(backends.array_creation_dispatch.full, full)
++    ones = update_wrapper(backends.array_creation_dispatch.ones, ones)
++    zeros = update_wrapper(backends.array_creation_dispatch.zeros, zeros)
++
+ except ImportError as e:
+     msg = (
+         "Dask array requirements are not installed.\n\n"
+diff --git a/dask/array/backends.py b/dask/array/backends.py
+index 2609fbe..b46344d 100644
+--- a/dask/array/backends.py
++++ b/dask/array/backends.py
+@@ -2,6 +2,8 @@ import math
+ 
+ import numpy as np
+ 
++from dask.backends import CreationDispatch, DaskBackendEntrypoint
++
+ from dask.array import chunk
+ from dask.array.dispatch import (
+     concatenate_lookup,
+@@ -26,6 +28,84 @@ divide_lookup.register((object, np.ndarray), np_divide)
+ divide_lookup.register(np.ma.masked_array, ma_divide)
+ 
+ 
++class ArrayBackendEntrypoint(DaskBackendEntrypoint):
++    """Interface for a Dask Array creation backend."""
++
++
++class NumpyBackendEntrypoint(ArrayBackendEntrypoint):
++    @staticmethod
++    def array(*args, **kwargs):
++        from dask.array.routines import array
++
++        return array(*args, **kwargs)
++
++    @staticmethod
++    def asarray(*args, **kwargs):
++        from dask.array.core import asarray
++
++        return asarray(*args, **kwargs)
++
++    @staticmethod
++    def asanyarray(*args, **kwargs):
++        from dask.array.core import asanyarray
++
++        return asanyarray(*args, **kwargs)
++
++    @staticmethod
++    def arange(*args, **kwargs):
++        from dask.array.creation import arange
++
++        return arange(*args, **kwargs)
++
++    @staticmethod
++    def linspace(*args, **kwargs):
++        from dask.array.creation import linspace
++
++        return linspace(*args, **kwargs)
++
++    @staticmethod
++    def from_array(*args, **kwargs):
++        from dask.array.core import from_array
++
++        return from_array(*args, **kwargs)
++
++    @staticmethod
++    def from_zarr(*args, **kwargs):
++        from dask.array.core import from_zarr
++
++        return from_zarr(*args, **kwargs)
++
++    @staticmethod
++    def empty(*args, **kwargs):
++        from dask.array.wrap import empty
++
++        return empty(*args, **kwargs)
++
++    @staticmethod
++    def full(*args, **kwargs):
++        from dask.array.wrap import full
++
++        return full(*args, **kwargs)
++
++    @staticmethod
++    def ones(*args, **kwargs):
++        from dask.array.wrap import ones
++
++        return ones(*args, **kwargs)
++
++    @staticmethod
++    def zeros(*args, **kwargs):
++        from dask.array.wrap import zeros
++
++        return zeros(*args, **kwargs)
++
++
++array_creation_dispatch = CreationDispatch(
++    module_name="array", default="numpy", entrypoint_root="dask.array.backends"
++)
++array_creation_dispatch.register_backend("numpy", NumpyBackendEntrypoint())
++
++
+ @percentile_lookup.register(np.ndarray)
+ def percentile(a, q, method="linear"):
+     return _percentile(a, q, method)
+diff --git a/dask/array/core.py b/dask/array/core.py
+index 7932135..84be30f 100644
+--- a/dask/array/core.py
++++ b/dask/array/core.py
+@@ -1876,6 +1876,14 @@ class Array(DaskMethodsMixin):
+         if value is np.ma.masked:
+             value = np.ma.masked_all((), dtype=self.dtype)
+ 
++        if np.issubdtype(self.dtype, np.integer) and not isinstance(value, Array):
++            try:
++                contains_nan = np.isnan(value).any()
++            except TypeError:
++                contains_nan = False
++            if contains_nan:
++                raise ValueError("cannot convert float NaN to integer")
++
+         ## Use the "where" method for cases when key is an Array
+         if isinstance(key, Array):
+             from dask.array.routines import where
+@@ -2851,12 +2859,9 @@ class Array(DaskMethodsMixin):
+ 
+     def copy(self):
+         """
+-        Copy array.  This is a no-op for dask.arrays, which are immutable
++        Copy an array collection without copying its immutable task graph.
+         """
+-        if self.npartitions == 1:
+-            return self.map_blocks(M.copy)
+-        else:
+-            return Array(self.dask, self.name, self.chunks, meta=self)
++        return Array(self.dask, self.name, self.chunks, meta=self)
+ 
+     def __deepcopy__(self, memo):
+         c = self.copy()
+diff --git a/dask/array/slicing.py b/dask/array/slicing.py
+index 475fd89..f8daa99 100644
+--- a/dask/array/slicing.py
++++ b/dask/array/slicing.py
+@@ -2135,6 +2135,10 @@ def setitem(x, v, indices):
+     if not v.size:
+         return x
+ 
++    if np.issubdtype(x.dtype, np.integer) and np.issubdtype(v.dtype, np.floating):
++        if np.isnan(v).any():
++            raise ValueError("cannot convert float NaN to integer")
++
+     # Normalize integer array indices
+     for i, (index, block_size) in enumerate(zip(indices, x.shape)):
+         if isinstance(index, np.ndarray) and index.dtype != bool:
+diff --git a/dask/array/tests/test_array_core.py b/dask/array/tests/test_array_core.py
+index ffb9c63..d2d7f26 100644
+--- a/dask/array/tests/test_array_core.py
++++ b/dask/array/tests/test_array_core.py
+@@ -2711,12 +2711,21 @@ def test_from_array_minus_one():
+ 
+ def test_from_array_copy():
+     # Regression test for https://github.com/dask/dask/issues/3751
+-    x = np.arange(10)
+-    y = da.from_array(x, -1)
+-    assert y.npartitions == 1
+-    y_c = y.copy()
+-    assert y is not y_c
+-    assert y.compute() is not y_c.compute()
++    for chunks in (-1, 3):
++        x = np.arange(10)
++        y = da.from_array(x, chunks)
++        y_c = y.copy()
++
++        assert y is not y_c
++        assert y.name == y_c.name
++        assert y.dask is y_c.dask
++        assert_eq(y, y_c)
++
++
++def test_setitem_nan_into_integer_raises():
++    x = da.arange(5, chunks=2)
++    with pytest.raises(ValueError, match="cannot convert float NaN to integer"):
++        x[0] = np.nan
+ 
+ 
+ def test_from_array_dask_array():
+diff --git a/dask/base.py b/dask/base.py
+index 1af3559..89b392e 100644
+--- a/dask/base.py
++++ b/dask/base.py
+@@ -947,6 +947,7 @@ normalize_token.register(
+         complex,
+         type(Ellipsis),
+         datetime.date,
++        datetime.time,
+         datetime.timedelta,
+         pathlib.PurePath,
+     ),
+@@ -954,6 +955,12 @@ normalize_token.register(
+ )
+ 
+ 
++@normalize_token.register(datetime.datetime)
++def normalize_datetime(dt):
++    """Normalize datetimes independently of their ``repr`` implementation."""
++    return dt.isoformat()
++
++
+ @normalize_token.register(dict)
+ def normalize_dict(d):
+     return normalize_token(sorted(d.items(), key=str))
+diff --git a/dask/dask-schema.yaml b/dask/dask-schema.yaml
+index dab8101..6530175 100644
+--- a/dask/dask-schema.yaml
++++ b/dask/dask-schema.yaml
+@@ -37,6 +37,11 @@ properties:
+     type: object
+     properties:
+ 
++      backend:
++        type: string
++        description: |
++          Backend dataframe library for input creation and IO.
++
+       shuffle-compression:
+         type:
+         - string
+@@ -67,6 +72,11 @@ properties:
+     type: object
+     properties:
+ 
++      backend:
++        type: string
++        description: |
++          Backend array library for input creation and IO.
++
+       svg:
+         type: object
+         properties:
+diff --git a/dask/dask.yaml b/dask/dask.yaml
+index b4e83fc..d8ddf52 100644
+--- a/dask/dask.yaml
++++ b/dask/dask.yaml
+@@ -7,12 +7,14 @@ tokenize:
+   ensure-deterministic: false  # If true, tokenize will error instead of falling back to uuids
+ 
+ dataframe:
++  backend: pandas  # Backend dataframe library for input creation and IO
+   shuffle-compression: null  # compression for on disk-shuffling. Partd supports ZLib, BZ2, SNAPPY, BLOSC
+   parquet:
+     metadata-task-size-local: 512  # Number of files per local metadata-processing task
+     metadata-task-size-remote: 16  # Number of files per remote metadata-processing task
+ 
+ array:
++  backend: numpy  # Backend array library for input creation and IO
+   svg:
+     size: 120  # pixels
+   slicing:
+diff --git a/dask/dataframe/__init__.py b/dask/dataframe/__init__.py
+index 778ac3a..43ab1c4 100644
+--- a/dask/dataframe/__init__.py
++++ b/dask/dataframe/__init__.py
+@@ -1,4 +1,6 @@
+ try:
++    from functools import update_wrapper
++
+     import dask.dataframe._pyarrow_compat
+     from dask.base import compute
+     from dask.dataframe import backends, dispatch, rolling
+@@ -53,6 +55,27 @@ try:
+         from dask.dataframe.core import isna
+     except ImportError:
+         pass
++
++    from_array = update_wrapper(backends.dataframe_creation_dispatch.from_array, from_array)
++    from_pandas = update_wrapper(backends.dataframe_creation_dispatch.from_pandas, from_pandas)
++    read_csv = update_wrapper(backends.dataframe_creation_dispatch.read_csv, read_csv)
++    read_table = update_wrapper(backends.dataframe_creation_dispatch.read_table, read_table)
++    read_fwf = update_wrapper(backends.dataframe_creation_dispatch.read_fwf, read_fwf)
++    read_json = update_wrapper(backends.dataframe_creation_dispatch.read_json, read_json)
++    read_hdf = update_wrapper(backends.dataframe_creation_dispatch.read_hdf, read_hdf)
++    read_sql = update_wrapper(backends.dataframe_creation_dispatch.read_sql, read_sql)
++    read_sql_query = update_wrapper(
++        backends.dataframe_creation_dispatch.read_sql_query, read_sql_query
++    )
++    read_sql_table = update_wrapper(
++        backends.dataframe_creation_dispatch.read_sql_table, read_sql_table
++    )
++    if "read_parquet" in globals():
++        read_parquet = update_wrapper(
++            backends.dataframe_creation_dispatch.read_parquet, read_parquet
++        )
++    if "read_orc" in globals():
++        read_orc = update_wrapper(backends.dataframe_creation_dispatch.read_orc, read_orc)
+ except ImportError as e:
+     msg = (
+         "Dask dataframe requirements are not installed.\n\n"
+diff --git a/dask/dataframe/backends.py b/dask/dataframe/backends.py
+index f26b560..27924a3 100644
+--- a/dask/dataframe/backends.py
++++ b/dask/dataframe/backends.py
+@@ -15,6 +15,7 @@ from pandas.api.types import (
+     union_categoricals,
+ )
+ 
++from dask.backends import CreationDispatch, DaskBackendEntrypoint
+ from dask.array.dispatch import percentile_lookup
+ from dask.array.percentile import _percentile
+ from dask.dataframe.core import DataFrame, Index, Scalar, Series, _Frame
+@@ -45,6 +46,90 @@ from dask.dataframe.utils import (
+ from dask.sizeof import SimpleSizeof, sizeof
+ from dask.utils import is_arraylike, is_series_like, typename
+ 
++
++class DataFrameBackendEntrypoint(DaskBackendEntrypoint):
++    """Interface for a Dask DataFrame creation backend."""
++
++
++class PandasBackendEntrypoint(DataFrameBackendEntrypoint):
++    @staticmethod
++    def from_pandas(*args, **kwargs):
++        from dask.dataframe.io.io import from_pandas
++
++        return from_pandas(*args, **kwargs)
++
++    @staticmethod
++    def from_array(*args, **kwargs):
++        from dask.dataframe.io.io import from_array
++
++        return from_array(*args, **kwargs)
++
++    @staticmethod
++    def read_csv(*args, **kwargs):
++        from dask.dataframe.io.csv import read_csv
++
++        return read_csv(*args, **kwargs)
++
++    @staticmethod
++    def read_table(*args, **kwargs):
++        from dask.dataframe.io.csv import read_table
++
++        return read_table(*args, **kwargs)
++
++    @staticmethod
++    def read_fwf(*args, **kwargs):
++        from dask.dataframe.io.csv import read_fwf
++
++        return read_fwf(*args, **kwargs)
++
++    @staticmethod
++    def read_json(*args, **kwargs):
++        from dask.dataframe.io.json import read_json
++
++        return read_json(*args, **kwargs)
++
++    @staticmethod
++    def read_hdf(*args, **kwargs):
++        from dask.dataframe.io.hdf import read_hdf
++
++        return read_hdf(*args, **kwargs)
++
++    @staticmethod
++    def read_sql(*args, **kwargs):
++        from dask.dataframe.io.sql import read_sql
++
++        return read_sql(*args, **kwargs)
++
++    @staticmethod
++    def read_sql_query(*args, **kwargs):
++        from dask.dataframe.io.sql import read_sql_query
++
++        return read_sql_query(*args, **kwargs)
++
++    @staticmethod
++    def read_sql_table(*args, **kwargs):
++        from dask.dataframe.io.sql import read_sql_table
++
++        return read_sql_table(*args, **kwargs)
++
++    @staticmethod
++    def read_parquet(*args, **kwargs):
++        from dask.dataframe.io.parquet import read_parquet
++
++        return read_parquet(*args, **kwargs)
++
++    @staticmethod
++    def read_orc(*args, **kwargs):
++        from dask.dataframe.io.orc import read_orc
++
++        return read_orc(*args, **kwargs)
++
++
++dataframe_creation_dispatch = CreationDispatch(
++    module_name="dataframe", default="pandas", entrypoint_root="dask.dataframe.backends"
++)
++dataframe_creation_dispatch.register_backend("pandas", PandasBackendEntrypoint())
++
+ ##########
+ # Pandas #
+ ##########
+diff --git a/dask/dataframe/core.py b/dask/dataframe/core.py
+index cc82fd7..49ba5c1 100644
+--- a/dask/dataframe/core.py
++++ b/dask/dataframe/core.py
+@@ -562,7 +562,7 @@ Dask Name: {name}, {layers}"""
+         return self.map_partitions(
+             getattr,
+             "index",
+-            token=self._name + "-index",
++            token=key_split(self._name) + "-index",
+             meta=self._meta.index,
+             enforce_metadata=False,
+         )
+diff --git a/dask/dataframe/groupby.py b/dask/dataframe/groupby.py
+index e2db913..61b897f 100644
+--- a/dask/dataframe/groupby.py
++++ b/dask/dataframe/groupby.py
+@@ -331,6 +331,35 @@ def _groupby_aggregate(
+     return aggfunc(grouped, **kwargs)
+ 
+ 
++def _groupby_aggregate_spec(df, by, key, func, sort=False, dropna=None, observed=None):
++    """Apply a non-decomposable aggregation after groups have been shuffled."""
++    dropna = {"dropna": dropna} if dropna is not None else {}
++    observed = {"observed": observed} if observed is not None else {}
++    # Inputs are aligned by the preceding shuffle. Calling pandas directly also
++    # preserves the name of an external Series grouper in the result index.
++    grouped = df.groupby(by, sort=sort, **observed, **dropna)
++    grouped = _maybe_slice(grouped, key)
++    return grouped.aggregate(func)
++
++
++def _aggregate_function_names(arg):
++    """Return the normalized function names in a groupby aggregation spec."""
++    if isinstance(arg, dict):
++        args = arg.values()
++    elif isinstance(arg, (list, tuple)):
++        args = arg
++    else:
++        args = [arg]
++
++    names = set()
++    for value in args:
++        if isinstance(value, (list, tuple)):
++            names.update(_aggregate_function_names(value))
++        else:
++            names.add(funcname({np.min: "min", np.max: "max"}.get(value, value)))
++    return names
++
++
+ def _apply_chunk(df, *by, dropna=None, observed=None, **kwargs):
+     func = kwargs.pop("chunk")
+     columns = kwargs.pop("columns")
+@@ -1414,7 +1443,7 @@ class _GroupBy:
+             "specific group using ``.get_group()`` before calling ``compute()``"
+         )
+ 
+-    def _shuffle(self, meta):
++    def _shuffle(self, meta, shuffle_method=None, npartitions=None):
+         df = self.obj
+ 
+         if isinstance(self.obj, Series):
+@@ -1424,7 +1453,21 @@ class _GroupBy:
+         else:
+             convert_back_to_series = False
+ 
+-        if isinstance(self.by, DataFrame):  # add by columns to dataframe
++        temporary_by_columns = None
++        if isinstance(self.by, list) and any(
++            isinstance(item, Series) for item in self.by
++        ):
++            temporary_by_columns = {}
++            by = []
++            for position, item in enumerate(self.by):
++                if isinstance(item, Series):
++                    column = f"_by_{position}"
++                    temporary_by_columns[column] = item
++                    by.append(column)
++                else:
++                    by.append(item)
++            df2 = df.assign(**temporary_by_columns)
++        elif isinstance(self.by, DataFrame):  # add by columns to dataframe
+             df2 = df.assign(**{"_by_" + c: self.by[c] for c in self.by.columns})
+             by = self.by
+         elif isinstance(self.by, Series):
+@@ -1434,9 +1477,24 @@ class _GroupBy:
+             df2 = df
+             by = df._select_columns_or_index(self.by)
+ 
+-        df3 = shuffle(df2, by)  # shuffle dataframe and index
+-
+-        if isinstance(self.by, DataFrame):
++        # Shuffle dataframe and index
++        df3 = shuffle(df2, by, shuffle=shuffle_method, npartitions=npartitions)
++
++        if temporary_by_columns is not None:
++            cols = list(temporary_by_columns)
++            by2 = []
++            for position, item in enumerate(self.by):
++                if isinstance(item, Series):
++                    grouped = df3[f"_by_{position}"]
++                    grouped.name = item.name
++                    by2.append(grouped)
++                else:
++                    by2.append(item)
++            if is_dataframe_like(meta):
++                df4 = df3.map_partitions(drop_columns, cols, meta.columns.dtype)
++            else:
++                df4 = df3.drop(cols, axis=1)
++        elif isinstance(self.by, DataFrame):
+             # extract by from dataframe
+             cols = ["_by_" + c for c in self.by.columns]
+             by2 = df3[cols]
+@@ -1460,6 +1518,47 @@ class _GroupBy:
+ 
+         return df4, by2
+ 
++    def _single_agg(
++        self, func, split_every=None, split_out=1, shuffle_method=None
++    ):
++        """Aggregate a single function by putting every group in one partition."""
++        if not isinstance(split_out, Integral) or split_out < 1:
++            raise ValueError("split_out must be an integer greater than zero")
++        if split_every not in (None, False) and (
++            not isinstance(split_every, Integral) or split_every < 2
++        ):
++            raise ValueError("split_every must be an integer >= 2")
++
++        with check_numeric_only_deprecation():
++            meta = make_meta(
++                self._meta_nonempty.aggregate(func), parent_meta=self._meta.obj
++            )
++
++        shuffled, by = self._shuffle(
++            meta, shuffle_method=shuffle_method, npartitions=split_out
++        )
++        function_names = _aggregate_function_names(func)
++        function_name = (
++            next(iter(function_names)) if len(function_names) == 1 else "aggregate"
++        )
++        return map_partitions(
++            _groupby_aggregate_spec,
++            shuffled,
++            by,
++            self._slice,
++            func,
++            sort=self.sort,
++            meta=meta,
++            token=(
++                self._token_prefix
++                + function_name
++                + "-"
++                + tokenize(func, split_every, split_out, shuffle_method)
++            ),
++            **self.observed,
++            **self.dropna,
++        )
++
+     @derived_from(pd.core.groupby.GroupBy)
+     def cumsum(self, axis=0):
+         if axis:
+@@ -1493,33 +1592,51 @@ class _GroupBy:
+         )
+ 
+     @derived_from(pd.core.groupby.GroupBy)
+-    def sum(self, split_every=None, split_out=1, min_count=None):
+-        result = self._aca_agg(
+-            token="sum", func=M.sum, split_every=split_every, split_out=split_out
+-        )
++    def sum(self, split_every=None, split_out=1, min_count=None, shuffle=None):
++        if shuffle:
++            result = self.aggregate(
++                "sum", split_every=split_every, split_out=split_out, shuffle=shuffle
++            )
++        else:
++            result = self._aca_agg(
++                token="sum", func=M.sum, split_every=split_every, split_out=split_out
++            )
+         if min_count:
+             return result.where(self.count() >= min_count, other=np.NaN)
+         else:
+             return result
+ 
+     @derived_from(pd.core.groupby.GroupBy)
+-    def prod(self, split_every=None, split_out=1, min_count=None):
+-        result = self._aca_agg(
+-            token="prod", func=M.prod, split_every=split_every, split_out=split_out
+-        )
++    def prod(self, split_every=None, split_out=1, min_count=None, shuffle=None):
++        if shuffle:
++            result = self.aggregate(
++                "prod", split_every=split_every, split_out=split_out, shuffle=shuffle
++            )
++        else:
++            result = self._aca_agg(
++                token="prod", func=M.prod, split_every=split_every, split_out=split_out
++            )
+         if min_count:
+             return result.where(self.count() >= min_count, other=np.NaN)
+         else:
+             return result
+ 
+     @derived_from(pd.core.groupby.GroupBy)
+-    def min(self, split_every=None, split_out=1):
++    def min(self, split_every=None, split_out=1, shuffle=None):
++        if shuffle:
++            return self.aggregate(
++                "min", split_every=split_every, split_out=split_out, shuffle=shuffle
++            )
+         return self._aca_agg(
+             token="min", func=M.min, split_every=split_every, split_out=split_out
+         )
+ 
+     @derived_from(pd.core.groupby.GroupBy)
+-    def max(self, split_every=None, split_out=1):
++    def max(self, split_every=None, split_out=1, shuffle=None):
++        if shuffle:
++            return self.aggregate(
++                "max", split_every=split_every, split_out=split_out, shuffle=shuffle
++            )
+         return self._aca_agg(
+             token="max", func=M.max, split_every=split_every, split_out=split_out
+         )
+@@ -1547,7 +1664,11 @@ class _GroupBy:
+         )
+ 
+     @derived_from(pd.core.groupby.GroupBy)
+-    def count(self, split_every=None, split_out=1):
++    def count(self, split_every=None, split_out=1, shuffle=None):
++        if shuffle:
++            return self.aggregate(
++                "count", split_every=split_every, split_out=split_out, shuffle=shuffle
++            )
+         return self._aca_agg(
+             token="count",
+             func=M.count,
+@@ -1557,7 +1678,11 @@ class _GroupBy:
+         )
+ 
+     @derived_from(pd.core.groupby.GroupBy)
+-    def mean(self, split_every=None, split_out=1):
++    def mean(self, split_every=None, split_out=1, shuffle=None):
++        if shuffle:
++            return self.aggregate(
++                "mean", split_every=split_every, split_out=split_out, shuffle=shuffle
++            )
+         s = self.sum(split_every=split_every, split_out=split_out)
+         c = self.count(split_every=split_every, split_out=split_out)
+         if is_dataframe_like(s):
+@@ -1565,7 +1690,19 @@ class _GroupBy:
+         return s / c
+ 
+     @derived_from(pd.core.groupby.GroupBy)
+-    def size(self, split_every=None, split_out=1):
++    def median(self, split_every=None, split_out=1):
++        return self._single_agg(
++            M.median,
++            split_every=split_every,
++            split_out=split_out,
++        )
++
++    @derived_from(pd.core.groupby.GroupBy)
++    def size(self, split_every=None, split_out=1, shuffle=None):
++        if shuffle:
++            return self.aggregate(
++                "size", split_every=split_every, split_out=split_out, shuffle=shuffle
++            )
+         return self._aca_agg(
+             token="size",
+             func=M.size,
+@@ -1664,13 +1801,21 @@ class _GroupBy:
+         return result
+ 
+     @derived_from(pd.core.groupby.GroupBy)
+-    def first(self, split_every=None, split_out=1):
++    def first(self, split_every=None, split_out=1, shuffle=None):
++        if shuffle:
++            return self.aggregate(
++                "first", split_every=split_every, split_out=split_out, shuffle=shuffle
++            )
+         return self._aca_agg(
+             token="first", func=M.first, split_every=split_every, split_out=split_out
+         )
+ 
+     @derived_from(pd.core.groupby.GroupBy)
+-    def last(self, split_every=None, split_out=1):
++    def last(self, split_every=None, split_out=1, shuffle=None):
++        if shuffle:
++            return self.aggregate(
++                "last", split_every=split_every, split_out=split_out, shuffle=shuffle
++            )
+         return self._aca_agg(
+             token="last", func=M.last, split_every=split_every, split_out=split_out
+         )
+@@ -1765,7 +1910,25 @@ class _GroupBy:
+         else:
+             raise ValueError(f"aggregate on unknown object {self.obj}")
+ 
+-        chunk_funcs, aggregate_funcs, finalizers = _build_agg_args(spec)
++        try:
++            chunk_funcs, aggregate_funcs, finalizers = _build_agg_args(spec)
++        except ValueError as err:
++            # Aggregations such as median cannot be decomposed into independent
++            # chunk and combine operations. They can still be evaluated exactly
++            # after shuffling complete groups together. Compound specs must opt
++            # into that more expensive algorithm explicitly.
++            if not str(err).startswith("unknown aggregate"):
++                raise
++            if isinstance(arg, (list, tuple, dict)) and not shuffle:
++                raise ValueError(
++                    f"Aggregation {arg!r} must use shuffle=True or a shuffle method"
++                ) from err
++            return self._single_agg(
++                arg,
++                split_every=split_every,
++                split_out=split_out,
++                shuffle_method=shuffle if isinstance(shuffle, str) else None,
++            )
+ 
+         if isinstance(self.by, (tuple, list)) and len(self.by) > 1:
+             levels = list(range(len(self.by)))
+@@ -2372,7 +2535,11 @@ class SeriesGroupBy(_GroupBy):
+         result = super().aggregate(
+             arg, split_every=split_every, split_out=split_out, shuffle=shuffle
+         )
+-        if self._slice:
++        if (
++            self._slice
++            and isinstance(result, DataFrame)
++            and self._slice in result.columns
++        ):
+             result = result[self._slice]
+ 
+         if not isinstance(arg, (list, dict)) and isinstance(result, DataFrame):
+diff --git a/dask/dataframe/io/csv.py b/dask/dataframe/io/csv.py
+index 9276a06..c1eab2d 100644
+--- a/dask/dataframe/io/csv.py
++++ b/dask/dataframe/io/csv.py
+@@ -73,14 +73,17 @@ class CSVFunctionWrapper(DataFrameIOFunction):
+         columns = [c for c in self.head.columns if c in columns]
+         if columns == self.columns:
+             return self
++        head_columns = list(columns)
++        if self.colname is not None and self.colname not in head_columns:
++            head_columns.append(self.colname)
+         return CSVFunctionWrapper(
+             self.full_columns,
+             columns,
+             self.colname,
+-            self.head[columns],
++            self.head[head_columns],
+             self.header,
+             self.reader,
+-            {c: self.dtypes[c] for c in columns},
++            {c: self.dtypes[c] for c in columns if c in self.dtypes},
+             self.enforce,
+             self.kwargs,
+         )
+@@ -122,7 +125,18 @@ class CSVFunctionWrapper(DataFrameIOFunction):
+                 # select columns after the read
+                 project_after_read = True
+             else:
+-                columns = self._columns
++                # The path column is synthesized after parsing and must never
++                # be forwarded to pandas as a ``usecols`` value.
++                columns = [c for c in self._columns if c != self.colname]
++                if not columns:
++                    # Reading one real column preserves the number of rows for
++                    # a projection containing only the synthetic path column.
++                    columns = self.full_columns[:1]
++                    project_after_read = True
++                elif len(columns) != len(self._columns):
++                    project_after_read = True
++                if self.colname is not None:
++                    project_after_read = True
+                 rest_kwargs["usecols"] = columns
+ 
+         # Call `pandas_read_text`
+diff --git a/dask/dataframe/io/demo.py b/dask/dataframe/io/demo.py
+index 960cfbd..d7d02a4 100644
+--- a/dask/dataframe/io/demo.py
++++ b/dask/dataframe/io/demo.py
+@@ -71,8 +71,10 @@ class MakeTimeseriesPart(DataFrameIOFunction):
+     """
+ 
+     def __init__(self, dtypes, freq, kwargs, columns=None):
+-        self._columns = columns or list(dtypes.keys())
+-        self.dtypes = {c: dtypes[c] for c in self.columns}
++        self._columns = sorted(dtypes) if columns is None else sorted(columns)
++        # Keep the complete dtype mapping so projection does not alter the
++        # random-number stream used to generate any selected column.
++        self.dtypes = dtypes
+         self.freq = freq
+         self.kwargs = kwargs
+ 
+@@ -97,9 +99,10 @@ class MakeTimeseriesPart(DataFrameIOFunction):
+         divisions, state_data = part
+         if isinstance(state_data, int):
+             state_data = random_state_data(1, state_data)
+-        return make_timeseries_part(
++        result = make_timeseries_part(
+             divisions[0], divisions[1], self.dtypes, self.freq, state_data, self.kwargs
+         )
++        return result[self.columns]
+ 
+ 
+ def make_timeseries_part(start, end, dtypes, freq, state_data, kwargs):
+diff --git a/dask/dataframe/io/tests/test_csv.py b/dask/dataframe/io/tests/test_csv.py
+index 71cb458..7767bac 100644
+--- a/dask/dataframe/io/tests/test_csv.py
++++ b/dask/dataframe/io/tests/test_csv.py
+@@ -439,6 +439,12 @@ def test_read_csv_include_path_column(dd_read, files):
+         assert "2014-01-02.csv" not in filenames
+         assert "2014-01-03.csv" in filenames
+ 
++        # Projection must not pass the synthetic path column to pandas usecols.
++        plain = dd_read("2014-01-*.csv", include_path_column=True)
++        computed = plain.compute()
++        for columns in [["path"], ["name"], ["name", "path"]]:
++            assert_eq(plain[columns], computed[columns])
++
+ 
+ @pytest.mark.parametrize(
+     "dd_read,files", [(dd.read_csv, csv_files), (dd.read_table, tsv_files)]
+diff --git a/dask/dataframe/io/tests/test_demo.py b/dask/dataframe/io/tests/test_demo.py
+index 114cd43..476b9d2 100644
+--- a/dask/dataframe/io/tests/test_demo.py
++++ b/dask/dataframe/io/tests/test_demo.py
+@@ -5,6 +5,7 @@ import dask.dataframe as dd
+ from dask.blockwise import Blockwise, optimize_blockwise
+ from dask.dataframe._compat import tm
+ from dask.dataframe.optimize import optimize_dataframe_getitem
++from dask.dataframe.utils import assert_eq
+ 
+ 
+ def test_make_timeseries():
+@@ -157,3 +158,10 @@ def test_make_timeseries_getitem_compute():
+     df3 = df2.compute()
+     assert df3["y"].min() > 0
+     assert list(df.columns) == list(df3.columns)
++
++
++def test_make_timeseries_projection_is_stable():
++    df = dd.demo.make_timeseries(
++        start="2000-01-01", end="2000-01-05", partition_freq="1D", seed=1
++    )
++    assert_eq(df[["y"]], df.compute()[["y"]])
+diff --git a/dask/dataframe/rolling.py b/dask/dataframe/rolling.py
+index 38df268..cb65241 100644
+--- a/dask/dataframe/rolling.py
++++ b/dask/dataframe/rolling.py
+@@ -147,6 +147,11 @@ def map_overlap(
+     """
+     args = (df,) + args
+ 
++    if isinstance(before, str):
++        before = pd.Timedelta(before)
++    if isinstance(after, str):
++        after = pd.Timedelta(after)
++
+     dfs = [df for df in args if isinstance(df, _Frame)]
+ 
+     if isinstance(before, datetime.timedelta) or isinstance(after, datetime.timedelta):
+diff --git a/dask/dataframe/tests/test_format.py b/dask/dataframe/tests/test_format.py
+index 81b892b..b8e01a5 100644
+--- a/dask/dataframe/tests/test_format.py
++++ b/dask/dataframe/tests/test_format.py
+@@ -480,7 +480,7 @@ D       ...
+ G       ...
+ H       ...
+ dtype: object
+-Dask Name: from_pandas, 2 graph layers"""
++Dask Name: from_pandas-index, 2 graph layers"""
+     assert repr(ds.index) == exp
+     assert str(ds.index) == exp
+ 
+@@ -498,7 +498,7 @@ Dask Name: from_pandas, 2 graph layers"""
+     7                ...
+     8                ...
+     Name: YYY, dtype: category
+-    Dask Name: from_pandas, 2 graph layers"""
++    Dask Name: from_pandas-index, 2 graph layers"""
+     )
+     assert repr(ds.index) == exp
+     assert str(ds.index) == exp
+diff --git a/dask/dataframe/tests/test_groupby.py b/dask/dataframe/tests/test_groupby.py
+index f5f9d17..9267eac 100644
+--- a/dask/dataframe/tests/test_groupby.py
++++ b/dask/dataframe/tests/test_groupby.py
+@@ -30,6 +30,7 @@ if dd._compat.PANDAS_GT_110:
+ AGG_FUNCS = [
+     "sum",
+     "mean",
++    "median",
+     "min",
+     "max",
+     "count",
+@@ -2751,6 +2752,32 @@ def test_groupby_sort_argument(by, agg, sort):
+         assert_eq(result_3, result_3_pd)
+ 
+ 
++def test_groupby_median_and_single_function_aggregate():
++    pdf = pd.DataFrame(
++        {"key": ["a", "b", "a", "b", "a", "b"], "x": [1, 10, 5, 30, 3, 20]}
++    )
++    ddf = dd.from_pandas(pdf, npartitions=3)
++
++    assert_eq(ddf.groupby("key").median(), pdf.groupby("key").median())
++    assert_eq(ddf.groupby("key").x.median(), pdf.groupby("key").x.median())
++    assert_eq(ddf.x.groupby(ddf.key).median(), pdf.x.groupby(pdf.key).median())
++    assert_eq(
++        ddf.groupby("key").agg("median", split_out=2),
++        pdf.groupby("key").agg("median"),
++    )
++    for spec in (
++        {"x": "median"},
++        {"x": ["median"]},
++        {"x": ["median", "sum"]},
++    ):
++        with pytest.raises(ValueError, match="must use shuffle"):
++            ddf.groupby("key").agg(spec)
++        assert_eq(
++            ddf.groupby("key").agg(spec, shuffle=True),
++            pdf.groupby("key").agg(spec),
++        )
++
++
+ @pytest.mark.parametrize("agg", [M.sum, M.prod, M.max, M.min])
+ @pytest.mark.parametrize("sort", [True, False])
+ def test_groupby_sort_argument_agg(agg, sort):
+@@ -2783,6 +2810,15 @@ def test_groupby_sort_true_split_out():
+         # Cannot use sort=True with split_out>1 (for now)
+         M.sum(ddf.groupby("x", sort=True), split_out=2)
+ 
++    with pytest.raises(NotImplementedError):
++        M.sum(ddf.groupby("x", sort=True), split_out=2, shuffle=False)
++
++    # Direct single-function reductions can opt into a shuffle.
++    assert_eq(
++        M.sum(ddf.groupby("x", sort=True), split_out=2, shuffle=True),
++        M.sum(df.groupby("x", sort=True)),
++    )
++
+     # Can use sort=True with split_out>1 with agg() if shuffle=True
+     ddf.groupby("x", sort=True).agg("sum", split_out=2, shuffle=True)
+ 
+@@ -2797,7 +2833,7 @@ def test_groupby_sort_true_split_out():
+ def test_groupby_aggregate_categorical_observed(
+     known_cats, ordered_cats, agg_func, groupby, observed
+ ):
+-    if agg_func in ["cov", "corr", "nunique"]:
++    if agg_func in ["cov", "corr", "nunique", "median"]:
+         pytest.skip("Not implemented for DataFrameGroupBy yet.")
+     if agg_func in ["sum", "count", "prod"] and groupby != "cat_1":
+         pytest.skip("Gives zeros rather than nans.")
+diff --git a/dask/dataframe/tests/test_rolling.py b/dask/dataframe/tests/test_rolling.py
+index 3b11847..327ece1 100644
+--- a/dask/dataframe/tests/test_rolling.py
++++ b/dask/dataframe/tests/test_rolling.py
+@@ -67,6 +67,13 @@ def test_map_overlap(npartitions):
+         assert_eq(res, sol)
+ 
+ 
++def test_map_overlap_string_timedelta():
++    ddf = dd.from_pandas(ts_constant_freq, 4)
++    result = ddf.map_overlap(lambda x: x.rolling("3s").sum(), "3s", 0)
++    expected = ts_constant_freq.rolling("3s").sum()
++    assert_eq(result, expected)
++
++
+ @pytest.mark.parametrize("npartitions", [1, 4])
+ @pytest.mark.parametrize("enforce_metadata", [True, False])
+ @pytest.mark.parametrize("transform_divisions", [True, False])
+diff --git a/dask/delayed.py b/dask/delayed.py
+index 8f87943..2f2b7a8 100644
+--- a/dask/delayed.py
++++ b/dask/delayed.py
+@@ -4,6 +4,7 @@ import uuid
+ import warnings
+ from collections.abc import Iterator
+ from dataclasses import fields, is_dataclass, replace
++from functools import partial
+ 
+ from tlz import concat, curry, merge, unique
+ 
+@@ -496,13 +497,13 @@ def delayed(obj, name=None, pure=None, nout=None, traverse=True):
+         return Delayed(name, graph, nout)
+ 
+ 
+-def right(method):
+-    """Wrapper to create 'right' version of operator given left version"""
++def _swap_binary_operator(method, self, other):
++    return method(other, self)
+ 
+-    def _inner(self, other):
+-        return method(other, self)
+ 
+-    return _inner
++def right(method):
++    """Pickleable wrapper creating a right operator from a left operator."""
++    return partial(_swap_binary_operator, method)
+ 
+ 
+ def optimize(dsk, keys, **kwargs):
+diff --git a/dask/tests/test_base.py b/dask/tests/test_base.py
+index f108b05..3892034 100644
+--- a/dask/tests/test_base.py
++++ b/dask/tests/test_base.py
+@@ -439,6 +439,16 @@ def test_tokenize_timedelta():
+     assert tokenize(datetime.timedelta(days=1)) != tokenize(datetime.timedelta(days=2))
+ 
+ 
++def test_tokenize_datetime_and_time():
++    dt = datetime.datetime(2022, 10, 14, 12, 30, 1, 2)
++    assert tokenize(dt) == tokenize(dt)
++    assert tokenize(dt) != tokenize(dt.replace(microsecond=3))
++
++    t = datetime.time(12, 30, 1, 2)
++    assert tokenize(t) == tokenize(t)
++    assert tokenize(t) != tokenize(t.replace(microsecond=3))
++
++
+ @pytest.mark.parametrize("enum_type", [Enum, IntEnum, IntFlag, Flag])
+ def test_tokenize_enum(enum_type):
+     class Color(enum_type):
+diff --git a/dask/tests/test_delayed.py b/dask/tests/test_delayed.py
+index 99dc844..b6f0b7a 100644
+--- a/dask/tests/test_delayed.py
++++ b/dask/tests/test_delayed.py
+@@ -589,6 +589,11 @@ def test_delayed_picklable():
+     y = pickle.loads(pickle.dumps(x))
+     assert x.dask == y.dask
+     assert x._key == y._key
++
++    # Reverse binary operators used to contain a local closure.
++    x = 1 + delayed(2)
++    y = pickle.loads(pickle.dumps(x))
++    assert y.compute() == 3
+     assert x._length == y._length
+     # DelayedLeaf
+     x = delayed(1j + 2)
+diff --git a/dask/tests/test_utils.py b/dask/tests/test_utils.py
+index b075d61..d985b7b 100644
+--- a/dask/tests/test_utils.py
++++ b/dask/tests/test_utils.py
+@@ -2,7 +2,9 @@ import datetime
+ import functools
+ import operator
+ import pickle
++import threading
+ from array import array
++from concurrent.futures import ThreadPoolExecutor
+ 
+ import pytest
+ from tlz import curry
+@@ -243,6 +245,28 @@ def test_dispatch_lazy_walks_mro():
+     assert foo(Eager(1)) == "eager"
+ 
+ 
++def test_dispatch_lazy_threadsafe():
++    import decimal
++
++    foo = Dispatch()
++    registering = threading.Event()
++    finish_registration = threading.Event()
++
++    @foo.register_lazy("decimal")
++    def register_decimal():
++        registering.set()
++        finish_registration.wait(timeout=5)
++        foo.register(decimal.Decimal, lambda value: value)
++
++    with ThreadPoolExecutor(2) as executor:
++        first = executor.submit(foo.dispatch, decimal.Decimal)
++        assert registering.wait(timeout=5)
++        second = executor.submit(foo.dispatch, decimal.Decimal)
++        finish_registration.set()
++        assert first.result(timeout=5)(decimal.Decimal(1)) == 1
++        assert second.result(timeout=5)(decimal.Decimal(1)) == 1
++
++
+ def test_random_state_data():
+     np = pytest.importorskip("numpy")
+     seed = 37
+diff --git a/dask/utils.py b/dask/utils.py
+index cc6fd92..8ff745e 100644
+--- a/dask/utils.py
++++ b/dask/utils.py
+@@ -18,7 +18,7 @@ from functools import lru_cache
+ from importlib import import_module
+ from numbers import Integral, Number
+ from operator import add
+-from threading import Lock
++from threading import Lock, RLock
+ from typing import Any, ClassVar, Literal, TypeVar, overload
+ from weakref import WeakValueDictionary
+ 
+@@ -579,6 +579,7 @@ class Dispatch:
+     def __init__(self, name=None):
+         self._lookup = {}
+         self._lazy = {}
++        self._lock = RLock()
+         if name:
+             self.__name__ = name
+ 
+@@ -611,23 +612,31 @@ class Dispatch:
+         """Return the function implementation for the given ``cls``"""
+         lk = self._lookup
+         for cls2 in cls.__mro__:
+-            try:
+-                impl = lk[cls2]
+-            except KeyError:
+-                pass
+-            else:
+-                if cls is not cls2:
+-                    # Cache lookup
+-                    lk[cls] = impl
+-                return impl
+-            # Is a lazy registration function present?
+-            toplevel, _, _ = cls2.__module__.partition(".")
+-            try:
+-                register = self._lazy.pop(toplevel)
+-            except KeyError:
+-                pass
+-            else:
+-                register()
++            register = None
++            with self._lock:
++                try:
++                    impl = lk[cls2]
++                except KeyError:
++                    pass
++                else:
++                    if cls is not cls2:
++                        # Cache lookup
++                        lk[cls] = impl
++                    return impl
++
++                # Is a lazy registration function present?
++                toplevel, _, _ = cls2.__module__.partition(".")
++                try:
++                    register = self._lazy.pop(toplevel)
++                except KeyError:
++                    pass
++                else:
++                    # Registration must complete before another thread is allowed
++                    # to inspect the lookup table. Otherwise that thread can miss
++                    # both the lazy callback and the implementation it installs.
++                    register()
++
++            if register is not None:
+                 return self.dispatch(cls)  # recurse
+         raise TypeError(f"No dispatch for {cls}")
+ 
+diff --git a/docs/source/changelog.rst b/docs/source/changelog.rst
+index 998ab59..56c8b80 100644
+--- a/docs/source/changelog.rst
++++ b/docs/source/changelog.rst
+@@ -1,6 +1,40 @@
+ Changelog
+ =========
+ 
++.. _v2022.10.0:
++
++2022.10.0
++---------
++
++Released on October 14, 2022
++
++New Features
++^^^^^^^^^^^^
++- Backend library dispatching for IO in Dask-Array and Dask-DataFrame (:pr:`9475`) `Richard (Rick) Zamora`_
++- Add new CLI that is extensible (:pr:`9283`) `Doug Davis`_
++
++Enhancements
++^^^^^^^^^^^^
++- Groupby median (:pr:`9516`) `Ian Rose`_
++- Fix array copy not being a no-op (:pr:`9555`) `David Hoese`_
++- Add support for string timedelta in ``map_overlap`` (:pr:`9559`) `Nicolas Grandemange`_
++- Shuffle-based groupby for single functions (:pr:`9504`) `Ian Rose`_
++- Make ``datetime.datetime`` tokenize idempotantly (:pr:`9532`) `Martin Durant`_
++- Support tokenizing ``datetime.time`` (:pr:`9528`) `Tim Paine`_
++
++Bug Fixes
++^^^^^^^^^
++- Avoid race condition in lazy dispatch registration (:pr:`9545`) `James Bourbeau`_
++- Do not allow setitem to ``np.nan`` for ``int`` dtype (:pr:`9531`) `Doug Davis`_
++- Stable demo column projection (:pr:`9538`) `Ian Rose`_
++- Ensure ``pickle``-able binops in ``delayed`` (:pr:`9540`) `Ian Rose`_
++- Fix project CSV columns when selecting (:pr:`9534`) `Martin Durant`_
++
++Documentation
++^^^^^^^^^^^^^
++- Update Parquet best practice (:pr:`9537`) `Matthew Rocklin`_
++
++
+ .. _v2022.9.2:
+ 
+ 2022.9.2
+diff --git a/setup.cfg b/setup.cfg
+index c1ee130..a02b6d2 100644
+--- a/setup.cfg
++++ b/setup.cfg
+@@ -48,6 +48,10 @@ test = pytest
+ dask =
+     py.typed
+ 
++[options.entry_points]
++console_scripts =
++    dask = dask.cli:run_cli
++
+ [tool:pytest]
+ markers:
+   network: Test requires an internet connection
+diff --git a/setup.py b/setup.py
+index 9db0daf..7949e17 100755
+--- a/setup.py
++++ b/setup.py
+@@ -15,7 +15,7 @@ extras_require: dict[str, list[str]] = {
+     "array": ["numpy >= 1.18"],
+     "bag": [],  # keeping for backwards compatibility
+     "dataframe": ["numpy >= 1.18", "pandas >= 1.0"],
+-    "distributed": ["distributed == 2022.9.2"],
++    "distributed": ["distributed == 2022.10.0"],
+     "diagnostics": [
+         "bokeh >= 2.4.2",
+         "jinja2",
+@@ -33,6 +33,7 @@ extras_require["test"] = [
+ ]
+ 
+ install_requires = [
++    "click >= 7.0",
+     "cloudpickle >= 1.1.1",
+     "fsspec >= 0.6.0",
+     "packaging >= 20.0",
+diff --git a/dask/backends.py b/dask/backends.py
+new file mode 100644
+index 0000000..868de89
+--- /dev/null
++++ b/dask/backends.py
+@@ -0,0 +1,66 @@
++"""Common machinery for dispatching collection creation to backend libraries."""
++
++from __future__ import annotations
++
++from functools import partial
++
++from dask import config
++from dask.compatibility import entry_points
++
++
++class DaskBackendEntrypoint:
++    """Base class for backend entry-point implementations."""
++
++
++class CreationDispatch:
++    """Dispatch top-level collection creation functions by backend name."""
++
++    def __init__(self, module_name, default, entrypoint_root):
++        self.module_name = module_name
++        self.default = default
++        self.entrypoint_root = entrypoint_root
++        self._backends = {}
++        self._entrypoints_loaded = False
++
++    def register_backend(self, name, backend):
++        """Register an object implementing backend creation methods."""
++        if isinstance(backend, type):
++            backend = backend()
++        self._backends[name] = backend
++        return backend
++
++    def _load_entrypoints(self):
++        if self._entrypoints_loaded:
++            return
++        self._entrypoints_loaded = True
++        for entry_point in entry_points(group=self.entrypoint_root):
++            backend = entry_point.load()
++            self.register_backend(entry_point.name, backend)
++
++    def dispatch(self, backend=None):
++        if backend is None:
++            backend = config.get(f"{self.module_name}.backend", self.default)
++        if backend not in self._backends:
++            self._load_entrypoints()
++        try:
++            return self._backends[backend]
++        except KeyError as exc:
++            known = ", ".join(sorted(self._backends)) or "none"
++            raise ValueError(
++                f"No backend dispatch registered for {backend!r}; known backends: {known}"
++            ) from exc
++
++    def __getattr__(self, method):
++        if method.startswith("_"):
++            raise AttributeError(method)
++        return partial(self._call, method)
++
++    def _call(self, method, *args, backend=None, **kwargs):
++        implementation = self.dispatch(backend)
++        try:
++            func = getattr(implementation, method)
++        except AttributeError as exc:
++            raise NotImplementedError(
++                f"The {implementation!r} backend does not implement {method!r}"
++            ) from exc
++        return func(*args, **kwargs)
+diff --git a/dask/cli.py b/dask/cli.py
+new file mode 100644
+index 0000000..2ffc04d
+--- /dev/null
++++ b/dask/cli.py
+@@ -0,0 +1,69 @@
++"""The extensible Dask command line interface."""
++
++from __future__ import annotations
++
++import warnings
++import webbrowser
++
++import click
++
++from dask import __version__
++from dask.compatibility import entry_points
++from dask.utils import show_versions
++
++
++@click.group(context_settings={"help_option_names": ["-h", "--help"]})
++@click.version_option(version=__version__)
++def cli():
++    """Dask command line interface."""
++
++
++@cli.command()
++def docs():
++    """Open the Dask documentation in a web browser."""
++    webbrowser.open("https://docs.dask.org")
++
++
++@cli.command(name="info")
++def versions():
++    """Print versions useful for bug reports."""
++    show_versions()
++
++
++def _register_command_ep(interface, command_entry_points):
++    """Register commands exposed through the ``dask_cli`` entry-point group."""
++    for entry_point in command_entry_points:
++        try:
++            command = entry_point.load()
++        except Exception as exc:
++            warnings.warn(
++                f"While registering the command with name {entry_point.name!r}, "
++                f"an error occurred: {exc}",
++                UserWarning,
++            )
++            continue
++
++        if not isinstance(command, click.Command):
++            warnings.warn(
++                "Dask CLI entry points must be instances of click.Command "
++                f"or click.Group, not {type(command)!r}",
++                UserWarning,
++            )
++            continue
++        if command.name in interface.commands:
++            warnings.warn(
++                f"A command named {command.name!r} is already registered; "
++                "the original has been overwritten",
++                UserWarning,
++            )
++        interface.add_command(command)
++
++
++def run_cli():
++    """Load command extensions and invoke the CLI."""
++    _register_command_ep(cli, entry_points(group="dask_cli"))
++    cli()
++
++
++if __name__ == "__main__":
++    run_cli()
+diff --git a/dask/tests/test_backends.py b/dask/tests/test_backends.py
+new file mode 100644
+index 0000000..ac9d530
+--- /dev/null
++++ b/dask/tests/test_backends.py
+@@ -0,0 +1,32 @@
++import pandas as pd
++
++import dask
++import dask.array as da
++import dask.dataframe as dd
++
++
++def test_array_creation_backend_dispatch(monkeypatch):
++    class Backend:
++        @staticmethod
++        def ones(*args, **kwargs):
++            return "array-backend"
++
++    monkeypatch.setitem(da.backends.array_creation_dispatch._backends, "test", Backend())
++    assert da.ones(3, backend="test") == "array-backend"
++    with dask.config.set({"array.backend": "test"}):
++        assert da.ones(3) == "array-backend"
++
++
++def test_dataframe_creation_backend_dispatch(monkeypatch):
++    class Backend:
++        @staticmethod
++        def from_pandas(*args, **kwargs):
++            return "dataframe-backend"
++
++    monkeypatch.setitem(
++        dd.backends.dataframe_creation_dispatch._backends, "test", Backend()
++    )
++    pdf = pd.DataFrame({"x": [1]})
++    assert dd.from_pandas(pdf, backend="test") == "dataframe-backend"
++    with dask.config.set({"dataframe.backend": "test"}):
++        assert dd.from_pandas(pdf) == "dataframe-backend"
+diff --git a/dask/tests/test_cli.py b/dask/tests/test_cli.py
+new file mode 100644
+index 0000000..0d1f44b
+--- /dev/null
++++ b/dask/tests/test_cli.py
+@@ -0,0 +1,75 @@
++import click
++import pytest
++from click.testing import CliRunner
++
++from dask import cli as dask_cli
++
++
++def test_cli_help_and_version():
++    runner = CliRunner()
++    result = runner.invoke(dask_cli.cli, ["--help"])
++    assert result.exit_code == 0
++    assert "docs" in result.output
++    assert "info" in result.output
++
++    result = runner.invoke(dask_cli.cli, ["--version"])
++    assert result.exit_code == 0
++
++
++def test_info_versions(monkeypatch):
++    called = []
++    monkeypatch.setattr(dask_cli, "show_versions", lambda: called.append(True))
++
++    result = CliRunner().invoke(dask_cli.versions)
++    assert result.exit_code == 0
++    assert called == [True]
++
++
++def test_register_command_entry_point():
++    @click.command(name="example")
++    def example():
++        click.echo("registered")
++
++    class EntryPoint:
++        name = "example"
++
++        def load(self):
++            return example
++
++    interface = click.Group()
++    dask_cli._register_command_ep(interface, [EntryPoint()])
++    result = CliRunner().invoke(interface, ["example"])
++    assert result.exit_code == 0
++    assert result.output == "registered\n"
++
++
++def test_register_command_entry_point_warns():
++    class EntryPoint:
++        name = "invalid"
++
++        def load(self):
++            return object()
++
++    with pytest.warns(UserWarning, match="must be instances of"):
++        dask_cli._register_command_ep(click.Group(), [EntryPoint()])
++
++
++def test_repeated_name_registration_warn():
++    @click.command(name="example")
++    def original():
++        pass
++
++    @click.command(name="example")
++    def replacement():
++        pass
++
++    class EntryPoint:
++        name = "example"
++
++        def load(self):
++            return replacement
++
++    interface = click.Group(commands={"example": original})
++    with pytest.warns(UserWarning, match="already registered"):
++        dask_cli._register_command_ep(interface, [EntryPoint()])
++    assert interface.commands["example"] is replacement

@@ -1,0 +1,3568 @@
+{
+  "schema": "hermes_phase4g8_real_case_v1",
+  "run_id": "phase4g8-medium-afab266a85",
+  "job_id": "rjob_45bf744a9f95",
+  "worker_identity": {
+    "uid": 574996814,
+    "gid": 851324563
+  },
+  "worker_environment": {
+    "schema": "hermes_phase4g8_worker_toolchain_v1",
+    "cache_key": "74b7ea4eb4e10fec7c24",
+    "official_image": "xingyaoww/sweb.eval.x86_64.dask_s_dask-9531",
+    "image_id": "sha256:b067cb26fc09fd8cb8371a6271f19e1357de2d303ddd220a53894cab77f39cce",
+    "image_content_identity": "xingyaoww/sweb.eval.x86_64.dask_s_dask-9531@sha256:b067cb26fc09fd8cb8371a6271f19e1357de2d303ddd220a53894cab77f39cce",
+    "repo_digests": [
+      "xingyaoww/sweb.eval.x86_64.dask_s_dask-9531@sha256:b067cb26fc09fd8cb8371a6271f19e1357de2d303ddd220a53894cab77f39cce"
+    ],
+    "setup_sha256": "f11ec9f1b317aba59f68717bb7d8df236643e75110e95d436ac9e10c3fd3b75e",
+    "setup_env_sha256": "9efa934a00fca30cb988fc83b818be70e079a24eef70db58c59c43f89e020a15",
+    "resolved_environment_sha256": "8601ded067e25620404a459f6c1ed63bb4ab2fc47fdb474d3262e8fc05415dd2",
+    "environment_fingerprint": {
+      "package_count": 174,
+      "python_implementation": "CPython",
+      "python_version": "3.10.14",
+      "schema": "hermes_phase4g8_environment_fingerprint_v1",
+      "selected_packages": {
+        "distributed": "2024.8.1",
+        "numpy": "1.26.4",
+        "pandas": "1.5.3",
+        "pyarrow": "17.0.0",
+        "pytest": "8.3.2",
+        "sqlalchemy": "2.0.32"
+      },
+      "sha256": "8601ded067e25620404a459f6c1ed63bb4ab2fc47fdb474d3262e8fc05415dd2"
+    },
+    "parity_status": "passed"
+  },
+  "worker_approval": {
+    "configured": true,
+    "policy": "on-request",
+    "reviewer": "auto_review",
+    "auto_review_policy_version": "phase4g8-dangerous-operations-v1",
+    "auto_review_policy_sha256": "71121855720c07665e7b98031f95485a4c180a723dcc7f012d38a22afde05016",
+    "guardian_approval_enabled": true,
+    "exec_policy_version": "phase4g8-exec-policy-v1",
+    "exec_policy_sha256": "0defe5084bc4fc56de084d1298780cdadb620006f327d8041988771dd8ceb8e5"
+  },
+  "resume": {
+    "resumed": false
+  },
+  "model_source": {
+    "source": "codex_config",
+    "provider": "MySub2api",
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high",
+    "base_url_sha256": "d7006f4957539674e207643c9937cbcdc637ab6ef7a3e3e4b85e2a054a6b241b"
+  },
+  "run_report": {
+    "schema": "hermes_phase4g8_run_report_v1",
+    "instance_id": "dask__dask_2022.9.2_2022.10.0",
+    "job_id": "rjob_45bf744a9f95",
+    "classification": "runtime-correct/task-failed",
+    "runtime_validation": {
+      "passed": true,
+      "failures": [],
+      "consistency": {
+        "status": "passed",
+        "violation_count": 0,
+        "warning_count": 0
+      },
+      "checkpoint_chain": {
+        "status": "valid",
+        "selection_mode": "latest_checkpoint",
+        "latest_checkpoint_id": "dchk_9ed229a589ce",
+        "selected_checkpoint_id": "dchk_9ed229a589ce",
+        "selected_checkpoint": {
+          "id": "dchk_9ed229a589ce",
+          "job_id": "rjob_45bf744a9f95",
+          "decision_session_id": "dses_8090f4dc6dd0",
+          "revision": 1,
+          "checkpoint_json": "{\"artifact_index\": [], \"do_not_repeat\": [{\"source_refs\": [{\"patch_id\": \"gpatch_cd98696d3eb7\"}], \"summary\": \"Do not create a duplicate primary implementation worker while the already-applied implementation node remains active.\"}], \"goal_contract_revision\": 1, \"graph_frontier\": [{\"node_key\": \"implement-srs-and-validate\", \"node_type\": \"implementation\", \"source_refs\": [{\"node_key\": \"implement-srs-and-validate\"}], \"state\": \"running\", \"summary\": \"Inspect the repository and task artifacts to identify the concrete SRS, implement the complete required change, add or update focused tests, run relevant validation, and report changed files, commands, outcomes, and environmental limitations.\"}], \"human_decisions\": [], \"key_decisions\": [{\"source_refs\": [{\"decision_id\": \"kdec_b4c6a6bbf482\"}, {\"patch_id\": \"gpatch_cd98696d3eb7\"}], \"summary\": \"A single primary implementation node was created and the corresponding graph patch was applied to resolve the previously unrunnable required evaluator goal.\"}], \"known_failure_boundaries\": [], \"metadata\": {\"covered_graph_revision_end\": 1, \"covered_graph_revision_start\": 0, \"current_graph_revision\": 1, \"db_authoritative\": true, \"db_revision\": 1, \"graph_revision\": 1, \"ledger_revision\": 1, \"profile_hash\": \"ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c\", \"profile_name\": \"token_budget_compaction\", \"profile_path\": \"docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md\", \"profile_version\": \"1\", \"provider_audit\": {\"fallback_used\": false, \"input_token_estimate\": 6869, \"output_token_estimate\": 974, \"parse_status\": \"parsed\", \"provider_input_entry_id\": 9, \"provider_latency_ms\": 63263, \"provider_model\": \"gpt-5.6-sol\", \"provider_name\": \"custom\", \"provider_validation\": {\"status\": \"accepted\"}, \"reason\": \"phase4g8_controlled_process_boundary\", \"request_entry_id\": 8, \"request_ref\": \"eb98a31c2bcafd9ae865b0ec378d056cae56e848bef96a583b5841b131ab4bfa\", \"response_ref\": \"ab568ebd91adb3806698f320de2d5bb62580655b99542ae6ed1f17f4817db82f\", \"retry_count\": 0}, \"provider_generated\": true, \"source_fingerprint\": \"8377f202c0e0b52b8ad6127116baf083a93d61e7e0fcd69c179a2038c46fda20\", \"source_segment_id\": \"dseg_020cc339cc90\"}, \"next_strategy_constraints\": [{\"source_refs\": [{\"goal_item_key\": \"official-evaluator-resolved\"}, {\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"Do not treat the required evaluator goal as satisfied until implementation results and independently verified evidence are available.\"}, {\"source_refs\": [{\"node_key\": \"implement-srs-and-validate\"}], \"summary\": \"Continue from the running implementation worker's results; preserve compatibility, avoid unrelated changes, and use its concrete changed-file and test evidence as the basis for subsequent verification.\"}], \"objective_summary\": \"Determine and implement the repository-specific SRS associated with the Dask 2022.10.0 release context, validate the change locally, and provide independently verifiable evidence sufficient to pass the fixed official SWE-EVO evaluator.\", \"open_blockers\": [{\"source_refs\": [{\"node_key\": \"implement-srs-and-validate\"}, {\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"Completion is blocked while the implementation node remains running and the required evaluator goal has no independently verified evidence.\"}], \"open_goal_gaps\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\", \"gap_type\": \"missing_evidence\", \"source_refs\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"The required official-evaluator goal remains open because no verified implementation or test evidence has been recorded.\"}, {\"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\", \"gap_type\": \"stale_or_no_progress\", \"source_refs\": [{\"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\"}], \"summary\": \"The missing-evidence gap has not yet produced new recorded progress.\"}], \"rejected_approaches\": [], \"satisfied_goal_items\": [], \"validator_rejection_lessons\": []}",
+          "reason": "phase4g8_controlled_process_boundary",
+          "transcript_ref": "decision_segment:dseg_020cc339cc90",
+          "created_at": 1784102021,
+          "source_segment_id": "dseg_020cc339cc90",
+          "profile_name": "token_budget_compaction",
+          "profile_version": "1",
+          "profile_hash": "ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c",
+          "profile_path": "docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md",
+          "checkpoint_revision": 1,
+          "db_revision": 1,
+          "graph_revision": 1,
+          "ledger_revision": 1,
+          "covered_event_start": null,
+          "covered_event_end": null,
+          "covered_decision_start": "kdec_b4c6a6bbf482",
+          "covered_decision_end": "kdec_b4c6a6bbf482",
+          "covered_entry_start": 1,
+          "covered_entry_end": 10,
+          "payload_json": "{\"artifact_index\": [], \"do_not_repeat\": [{\"source_refs\": [{\"patch_id\": \"gpatch_cd98696d3eb7\"}], \"summary\": \"Do not create a duplicate primary implementation worker while the already-applied implementation node remains active.\"}], \"goal_contract_revision\": 1, \"graph_frontier\": [{\"node_key\": \"implement-srs-and-validate\", \"node_type\": \"implementation\", \"source_refs\": [{\"node_key\": \"implement-srs-and-validate\"}], \"state\": \"running\", \"summary\": \"Inspect the repository and task artifacts to identify the concrete SRS, implement the complete required change, add or update focused tests, run relevant validation, and report changed files, commands, outcomes, and environmental limitations.\"}], \"human_decisions\": [], \"key_decisions\": [{\"source_refs\": [{\"decision_id\": \"kdec_b4c6a6bbf482\"}, {\"patch_id\": \"gpatch_cd98696d3eb7\"}], \"summary\": \"A single primary implementation node was created and the corresponding graph patch was applied to resolve the previously unrunnable required evaluator goal.\"}], \"known_failure_boundaries\": [], \"metadata\": {\"covered_graph_revision_end\": 1, \"covered_graph_revision_start\": 0, \"current_graph_revision\": 1, \"db_authoritative\": true, \"db_revision\": 1, \"graph_revision\": 1, \"ledger_revision\": 1, \"profile_hash\": \"ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c\", \"profile_name\": \"token_budget_compaction\", \"profile_path\": \"docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md\", \"profile_version\": \"1\", \"provider_audit\": {\"fallback_used\": false, \"input_token_estimate\": 6869, \"output_token_estimate\": 974, \"parse_status\": \"parsed\", \"provider_input_entry_id\": 9, \"provider_latency_ms\": 63263, \"provider_model\": \"gpt-5.6-sol\", \"provider_name\": \"custom\", \"provider_validation\": {\"status\": \"accepted\"}, \"reason\": \"phase4g8_controlled_process_boundary\", \"request_entry_id\": 8, \"request_ref\": \"eb98a31c2bcafd9ae865b0ec378d056cae56e848bef96a583b5841b131ab4bfa\", \"response_ref\": \"ab568ebd91adb3806698f320de2d5bb62580655b99542ae6ed1f17f4817db82f\", \"retry_count\": 0}, \"provider_generated\": true, \"source_fingerprint\": \"8377f202c0e0b52b8ad6127116baf083a93d61e7e0fcd69c179a2038c46fda20\", \"source_segment_id\": \"dseg_020cc339cc90\"}, \"next_strategy_constraints\": [{\"source_refs\": [{\"goal_item_key\": \"official-evaluator-resolved\"}, {\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"Do not treat the required evaluator goal as satisfied until implementation results and independently verified evidence are available.\"}, {\"source_refs\": [{\"node_key\": \"implement-srs-and-validate\"}], \"summary\": \"Continue from the running implementation worker's results; preserve compatibility, avoid unrelated changes, and use its concrete changed-file and test evidence as the basis for subsequent verification.\"}], \"objective_summary\": \"Determine and implement the repository-specific SRS associated with the Dask 2022.10.0 release context, validate the change locally, and provide independently verifiable evidence sufficient to pass the fixed official SWE-EVO evaluator.\", \"open_blockers\": [{\"source_refs\": [{\"node_key\": \"implement-srs-and-validate\"}, {\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"Completion is blocked while the implementation node remains running and the required evaluator goal has no independently verified evidence.\"}], \"open_goal_gaps\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\", \"gap_type\": \"missing_evidence\", \"source_refs\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"The required official-evaluator goal remains open because no verified implementation or test evidence has been recorded.\"}, {\"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\", \"gap_type\": \"stale_or_no_progress\", \"source_refs\": [{\"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\"}], \"summary\": \"The missing-evidence gap has not yet produced new recorded progress.\"}], \"rejected_approaches\": [], \"satisfied_goal_items\": [], \"validator_rejection_lessons\": []}",
+          "payload_text": "{\n  \"artifact_index\": [],\n  \"do_not_repeat\": [\n    {\n      \"source_refs\": [\n        {\n          \"patch_id\": \"gpatch_cd98696d3eb7\"\n        }\n      ],\n      \"summary\": \"Do not create a duplicate primary implementation worker while the already-applied implementation node remains active.\"\n    }\n  ],\n  \"goal_contract_revision\": 1,\n  \"graph_frontier\": [\n    {\n      \"node_key\": \"implement-srs-and-validate\",\n      \"node_type\": \"implementation\",\n      \"source_refs\": [\n        {\n          \"node_key\": \"implement-srs-and-validate\"\n        }\n      ],\n      \"state\": \"running\",\n      \"summary\": \"Inspect the repository and task artifacts to identify the concrete SRS, implement the complete required change, add or update focused tests, run relevant validation, and report changed files, commands, outcomes, and environmental limitations.\"\n    }\n  ],\n  \"human_decisions\": [],\n  \"key_decisions\": [\n    {\n      \"source_refs\": [\n        {\n          \"decision_id\": \"kdec_b4c6a6bbf482\"\n        },\n        {\n          \"patch_id\": \"gpatch_cd98696d3eb7\"\n        }\n      ],\n      \"summary\": \"A single primary implementation node was created and the corresponding graph patch was applied to resolve the previously unrunnable required evaluator goal.\"\n    }\n  ],\n  \"known_failure_boundaries\": [],\n  \"metadata\": {\n    \"covered_graph_revision_end\": 1,\n    \"covered_graph_revision_start\": 0,\n    \"current_graph_revision\": 1,\n    \"db_authoritative\": true,\n    \"db_revision\": 1,\n    \"graph_revision\": 1,\n    \"ledger_revision\": 1,\n    \"profile_hash\": \"ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c\",\n    \"profile_name\": \"token_budget_compaction\",\n    \"profile_path\": \"docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md\",\n    \"profile_version\": \"1\",\n    \"provider_audit\": {\n      \"fallback_used\": false,\n      \"input_token_estimate\": 6869,\n      \"output_token_estimate\": 974,\n      \"parse_status\": \"parsed\",\n      \"provider_input_entry_id\": 9,\n      \"provider_latency_ms\": 63263,\n      \"provider_model\": \"gpt-5.6-sol\",\n      \"provider_name\": \"custom\",\n      \"provider_validation\": {\n        \"status\": \"accepted\"\n      },\n      \"reason\": \"phase4g8_controlled_process_boundary\",\n      \"request_entry_id\": 8,\n      \"request_ref\": \"eb98a31c2bcafd9ae865b0ec378d056cae56e848bef96a583b5841b131ab4bfa\",\n      \"response_ref\": \"ab568ebd91adb3806698f320de2d5bb62580655b99542ae6ed1f17f4817db82f\",\n      \"retry_count\": 0\n    },\n    \"provider_generated\": true,\n    \"source_fingerprint\": \"8377f202c0e0b52b8ad6127116baf083a93d61e7e0fcd69c179a2038c46fda20\",\n    \"source_segment_id\": \"dseg_020cc339cc90\"\n  },\n  \"next_strategy_constraints\": [\n    {\n      \"source_refs\": [\n        {\n          \"goal_item_key\": \"official-evaluator-resolved\"\n        },\n        {\n          \"gap_key\": \"official-evaluator-resolved:missing_evidence\"\n        }\n      ],\n      \"summary\": \"Do not treat the required evaluator goal as satisfied until implementation results and independently verified evidence are available.\"\n    },\n    {\n      \"source_refs\": [\n        {\n          \"node_key\": \"implement-srs-and-validate\"\n        }\n      ],\n      \"summary\": \"Continue from the running implementation worker's results; preserve compatibility, avoid unrelated changes, and use its concrete changed-file and test evidence as the basis for subsequent verification.\"\n    }\n  ],\n  \"objective_summary\": \"Determine and implement the repository-specific SRS associated with the Dask 2022.10.0 release context, validate the change locally, and provide independently verifiable evidence sufficient to pass the fixed official SWE-EVO evaluator.\",\n  \"open_blockers\": [\n    {\n      \"source_refs\": [\n        {\n          \"node_key\": \"implement-srs-and-validate\"\n        },\n        {\n          \"gap_key\": \"official-evaluator-resolved:missing_evidence\"\n        }\n      ],\n      \"summary\": \"Completion is blocked while the implementation node remains running and the required evaluator goal has no independently verified evidence.\"\n    }\n  ],\n  \"open_goal_gaps\": [\n    {\n      \"gap_key\": \"official-evaluator-resolved:missing_evidence\",\n      \"gap_type\": \"missing_evidence\",\n      \"source_refs\": [\n        {\n          \"gap_key\": \"official-evaluator-resolved:missing_evidence\"\n        }\n      ],\n      \"summary\": \"The required official-evaluator goal remains open because no verified implementation or test evidence has been recorded.\"\n    },\n    {\n      \"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\",\n      \"gap_type\": \"stale_or_no_progress\",\n      \"source_refs\": [\n        {\n          \"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\"\n        }\n      ],\n      \"summary\": \"The missing-evidence gap has not yet produced new recorded progress.\"\n    }\n  ],\n  \"rejected_approaches\": [],\n  \"satisfied_goal_items\": [],\n  \"validator_rejection_lessons\": []\n}",
+          "validator_status": "accepted",
+          "reject_reason": null,
+          "supersedes_checkpoint_id": null,
+          "metadata_json": "{\"fallback_used\": false, \"input_token_estimate\": 6869, \"output_token_estimate\": 974, \"parse_status\": \"parsed\", \"provider_input_entry_id\": 9, \"provider_latency_ms\": 63263, \"provider_model\": \"gpt-5.6-sol\", \"provider_name\": \"custom\", \"provider_validation\": {\"status\": \"accepted\"}, \"reason\": \"phase4g8_controlled_process_boundary\", \"request_entry_id\": 8, \"request_ref\": \"eb98a31c2bcafd9ae865b0ec378d056cae56e848bef96a583b5841b131ab4bfa\", \"response_ref\": \"ab568ebd91adb3806698f320de2d5bb62580655b99542ae6ed1f17f4817db82f\", \"retry_count\": 0}",
+          "checkpoint": {
+            "artifact_index": [],
+            "do_not_repeat": [
+              {
+                "source_refs": [
+                  {
+                    "patch_id": "gpatch_cd98696d3eb7"
+                  }
+                ],
+                "summary": "Do not create a duplicate primary implementation worker while the already-applied implementation node remains active."
+              }
+            ],
+            "goal_contract_revision": 1,
+            "graph_frontier": [
+              {
+                "node_key": "implement-srs-and-validate",
+                "node_type": "implementation",
+                "source_refs": [
+                  {
+                    "node_key": "implement-srs-and-validate"
+                  }
+                ],
+                "state": "running",
+                "summary": "Inspect the repository and task artifacts to identify the concrete SRS, implement the complete required change, add or update focused tests, run relevant validation, and report changed files, commands, outcomes, and environmental limitations."
+              }
+            ],
+            "human_decisions": [],
+            "key_decisions": [
+              {
+                "source_refs": [
+                  {
+                    "decision_id": "kdec_b4c6a6bbf482"
+                  },
+                  {
+                    "patch_id": "gpatch_cd98696d3eb7"
+                  }
+                ],
+                "summary": "A single primary implementation node was created and the corresponding graph patch was applied to resolve the previously unrunnable required evaluator goal."
+              }
+            ],
+            "known_failure_boundaries": [],
+            "metadata": {
+              "covered_graph_revision_end": 1,
+              "covered_graph_revision_start": 0,
+              "current_graph_revision": 1,
+              "db_authoritative": true,
+              "db_revision": 1,
+              "graph_revision": 1,
+              "ledger_revision": 1,
+              "profile_hash": "ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c",
+              "profile_name": "token_budget_compaction",
+              "profile_path": "docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md",
+              "profile_version": "1",
+              "provider_audit": {
+                "fallback_used": false,
+                "input_token_estimate": 6869,
+                "output_token_estimate": 974,
+                "parse_status": "parsed",
+                "provider_input_entry_id": 9,
+                "provider_latency_ms": 63263,
+                "provider_model": "gpt-5.6-sol",
+                "provider_name": "custom",
+                "provider_validation": {
+                  "status": "accepted"
+                },
+                "reason": "phase4g8_controlled_process_boundary",
+                "request_entry_id": 8,
+                "request_ref": "eb98a31c2bcafd9ae865b0ec378d056cae56e848bef96a583b5841b131ab4bfa",
+                "response_ref": "ab568ebd91adb3806698f320de2d5bb62580655b99542ae6ed1f17f4817db82f",
+                "retry_count": 0
+              },
+              "provider_generated": true,
+              "source_fingerprint": "8377f202c0e0b52b8ad6127116baf083a93d61e7e0fcd69c179a2038c46fda20",
+              "source_segment_id": "dseg_020cc339cc90"
+            },
+            "next_strategy_constraints": [
+              {
+                "source_refs": [
+                  {
+                    "goal_item_key": "official-evaluator-resolved"
+                  },
+                  {
+                    "gap_key": "official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "Do not treat the required evaluator goal as satisfied until implementation results and independently verified evidence are available."
+              },
+              {
+                "source_refs": [
+                  {
+                    "node_key": "implement-srs-and-validate"
+                  }
+                ],
+                "summary": "Continue from the running implementation worker's results; preserve compatibility, avoid unrelated changes, and use its concrete changed-file and test evidence as the basis for subsequent verification."
+              }
+            ],
+            "objective_summary": "Determine and implement the repository-specific SRS associated with the Dask 2022.10.0 release context, validate the change locally, and provide independently verifiable evidence sufficient to pass the fixed official SWE-EVO evaluator.",
+            "open_blockers": [
+              {
+                "source_refs": [
+                  {
+                    "node_key": "implement-srs-and-validate"
+                  },
+                  {
+                    "gap_key": "official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "Completion is blocked while the implementation node remains running and the required evaluator goal has no independently verified evidence."
+              }
+            ],
+            "open_goal_gaps": [
+              {
+                "gap_key": "official-evaluator-resolved:missing_evidence",
+                "gap_type": "missing_evidence",
+                "source_refs": [
+                  {
+                    "gap_key": "official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "The required official-evaluator goal remains open because no verified implementation or test evidence has been recorded."
+              },
+              {
+                "gap_key": "runtime:stale:official-evaluator-resolved:missing_evidence",
+                "gap_type": "stale_or_no_progress",
+                "source_refs": [
+                  {
+                    "gap_key": "runtime:stale:official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "The missing-evidence gap has not yet produced new recorded progress."
+              }
+            ],
+            "rejected_approaches": [],
+            "satisfied_goal_items": [],
+            "validator_rejection_lessons": []
+          },
+          "payload": {
+            "artifact_index": [],
+            "do_not_repeat": [
+              {
+                "source_refs": [
+                  {
+                    "patch_id": "gpatch_cd98696d3eb7"
+                  }
+                ],
+                "summary": "Do not create a duplicate primary implementation worker while the already-applied implementation node remains active."
+              }
+            ],
+            "goal_contract_revision": 1,
+            "graph_frontier": [
+              {
+                "node_key": "implement-srs-and-validate",
+                "node_type": "implementation",
+                "source_refs": [
+                  {
+                    "node_key": "implement-srs-and-validate"
+                  }
+                ],
+                "state": "running",
+                "summary": "Inspect the repository and task artifacts to identify the concrete SRS, implement the complete required change, add or update focused tests, run relevant validation, and report changed files, commands, outcomes, and environmental limitations."
+              }
+            ],
+            "human_decisions": [],
+            "key_decisions": [
+              {
+                "source_refs": [
+                  {
+                    "decision_id": "kdec_b4c6a6bbf482"
+                  },
+                  {
+                    "patch_id": "gpatch_cd98696d3eb7"
+                  }
+                ],
+                "summary": "A single primary implementation node was created and the corresponding graph patch was applied to resolve the previously unrunnable required evaluator goal."
+              }
+            ],
+            "known_failure_boundaries": [],
+            "metadata": {
+              "covered_graph_revision_end": 1,
+              "covered_graph_revision_start": 0,
+              "current_graph_revision": 1,
+              "db_authoritative": true,
+              "db_revision": 1,
+              "graph_revision": 1,
+              "ledger_revision": 1,
+              "profile_hash": "ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c",
+              "profile_name": "token_budget_compaction",
+              "profile_path": "docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md",
+              "profile_version": "1",
+              "provider_audit": {
+                "fallback_used": false,
+                "input_token_estimate": 6869,
+                "output_token_estimate": 974,
+                "parse_status": "parsed",
+                "provider_input_entry_id": 9,
+                "provider_latency_ms": 63263,
+                "provider_model": "gpt-5.6-sol",
+                "provider_name": "custom",
+                "provider_validation": {
+                  "status": "accepted"
+                },
+                "reason": "phase4g8_controlled_process_boundary",
+                "request_entry_id": 8,
+                "request_ref": "eb98a31c2bcafd9ae865b0ec378d056cae56e848bef96a583b5841b131ab4bfa",
+                "response_ref": "ab568ebd91adb3806698f320de2d5bb62580655b99542ae6ed1f17f4817db82f",
+                "retry_count": 0
+              },
+              "provider_generated": true,
+              "source_fingerprint": "8377f202c0e0b52b8ad6127116baf083a93d61e7e0fcd69c179a2038c46fda20",
+              "source_segment_id": "dseg_020cc339cc90"
+            },
+            "next_strategy_constraints": [
+              {
+                "source_refs": [
+                  {
+                    "goal_item_key": "official-evaluator-resolved"
+                  },
+                  {
+                    "gap_key": "official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "Do not treat the required evaluator goal as satisfied until implementation results and independently verified evidence are available."
+              },
+              {
+                "source_refs": [
+                  {
+                    "node_key": "implement-srs-and-validate"
+                  }
+                ],
+                "summary": "Continue from the running implementation worker's results; preserve compatibility, avoid unrelated changes, and use its concrete changed-file and test evidence as the basis for subsequent verification."
+              }
+            ],
+            "objective_summary": "Determine and implement the repository-specific SRS associated with the Dask 2022.10.0 release context, validate the change locally, and provide independently verifiable evidence sufficient to pass the fixed official SWE-EVO evaluator.",
+            "open_blockers": [
+              {
+                "source_refs": [
+                  {
+                    "node_key": "implement-srs-and-validate"
+                  },
+                  {
+                    "gap_key": "official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "Completion is blocked while the implementation node remains running and the required evaluator goal has no independently verified evidence."
+              }
+            ],
+            "open_goal_gaps": [
+              {
+                "gap_key": "official-evaluator-resolved:missing_evidence",
+                "gap_type": "missing_evidence",
+                "source_refs": [
+                  {
+                    "gap_key": "official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "The required official-evaluator goal remains open because no verified implementation or test evidence has been recorded."
+              },
+              {
+                "gap_key": "runtime:stale:official-evaluator-resolved:missing_evidence",
+                "gap_type": "stale_or_no_progress",
+                "source_refs": [
+                  {
+                    "gap_key": "runtime:stale:official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "The missing-evidence gap has not yet produced new recorded progress."
+              }
+            ],
+            "rejected_approaches": [],
+            "satisfied_goal_items": [],
+            "validator_rejection_lessons": []
+          },
+          "metadata": {
+            "fallback_used": false,
+            "input_token_estimate": 6869,
+            "output_token_estimate": 974,
+            "parse_status": "parsed",
+            "provider_input_entry_id": 9,
+            "provider_latency_ms": 63263,
+            "provider_model": "gpt-5.6-sol",
+            "provider_name": "custom",
+            "provider_validation": {
+              "status": "accepted"
+            },
+            "reason": "phase4g8_controlled_process_boundary",
+            "request_entry_id": 8,
+            "request_ref": "eb98a31c2bcafd9ae865b0ec378d056cae56e848bef96a583b5841b131ab4bfa",
+            "response_ref": "ab568ebd91adb3806698f320de2d5bb62580655b99542ae6ed1f17f4817db82f",
+            "retry_count": 0
+          }
+        },
+        "active_segment_id": "dseg_e44fc4d31e7a",
+        "checked_checkpoint_count": 1,
+        "errors": [],
+        "checks": [
+          {
+            "checkpoint_id": "dchk_9ed229a589ce",
+            "errors": []
+          }
+        ]
+      },
+      "compaction_fallback_count": 0,
+      "duplicate_terminal_fact_count": 0,
+      "duplicate_ledger_fact_count": 0,
+      "premature_done": false,
+      "process_boundaries": {
+        "daemon_process_started": true,
+        "daemon_restarted": true,
+        "worker_process_started": true,
+        "independent_evaluator_process": true,
+        "fixed_revision_evaluated": true,
+        "filesystem_isolation_preflight": true,
+        "worker_evaluator_environment_parity_preflight": true,
+        "worker_auto_review_preflight": true,
+        "worker_process_interrupted": true,
+        "worker_backend_session_resumed": true
+      },
+      "credential_scan_hits": 0,
+      "source_config_unchanged": true
+    },
+    "capability_validation": {
+      "passed": false,
+      "official_resolved": false,
+      "runtime_job_state": "waiting_decision",
+      "fail_to_pass": {
+        "passed": 37,
+        "failed": 7,
+        "total": 44,
+        "failed_tests": [
+          "dask/dataframe/tests/test_groupby.py::test_aggregate_median[disk-a-spec0]",
+          "dask/dataframe/tests/test_groupby.py::test_aggregate_median[disk-a-spec1]",
+          "dask/dataframe/tests/test_groupby.py::test_aggregate_median[tasks-a-spec0]",
+          "dask/dataframe/tests/test_groupby.py::test_aggregate_median[tasks-a-spec1]",
+          "dask/tests/test_cli.py::test_info_versions",
+          "dask/tests/test_cli.py::test_register_command_ep",
+          "dask/tests/test_cli.py::test_repeated_name_registration_warn"
+        ],
+        "failed_tests_truncated": 0
+      },
+      "pass_to_pass": {
+        "passed": 2861,
+        "failed": 0,
+        "total": 2861,
+        "failed_tests": [],
+        "failed_tests_truncated": 0
+      }
+    },
+    "metrics": {
+      "wall_time_seconds": 5014.829,
+      "case_size": "medium",
+      "worker_interrupted": true,
+      "evaluator_attempt_count": 3,
+      "evaluator_failure_count": 3,
+      "max_unresolved_evaluator_attempts": 3,
+      "evaluator_budget_exhausted": true,
+      "evaluator_budget_session_sync": {
+        "job_id": "rjob_45bf744a9f95",
+        "discovered": [],
+        "updated": [
+          "bws_37f5c845611b",
+          "bws_59fcbb6485e2",
+          "bws_242457e03061",
+          "bws_9561c4cb0c1f",
+          "bws_37f5c845611b",
+          "bws_37f5c845611b",
+          "bws_37f5c845611b"
+        ],
+        "resumed": [],
+        "resume_failed": [],
+        "identity_conflicts": []
+      },
+      "evaluator_container_cleanup": [
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "10edcc57600c"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "509f7a0dd326"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [
+            "911abf2fe0d3"
+          ],
+          "errors": []
+        },
+        {
+          "run_id": "phase4g8-medium-afab266a85",
+          "removed": [],
+          "retained": [],
+          "errors": []
+        }
+      ],
+      "resumed_run": false,
+      "resume_audit": {
+        "resumed": false
+      }
+    },
+    "generated_at": 1784106948
+  },
+  "termination": {
+    "reason": "evaluator_failure_budget_exhausted",
+    "evaluator_budget_exhausted": true
+  },
+  "paths": {
+    "root": "/tmp/hermes-phase4g8-medium-ws-v2/dask__dask_2022.9.2_2022.10.0/phase4g8-medium-afab266a85",
+    "report": "/tmp/hermes-phase4g8-medium-ws-v2/dask__dask_2022.9.2_2022.10.0/phase4g8-medium-afab266a85/reports/run-report.json",
+    "capability_trace": {
+      "json": "/tmp/hermes-phase4g8-medium-ws-v2/dask__dask_2022.9.2_2022.10.0/phase4g8-medium-afab266a85/reports/capability-trace.json",
+      "markdown": "/tmp/hermes-phase4g8-medium-ws-v2/dask__dask_2022.9.2_2022.10.0/phase4g8-medium-afab266a85/reports/capability-trace.md"
+    }
+  }
+}

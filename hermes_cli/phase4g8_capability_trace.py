@@ -83,7 +83,9 @@ def build_capability_trace(
             "created_at": row["created_at"],
         })
 
-    worker_nodes = [node for node in nodes if node["node_type"] != "verification"]
+    all_worker_nodes = [node for node in nodes if node["node_type"] != "verification"]
+    superseded_worker_nodes = [node for node in all_worker_nodes if node["state"] == "superseded"]
+    worker_nodes = [node for node in all_worker_nodes if node["state"] != "superseded"]
     evaluator_nodes = [node for node in nodes if node["node_type"] == "verification"]
     failed_test_sets = [
         set(node.get("official_evaluator_result", {}).get("fail_to_pass", {}).get("failed_tests") or [])
@@ -131,7 +133,8 @@ def build_capability_trace(
         "evidence": [
             f"classification={run_report.get('classification')}",
             f"official_resolved={capability_validation.get('official_resolved')}",
-            f"evaluator_budget_exhausted={metrics.get('evaluator_budget_exhausted', False)}",
+            f"resource_exhausted={metrics.get('resource_exhausted', False)}",
+            f"no_progress_streak={metrics.get('evaluator_progress', {}).get('no_progress_streak', 0)}",
         ],
     })
     if local_pass_then_evaluator_fail:
@@ -147,6 +150,24 @@ def build_capability_trace(
             "assessment": "not_converged" if not capability_validation.get("passed") else "converged",
             "summary": "同一 evaluator failure 在多轮 recovery 后仍重复出现。",
             "evidence": repeated_failed_tests[:10],
+        })
+    resumed_worker_nodes = [node for node in worker_nodes if node["resume_count"] > 0]
+    if resumed_worker_nodes:
+        effective_sessions = {
+            session
+            for node in worker_nodes
+            for session in node["backend_session_keys"]
+        }
+        observations.append({
+            "category": "context_continuity",
+            "assessment": "preserved",
+            "summary": "有效 implementation responsibility 在多个 materialization attempt 间恢复原 backend session。",
+            "evidence": [
+                f"effective_worker_nodes={len(worker_nodes)}",
+                f"distinct_backend_sessions={len(effective_sessions)}",
+                f"session_resume_count={sum(node['resume_count'] for node in resumed_worker_nodes)}",
+                f"superseded_worker_nodes={len(superseded_worker_nodes)}",
+            ],
         })
     if len(worker_nodes) > 1:
         observations.append({
@@ -219,6 +240,7 @@ def build_capability_trace(
             "decision_patches": len(patches),
             "execution_nodes": len(nodes),
             "worker_nodes": len(worker_nodes),
+            "superseded_worker_nodes": len(superseded_worker_nodes),
             "recovery_nodes": sum(node["node_type"] == "strategy_update" for node in worker_nodes),
             "evaluator_attempts": len(evaluator_nodes),
             "accepted_checkpoints": sum(item["validator_status"] == "accepted" for item in checkpoints),

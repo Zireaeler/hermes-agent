@@ -254,10 +254,26 @@ def test_phase4g8_filesystem_wrapper_hides_host_tmp_and_exposes_only_worker_path
     protected = tmp_path / "protected-gold.patch"
     for path in (workspace, home, codex_home, toolchain):
         path.mkdir(parents=True)
+    (codex_home / "config.toml").write_text('model = "test"\n', encoding="utf-8")
+    (codex_home / "auth.json").write_text('{}\n', encoding="utf-8")
+    (codex_home / "rules").mkdir()
+    (codex_home / "rules" / "default.rules").write_text(
+        'prefix_rule(pattern=["rm"], decision="prompt")\n',
+        encoding="utf-8",
+    )
     protected.write_text("gold\n", encoding="utf-8")
     (workspace / "visible.txt").write_text("worker\n", encoding="utf-8")
     worker_uid, worker_gid = 345_678_901, 345_678_902
-    for path in (workspace, workspace / "visible.txt", home, codex_home):
+    for path in (
+        workspace,
+        workspace / "visible.txt",
+        home,
+        codex_home,
+        codex_home / "config.toml",
+        codex_home / "auth.json",
+        codex_home / "rules",
+        codex_home / "rules" / "default.rules",
+    ):
         os.chown(path, worker_uid, worker_gid)
     os.chmod(toolchain, 0o755)
     (toolchain / "bin").mkdir()
@@ -271,6 +287,8 @@ def test_phase4g8_filesystem_wrapper_hides_host_tmp_and_exposes_only_worker_path
         "/bin/sh", "-c",
         f"test -r {workspace / 'visible.txt'} && test ! -e {protected} && test ! -e /root "
         "&& test -r /opt/miniconda3/envs/testbed/bin/python "
+        f"&& ! printf disabled > {codex_home / 'config.toml'} "
+        f"&& ! rm -f {codex_home / 'rules' / 'default.rules'} "
         "&& printf isolated > /tmp/worker-canary",
     ]
     argv = wrap_codex_network_argv(
@@ -936,6 +954,11 @@ def test_phase4g8_codex_home_isolated_per_execution_node_and_reused_for_retry(
     seed.mkdir()
     (seed / "config.toml").write_text('model = "test"\n', encoding="utf-8")
     (seed / "auth.json").write_text('{"OPENAI_API_KEY":"test"}\n', encoding="utf-8")
+    (seed / "rules").mkdir()
+    (seed / "rules" / "default.rules").write_text(
+        'prefix_rule(pattern=["rm"], decision="prompt")\n',
+        encoding="utf-8",
+    )
     node_homes = tmp_path / "codex-homes"
     cfg = CodexLaneConfig(
         name="phase4g8-codex",
@@ -997,6 +1020,9 @@ def test_phase4g8_codex_home_isolated_per_execution_node_and_reused_for_retry(
     assert home_b != home_a
     assert not (home_b / "sessions").exists()
     assert (home_b / "config.toml").read_text(encoding="utf-8") == 'model = "test"\n'
+    assert (home_b / "rules" / "default.rules").read_text(encoding="utf-8").startswith(
+        "prefix_rule"
+    )
     assert len(list(node_homes.glob("node-*"))) == 2
 
 
@@ -1216,6 +1242,23 @@ def test_codex_exit_zero_blocks_for_review_and_records_progress_metadata(
         "Verification:\n- command: pytest fake\n  result: passed\n",
     )
     monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + old_path)
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        'approval_policy = "on-request"\n'
+        'approvals_reviewer = "auto_review"\n'
+        '[auto_review]\n'
+        'policy = "Deny unsafe operations when uncertain."\n'
+        '[features]\n'
+        'guardian_approval = true\n',
+        encoding="utf-8",
+    )
+    (codex_home / "rules").mkdir()
+    (codex_home / "rules" / "default.rules").write_text(
+        'prefix_rule(pattern=["rm"], decision="prompt")\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
     with kb.connect() as conn:
         tid, task = _claim_for_codex(conn)
         run_id = task.current_run_id
@@ -1224,7 +1267,7 @@ def test_codex_exit_zero_blocks_for_review_and_records_progress_metadata(
         lane="codex-deep",
         workspace=os.getcwd(),
         sandbox="workspace-write",
-        approval="never",
+        approval="on-request",
         model="gpt-5.5",
         run_id=run_id,
         claim_lock=task.claim_lock,
@@ -1246,6 +1289,13 @@ def test_codex_exit_zero_blocks_for_review_and_records_progress_metadata(
     assert run.metadata["review"]["required"] is True
     assert "hermes_cli/kanban_db.py" in run.metadata["worker_lane"]["output_tail"]
     assert run.metadata["verification"]["commands"] == ["pytest fake"]
+    worker_started = [e for e in events if e.kind == "worker_started"]
+    assert worker_started[-1].payload["approval_policy"] == "on-request"
+    assert worker_started[-1].payload["approval_config"]["reviewer"] == "auto_review"
+    assert worker_started[-1].payload["approval_config"]["auto_review_policy_configured"] is True
+    assert len(worker_started[-1].payload["approval_config"]["auto_review_policy_sha256"]) == 64
+    assert worker_started[-1].payload["approval_config"]["exec_policy_configured"] is True
+    assert len(worker_started[-1].payload["approval_config"]["exec_policy_sha256"]) == 64
     assert any(e.kind == "heartbeat" for e in events)
     worker_heartbeats = [e for e in events if e.kind == "worker_heartbeat"]
     assert worker_heartbeats

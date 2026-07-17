@@ -1640,12 +1640,25 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
         help="Run one qualified SWE-EVO instance through the real Phase 4G8 path",
     )
     phase4g8_run.add_argument("--spec", required=True)
-    phase4g8_run.add_argument("--run-root", required=True)
+    phase4g8_run_target = phase4g8_run.add_mutually_exclusive_group(required=True)
+    phase4g8_run_target.add_argument("--run-root")
+    phase4g8_run_target.add_argument(
+        "--resume-run",
+        help="Resume one existing nonterminal Phase 4G8 run directory",
+    )
     phase4g8_run.add_argument("--source-codex-home", default="~/.codex")
     phase4g8_run.add_argument("--case-size", choices=["small", "medium", "large"], required=True)
     phase4g8_run.add_argument("--max-wall-seconds", type=float, default=14400)
     phase4g8_run.add_argument("--worker-timeout-seconds", type=int, default=7200)
-    phase4g8_run.add_argument("--max-unresolved-evaluator-attempts", type=int, default=3)
+    phase4g8_run.add_argument("--decision-timeout-seconds", type=float, default=300.0)
+    phase4g8_run.add_argument("--compaction-timeout-seconds", type=float, default=300.0)
+    phase4g8_run.add_argument(
+        "--max-unresolved-evaluator-attempts",
+        type=int,
+        default=3,
+        help=argparse.SUPPRESS,
+    )
+    phase4g8_run.add_argument("--max-evaluator-no-progress-streak", type=int, default=2)
     phase4g8_run.add_argument("--execute-real", action="store_true", required=True)
     phase4g8_run.add_argument("--json", action="store_true")
     phase4g8_qualify = phase4g8_sub.add_parser("qualify", help="Run base/gold oracle qualification")
@@ -2231,7 +2244,7 @@ def _parse_runtime_goal_items(values: list[str]) -> Optional[list[dict[str, Any]
                 "item_key": key,
                 "description": desc,
                 "required": True,
-                "verifier_required": True,
+                "verifier_required": False,
             }
         )
     return items
@@ -2987,13 +3000,17 @@ def _cmd_runtime_phase4g8(args: argparse.Namespace) -> int:
 
             payload = phase4g8_run.run_phase4g8_real_case(
                 qualification_spec_path=Path(args.spec).expanduser(),
-                run_root=Path(args.run_root).expanduser(),
+                run_root=Path(args.run_root).expanduser() if args.run_root else None,
+                resume_run=Path(args.resume_run).expanduser() if args.resume_run else None,
                 source_codex_home=Path(args.source_codex_home).expanduser(),
                 case_size=args.case_size,
                 execute_real=bool(args.execute_real),
                 max_wall_seconds=args.max_wall_seconds,
                 worker_timeout_seconds=args.worker_timeout_seconds,
+                decision_timeout_seconds=args.decision_timeout_seconds,
+                compaction_timeout_seconds=args.compaction_timeout_seconds,
                 max_unresolved_evaluator_attempts=args.max_unresolved_evaluator_attempts,
+                max_evaluator_no_progress_streak=args.max_evaluator_no_progress_streak,
             )
         elif action == "qualify":
             spec = p4g8.load_qualification_spec(Path(args.spec).expanduser())

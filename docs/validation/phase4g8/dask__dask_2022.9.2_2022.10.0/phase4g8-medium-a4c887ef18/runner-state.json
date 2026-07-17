@@ -1,0 +1,15 @@
+{
+  "schema": "hermes_phase4g8_runner_state_v1",
+  "run_id": "phase4g8-medium-a4c887ef18",
+  "job_id": "rjob_8932e6eaac66",
+  "case_size": "medium",
+  "qualification_spec_path": "/tmp/hermes-phase4g8-runs/dask__dask_2022.9.2_2022.10.0/protected/qualification-spec.json",
+  "qualification_spec_sha256": "5aae483cff37797c15a12374fc9c9718e1307bdf13729f6d230f7f7835acc065",
+  "worker_toolchain": "/tmp/phase4g8-worker-toolchains/74b7ea4eb4e10fec7c24",
+  "worker_identity": {
+    "uid": 437890326,
+    "gid": 140785153
+  },
+  "resumed": false,
+  "updated_at": 1784179820
+}

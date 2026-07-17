@@ -285,6 +285,33 @@ phase4g8/<instance_id>/
 - 不复制主 session history；
 - 不把 key 写入 DB、state、report、prompt、event 或日志。
 
+`codex-home-seed/config.toml` 还必须显式启用 Phase 4G8 专用危险操作审查：
+
+```toml
+approval_policy = "on-request"
+approvals_reviewer = "auto_review"
+
+[auto_review]
+policy = "<Phase 4G8 strict dangerous-operation policy>"
+
+[features]
+guardian_approval = true
+```
+
+隔离 seed 还必须包含 `rules/default.rules`。Auto-review 只处理已经形成的 approval request，不会旁路
+观察每一条 shell command；因此必须由 Codex exec-policy 将风险命令确定性分类：提权、host service、
+namespace/firewall、工具外网和 Git network 操作为 `forbidden`，`rm/chmod/chown/kill`、破坏性 Git
+操作和 package environment mutation 为 `prompt`。`prompt` 请求才进入 auto-review；普通 `pytest`、
+仓库读取和常规编辑不应产生额外 handoff。
+
+该配置只写入隔离的 seed，并由 execution node 复制到各自的 `CODEX_HOME`；不得写入或修改主
+`.codex/config.toml`。审查 policy 默认允许 workspace 内的常规检查、修改、构建和测试，拒绝凭证读取、
+protected oracle/gold/evaluator 访问、提权与 namespace/firewall 操作、工具侧外网、workspace 外破坏和
+关闭审计边界；目标或副作用不明确时必须拒绝。配置 preflight 和 `worker_started` event 必须记录
+approval mode、reviewer、review policy version/hash 和 exec-policy version/hash，不记录 policy 正文或
+认证信息。外层 bwrap 必须在可写 node `CODEX_HOME` 上将 `config.toml`、`auth.json` 和 `rules/` 重新
+叠加为只读挂载，使 worker 可以保存 session history，但不能修改模型源、认证或审查规则。
+
 Worker 的实际 `CODEX_HOME` 必须按 `execution_node_id` 派生。相同 node 的 retry/resume 复用同一
 目录，以保留 backend session；新的 recovery、verification 或其他 execution node 必须使用不同
 目录。Worker filesystem namespace 只挂载当前 node 的目录，不挂载 seed 或其他 node 的 session
@@ -377,6 +404,13 @@ Phase 4G8 继续遵守 delegation policy：
 ## 11. 独立 Evaluator
 
 Official evaluator 是 worker 之外的独立责任主体。
+
+本节定义的是 SWE-EVO 提供 protected FAIL_TO_PASS / PASS_TO_PASS oracle 时的显式
+external-oracle adapter，不是普通开发任务的默认 completion path。Phase 4G8 harness 必须在
+goal contract 中显式设置 `verifier_required=true`，并配置
+`verification_policy.mode=required_evaluator`。缺少这种独立 oracle 或明确审计责任的普通任务默认
+采用 `worker_owned` verification，由 primary worker 完成实现、测试、debug 和本地验证；Runtime
+不得仅为了重跑 worker 自写测试而创建 evaluator。
 
 它必须：
 
@@ -497,6 +531,21 @@ Decision Provider 只处理执行中发现的未知结构边界。已知 verifie
 Worker interruption 必须终止测试 harness 所拥有的 worker process group，而不只是 wrapper PID；
 必须确认 Codex child 未成为 orphan，且不得影响用户自己的 Codex session。旧 attempt 在新 attempt
 开始后提交的迟到 receipt 必须被识别为 stale，不能覆盖新 attempt 或重复提交 terminal fact。
+
+基础设施恢复预算和 receipt 协议恢复预算必须独立计数。先前的 worker crash、timeout 或 lease
+recovery 不得消耗后续 `receipt_missing` / `receipt_invalid` 的恢复额度。若 worker 已完成 workspace
+修改但 terminal receipt schema 无效，Runtime 应保留 workspace 和 backend session，创建仅用于
+receipt protocol recovery 的新 materialization，并明确要求同一 worker 输出合法
+`runtime_worker_receipt_v1`；不得因此丢弃 candidate、伪造 receipt 或直接标记业务失败。
+Receipt protocol recovery 尚未结束时不得向 Decision Provider 暴露为业务 `no_runnable` gap，也不得创建
+新的 strategy/implementation writer。若旧版本已基于该错误状态创建 speculative recovery branch，resume
+只能在 candidate revision 未变化且该分支尚无 terminal receipt/evidence 时将其审计为 `superseded`。
+
+为避免长 session 反复复制旧 receipt 形状，Phase 4G8 可以使用一个严格限定的本地 candidate adapter：
+仅当 worker 显式返回 `status=completed`、`outcome=implementation_ready`、全部结构化本地 verification
+均为 passed、workspace revision 可复核、且 job 明确配置 `required_evaluator` 时，将其归一化为
+`candidate_ready`。Adapter 必须写审计 event，并标记 independent evaluator 仍然 required；它不得适配
+失败/不确定 verification、不得生成 `independently_verified`，也不得直接满足 goal completion。
 
 ### 12.3 Large
 
@@ -661,19 +710,84 @@ stall、worker timeout 和 task-quality failure。异常路径不得继续等待
 ### 13.4 Task-quality 终止预算
 
 真实任务不能因 official evaluator 持续失败而无限创建 recovery worker。Harness 必须在每次
-`dispatch_once()` 之前，从 terminal evaluator `task_runs.metadata` 统计未 resolved 的 official
-evaluator attempts，并应用可配置的 `max_unresolved_evaluator_attempts`；默认值为 `3`。
+`dispatch_once()` 之前统计 evaluator progress、structured failure signature、feedback consumption、
+no-progress streak 和总资源使用。固定 unresolved evaluator attempt 数不得作为 task-quality 终止条件。
 
-达到预算后必须：
+达到总 wall/token/cost 资源预算后必须：
 
-1. 不再 dispatch 新 recovery worker；
+1. 只有最新 feedback bundle 已由同一 implementation session 消费后，才允许停止 dispatch；
 2. 停止本 case 的 daemon 与 owned worker；
 3. 保留最新 fixed-revision evaluator result、open/reopened gap 和全部失败 evidence；
 4. 生成正常 `run-report.json`，记录 attempt count、failure count、预算和 exhausted 状态；
-5. 将结果分类为 `runtime-correct / task-failed`，前提是其他 runtime invariants 均通过。
+5. 终止必须分类为 `runtime-correct / resource-exhausted`，前提是其他 runtime invariants 均通过；
+   `no-progress streak` 只触发 anti-stuck/audit，不单独形成 task-quality 终止事实。
 
-预算耗尽不是 `infrastructure_invalid`，也不能把 runtime job 伪造为 `done`。若最新 evaluator 已
-resolved，即使此前失败次数达到预算，也应按成功路径完成，不能由历史失败覆盖最终有效证据。
+资源耗尽不是 `infrastructure_invalid`，也不能把 runtime job 伪造为 `done`。若最新 evaluator 已
+resolved，应按成功路径完成，不能由历史失败覆盖最终有效证据。有 F2P/P2P 改善或 failure signature
+变化时必须重置 no-progress streak；相同测试进入更深断言属于 signature 变化。
+
+### 13.5 Evaluator remediation continuity
+
+Implementation receipt 通过本地验证后进入 `candidate_ready`，而不是 `succeeded`。该状态仅表示固定
+revision 可交给 required evaluator；它不满足 verifier-required goal。只有独立 evaluator 写入
+`independently_verified` evidence 后，才形成最终 completion fact。Evaluator unresolved 后，同一 node
+从 `candidate_ready` 回到 `ready` 并恢复原 backend session。
+
+Official evaluator 返回有效 unresolved result 后，默认不得立即让 Decision Provider 创建新的 recovery
+node。对于显式启用 `resume_target_session` 的 job，只要原 implementation node 的 workspace、
+capability、contract、worker lane 和 Codex backend session 仍满足恢复条件，本地 reducer 必须将同一
+node 重新置为 `ready`，并把受预算、已脱敏的 failure bundle 送入同一 backend session。
+
+Failure bundle 必须区分“测试源码”与“测试结果”。Hidden test source、fixture、gold/test patch、protected
+path 和完整 harness log 始终隔离；但 official evaluator 已经产生的失败 test id、对称 comparison
+relation、安全标量调用条件、expected/actual、regex/input、emitted warning 与 exception summary 可以作为
+标准化 outcome 反馈给 worker。Comparison 只表达诸如“左右值必须相等”的关系，不能把任一侧伪装成
+期望值；branch condition 只允许脱敏后的标量 keyword，例如 `shuffle=False`，不能包含路径、URL、
+credential 或任意代码。Condition 来自失败 test 的安全分支上下文，可能同时包含直接失败分支与应抛
+异常的替代分支，不得宣称每项 condition 都是当前异常的直接调用参数。Evaluator 对
+pytest 仅通过 `PYTEST_ADDOPTS=-vv` 提高 assertion diff 的显示完整度，不得修改 protected test command
+或测试选择。Runtime 必须再次按 failed test id 做关联校验，只转发 allow-list 字段；全部 failed test id
+和每项首个 structured diagnostic 必须保留，诊断可以分 batch 组织但不能因 case/总字符预算被丢弃。
+Worker 收到的仍是 non-authoritative diagnostics，不能据此读取
+protected artifact、扩大 capability 或硬编码单个测试值。
+
+若同一 test 产生多个 pytest section，evaluator 必须为每个 official failed test 选择第一条可提取诊断，
+重复 section 不进入 worker bundle。无关 failure、warning 或未计入 official result 的 section 不得进入
+bundle。无法为某个 official failed
+test 提取 bounded outcome 时，必须显式写入 `missing_test_ids`；不得静默退化成只有 failed-test list、却让
+下游误以为诊断完整。
+
+Evaluator 必须同时生成 `feedback_coverage`：`current_failure_complete` 表示本轮全部 official failed
+test id 都有 bounded diagnostic；`extraction_incomplete` 表示至少一个 official failure 没有 diagnostic。
+不得再使用 `budget_limited` 将固定槽位覆盖误报为当前失败集合完整。只有第一种状态可以进入 worker
+remediation。`extraction_incomplete` 是 evaluator infrastructure failure：
+不得恢复 worker 盲猜，不得消耗 task-quality retry budget，并必须尽快把 real case 终止为
+`infrastructure_invalid`。
+
+### 13.6 Evaluator 与 run artifact retention
+
+Evaluator 在 bounded diagnostics、coverage、result hash、environment fingerprint 和 provenance 已构造
+后，只有 coverage 为 `current_failure_complete` 才删除该次 protected evaluator run 的
+`combined.patch`、`test_output` 和 harness raw log。若 coverage 为 `extraction_incomplete`，必须保留 raw
+目录并记录 `retained_for_incomplete_feedback`，供本地 infrastructure diagnosis；该路径和 raw 内容不能
+进入 worker prompt。其他清理异常同样必须保留 raw 并明确记录 cleanup error，不能静默丢失唯一失败证据。
+
+每个 real case 在写最终报告或进入 retention cleanup 前，必须从 worker workspace 归档精确
+`reports/candidate.patch` 与 `reports/candidate-evidence.json`。Evidence 至少包含 base commit、固定
+workspace revision、patch SHA-256、字节数、changed files 和 `protected_oracle_included=false`。该归档只
+包含 candidate workspace diff，不包含 hidden test/gold patch、evaluator raw、provider credential 或其他
+protected path。
+
+Fresh real case 启动前，harness 必须扫描同一稳定 `run_root/instance` 下已有 run。只有已经持久化
+`reports/run-report.json` 且已归档 candidate evidence 的结束 run 才可压缩：保留整个 `reports/`，删除 workspace、Hermes DB、隔离
+home、Codex session cache 和 service state，并写 `reports/retention.json` 记录删除项与字节数。没有最终
+报告的 run 视为可能仍需 resume，不得清理。Qualification base/gold、source mirror 和共享只读 worker
+toolchain 是可复用资产，不属于 per-run garbage。
+
+每个 remediation candidate 仍由新的独立 evaluator node 验证，并固定到新的 materialization 和
+workspace revision。Auto-remediation、restart 幂等、per-materialization evidence ref、预算耗尽后的
+provider suppression 和 fallback 条件详见：
+[Phase 4G8 Evaluator Remediation Loop](validation/phase4g8/evaluator-remediation-loop.md)。
 
 ---
 
@@ -786,13 +900,16 @@ Infrastructure invalid 不算模型或 runtime 失败，但实例必须重新 qu
 
 禁止：
 
-- 把 hidden test failure 内容改写成 task-specific prompt；
+- 人工读取 hidden test 后把源码、fixture、gold 信息或 task-specific 解题提示改写进 worker prompt；
 - 手工告诉 worker gold 修改位置；
 - 多次随机采样直到偶然通过却只报告最佳结果；
 - 在失败 workspace 上手工补代码后继续；
 - 删除 rejected decision/patch/attempt history。
 
 每次正式 run 都必须保留，包括失败 run。
+
+允许通过统一、受预算、可审计的 evaluator failure schema 返回断言 outcome；这不等于暴露 hidden test
+source。该 schema 必须适用于所有任务，且不能包含测试正文、protected path 或完整 raw output。
 
 ---
 
@@ -951,12 +1068,30 @@ capability drop 强制实施。Codex 内层 sandbox 使用 `danger-full-access`�
 在外层 netns 中因无法配置 loopback 而阻断所有工具；这不会移除外层网络、身份和 protected
 artifact 隔离。
 
-正式 worker 必须能运行 base workspace 中的公开测试。Runner 可以从 locked official image 中只
-提取依赖 toolchain/conda environment，按 image hash 缓存为 root-owned read-only 目录并加入 worker
-`PATH`；不得复制 image 的 `/testbed` checkout、test patch、evaluator script、gold patch 或 evaluator
-artifact。提取后必须删除指向 `/testbed` 等 image workspace 的 `.pth` 绝对路径，并验证 worker UID
-只能读取/执行 toolchain、不能写入 toolchain。公开 toolchain 不是 evaluator evidence，不能替代固定
-revision official evaluator。
+内层 Codex 必须同时使用 `on-request + auto_review + exec-policy`。Exec-policy 先阻断 hard deny，或把
+需要判断目标/范围的风险操作升级为 approval request；随后由独立的只读 reviewer session 旁路审查。
+Reviewer 只能批准或拒绝当前请求，不能扩大外层 capability envelope。Auto-review 是
+defense-in-depth，不是全量命令审计器，也不是授权事实源：未命中规则的命令仍由 Codex 本地启发式处理，
+审查允许的操作仍必须通过 bwrap/netns/UID 的物理限制；审查超时、解析失败或不确定时不得回退为
+`never` 或无条件执行。不得使用 `--full-auto` 或
+`--dangerously-bypass-approvals-and-sandbox`，因为这两种模式会把 approval policy 强制降为 `never`。
+
+正式 worker 必须能运行 base workspace 中的公开测试。Runner 必须先使用 official harness 渲染
+evaluator 的测试前环境准备段，并在临时 official image container 中执行该准备段，再提取最终的
+toolchain/conda environment。不能直接从 pristine image 提取，因为 official harness 可能在测试前执行
+依赖 hot-fix，例如降级某个不兼容依赖。
+
+Toolchain cache identity 必须同时包含 image content digest、环境准备脚本 hash、setup environment
+hash 和 setup 后的 resolved environment fingerprint。每次 run 都必须重新执行 setup preflight；解析
+结果未变化时复用只读快照，结果变化时创建新的内容寻址缓存。提取后必须删除指向 `/testbed`、
+`/workspace` 等 image workspace 的 `.pth` 绝对路径，将目录转为
+root-owned read-only，并比较临时 official container 与提取后 toolchain 的 Python 版本和非 workspace
+package fingerprint。每次 official evaluator 也必须回报同一 fingerprint；不匹配时该次运行属于
+infrastructure-invalid，不能计为 task-quality failure。
+
+环境准备脚本、evaluator test command、test patch、gold patch、`/testbed` checkout 和 evaluator artifact
+均不得进入 worker 可见目录。Worker 只能读取准备后的 toolchain 和不含敏感正文的审计 manifest。
+公开 toolchain 不是 evaluator evidence，不能替代固定 revision official evaluator。
 
 ### Step 1：Qualification Harness
 
@@ -1071,6 +1206,12 @@ Malformed `structure_request` 不得产生 graph mutation；原始 worker artifa
 - goal 未满足时没有 silent idle/done；
 - credential scan 为 0；
 - 主 `.codex` config/auth hash 未变化；
+- 三项 worker 均通过隔离 auto-review/exec-policy 配置 preflight，实际 lane 使用 `on-request`，且不存在
+  `--full-auto`/bypass；
+- hard-deny command 被 exec-policy 本地拒绝，prompt command 确实进入 auto-review；普通公开测试命令
+  不被无条件送审；
+- `config.toml`、`auth.json` 和 `rules/` 在 worker filesystem namespace 中不可写；
+- auto-review 失败或拒绝不会扩大 capability，也不会绕过外层 filesystem/network 隔离；
 - 不同 execution node 的 `CODEX_HOME` 相互隔离，同一 node 的 retry/resume 可复用；
 - 所有失败尝试、recovery、validator rejection 和 fallback audit 均保留；
 - 每项正式任务均生成中文 `capability-trace.md` 和结构化 `capability-trace.json`，并能区分
@@ -1107,3 +1248,48 @@ Phase 4G8 是 Phase 4H Dashboard Runtime UI 之前的 production validation gate
 
 Phase 4H 不得通过 UI 隐藏 Phase 4G8 暴露的 task quality、recovery、compaction、capability 或
 consistency 问题。
+
+---
+
+## 23. 2026-07-16 当前验证事实
+
+Medium `phase4g8-medium-c1e87ae82e` 已完成并 resolved：
+
+- Runtime Validation：通过；
+- End-to-End Capability Validation：通过；
+- 7 次 official evaluator FAIL_TO_PASS：`34 -> 38 -> 40 -> 40 -> 40 -> 40 -> 44 / 44`；
+- 7 次 PASS_TO_PASS：始终 `2861/2861`；
+- 前 6 个 unresolved result 均保留全部 failed IDs，diagnostic coverage 为
+  `current_failure_complete`；
+- 6 个 feedback bundle 均先由同一 Codex worker session 消费，再形成下一 candidate；
+- 1 个有效 implementation node、8 个 materialization attempts、同一 Codex thread，
+  `resume_count=7`；
+- worker hard interruption、daemon restart、real compaction、fixed revision evaluator 和 same-session
+  remediation 均有真实证据；
+- consistency violation/warning、duplicate terminal/ledger fact、compaction fallback、credential scan 均为 0；
+- final candidate 为 28 个 changed files、47333 bytes，protected oracle included 为 false；
+- WebSocket transport 为 upgrade/101 `18/18`、failure `0`、HTTP fallback `0`。
+
+本次运行修复了两个状态机缺口：required evaluator selector 未接受合法的
+`partial + candidate_ready` evidence；remediation reopen SQL 未包含 `candidate_ready`。旧代码已在 DB 中
+形成一次 session interrupted/node candidate_ready 的半迁移状态，恢复前通过严格断言只回滚该 session
+状态，再由修复后代码重新调度。因此该结果是 resolved 的诊断性 resumed evidence，不应描述为 Runtime
+代码从启动到结束完全冻结的 release-grade clean run。
+
+Evaluator 在第 3-6 轮连续返回相同 4 个 failure/signature，`no_progress_streak` 一度达到 3，但第 7 轮
+仍然 resolved。该事实否定了把 streak 或固定 evaluator attempt count 作为硬 task-quality gate；它们只
+用于 anti-stuck 和 observability，Phase 4G8 的硬 operational guard 保持为总 wall/token/cost budget。
+
+历史 Medium `phase4g8-medium-85eef83bdd` 仍保留为旧 `budget_limited`、固定 3 次 attempt 的失败基线；其
+最新 feedback 未被 worker 消费，不能作为 single-worker capability ceiling。Small
+`phase4g8-small-6dafeda34c` 的 Runtime Validation 通过但 task 未 resolved，继续作为独立历史事实。
+
+Large 按 operator 要求未运行。因此当前可确认 Medium 的 Runtime 和 End-to-End Capability Validation
+均通过，但三任务 production capability gate 尚未满足，也不据此自动进入 Phase 4H。
+
+详细证据见：
+
+- `docs/validation/phase4g8/dask__dask_2022.9.2_2022.10.0/phase4g8-medium-c1e87ae82e/`；
+- `docs/validation/phase4g8/small-medium-execution-flow.md`；
+- `docs/validation/phase4g8/evaluator-remediation-loop.md`；
+- `docs/validation/phase4g8/environment-parity-fix.md`。

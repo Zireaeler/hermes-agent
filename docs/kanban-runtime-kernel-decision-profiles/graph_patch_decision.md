@@ -88,7 +88,8 @@ Use exactly these field names for patch ops:
   `target_workspace_revision`. A `target_evidence_ref` must use a validator
   supported immutable format: `receipt:<node_key>:attempt-<n>`,
   `event:<event_id>`, or `artifact:<artifact_id_or_ref>`. Do not copy a
-  mutable `node:<id>` ledger reference into this field.
+  mutable `node:<id>` ledger reference into this field. Every verifier must
+  link to a goal item whose contract explicitly has `verifier_required=true`.
 - `request_human`: include `decision_type`, `question`,
   `default_recommendation`, `why_user_required`, and affected goal/gap keys.
 - `strategy_update`: include `node_key`, `title`, `description`,
@@ -100,8 +101,12 @@ Use exactly these field names for patch ops:
 
 Use `insert_verifier` only when you can name an existing `target_node_key` from
 the graph frontier or a real `target_goal_item_key` from the goal contract, and
-you can also provide `goal_item_keys` or `gap_keys` for the verifier node. If
-you are unsure, prefer `create_node` with `goal_item_keys` or `gap_keys`.
+you can also provide `goal_item_keys` or `gap_keys` for the verifier node. The
+linked goal must explicitly require independent verification and the runtime
+must have an independent verification source. Task complexity, model
+uncertainty, or rerunning worker-authored tests do not justify a verifier. If
+the goal does not require a verifier, keep implementation, testing, debugging,
+and local verification in one coherent worker node.
 
 Never invent empty node keys, empty target fields, unknown goal keys, or
 dependencies on nodes that are not present in the request.

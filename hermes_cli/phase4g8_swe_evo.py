@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import ast
 from contextlib import redirect_stderr, redirect_stdout
 import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
+import re
+import shutil
 import subprocess
 import sys
 import time
@@ -22,6 +25,11 @@ from hermes_cli import kanban_runtime_phase4g8 as phase4g8
 
 
 SWE_EVO_ADAPTER_SCHEMA = "hermes_phase4g8_swe_evo_adapter_v1"
+WORKER_ENVIRONMENT_SETUP_SCHEMA = "hermes_phase4g8_worker_environment_setup_v1"
+ENVIRONMENT_FINGERPRINT_SCHEMA = "hermes_phase4g8_environment_fingerprint_v1"
+PYTEST_FAILURE_DIAGNOSTICS_SCHEMA = "hermes_phase4g8_pytest_failure_diagnostics_v3"
+EVALUATOR_DIAGNOSTIC_BATCH_SIZE = 20
+EVALUATOR_TEST_OUTPUT_MARKER = ">>>>> Start Test Output"
 SWE_EVO_DATASET_REVISION = "9b83d5af943ba7a17567336f5b18239f73960219"
 SWE_EVO_ARROW_SHA256 = "74e7c63160ada4ceba71d5d89a9bb7c9794f4574b384458d546eb65cdb730520"
 EVALUATOR_RUN_LABEL = "hermes.phase4g8.run_id"
@@ -32,6 +40,39 @@ SWE_EVO_OFFICIAL_INSTANCE_IDS = (
     "dask__dask_2022.9.2_2022.10.0",
     "iterative__dvc_1.0.0a1_1.0.0a2",
 )
+
+_ENVIRONMENT_FINGERPRINT_CODE = r"""
+import hashlib
+import importlib.metadata
+import json
+import platform
+
+packages = []
+for distribution in importlib.metadata.distributions():
+    location = str(distribution.locate_file(""))
+    if location.startswith(("/testbed", "/workspace")):
+        continue
+    name = str(distribution.metadata.get("Name") or "").strip().lower().replace("_", "-")
+    if name:
+        packages.append([name, str(distribution.version)])
+packages.sort()
+payload = {
+    "python_implementation": platform.python_implementation(),
+    "python_version": platform.python_version(),
+    "packages": packages,
+}
+encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+selected_names = {"dask", "distributed", "numpy", "pandas", "pyarrow", "pytest", "sqlalchemy"}
+selected = {name: version for name, version in packages if name in selected_names}
+print(json.dumps({
+    "schema": "hermes_phase4g8_environment_fingerprint_v1",
+    "sha256": hashlib.sha256(encoded).hexdigest(),
+    "python_implementation": payload["python_implementation"],
+    "python_version": payload["python_version"],
+    "package_count": len(packages),
+    "selected_packages": selected,
+}, sort_keys=True))
+""".strip()
 
 
 def load_swe_evo_rows(
@@ -139,6 +180,17 @@ def prepare_swe_evo_specs(
                 "timeout_seconds": 7200,
                 "env": {str(key): str(value) for key, value in (evaluator_env or {}).items()},
             },
+            "worker_environment": {
+                "renderer_argv": [
+                    str(harness_python),
+                    "-m",
+                    "hermes_cli.phase4g8_swe_evo",
+                    "render-worker-environment",
+                    "--instance",
+                    str(evaluator_instance_path),
+                ],
+                "env": {str(key): str(value) for key, value in (evaluator_env or {}).items()},
+            },
             "benchmark": {
                 "name": "SWE-EVO",
                 "adapter_schema": SWE_EVO_ADAPTER_SCHEMA,
@@ -161,6 +213,28 @@ def prepare_swe_evo_specs(
             "gold_patch_bytes": len(row["patch"].encode("utf-8")),
         })
     return outputs
+
+
+def render_worker_environment_setup(instance_path: Path) -> dict[str, Any]:
+    """Render the trusted evaluator setup prefix without exposing its test command."""
+
+    instance = json.loads(instance_path.read_text(encoding="utf-8"))
+    _validate_evaluator_instance(instance)
+    if instance["dependency_mode"] != "locked_image":
+        raise RuntimeError("worker environment rendering currently requires locked_image mode")
+    test_patch_path = Path(str(instance.pop("test_patch_path"))).resolve()
+    benchmark_row = dict(instance)
+    benchmark_row["test_patch"] = test_patch_path.read_text(encoding="utf-8")
+    _test_spec, eval_script = _make_official_test_spec(benchmark_row)
+    setup_script = _worker_environment_setup_script(eval_script)
+    return {
+        "schema": WORKER_ENVIRONMENT_SETUP_SCHEMA,
+        "official_image": benchmark_row["image"],
+        "dependency_mode": benchmark_row["dependency_mode"],
+        "setup_script": setup_script,
+        "setup_sha256": hashlib.sha256(setup_script.encode("utf-8")).hexdigest(),
+        "eval_script_sha256": hashlib.sha256(eval_script.encode("utf-8")).hexdigest(),
+    }
 
 
 def evaluate_swe_evo_workspace(instance_path: Path, workspace: Path, output_root: Path) -> dict[str, Any]:
@@ -195,9 +269,31 @@ def evaluate_swe_evo_workspace(instance_path: Path, workspace: Path, output_root
             traceback.print_exc(file=log)
             raise
     result = _standardize_report(report, benchmark_row)
-    failure_diagnostics = _extract_pytest_failure_diagnostics(run_root / "test_output.txt")
+    environment_fingerprint = report.get("_hermes_environment_fingerprint")
+    if isinstance(environment_fingerprint, dict):
+        result["environment_fingerprint"] = environment_fingerprint
+    failed_test_ids = [
+        str(test_id)
+        for section in (result.get("fail_to_pass") or {}, result.get("pass_to_pass") or {})
+        for test_id in section.get("failed_tests") or []
+    ]
+    expected_failed_count = sum(
+        int(section.get("failed") or 0)
+        for section in (result.get("fail_to_pass") or {}, result.get("pass_to_pass") or {})
+    )
+    failure_diagnostics = _extract_pytest_failure_diagnostics(
+        run_root / "test_output.txt",
+        failed_test_ids=failed_test_ids,
+        batch_size=EVALUATOR_DIAGNOSTIC_BATCH_SIZE,
+    )
     if failure_diagnostics:
         result["failure_diagnostics"] = failure_diagnostics
+    feedback_coverage = _evaluator_feedback_coverage(
+        failed_test_ids,
+        failure_diagnostics,
+        expected_failed_count=expected_failed_count,
+    )
+    result["feedback_coverage"] = feedback_coverage
     result.update({
         "wall_time_seconds": round(time.monotonic() - started, 3),
         "harness_log_sha256": _sha256_file(log_path),
@@ -210,10 +306,27 @@ def evaluate_swe_evo_workspace(instance_path: Path, workspace: Path, output_root
         "official_image": benchmark_row["image"],
         "dataset_revision": benchmark_row["dataset_revision"],
     })
+    if feedback_coverage["status"] == "extraction_incomplete":
+        result["error"] = "evaluator_feedback_extraction_incomplete"
+    result["raw_artifact_cleanup"] = _finalize_evaluator_artifacts(
+        run_root, feedback_coverage
+    )
     return result
 
 
-def _extract_pytest_failure_diagnostics(path: Path, *, max_chars: int = 6_000) -> dict[str, Any]:
+def _extract_pytest_failure_diagnostics(
+    path: Path,
+    *,
+    failed_test_ids: Optional[list[str]] = None,
+    batch_size: int = EVALUATOR_DIAGNOSTIC_BATCH_SIZE,
+    max_chars_per_case: int = 4_000,
+    max_cases: Optional[int] = None,
+    max_total_chars: Optional[int] = None,
+) -> dict[str, Any]:
+    # Legacy limits now affect organization only; they must not drop failures.
+    if max_cases is not None:
+        batch_size = max(1, int(max_cases))
+    del max_total_chars
     if not path.is_file():
         return {}
     text = path.read_text(encoding="utf-8", errors="replace")
@@ -221,28 +334,486 @@ def _extract_pytest_failure_diagnostics(path: Path, *, max_chars: int = 6_000) -
     start = text.rfind(marker)
     if start < 0:
         return {}
-    selected: list[str] = []
-    for line in text[start + len(marker):].splitlines():
-        stripped = line.strip()
-        if stripped.startswith(("warnings summary", "short test summary info", "PASSES", "Summary of Failures")):
-            break
-        if (
-            stripped.startswith("E ")
-            or stripped.startswith("E\t")
-            or stripped.startswith("assert ")
-            or (stripped.startswith("tests/") and ": in " in stripped)
-        ):
-            selected.append(line.rstrip())
-    diagnostic = redact_sensitive_text("\n".join(selected)).strip()
-    if not diagnostic:
+    failure_body = text[start + len(marker):]
+    sections = _pytest_failure_sections(failure_body)
+    known_test_ids = [str(value) for value in (failed_test_ids or []) if str(value)]
+    relevant_sections: list[tuple[str, list[str], str]] = []
+    for title, lines in sections:
+        test_id = _match_pytest_test_id(title, lines, known_test_ids)
+        if known_test_ids and test_id not in known_test_ids:
+            continue
+        relevant_sections.append((title, lines, test_id))
+
+    # Select one diagnostic for every official failed test. Repeated pytest
+    # sections do not add information and must never displace another test.
+    ordered_sections: list[tuple[str, list[str], str]] = []
+    selected_section_indexes: set[int] = set()
+    for test_id in known_test_ids:
+        for index, section in enumerate(relevant_sections):
+            if index not in selected_section_indexes and section[2] == test_id:
+                ordered_sections.append(section)
+                selected_section_indexes.add(index)
+                break
+    if not known_test_ids:
+        ordered_sections.extend(
+            section
+            for index, section in enumerate(relevant_sections)
+            if index not in selected_section_indexes
+        )
+
+    cases: list[dict[str, Any]] = []
+    duplicate_sections_omitted = max(0, len(relevant_sections) - len(ordered_sections))
+    for title, lines, _test_id in ordered_sections:
+        case = _structured_pytest_failure_case(
+            title,
+            lines,
+            known_test_ids,
+            max_chars=max(256, int(max_chars_per_case)),
+            protected_root=path.parent,
+        )
+        if case is None:
+            case = _pytest_test_id_only_failure_case(_test_id)
+        case.pop("_content_chars", None)
+        case["batch_index"] = len(cases) // max(1, int(batch_size))
+        cases.append(case)
+    selected_test_ids = {str(case.get("test_id") or "") for case in cases}
+    for test_id in known_test_ids:
+        if test_id in selected_test_ids:
+            continue
+        case = _pytest_test_id_only_failure_case(test_id)
+        case["batch_index"] = len(cases) // max(1, int(batch_size))
+        cases.append(case)
+        selected_test_ids.add(test_id)
+    if not cases and not known_test_ids:
         return {}
-    truncated = len(diagnostic) > int(max_chars)
+    missing_test_ids = [
+        test_id for test_id in known_test_ids if test_id not in selected_test_ids
+    ]
+    rendered = _render_pytest_failure_cases(cases)
     return {
-        "schema": "hermes_phase4g8_pytest_failure_diagnostics_v1",
-        "text": diagnostic[: int(max_chars)],
-        "truncated": truncated,
+        "schema": PYTEST_FAILURE_DIAGNOSTICS_SCHEMA,
+        "cases": cases,
+        "case_count": len(cases),
+        "batch_size": max(1, int(batch_size)),
+        "batch_count": (
+            (len(cases) + max(1, int(batch_size)) - 1) // max(1, int(batch_size))
+        ),
+        "duplicate_sections_omitted_count": duplicate_sections_omitted,
+        "omitted_case_count": 0,
+        "missing_test_ids": missing_test_ids,
+        "text": rendered,
+        "detail_bounded": any(case.get("truncated") for case in cases),
+        "truncated": bool(missing_test_ids),
         "source_sha256": hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest(),
     }
+
+
+def _evaluator_feedback_coverage(
+    failed_test_ids: list[str],
+    diagnostics: dict[str, Any],
+    *,
+    max_cases: Optional[int] = None,
+    expected_failed_count: Optional[int] = None,
+) -> dict[str, Any]:
+    del max_cases
+    official_test_ids = list(dict.fromkeys(
+        str(test_id) for test_id in failed_test_ids if str(test_id).strip()
+    ))
+    required_test_ids = official_test_ids
+    cases = diagnostics.get("cases") if isinstance(diagnostics, dict) else []
+    covered_test_ids = {
+        str(case.get("test_id") or "")
+        for case in cases or []
+        if isinstance(case, dict)
+    }
+    missing_test_ids = [
+        test_id for test_id in required_test_ids if test_id not in covered_test_ids
+    ]
+    expected_count = max(
+        len(official_test_ids),
+        int(expected_failed_count) if expected_failed_count is not None else 0,
+    )
+    unidentified_failed_test_count = max(0, expected_count - len(official_test_ids))
+    if missing_test_ids or unidentified_failed_test_count:
+        status = "extraction_incomplete"
+    else:
+        status = "current_failure_complete"
+    return {
+        "official_failed_test_count": len(official_test_ids),
+        "required_case_count": len(required_test_ids),
+        "covered_official_test_count": sum(
+            test_id in covered_test_ids for test_id in official_test_ids
+        ),
+        "status": status,
+        "missing_test_ids": missing_test_ids,
+        "unidentified_failed_test_count": unidentified_failed_test_count,
+        "uncovered_due_to_budget_count": 0,
+    }
+
+
+def _pytest_test_id_only_failure_case(test_id: str) -> dict[str, Any]:
+    return {
+        "test_id": str(test_id),
+        "failure_kind": "test_failed",
+        "detail_status": "test_id_only",
+        "comparisons": [],
+        "conditions": [],
+        "expected": [],
+        "actual": [],
+        "regex": [],
+        "emitted_warnings": [],
+        "exception_summary": [],
+        "diagnostic_excerpt": (
+            "Official pytest reported this test as failed but emitted no bounded "
+            "failure detail; rerun this exact test in the parity environment."
+        ),
+        "truncated": False,
+    }
+
+
+def _pytest_failure_sections(body: str) -> list[tuple[str, list[str]]]:
+    sections: list[tuple[str, list[str]]] = []
+    title: Optional[str] = None
+    lines: list[str] = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        summary_label = stripped.strip("=_ ")
+        if summary_label.startswith((
+            "warnings summary",
+            "short test summary info",
+            "PASSES",
+            "Summary of Failures",
+        )):
+            break
+        heading = re.match(r"^_+\s*(?P<title>.*?)\s*_+$", stripped)
+        heading_title = heading.group("title").strip() if heading else ""
+        if heading_title and re.search(r"[A-Za-z0-9]", heading_title):
+            if title is not None:
+                sections.append((title, lines))
+            title = heading_title
+            lines = []
+            continue
+        if title is not None:
+            lines.append(line)
+    if title is not None:
+        sections.append((title, lines))
+    return sections
+
+
+def _structured_pytest_failure_case(
+    title: str,
+    lines: list[str],
+    known_test_ids: list[str],
+    *,
+    max_chars: int,
+    protected_root: Path,
+) -> Optional[dict[str, Any]]:
+    test_id = _match_pytest_test_id(title, lines, known_test_ids)
+    safe_lines = []
+    for line in lines:
+        stripped = line.lstrip()
+        if not re.match(r"^E(?:\s|$)", stripped):
+            continue
+        value = re.sub(r"^E\s*", "", stripped, count=1)
+        value = _sanitize_pytest_diagnostic_value(value, protected_root=protected_root)
+        if value:
+            safe_lines.append(value)
+    if not safe_lines:
+        return None
+
+    comparisons = [
+        comparison
+        for line in safe_lines
+        if (comparison := _pytest_assertion_comparison(line)) is not None
+    ]
+    conditions = _pytest_safe_call_conditions(lines, protected_root=protected_root)
+    expected: list[str] = []
+    actual: list[str] = []
+    regex_values: list[str] = []
+    emitted_warnings: list[str] = []
+    exception_summary: list[str] = []
+    for line in safe_lines:
+        lowered = line.lower()
+        if lowered.startswith("regex:"):
+            _append_unique(regex_values, line.split(":", 1)[1].strip())
+        elif lowered.startswith("input:"):
+            _append_unique(actual, line.split(":", 1)[1].strip())
+        elif lowered.startswith(("expected:", "right:")):
+            _append_unique(expected, line.split(":", 1)[1].strip())
+        elif lowered.startswith(("actual:", "obtained:", "left:")):
+            _append_unique(actual, line.split(":", 1)[1].strip())
+        elif lowered.startswith("[right]:"):
+            _append_unique(expected, line.split(":", 1)[1].strip())
+        elif lowered.startswith("[left]:"):
+            _append_unique(actual, line.split(":", 1)[1].strip())
+        elif lowered.startswith("emitted warnings:"):
+            _append_unique(emitted_warnings, line.split(":", 1)[1].strip())
+        elif line.startswith("- ") and not comparisons:
+            _append_unique(expected, line[2:].strip())
+        elif line.startswith("+ ") and not comparisons:
+            _append_unique(actual, line[2:].strip())
+        if re.match(
+            r"^(?:[A-Za-z_][\w.]*\.)*[A-Za-z_][\w]*(?:Error|Exception|Warning):",
+            line,
+        ) or line.startswith("Failed:"):
+            _append_unique(exception_summary, line)
+
+    result: dict[str, Any] = {
+        "test_id": test_id,
+        "failure_kind": _pytest_failure_kind(safe_lines, comparisons),
+        "detail_status": "extracted",
+        "comparisons": [],
+        "conditions": [],
+        "expected": [],
+        "actual": [],
+        "regex": [],
+        "emitted_warnings": [],
+        "exception_summary": [],
+        "diagnostic_excerpt": "",
+        "truncated": False,
+    }
+    remaining = max(256, int(max_chars))
+    for comparison in comparisons:
+        if remaining <= 0:
+            result["truncated"] = True
+            break
+        bounded = {
+            "operator": comparison["operator"],
+            "left": comparison["left"][: min(len(comparison["left"]), remaining, 1_000)],
+            "right": comparison["right"][: min(len(comparison["right"]), remaining, 1_000)],
+            "required_relation": comparison["required_relation"],
+        }
+        result["comparisons"].append(bounded)
+        remaining -= len(bounded["left"]) + len(bounded["right"]) + 32
+    for condition in conditions:
+        if remaining <= 0:
+            result["truncated"] = True
+            break
+        bounded = condition[: min(len(condition), remaining, 500)]
+        result["conditions"].append(bounded)
+        remaining -= len(bounded)
+    for key, values in (
+        ("expected", expected),
+        ("actual", actual),
+        ("regex", regex_values),
+        ("emitted_warnings", emitted_warnings),
+        ("exception_summary", exception_summary),
+    ):
+        for value in values:
+            if remaining <= 0:
+                result["truncated"] = True
+                break
+            bounded = value[: min(len(value), remaining, 2_000)]
+            result[key].append(bounded)
+            remaining -= len(bounded)
+            if len(bounded) < len(value):
+                result["truncated"] = True
+    excerpt = "\n".join(safe_lines)
+    if remaining > 0:
+        result["diagnostic_excerpt"] = excerpt[:remaining]
+        remaining -= len(result["diagnostic_excerpt"])
+    if len(result["diagnostic_excerpt"]) < len(excerpt):
+        result["truncated"] = True
+    result["_content_chars"] = max(256, int(max_chars)) - max(0, remaining)
+    return result
+
+
+def _match_pytest_test_id(
+    title: str,
+    lines: list[str],
+    known_test_ids: list[str],
+) -> str:
+    normalized = re.sub(r"^ERROR at (?:setup|teardown) of ", "", title).strip()
+    exact = [value for value in known_test_ids if value.rsplit("::", 1)[-1] == normalized]
+    if len(exact) == 1:
+        return exact[0]
+    for line in lines:
+        match = re.search(r"(?P<path>(?:[A-Za-z0-9_.-]+/)+test[^:\s]+\.py):\d+", line)
+        if match:
+            candidate = f"{match.group('path')}::{normalized}"
+            if not known_test_ids or candidate in known_test_ids:
+                return candidate
+    return exact[0] if exact else normalized
+
+
+def _pytest_assertion_comparison(line: str) -> Optional[dict[str, str]]:
+    marker = "assert "
+    index = line.find(marker)
+    if index < 0:
+        return None
+    source = line[index:]
+    try:
+        statement = ast.parse(source).body[0]
+    except (SyntaxError, ValueError):
+        return None
+    test = getattr(statement, "test", None)
+    if not (
+        isinstance(test, ast.Compare)
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.Eq)
+        and len(test.comparators) == 1
+    ):
+        return None
+    return {
+        "operator": "==",
+        "left": ast.unparse(test.left),
+        "right": ast.unparse(test.comparators[0]),
+        "required_relation": "equal",
+    }
+
+
+def _pytest_safe_call_conditions(lines: list[str], *, protected_root: Path) -> list[str]:
+    """Extract scalar call kwargs without forwarding protected test source."""
+
+    conditions: list[str] = []
+    sensitive_key = re.compile(
+        r"(?i)(?:secret|token|password|credential|api_?key|auth|url|uri|path|file)"
+    )
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("E"):
+            continue
+        source = re.sub(r"^>\s*", "", stripped)
+        if "(" not in source or len(source) > 2_000:
+            continue
+        parse_source = source
+        if source.startswith(("with ", "async with ")) and source.endswith(":"):
+            parse_source += "\n    pass"
+        try:
+            tree = ast.parse(parse_source)
+        except (SyntaxError, ValueError):
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            for keyword in node.keywords:
+                if not keyword.arg or sensitive_key.search(keyword.arg):
+                    continue
+                if not isinstance(keyword.value, ast.Constant) or not isinstance(
+                    keyword.value.value, (str, int, float, bool, type(None))
+                ):
+                    continue
+                rendered = _sanitize_pytest_diagnostic_value(
+                    f"{keyword.arg}={keyword.value.value!r}",
+                    protected_root=protected_root,
+                )
+                if rendered:
+                    _append_unique(conditions, rendered)
+    return conditions
+
+
+def _pytest_failure_kind(
+    safe_lines: list[str], comparisons: list[dict[str, str]]
+) -> str:
+    joined = "\n".join(safe_lines)
+    if "DID NOT RAISE" in joined:
+        return "expected_exception_not_raised"
+    if "DID NOT WARN" in joined:
+        return "expected_warning_not_emitted"
+    if comparisons:
+        return "assertion_comparison_failed"
+    if any(
+        re.match(r"^(?:[A-Za-z_][\w.]*\.)*[A-Za-z_][\w]*(?:Error|Exception):", line)
+        for line in safe_lines
+    ):
+        return "exception_raised"
+    return "test_failed"
+
+
+def _sanitize_pytest_diagnostic_value(value: str, *, protected_root: Path) -> str:
+    sanitized = redact_sensitive_text(str(value))
+    protected_patterns = [
+        re.escape(str(protected_root.resolve())),
+        r"/testbed",
+        r"/workspace",
+    ]
+    for prefix in protected_patterns:
+        sanitized = re.sub(prefix + r"(?:/[^\s:'\"]+)*", "<protected-path>", sanitized)
+    sanitized = re.sub(
+        r"(?i)\b(?:gold|test)\.patch\b|\bhidden test (?:source|patch)\b",
+        "<protected-artifact>",
+        sanitized,
+    )
+    return sanitized.strip()
+
+
+def _append_unique(values: list[str], value: str) -> None:
+    selected = str(value or "").strip()
+    if selected and selected not in values:
+        values.append(selected)
+
+
+def _render_pytest_failure_cases(cases: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
+    for case in cases:
+        lines.append(f"[{case['test_id']}]")
+        lines.append(f"Failure kind: {case.get('failure_kind') or 'test_failed'}")
+        for comparison in case.get("comparisons") or []:
+            lines.append(
+                "Failed comparison: "
+                f"{comparison.get('left')} {comparison.get('operator')} "
+                f"{comparison.get('right')} (required: {comparison.get('required_relation')})"
+            )
+        for condition in case.get("conditions") or []:
+            lines.append(f"Call condition: {condition}")
+        for label, key in (
+            ("Expected", "expected"),
+            ("Actual", "actual"),
+            ("Regex", "regex"),
+            ("Emitted warnings", "emitted_warnings"),
+            ("Exceptions", "exception_summary"),
+        ):
+            for value in case.get(key) or []:
+                lines.append(f"{label}: {value}")
+        if case.get("diagnostic_excerpt"):
+            lines.append("Diagnostics:")
+            lines.append(str(case["diagnostic_excerpt"]))
+    return "\n".join(lines).strip()
+
+
+def _remove_completed_evaluator_artifacts(run_root: Path) -> dict[str, Any]:
+    """Remove raw protected evaluator output after bounded evidence is extracted."""
+
+    bytes_removed = 0
+    try:
+        for path in run_root.rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                bytes_removed += path.stat().st_size
+        shutil.rmtree(run_root)
+    except OSError as exc:
+        return {
+            "status": "retained_after_cleanup_error",
+            "bytes_removed": 0,
+            "error": type(exc).__name__,
+        }
+    return {
+        "status": "removed_after_evidence_extraction",
+        "bytes_removed": bytes_removed,
+    }
+
+
+def _finalize_evaluator_artifacts(
+    run_root: Path,
+    feedback_coverage: dict[str, Any],
+) -> dict[str, Any]:
+    if feedback_coverage.get("status") == "extraction_incomplete":
+        return {
+            "status": "retained_for_incomplete_feedback",
+            "bytes_retained": _path_tree_size(run_root),
+            "protected": True,
+        }
+    return _remove_completed_evaluator_artifacts(run_root)
+
+
+def _path_tree_size(path: Path) -> int:
+    total = 0
+    try:
+        for child in path.rglob("*"):
+            if child.is_file() and not child.is_symlink():
+                total += child.stat().st_size
+    except OSError:
+        return total
+    return total
 
 
 def collect_candidate_patch(
@@ -282,6 +853,27 @@ def collect_candidate_patch(
     return "\n".join(value.rstrip("\n") for value in parts if value) + ("\n" if parts else "")
 
 
+def _make_official_test_spec(instance: dict[str, Any]) -> tuple[Any, str]:
+    """Build the exact official test spec and its dependency-locked eval script."""
+
+    try:
+        _load_swebench_as_namespace()
+        from swebench.harness.constants import MAP_REPO_VERSION_TO_SPECS
+        from swebench.harness.test_spec import test_spec as test_spec_module
+    except ImportError as exc:
+        raise RuntimeError("official SWE-EVO harness dependencies are unavailable") from exc
+    test_spec_module.make_repo_script_list = lambda *_args, **_kwargs: []
+    test_spec_module.make_env_script_list = lambda *_args, **_kwargs: []
+    test_spec = test_spec_module.make_test_spec(instance, namespace=None)
+    install_command = MAP_REPO_VERSION_TO_SPECS[instance["repo"]][instance["version"]].get("install")
+    eval_script = (
+        test_spec.eval_script
+        if instance["dependency_mode"] == "official_install"
+        else _locked_image_eval_script(test_spec.eval_script, install_command)
+    )
+    return test_spec, eval_script
+
+
 def _run_official_harness(
     instance: dict[str, Any],
     combined_patch: str,
@@ -298,11 +890,9 @@ def _run_official_harness(
             KEY_INSTANCE_ID,
             KEY_MODEL,
             KEY_PREDICTION,
-            MAP_REPO_VERSION_TO_SPECS,
         )
         from swebench.harness.docker_utils import copy_to_container, exec_run_with_timeout
         from swebench.harness.grading import get_eval_report
-        from swebench.harness.test_spec import test_spec as test_spec_module
     except ImportError as exc:
         raise RuntimeError("official SWE-EVO harness dependencies are unavailable") from exc
 
@@ -312,11 +902,8 @@ def _run_official_harness(
         client.images.get(source_image)
     except docker.errors.ImageNotFound:
         client.images.pull(source_image)
-    # The official instance image already contains the repository and environment.
-    # Avoid unrelated network fetches used only to synthesize image build scripts.
-    test_spec_module.make_repo_script_list = lambda *_args, **_kwargs: []
-    test_spec_module.make_env_script_list = lambda *_args, **_kwargs: []
-    test_spec = test_spec_module.make_test_spec(instance, namespace=None)
+    test_spec, eval_script = _make_official_test_spec(instance)
+    eval_script = _with_pytest_diagnostic_verbosity(eval_script)
     container = client.containers.create(
         source_image,
         command=["tail", "-f", "/dev/null"],
@@ -335,12 +922,6 @@ def _run_official_harness(
     test_output_path = run_root / "test_output.txt"
     report_path = run_root / "official-report.json"
     _write_text(patch_path, combined_patch, mode=0o600)
-    install_command = MAP_REPO_VERSION_TO_SPECS[instance["repo"]][instance["version"]].get("install")
-    eval_script = (
-        test_spec.eval_script
-        if instance["dependency_mode"] == "official_install"
-        else _locked_image_eval_script(test_spec.eval_script, install_command)
-    )
     _write_text(eval_path, eval_script, mode=0o600)
     prediction = {
         KEY_INSTANCE_ID: instance["instance_id"],
@@ -372,6 +953,13 @@ def _run_official_harness(
             raise RuntimeError("official evaluator timed out")
         report = get_eval_report(test_spec, prediction, str(test_output_path), include_tests_status=True)
         instance_report = report[instance["instance_id"]]
+        environment_fingerprint = _fingerprint_container_environment(container)
+        expected_environment = str(
+            os.environ.get("HERMES_PHASE4G8_EXPECTED_ENVIRONMENT_SHA256") or ""
+        ).strip()
+        if expected_environment and environment_fingerprint["sha256"] != expected_environment:
+            raise RuntimeError("official evaluator environment does not match worker toolchain")
+        instance_report["_hermes_environment_fingerprint"] = environment_fingerprint
         _write_json(report_path, instance_report, mode=0o600)
         return instance_report
     finally:
@@ -488,6 +1076,58 @@ def _cleanup_phase4g8_evaluator_containers_cli(
     }
 
 
+def fingerprint_python_environment(python: Path) -> dict[str, Any]:
+    completed = subprocess.run(
+        [str(python), "-c", _ENVIRONMENT_FINGERPRINT_CODE],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        cwd="/",
+        timeout=60,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("worker environment fingerprint command failed")
+    return _parse_environment_fingerprint(completed.stdout)
+
+
+def environment_fingerprint_code() -> str:
+    return _ENVIRONMENT_FINGERPRINT_CODE
+
+
+def parse_environment_fingerprint(text: str) -> dict[str, Any]:
+    return _parse_environment_fingerprint(text)
+
+
+def _fingerprint_container_environment(container: Any) -> dict[str, Any]:
+    completed = container.exec_run(
+        ["/opt/miniconda3/envs/testbed/bin/python", "-c", _ENVIRONMENT_FINGERPRINT_CODE],
+        workdir="/",
+    )
+    if int(completed.exit_code) != 0:
+        raise RuntimeError("official evaluator environment fingerprint command failed")
+    output = (
+        completed.output.decode("utf-8", errors="replace")
+        if isinstance(completed.output, bytes)
+        else str(completed.output)
+    )
+    return _parse_environment_fingerprint(output)
+
+
+def _parse_environment_fingerprint(text: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("environment fingerprint output is not valid JSON") from exc
+    if payload.get("schema") != ENVIRONMENT_FINGERPRINT_SCHEMA:
+        raise RuntimeError("environment fingerprint schema is invalid")
+    if len(str(payload.get("sha256") or "")) != 64:
+        raise RuntimeError("environment fingerprint SHA-256 is invalid")
+    if not isinstance(payload.get("selected_packages"), dict):
+        raise RuntimeError("environment fingerprint selected_packages is invalid")
+    return payload
+
+
 def _positive_int(value: Any) -> Optional[int]:
     try:
         parsed = int(value)
@@ -547,15 +1187,15 @@ def _standardize_report(report: dict[str, Any], instance: dict[str, Any]) -> dic
             "passed": len(fail_success),
             "failed": len(fail_failure),
             "total": len(fail_success) + len(fail_failure),
-            "failed_tests": fail_failure[:20],
-            "failed_tests_truncated": max(0, len(fail_failure) - 20),
+            "failed_tests": fail_failure,
+            "failed_tests_truncated": 0,
         },
         "pass_to_pass": {
             "passed": len(pass_success),
             "failed": len(pass_failure),
             "total": len(pass_success) + len(pass_failure),
-            "failed_tests": pass_failure[:20],
-            "failed_tests_truncated": max(0, len(pass_failure) - 20),
+            "failed_tests": pass_failure,
+            "failed_tests_truncated": 0,
         },
     }
 
@@ -577,6 +1217,36 @@ def _locked_image_eval_script(eval_script: str, install_command: Any) -> str:
     if not removed:
         raise RuntimeError("official evaluator install command could not be isolated")
     return "\n".join(output) + "\n"
+
+
+def _worker_environment_setup_script(eval_script: str) -> str:
+    """Return the official eval prefix that mutates dependencies before tests start."""
+
+    lines = eval_script.splitlines()
+    marker_indexes = [
+        index for index, line in enumerate(lines) if EVALUATOR_TEST_OUTPUT_MARKER in line
+    ]
+    if len(marker_indexes) != 1:
+        raise RuntimeError("official evaluator script must contain one test output marker")
+    setup_lines = lines[: marker_indexes[0]]
+    if not setup_lines or not setup_lines[0].startswith("#!"):
+        raise RuntimeError("official evaluator setup prefix must retain its shell interpreter")
+    setup_script = "\n".join(setup_lines).rstrip() + "\n"
+    if EVALUATOR_TEST_OUTPUT_MARKER in setup_script:
+        raise RuntimeError("worker environment setup unexpectedly contains the test marker")
+    return setup_script
+
+
+def _with_pytest_diagnostic_verbosity(eval_script: str) -> str:
+    """Increase pytest diff detail without changing the protected test command."""
+
+    if not re.search(r"(?:^|[;&|\s])(?:python\s+-m\s+)?pytest(?:\s|$)", eval_script):
+        return eval_script
+    lines = eval_script.splitlines()
+    verbosity = 'export PYTEST_ADDOPTS="${PYTEST_ADDOPTS:-} -vv"'
+    insert_at = 1 if lines and lines[0].startswith("#!") else 0
+    lines.insert(insert_at, verbosity)
+    return "\n".join(lines) + ("\n" if eval_script.endswith("\n") else "")
 
 
 def _evaluator_instance(
@@ -710,19 +1380,24 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     evaluate.add_argument("--instance", required=True)
     evaluate.add_argument("--workspace", required=True)
     evaluate.add_argument("--output-root", required=True)
+    render = sub.add_parser("render-worker-environment")
+    render.add_argument("--instance", required=True)
     return parser.parse_args(argv)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = _parse_args(argv)
     try:
-        if args.action != "evaluate":
+        if args.action == "evaluate":
+            result = evaluate_swe_evo_workspace(
+                Path(args.instance).resolve(),
+                Path(args.workspace).resolve(),
+                Path(args.output_root).resolve(),
+            )
+        elif args.action == "render-worker-environment":
+            result = render_worker_environment_setup(Path(args.instance).resolve())
+        else:
             raise ValueError(f"unsupported action {args.action}")
-        result = evaluate_swe_evo_workspace(
-            Path(args.instance).resolve(),
-            Path(args.workspace).resolve(),
-            Path(args.output_root).resolve(),
-        )
     except Exception as exc:
         print(json.dumps({"status": "failed", "error": type(exc).__name__}), file=sys.stderr)
         return 1

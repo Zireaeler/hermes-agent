@@ -8,6 +8,7 @@ import multiprocessing
 import os
 from pathlib import Path
 import signal
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -25,6 +26,7 @@ from hermes_cli import phase4g8_swe_evo as swe_evo
 from hermes_cli import kanban_runtime_supervisor as supervisor
 from hermes_cli.codex_worker import (
     _safe_env_for_codex,
+    collect_git_evidence,
     make_codex_worker_lane,
     wrap_codex_network_argv,
 )
@@ -32,6 +34,7 @@ from hermes_cli.worker_lanes import clear_worker_lanes, register_worker_lane
 
 
 REAL_CASE_REPORT_SCHEMA = "hermes_phase4g8_real_case_v1"
+WORKER_TOOLCHAIN_MANIFEST_SCHEMA = "hermes_phase4g8_worker_toolchain_v1"
 PHASE4G8_CONTEXT_WINDOW_TOKENS = 353_400
 PHASE4G8_COMPACTION_POLICY = {
     "context_window_tokens": PHASE4G8_CONTEXT_WINDOW_TOKENS,
@@ -51,10 +54,11 @@ PHASE4G8_COMPACTION_POLICY = {
 def run_phase4g8_real_case(
     *,
     qualification_spec_path: Path,
-    run_root: Path,
+    run_root: Optional[Path],
     source_codex_home: Path,
     case_size: str,
     execute_real: bool,
+    resume_run: Optional[Path] = None,
     max_wall_seconds: float = 14_400,
     worker_timeout_seconds: int = 7_200,
     decision_timeout_seconds: float = 300.0,
@@ -64,6 +68,7 @@ def run_phase4g8_real_case(
     worker_event_startup_timeout_seconds: float = 300.0,
     worker_event_stall_timeout_seconds: float = 3600.0,
     max_unresolved_evaluator_attempts: int = 3,
+    max_evaluator_no_progress_streak: int = 2,
 ) -> dict[str, Any]:
     """Run one qualified SWE-EVO case through production runtime boundaries."""
 
@@ -73,6 +78,10 @@ def run_phase4g8_real_case(
         raise ValueError("case_size must be small, medium, or large")
     if int(max_unresolved_evaluator_attempts) < 1:
         raise ValueError("max_unresolved_evaluator_attempts must be positive")
+    if int(max_evaluator_no_progress_streak) < 1:
+        raise ValueError("max_evaluator_no_progress_streak must be positive")
+    if (run_root is None) == (resume_run is None):
+        raise ValueError("exactly one of run_root or resume_run is required")
     if os.name == "nt" or "fork" not in multiprocessing.get_all_start_methods():
         raise RuntimeError("Phase 4G8 real cases require POSIX fork semantics")
     spec = p4g8.load_qualification_spec(qualification_spec_path.resolve())
@@ -80,10 +89,25 @@ def run_phase4g8_real_case(
     if not str((spec.get("benchmark") or {}).get("official_image") or "").strip():
         raise ValueError("Phase 4G8 real case requires benchmark.official_image")
     source = p4g8.load_codex_model_source(source_codex_home)
-    run_id = f"phase4g8-{case_size}-{uuid.uuid4().hex[:10]}"
+    resumed_run = resume_run is not None
+    previous_run_retention: list[dict[str, Any]] = []
+    if resumed_run:
+        root = resume_run.resolve()
+        run_id = root.name
+        if not run_id.startswith(f"phase4g8-{case_size}-"):
+            raise ValueError("resume run directory does not match the requested case size")
+    else:
+        instance_run_root = run_root.resolve() / str(spec["instance_id"])
+        previous_run_retention = _compact_completed_phase4g8_runs(instance_run_root)
+        run_id = f"phase4g8-{case_size}-{uuid.uuid4().hex[:10]}"
+        root = instance_run_root / run_id
     worker_uid, worker_gid = _derive_run_identity(run_id)
-    root = run_root.resolve() / str(spec["instance_id"]) / run_id
-    paths = _prepare_real_layout(root, spec, worker_uid=worker_uid, worker_gid=worker_gid)
+    paths = (
+        _load_existing_real_layout(root, spec)
+        if resumed_run
+        else _prepare_real_layout(root, spec, worker_uid=worker_uid, worker_gid=worker_gid)
+    )
+    worker_environment_audit = _load_worker_toolchain_manifest(paths["worker_toolchain"])
     boundaries = {
         "daemon_process_started": False,
         "daemon_restarted": False,
@@ -91,6 +115,8 @@ def run_phase4g8_real_case(
         "independent_evaluator_process": False,
         "fixed_revision_evaluated": False,
         "filesystem_isolation_preflight": False,
+        "worker_evaluator_environment_parity_preflight": False,
+        "worker_auto_review_preflight": False,
     }
     if case_size in {"medium", "large"}:
         boundaries.update({
@@ -115,16 +141,23 @@ def run_phase4g8_real_case(
     evaluator_daemon_stopped = False
     evaluator_fault_injected = False
     receipt_before_ingest_node_id: Optional[str] = None
+    receipt_before_ingest_materialization_id: Optional[str] = None
     receipt_before_ingest_before: Optional[dict[str, int]] = None
     job_id: Optional[str] = None
     evaluator_budget_exhausted = False
+    resource_exhausted = False
+    evaluator_progress_status: dict[str, Any] = {}
     evaluator_attempts: list[dict[str, Any]] = []
     evaluator_budget_session_sync: dict[str, Any] = {}
     evaluator_container_cleanup: list[dict[str, Any]] = []
+    model_transport_audit: dict[str, Any] = {}
+    candidate_evidence: dict[str, Any] = {}
     next_evaluator_cleanup_at = 0.0
+    codex_home_audit: dict[str, Any] = {}
+    resume_audit: dict[str, Any] = {"resumed": resumed_run}
     try:
         namespace = p4g8.Phase4G8NetworkNamespace(run_id, source["explicit_base_url"]).start()
-        p4g8.prepare_isolated_codex_home(
+        codex_home_audit = p4g8.prepare_isolated_codex_home(
             source_codex_home,
             paths["codex_home"],
             proxy_base_url=str(namespace.proxy_base_url),
@@ -132,8 +165,17 @@ def run_phase4g8_real_case(
             worker_uid=worker_uid,
             worker_gid=worker_gid,
         )
+        boundaries["worker_auto_review_preflight"] = bool(
+            codex_home_audit.get("approval", {}).get("configured")
+        )
+        if resumed_run:
+            resume_audit["node_codex_homes"] = _refresh_existing_node_codex_homes(
+                paths,
+                worker_uid=worker_uid,
+                worker_gid=worker_gid,
+            )
         old_environment = _install_isolated_environment(paths)
-        _assert_worker_filesystem_isolation(
+        worker_execution_fingerprint = _assert_worker_filesystem_isolation(
             paths,
             namespace=namespace.namespace,
             worker_uid=worker_uid,
@@ -142,18 +184,60 @@ def run_phase4g8_real_case(
             source_mirror=Path(spec["source"]["local_mirror"]).resolve(),
         )
         boundaries["filesystem_isolation_preflight"] = True
+        boundaries["worker_evaluator_environment_parity_preflight"] = bool(
+            worker_execution_fingerprint["sha256"]
+            == worker_environment_audit["environment_fingerprint"]["sha256"]
+        )
         _register_real_case_lanes(
             run_id=run_id,
             model=source["model"],
             namespace=namespace.namespace,
             worker_timeout_seconds=worker_timeout_seconds,
             evaluator_spec=qualification_spec_path.resolve(),
+            expected_environment_sha256=str(
+                worker_environment_audit["environment_fingerprint"]["sha256"]
+            ),
             worker_uid=worker_uid,
             worker_gid=worker_gid,
             codex_home_seed=paths["codex_home"],
             codex_home_root=paths["node_codex_homes"],
         )
-        job_id = _create_real_job(spec, paths["workspace"], run_id)
+        if resumed_run:
+            job_id = _load_resumable_job(
+                run_id=run_id,
+                spec=spec,
+                workspace=paths["workspace"],
+            )
+            pre_recovery = _reconstruct_resume_state(job_id, case_size=case_size)
+            resume_audit["runtime_recovery"] = _prepare_resumed_runtime_job(job_id)
+            recovered = _reconstruct_resume_state(job_id, case_size=case_size)
+            boundaries.update(recovered["boundaries"])
+            worker_killed = bool(
+                pre_recovery["worker_interrupted"] or recovered["worker_interrupted"]
+            )
+            excluded_crashed_task_id = recovered["dead_running_task_id"]
+            daemon_restarted = True
+            boundaries["daemon_restarted"] = True
+            resume_audit["before_recovery"] = pre_recovery
+            resume_audit["after_recovery"] = recovered
+        else:
+            job_id = _create_real_job(
+                spec,
+                paths["workspace"],
+                run_id,
+                max_evaluator_no_progress_streak=int(max_evaluator_no_progress_streak),
+            )
+        _write_runner_state(
+            paths["reports"] / "runner-state.json",
+            run_id=run_id,
+            job_id=job_id,
+            case_size=case_size,
+            qualification_spec_path=qualification_spec_path,
+            worker_toolchain=paths["worker_toolchain"],
+            worker_uid=worker_uid,
+            worker_gid=worker_gid,
+            resumed=resumed_run,
+        )
         decision_provider = rd.RuntimeDecisionProvider(
             provider_name=source["provider_name"],
             model=source["model"],
@@ -220,19 +304,12 @@ def run_phase4g8_real_case(
                 raise RuntimeError(f"runtime supervisor daemon exited with {daemon_process.exitcode}")
             with kb.connect() as conn:
                 evaluator_attempts = _official_evaluator_attempts(conn, job_id)
-                evaluator_budget_exhausted = _evaluator_failure_budget_status(
-                    evaluator_attempts,
-                    max_unresolved_evaluator_attempts=int(max_unresolved_evaluator_attempts),
-                )["exhausted"]
-            if evaluator_budget_exhausted:
-                if daemon_process is not None:
-                    _stop_daemon(daemon_process, hard=False)
-                with kb.connect() as conn:
-                    evaluator_budget_session_sync = rk.sync_runtime_backend_sessions(
-                        conn,
-                        job_id,
-                    )
-                break
+                evaluator_progress_status = _evaluator_progress_status(evaluator_attempts)
+            if evaluator_progress_status["latest_feedback_extraction_incomplete"]:
+                raise RuntimeError(
+                    "official evaluator feedback extraction incomplete; protected raw "
+                    "artifacts retained for infrastructure diagnosis"
+                )
             with kb.connect() as conn:
                 dispatchable = _dispatchable_task_ids(conn, job_id, exclude_task_id=excluded_crashed_task_id)
                 kb.dispatch_once(
@@ -352,11 +429,15 @@ def run_phase4g8_real_case(
 
             if case_size == "large" and evaluator_daemon_stopped and receipt_trigger["ready"]:
                 receipt_before_ingest_node_id = str(receipt_trigger["facts"]["node_id"])
+                receipt_before_ingest_materialization_id = str(
+                    receipt_trigger["facts"]["materialization_id"]
+                )
                 with kb.connect() as conn:
                     receipt_before_ingest_before = p4g8.runtime_fact_counts(
                         conn,
                         job_id,
                         receipt_before_ingest_node_id,
+                        materialization_id=receipt_before_ingest_materialization_id,
                     )
                 daemon_process = _start_daemon(daemon_config, decision_provider, compaction_provider)
                 evaluator_daemon_stopped = False
@@ -366,11 +447,26 @@ def run_phase4g8_real_case(
                 break
             time.sleep(max(0.05, poll_interval_seconds))
         else:
-            raise RuntimeError("Phase 4G8 real case exceeded max wall time")
+            resource_exhausted = True
+            if daemon_process is not None:
+                _stop_daemon(daemon_process, hard=False)
+            _terminate_owned_job_workers(job_id, run_id=run_id)
+            with kb.connect() as conn:
+                evaluator_budget_session_sync = rk.sync_runtime_backend_sessions(conn, job_id)
 
+        candidate_evidence = _archive_candidate_evidence(
+            paths["reports"],
+            paths["workspace"],
+            base_commit=str(spec["base_commit"]),
+        )
         with kb.connect() as conn:
-            if receipt_before_ingest_node_id:
-                after = p4g8.runtime_fact_counts(conn, job_id, receipt_before_ingest_node_id)
+            if receipt_before_ingest_node_id and receipt_before_ingest_materialization_id:
+                after = p4g8.runtime_fact_counts(
+                    conn,
+                    job_id,
+                    receipt_before_ingest_node_id,
+                    materialization_id=receipt_before_ingest_materialization_id,
+                )
                 if receipt_before_ingest_before != {
                     "ledger": 0,
                     "terminal_events": 0,
@@ -384,6 +480,7 @@ def run_phase4g8_real_case(
             evaluator_result, evaluator_facts = _official_evaluator_result(conn, job_id)
             boundaries["independent_evaluator_process"] = bool(evaluator_facts.get("producer_session_id"))
             boundaries["fixed_revision_evaluated"] = bool(evaluator_facts.get("target_revision"))
+            model_transport_audit = namespace.transport_audit()
             report = p4g8.build_phase4g8_run_report(
                 conn,
                 job_id,
@@ -399,10 +496,21 @@ def run_phase4g8_real_case(
                         attempt["result"].get("resolved") is not True
                         for attempt in evaluator_attempts
                     ),
-                    "max_unresolved_evaluator_attempts": int(max_unresolved_evaluator_attempts),
+                    "deprecated_max_unresolved_evaluator_attempts": int(
+                        max_unresolved_evaluator_attempts
+                    ),
+                    "max_evaluator_no_progress_streak": int(
+                        max_evaluator_no_progress_streak
+                    ),
+                    "evaluator_progress": evaluator_progress_status,
                     "evaluator_budget_exhausted": evaluator_budget_exhausted,
+                    "resource_exhausted": resource_exhausted,
                     "evaluator_budget_session_sync": evaluator_budget_session_sync,
                     "evaluator_container_cleanup": evaluator_container_cleanup,
+                    "resumed_run": resumed_run,
+                    "resume_audit": resume_audit,
+                    "model_transport_audit": model_transport_audit,
+                    "previous_run_retention": previous_run_retention,
                 },
                 source_config_unchanged=p4g8.verify_codex_source_unchanged(
                     source_codex_home, source["source_hashes"]
@@ -422,15 +530,22 @@ def run_phase4g8_real_case(
             "run_id": run_id,
             "job_id": job_id,
             "worker_identity": {"uid": worker_uid, "gid": worker_gid},
+            "worker_environment": worker_environment_audit,
+            "worker_approval": codex_home_audit.get("approval", {}),
+            "resume": resume_audit,
             "model_source": source["summary"],
+            "model_transport_audit": model_transport_audit,
+            "candidate_evidence": candidate_evidence,
+            "previous_run_retention": previous_run_retention,
             "run_report": report,
             "termination": {
                 "reason": (
-                    "evaluator_failure_budget_exhausted"
-                    if evaluator_budget_exhausted
+                    "total_resource_budget_exhausted"
+                    if resource_exhausted
                     else "runtime_terminal"
                 ),
                 "evaluator_budget_exhausted": evaluator_budget_exhausted,
+                "resource_exhausted": resource_exhausted,
             },
             "paths": {
                 "root": str(root),
@@ -459,6 +574,18 @@ def run_phase4g8_real_case(
                 boundaries["fixed_revision_evaluated"] = bool(evaluator_facts.get("target_revision"))
             except Exception:
                 pass
+        if not candidate_evidence:
+            try:
+                candidate_evidence = _archive_candidate_evidence(
+                    paths["reports"],
+                    paths["workspace"],
+                    base_commit=str(spec["base_commit"]),
+                )
+            except Exception as archive_exc:
+                candidate_evidence = {
+                    "status": "archive_failed",
+                    "error": type(archive_exc).__name__,
+                }
         failure = {
             "schema": REAL_CASE_REPORT_SCHEMA,
             "run_id": run_id,
@@ -466,6 +593,13 @@ def run_phase4g8_real_case(
             "status": "infrastructure_invalid",
             "classification": "infrastructure_invalid",
             "model_source": source["summary"],
+            "candidate_evidence": candidate_evidence,
+            "model_transport_audit": (
+                namespace.transport_audit() if namespace is not None else {}
+            ),
+            "worker_environment": worker_environment_audit,
+            "worker_approval": codex_home_audit.get("approval", {}),
+            "resume": resume_audit,
             "process_boundaries": boundaries,
             "failure": {
                 "type": type(exc).__name__,
@@ -478,6 +612,7 @@ def run_phase4g8_real_case(
             "metrics": {
                 "wall_time_seconds": round(time.monotonic() - started, 3),
                 "case_size": case_size,
+                "previous_run_retention": previous_run_retention,
             },
             "paths": {
                 "root": str(root),
@@ -504,6 +639,114 @@ def run_phase4g8_real_case(
             namespace.close()
 
 
+def _compact_completed_phase4g8_runs(instance_root: Path) -> list[dict[str, Any]]:
+    """Keep reports while removing bulky state from prior completed real runs."""
+
+    if not instance_root.is_dir():
+        return []
+    results: list[dict[str, Any]] = []
+    for run_root in sorted(instance_root.glob("phase4g8-*-*")):
+        if not run_root.is_dir():
+            continue
+        report_path = run_root / "reports" / "run-report.json"
+        retention_path = run_root / "reports" / "retention.json"
+        if retention_path.is_file() or not report_path.is_file():
+            continue
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if report.get("schema") != REAL_CASE_REPORT_SCHEMA:
+            continue
+        if not (
+            isinstance(report.get("termination"), dict)
+            or report.get("status") == "infrastructure_invalid"
+            or isinstance(report.get("run_report"), dict)
+        ):
+            continue
+
+        removed: list[str] = []
+        bytes_removed = 0
+        for child in sorted(run_root.iterdir()):
+            if child.name == "reports":
+                continue
+            bytes_removed += _path_tree_size(child)
+            try:
+                if child.is_dir() and not child.is_symlink():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
+            except OSError as exc:
+                results.append({
+                    "run_id": run_root.name,
+                    "status": "retained_after_cleanup_error",
+                    "error": type(exc).__name__,
+                })
+                break
+            removed.append(child.name)
+        else:
+            retention = {
+                "schema": "hermes_phase4g8_run_retention_v1",
+                "run_id": run_root.name,
+                "status": "compacted_after_report_persisted",
+                "bytes_removed": bytes_removed,
+                "removed_entries": removed,
+                "preserved_entries": ["reports"],
+                "compacted_at": int(time.time()),
+            }
+            _write_json(retention_path, retention)
+            results.append(retention)
+    return results
+
+
+def _archive_candidate_evidence(
+    reports_root: Path,
+    workspace: Path,
+    *,
+    base_commit: str,
+) -> dict[str, Any]:
+    """Persist the auditable candidate patch before bulky run state is compacted."""
+
+    patch = swe_evo.collect_candidate_patch(workspace, base_commit)
+    encoded = patch.encode("utf-8")
+    evidence = collect_git_evidence(str(workspace))
+    patch_path = reports_root / "candidate.patch"
+    evidence_path = reports_root / "candidate-evidence.json"
+    reports_root.mkdir(parents=True, exist_ok=True)
+    patch_path.write_bytes(encoded)
+    os.chmod(patch_path, 0o600)
+    payload = {
+        "schema": "hermes_phase4g8_candidate_evidence_v1",
+        "status": "archived",
+        "base_commit": base_commit,
+        "workspace_revision": evidence.get("workspace_revision"),
+        "patch_sha256": hashlib.sha256(encoded).hexdigest(),
+        "patch_bytes": len(encoded),
+        "changed_files": list(evidence.get("changed_files") or []),
+        "protected_oracle_included": False,
+        "patch_ref": "candidate.patch",
+    }
+    _write_json(evidence_path, payload)
+    return payload
+
+
+def _path_tree_size(path: Path) -> int:
+    if path.is_file() and not path.is_symlink():
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0
+    total = 0
+    if path.is_dir() and not path.is_symlink():
+        for child in path.rglob("*"):
+            if child.is_file() and not child.is_symlink():
+                try:
+                    total += child.stat().st_size
+                except OSError:
+                    pass
+    return total
+
+
 def _derive_run_identity(run_id: str) -> tuple[int, int]:
     """Derive an unprivileged identity that is isolated from other real runs."""
 
@@ -521,20 +764,28 @@ def _assert_worker_filesystem_isolation(
     worker_gid: int,
     qualification_spec_path: Path,
     source_mirror: Path,
-) -> None:
+) -> dict[str, Any]:
     canary = Path("/tmp") / f"phase4g8-host-leak-{uuid.uuid4().hex}.txt"
     canary.write_text("phase4g8-protected-canary\n", encoding="utf-8")
     os.chmod(canary, 0o644)
     worker_env = _safe_env_for_codex(str(paths["workspace"]))
-    probe = (
-        f"test -r {paths['workspace']} "
-        f"&& test -r {paths['worker_toolchain'] / 'bin' / 'python'} "
-        f"&& test ! -e {canary} "
-        f"&& test ! -e {qualification_spec_path} "
-        f"&& test ! -e {source_mirror} "
-        "&& test ! -e /root "
-        "&& printf isolated > /tmp/phase4g8-worker-canary"
-    )
+
+    def quote(value: Any) -> str:
+        return shlex.quote(str(value))
+
+    probe = " && ".join([
+        f"test -r {quote(paths['workspace'])}",
+        f"test -r {quote(paths['worker_toolchain'] / 'bin' / 'python')}",
+        f"test ! -e {quote(canary)}",
+        f"test ! -e {quote(qualification_spec_path)}",
+        f"test ! -e {quote(source_mirror)}",
+        "test ! -e /root",
+        "printf isolated > /tmp/phase4g8-worker-canary",
+        (
+            "/opt/miniconda3/envs/testbed/bin/python -c "
+            + quote(swe_evo.environment_fingerprint_code())
+        ),
+    ])
     argv = wrap_codex_network_argv(
         ["/bin/sh", "-c", probe],
         namespace,
@@ -561,6 +812,13 @@ def _assert_worker_filesystem_isolation(
             "Phase 4G8 worker filesystem isolation preflight failed: "
             + (result.stderr or result.stdout or f"exit {result.returncode}").strip()[:1000]
         )
+    fingerprint = swe_evo.parse_environment_fingerprint(result.stdout)
+    expected = _load_worker_toolchain_manifest(
+        paths["worker_toolchain"]
+    )["environment_fingerprint"]
+    if fingerprint["sha256"] != expected["sha256"]:
+        raise RuntimeError("Phase 4G8 isolated worker environment fingerprint mismatch")
+    return fingerprint
 
 
 def _prepare_real_layout(
@@ -618,7 +876,16 @@ def _prepare_real_layout(
     if tags:
         raise RuntimeError("Phase 4G8 worker workspace unexpectedly contains tags")
     official_image = str((spec.get("benchmark") or {}).get("official_image") or "").strip()
-    worker_toolchain = _prepare_worker_toolchain(official_image) if official_image else Path(sys.prefix).resolve()
+    worker_environment_setup = _render_worker_environment_setup(spec) if official_image else None
+    worker_toolchain = (
+        _prepare_worker_toolchain(
+            official_image,
+            environment_setup=worker_environment_setup,
+            setup_env=(spec.get("worker_environment") or spec.get("evaluator") or {}).get("env") or {},
+        )
+        if official_image
+        else Path(sys.prefix).resolve()
+    )
     p4g8.prepare_worker_workspace(workspace, worker_uid=worker_uid, worker_gid=worker_gid)
     for path in (root / "home", root / "codex-home-seed"):
         os.chown(path, int(worker_uid), int(worker_gid))
@@ -634,7 +901,139 @@ def _prepare_real_layout(
         "reports": root / "reports",
         "workspace": workspace,
         "worker_toolchain": worker_toolchain,
+        "worker_toolchain_manifest": worker_toolchain / ".hermes-phase4g8-toolchain.json",
         "db": root / "hermes-home" / "kanban.db",
+    }
+
+
+def _load_existing_real_layout(root: Path, spec: dict[str, Any]) -> dict[str, Path]:
+    """Validate and reopen a durable Phase 4G8 run without recreating it."""
+
+    root = root.resolve()
+    workspace = root / "workspace"
+    required_directories = {
+        "root": root,
+        "home": root / "home",
+        "hermes_home": root / "hermes-home",
+        "codex_home": root / "codex-home-seed",
+        "node_codex_homes": root / "codex-homes",
+        "service": root / "service",
+        "reports": root / "reports",
+        "workspace": workspace,
+    }
+    missing = [name for name, path in required_directories.items() if not path.is_dir()]
+    if missing:
+        raise ValueError(f"resume run is missing required directories: {', '.join(sorted(missing))}")
+    db = required_directories["hermes_home"] / "kanban.db"
+    if not db.is_file():
+        raise ValueError("resume run does not contain a Kanban runtime database")
+    head = subprocess.run(
+        ["git", "-c", f"safe.directory={workspace}", "rev-parse", "HEAD"],
+        cwd=workspace,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    ).stdout.strip()
+    if head != str(spec["base_commit"]):
+        raise ValueError("resume workspace base commit does not match the qualification spec")
+    _protect_source_mirror(Path(spec["source"]["local_mirror"]).resolve())
+    worker_toolchain = _resolve_resume_worker_toolchain(root, spec)
+    return {
+        **required_directories,
+        "worker_toolchain": worker_toolchain,
+        "worker_toolchain_manifest": worker_toolchain / ".hermes-phase4g8-toolchain.json",
+        "db": db,
+    }
+
+
+def _resolve_resume_worker_toolchain(root: Path, spec: dict[str, Any]) -> Path:
+    state_path = root / "reports" / "runner-state.json"
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        state = {}
+    recorded = Path(str(state.get("worker_toolchain") or ""))
+    if recorded.is_absolute() and recorded.is_dir():
+        try:
+            _load_worker_toolchain_manifest(recorded)
+        except RuntimeError:
+            pass
+        else:
+            return recorded.resolve()
+
+    official_image = str((spec.get("benchmark") or {}).get("official_image") or "").strip()
+    environment_setup = _render_worker_environment_setup(spec)
+    setup_script = str(environment_setup.get("setup_script") or "")
+    setup_sha256 = hashlib.sha256(setup_script.encode("utf-8")).hexdigest()
+    setup_env = (spec.get("worker_environment") or spec.get("evaluator") or {}).get("env") or {}
+    image_identity = _docker_image_identity(official_image)
+    _unused, setup_env_sha256 = _worker_toolchain_cache_identity(
+        official_image,
+        image_identity,
+        setup_sha256,
+        setup_env,
+    )
+    candidates: list[Path] = []
+    cache_root = Path("/tmp/phase4g8-worker-toolchains")
+    for manifest_path in sorted(cache_root.glob("*/.hermes-phase4g8-toolchain.json")):
+        try:
+            manifest = _load_worker_toolchain_manifest(manifest_path.parent)
+        except RuntimeError:
+            continue
+        if (
+            manifest.get("official_image") == official_image
+            and manifest.get("image_content_identity") == image_identity["content_identity"]
+            and manifest.get("setup_sha256") == setup_sha256
+            and manifest.get("setup_env_sha256") == setup_env_sha256
+        ):
+            candidates.append(manifest_path.parent.resolve())
+    if not candidates:
+        return _prepare_worker_toolchain(
+            official_image,
+            environment_setup=environment_setup,
+            setup_env=setup_env,
+        )
+    candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    return candidates[0]
+
+
+def _refresh_existing_node_codex_homes(
+    paths: dict[str, Path],
+    *,
+    worker_uid: int,
+    worker_gid: int,
+) -> dict[str, Any]:
+    """Rotate proxy credentials/config while preserving durable Codex session state."""
+
+    seed = paths["codex_home"]
+    root = paths["node_codex_homes"]
+    refreshed: list[str] = []
+    preserved_state_files = 0
+    for target in sorted(root.glob("node-*")):
+        if not target.is_dir() or not (target / ".execution-node").is_file():
+            continue
+        preserved_state_files += len(list(target.glob("*.sqlite*")))
+        for name in ("config.toml", "auth.json"):
+            destination = target / name
+            destination.write_bytes((seed / name).read_bytes())
+            os.chmod(destination, 0o600)
+            os.chown(destination, int(worker_uid), int(worker_gid))
+        seed_policy = seed / "rules" / "default.rules"
+        target_rules = target / "rules"
+        target_rules.mkdir(mode=0o700, exist_ok=True)
+        target_policy = target_rules / "default.rules"
+        target_policy.write_bytes(seed_policy.read_bytes())
+        os.chmod(target_rules, 0o700)
+        os.chmod(target_policy, 0o600)
+        os.chown(target_rules, int(worker_uid), int(worker_gid))
+        os.chown(target_policy, int(worker_uid), int(worker_gid))
+        os.chown(target, int(worker_uid), int(worker_gid))
+        refreshed.append(target.name)
+    return {
+        "refreshed": refreshed,
+        "refreshed_count": len(refreshed),
+        "preserved_state_file_count": preserved_state_files,
     }
 
 
@@ -648,25 +1047,162 @@ def _protect_source_mirror(mirror: Path) -> None:
     os.chmod(mirror, 0o700)
 
 
-def _prepare_worker_toolchain(official_image: str) -> Path:
+def _render_worker_environment_setup(spec: dict[str, Any]) -> dict[str, Any]:
+    worker_environment = spec.get("worker_environment")
+    if isinstance(worker_environment, dict):
+        argv = list(worker_environment.get("renderer_argv") or [])
+        renderer_env = worker_environment.get("env") or {}
+    else:
+        evaluator = spec.get("evaluator") or {}
+        evaluator_argv = list(evaluator.get("argv") or [])
+        if len(evaluator_argv) < 6 or evaluator_argv[1:3] != ["-m", "hermes_cli.phase4g8_swe_evo"]:
+            raise ValueError("SWE-EVO worker environment renderer is not configured")
+        try:
+            instance_index = evaluator_argv.index("--instance") + 1
+            instance_path = evaluator_argv[instance_index]
+        except (ValueError, IndexError) as exc:
+            raise ValueError("SWE-EVO evaluator argv does not identify its protected instance") from exc
+        argv = [
+            evaluator_argv[0],
+            "-m",
+            "hermes_cli.phase4g8_swe_evo",
+            "render-worker-environment",
+            "--instance",
+            instance_path,
+        ]
+        renderer_env = evaluator.get("env") or {}
+    if not argv:
+        raise ValueError("worker environment renderer argv is empty")
+    env = os.environ.copy()
+    env.update({str(key): str(value) for key, value in renderer_env.items()})
+    project_root = str(Path(__file__).resolve().parent.parent)
+    env["PYTHONPATH"] = project_root + (
+        os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else ""
+    )
+    completed = subprocess.run(
+        argv,
+        cwd=project_root,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=120,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("SWE-EVO worker environment renderer failed")
+    try:
+        setup = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("SWE-EVO worker environment renderer returned invalid JSON") from exc
+    if setup.get("schema") != swe_evo.WORKER_ENVIRONMENT_SETUP_SCHEMA:
+        raise RuntimeError("SWE-EVO worker environment setup schema is invalid")
+    setup_script = str(setup.get("setup_script") or "")
+    setup_sha256 = hashlib.sha256(setup_script.encode("utf-8")).hexdigest()
+    if not setup_script or setup.get("setup_sha256") != setup_sha256:
+        raise RuntimeError("SWE-EVO worker environment setup hash is invalid")
+    official_image = str((spec.get("benchmark") or {}).get("official_image") or "")
+    if setup.get("official_image") != official_image:
+        raise RuntimeError("SWE-EVO worker environment image does not match qualification spec")
+    return setup
+
+
+def _docker_image_identity(image: str) -> dict[str, Any]:
+    completed = subprocess.run(
+        ["docker", "image", "inspect", image],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=120,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("official image is not available for worker toolchain")
+    try:
+        rows = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("docker image inspect returned invalid JSON") from exc
+    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+        raise RuntimeError("docker image inspect returned an unexpected result")
+    image_id = str(rows[0].get("Id") or "").strip()
+    repo_digests = sorted(str(value) for value in rows[0].get("RepoDigests") or [] if str(value))
+    if not image_id:
+        raise RuntimeError("official image does not have a content identity")
+    return {
+        "image_id": image_id,
+        "repo_digests": repo_digests,
+        "content_identity": repo_digests[0] if repo_digests else image_id,
+    }
+
+
+def _worker_toolchain_cache_identity(
+    image: str,
+    image_identity: dict[str, Any],
+    setup_sha256: str,
+    setup_env: dict[str, Any],
+    environment_sha256: str = "",
+) -> tuple[str, str]:
+    env_payload = {str(key): str(value) for key, value in sorted(setup_env.items())}
+    env_sha256 = hashlib.sha256(
+        json.dumps(env_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    payload = {
+        "schema": WORKER_TOOLCHAIN_MANIFEST_SCHEMA,
+        "official_image": image,
+        "image_content_identity": image_identity["content_identity"],
+        "setup_sha256": setup_sha256,
+        "setup_env_sha256": env_sha256,
+        "environment_sha256": str(environment_sha256),
+    }
+    cache_key = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:20]
+    return cache_key, env_sha256
+
+
+def _prepare_worker_toolchain(
+    official_image: str,
+    *,
+    environment_setup: Optional[dict[str, Any]] = None,
+    setup_env: Optional[dict[str, Any]] = None,
+) -> Path:
     image = str(official_image or "").strip()
     if not image:
         raise ValueError("official image is required for worker toolchain")
+    setup_script = str((environment_setup or {}).get("setup_script") or "#!/bin/bash\nset -euo pipefail\n")
+    setup_sha256 = hashlib.sha256(setup_script.encode("utf-8")).hexdigest()
+    if environment_setup and environment_setup.get("setup_sha256") != setup_sha256:
+        raise ValueError("worker environment setup hash does not match its script")
+    image_identity = _docker_image_identity(image)
+    setup_cache_key, setup_env_sha256 = _worker_toolchain_cache_identity(
+        image,
+        image_identity,
+        setup_sha256,
+        setup_env or {},
+    )
     cache_root = Path("/tmp/phase4g8-worker-toolchains")
     cache_root.mkdir(parents=True, exist_ok=True)
     os.chmod(cache_root, 0o755)
-    cache_key = hashlib.sha256(image.encode("utf-8")).hexdigest()[:20]
-    target = cache_root / cache_key
-    python = target / "bin" / "python"
-    if python.is_file():
-        return target
-
-    temp = cache_root / f".{cache_key}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
+    temp = cache_root / f".{setup_cache_key}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
+    setup_path = cache_root / f".{setup_cache_key}.{os.getpid()}.{uuid.uuid4().hex[:8]}.setup.sh"
     temp.mkdir(mode=0o755)
+    setup_path.write_text(setup_script, encoding="utf-8")
+    os.chmod(setup_path, 0o600)
     container_id = ""
     try:
+        create_argv = ["docker", "create"]
+        create_env = os.environ.copy()
+        for key, value in sorted((setup_env or {}).items()):
+            key_text = str(key)
+            value_text = str(value)
+            if not key_text or "=" in key_text or "\x00" in key_text + value_text:
+                raise ValueError("worker environment setup contains an invalid environment variable")
+            create_env[key_text] = value_text
+            create_argv.extend(["--env", key_text])
+        create_argv.extend([image, "tail", "-f", "/dev/null"])
         created = subprocess.run(
-            ["docker", "create", image],
+            create_argv,
+            env=create_env,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -676,6 +1212,63 @@ def _prepare_worker_toolchain(official_image: str) -> Path:
         container_id = created.stdout.strip()
         if not container_id:
             raise RuntimeError("docker create did not return a container id")
+        subprocess.run(
+            ["docker", "start", container_id],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+            timeout=120,
+        )
+        subprocess.run(
+            ["docker", "cp", str(setup_path), f"{container_id}:/tmp/hermes-worker-environment.sh"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+            timeout=120,
+        )
+        subprocess.run(
+            ["docker", "exec", container_id, "/bin/bash", "/tmp/hermes-worker-environment.sh"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+            timeout=900,
+        )
+        source_fingerprint_run = subprocess.run(
+            [
+                "docker",
+                "exec",
+                "--workdir",
+                "/",
+                container_id,
+                "/opt/miniconda3/envs/testbed/bin/python",
+                "-c",
+                swe_evo.environment_fingerprint_code(),
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+            timeout=60,
+        )
+        source_fingerprint = swe_evo.parse_environment_fingerprint(source_fingerprint_run.stdout)
+        cache_key, _ = _worker_toolchain_cache_identity(
+            image,
+            image_identity,
+            setup_sha256,
+            setup_env or {},
+            source_fingerprint["sha256"],
+        )
+        target = cache_root / cache_key
+        python = target / "bin" / "python"
+        manifest_path = target / ".hermes-phase4g8-toolchain.json"
+        if python.is_file() and manifest_path.is_file():
+            manifest = _load_worker_toolchain_manifest(target)
+            if (
+                manifest.get("cache_key") == cache_key
+                and manifest["environment_fingerprint"]["sha256"]
+                == source_fingerprint["sha256"]
+            ):
+                return target
         subprocess.run(
             ["docker", "cp", f"{container_id}:/opt/miniconda3/envs/testbed/.", str(temp)],
             stdout=subprocess.PIPE,
@@ -693,6 +1286,31 @@ def _prepare_worker_toolchain(official_image: str) -> Path:
                 pth.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
         if not (temp / "bin" / "python").is_file():
             raise RuntimeError("official image does not contain /opt/miniconda3/envs/testbed")
+        worker_fingerprint = swe_evo.fingerprint_python_environment(temp / "bin" / "python")
+        if worker_fingerprint["sha256"] != source_fingerprint["sha256"]:
+            raise RuntimeError(
+                "extracted worker toolchain does not match prepared official environment: "
+                f"source={source_fingerprint['sha256']} worker={worker_fingerprint['sha256']} "
+                f"source_selected={source_fingerprint['selected_packages']} "
+                f"worker_selected={worker_fingerprint['selected_packages']}"
+            )
+        manifest = {
+            "schema": WORKER_TOOLCHAIN_MANIFEST_SCHEMA,
+            "cache_key": cache_key,
+            "official_image": image,
+            "image_id": image_identity["image_id"],
+            "image_content_identity": image_identity["content_identity"],
+            "repo_digests": image_identity["repo_digests"],
+            "setup_sha256": setup_sha256,
+            "setup_env_sha256": setup_env_sha256,
+            "resolved_environment_sha256": source_fingerprint["sha256"],
+            "environment_fingerprint": worker_fingerprint,
+            "parity_status": "passed",
+        }
+        (temp / ".hermes-phase4g8-toolchain.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
         subprocess.run(["chmod", "-R", "a-w", str(temp)], check=True, timeout=120)
         try:
             temp.rename(target)
@@ -707,11 +1325,32 @@ def _prepare_worker_toolchain(official_image: str) -> Path:
                 check=False,
                 timeout=60,
             )
+        setup_path.unlink(missing_ok=True)
         if temp.exists():
             shutil.rmtree(temp)
-    if not python.is_file():
+    if not python.is_file() or not manifest_path.is_file():
         raise RuntimeError("Phase 4G8 worker toolchain cache was not created")
+    _load_worker_toolchain_manifest(target)
     return target
+
+
+def _load_worker_toolchain_manifest(toolchain: Path) -> dict[str, Any]:
+    manifest_path = toolchain / ".hermes-phase4g8-toolchain.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Phase 4G8 worker toolchain manifest is invalid") from exc
+    if manifest.get("schema") != WORKER_TOOLCHAIN_MANIFEST_SCHEMA:
+        raise RuntimeError("Phase 4G8 worker toolchain manifest schema is invalid")
+    fingerprint = manifest.get("environment_fingerprint")
+    if (
+        manifest.get("parity_status") != "passed"
+        or not isinstance(fingerprint, dict)
+        or len(str(fingerprint.get("sha256") or "")) != 64
+        or manifest.get("resolved_environment_sha256") != fingerprint.get("sha256")
+    ):
+        raise RuntimeError("Phase 4G8 worker toolchain parity evidence is invalid")
+    return manifest
 
 
 def _install_isolated_environment(paths: dict[str, Path]) -> dict[str, Optional[str]]:
@@ -745,6 +1384,7 @@ def _register_real_case_lanes(
     namespace: str,
     worker_timeout_seconds: int,
     evaluator_spec: Path,
+    expected_environment_sha256: str,
     worker_uid: int = 65534,
     worker_gid: int = 65534,
     codex_home_seed: Path,
@@ -756,7 +1396,7 @@ def _register_real_case_lanes(
         "type": "codex_cli",
         "model": model,
         "sandbox": "danger-full-access",
-        "approval": "never",
+        "approval": p4g8.PHASE4G8_CODEX_APPROVAL_POLICY,
         "success_policy": "auto_complete",
         "timeout_seconds": int(worker_timeout_seconds),
         "json_events": True,
@@ -771,10 +1411,17 @@ def _register_real_case_lanes(
         "name": "phase4g8-evaluator",
         "spec_path": str(evaluator_spec),
         "run_id": run_id,
+        "expected_environment_sha256": expected_environment_sha256,
     }), replace=True)
 
 
-def _create_real_job(spec: dict[str, Any], workspace: Path, run_id: str) -> str:
+def _create_real_job(
+    spec: dict[str, Any],
+    workspace: Path,
+    run_id: str,
+    *,
+    max_evaluator_no_progress_streak: int = 2,
+) -> str:
     with kb.connect() as conn:
         root_task = kb.create_task(
             conn,
@@ -807,9 +1454,1146 @@ def _create_real_job(spec: dict[str, Any], workspace: Path, run_id: str) -> str:
                     "mode": "required_evaluator",
                     "assignee": "phase4g8-evaluator",
                     "require_workspace_revision": True,
+                    "remediation": {
+                        "mode": "resume_target_session",
+                        "max_no_progress_streak": int(max_evaluator_no_progress_streak),
+                        "diagnostic_batch_size": 20,
+                        "max_diagnostics_chars_per_case": 4000,
+                    },
                 },
             },
         )
+
+
+def _load_resumable_job(*, run_id: str, spec: dict[str, Any], workspace: Path) -> str:
+    with kb.connect() as conn:
+        rows = conn.execute("SELECT * FROM runtime_jobs ORDER BY created_at").fetchall()
+        matches = []
+        for row in rows:
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if metadata.get("phase4g8_run_id") == run_id:
+                matches.append(row)
+        if len(matches) != 1:
+            raise ValueError("resume run must contain exactly one matching Phase 4G8 runtime job")
+        job = matches[0]
+        if str(job["state"]) in {"done", "failed", "cancelled"}:
+            raise ValueError(f"resume runtime job is already terminal: {job['state']}")
+        if Path(str(job["workspace_path"] or "")).resolve() != workspace.resolve():
+            raise ValueError("resume runtime job workspace does not match the run directory")
+        root = conn.execute("SELECT tenant, title FROM tasks WHERE id = ?", (job["root_task_id"],)).fetchone()
+        if root is None or root["tenant"] != f"phase4g8:{run_id}":
+            raise ValueError("resume runtime root task does not belong to the requested run")
+        if str(spec["instance_id"]) not in str(root["title"] or ""):
+            raise ValueError("resume runtime job does not match the qualification instance")
+        live_workers = []
+        for row in conn.execute(
+            """
+            SELECT DISTINCT t.worker_pid
+              FROM execution_nodes n JOIN tasks t ON t.id = n.latest_task_id
+             WHERE n.job_id = ? AND t.status = 'running' AND t.worker_pid IS NOT NULL
+            """,
+            (job["id"],),
+        ):
+            pid = int(row["worker_pid"])
+            if _pid_is_alive(pid):
+                live_workers.append(pid)
+        if live_workers:
+            raise RuntimeError(
+                "resume run still has live worker processes: "
+                + ", ".join(str(pid) for pid in sorted(live_workers))
+            )
+        return str(job["id"])
+
+
+def _prepare_resumed_runtime_job(job_id: str) -> dict[str, Any]:
+    """Convert runner-owned dead processes into resumable runtime facts."""
+
+    with kb.connect() as conn:
+        dead_rows = conn.execute(
+            """
+            SELECT n.id AS node_id, n.node_key, n.node_type, t.id AS task_id,
+                   t.worker_pid, m.id AS materialization_id
+              FROM execution_nodes n
+              JOIN tasks t ON t.id = n.latest_task_id
+              JOIN node_materializations m ON m.task_id = t.id AND m.node_id = n.id
+             WHERE n.job_id = ? AND t.status = 'running' AND t.worker_pid IS NOT NULL
+             ORDER BY n.created_at
+            """,
+            (job_id,),
+        ).fetchall()
+        live = [int(row["worker_pid"]) for row in dead_rows if _pid_is_alive(int(row["worker_pid"]))]
+        if live:
+            raise RuntimeError(
+                "resume run still has live worker processes: "
+                + ", ".join(str(pid) for pid in sorted(live))
+            )
+        dead = [dict(row) for row in dead_rows]
+        detected = kb.detect_crashed_workers(conn) if dead else []
+        missed = sorted({item["task_id"] for item in dead} - set(detected))
+        if missed:
+            raise RuntimeError(
+                "resume could not reclaim dead worker tasks: " + ", ".join(missed)
+            )
+        session_sync = rk.sync_runtime_backend_sessions(conn, job_id)
+        reclaimed_dead_advance_lock = _reclaim_dead_phase4g8_advance_lock(conn, job_id)
+        repaired_timeout_branch = _repair_resume_timeout_branch(conn, job_id)
+        requeued_incomplete_evaluators = _requeue_incomplete_evaluator_nodes(conn, job_id)
+        adapted_candidate_receipts = _ingest_adaptable_candidate_receipts(
+            conn,
+            job_id,
+        )
+        adapted_structure_request_receipts = (
+            _ingest_adaptable_structure_request_receipts(conn, job_id)
+        )
+        requeued_receipt_recoveries = _requeue_mixed_budget_receipt_failures(
+            conn,
+            job_id,
+        )
+        repaired_structure_request_branch = (
+            _repair_resume_structure_request_branch(conn, job_id)
+        )
+        repaired_receipt_branch = (
+            {
+                "repaired": False,
+                "reason": "structure_request_consumed_latest_receipt",
+                "superseded_nodes": [],
+            }
+            if repaired_structure_request_branch.get("consumed")
+            else _repair_resume_receipt_recovery_branch(conn, job_id)
+        )
+        resumed_nodes: list[str] = []
+        superseded_nodes = set(repaired_timeout_branch.get("superseded_nodes") or [])
+        superseded_nodes.update(
+            repaired_receipt_branch.get("superseded_nodes") or []
+        )
+        superseded_nodes.update(
+            repaired_structure_request_branch.get("superseded_nodes") or []
+        )
+        now = int(time.time())
+        for item in dead:
+            if item["node_key"] in superseded_nodes:
+                continue
+            node = conn.execute("SELECT * FROM execution_nodes WHERE id = ?", (item["node_id"],)).fetchone()
+            if node is None or node["state"] in rk.TERMINAL_NODE_STATES:
+                continue
+            materialization = conn.execute(
+                "SELECT * FROM node_materializations WHERE id = ?",
+                (item["materialization_id"],),
+            ).fetchone()
+            rk._mark_backend_worker_session_interrupted(
+                conn,
+                dict(node),
+                dict(materialization),
+                "phase4g8_runner_interrupted",
+                now=now,
+            )
+            metadata = json.loads(materialization["metadata_json"] or "{}")
+            metadata["runner_resume"] = {
+                "reason": "phase4g8_runner_interrupted",
+                "recovered_at": now,
+                "prior_worker_pid": item["worker_pid"],
+            }
+            conn.execute(
+                """
+                UPDATE node_materializations
+                   SET status = 'crashed', completed_at = COALESCE(completed_at, ?), metadata_json = ?
+                 WHERE id = ?
+                """,
+                (now, json.dumps(metadata, ensure_ascii=False, sort_keys=True), item["materialization_id"]),
+            )
+            conn.execute(
+                """
+                UPDATE tasks
+                   SET status = 'blocked', claim_lock = NULL, claim_expires = NULL,
+                       worker_pid = NULL, current_run_id = NULL,
+                       result = COALESCE(result, 'Superseded by Phase 4G8 runner resume.')
+                 WHERE id = ? AND status = 'ready'
+                """,
+                (item["task_id"],),
+            )
+            conn.execute(
+                """
+                UPDATE execution_nodes
+                   SET state = 'ready', latest_task_id = NULL, latest_run_id = NULL,
+                       output_summary = NULL, completed_at = NULL, updated_at = ?
+                 WHERE id = ?
+                """,
+                (now, item["node_id"]),
+            )
+            rk._event(
+                conn,
+                job_id,
+                "phase4g8_runner_resume_scheduled",
+                {
+                    "node_key": item["node_key"],
+                    "materialization_id": item["materialization_id"],
+                    "task_id": item["task_id"],
+                    "prior_worker_pid": item["worker_pid"],
+                    "recovery_reason": "runner_process_interrupted",
+                },
+                node_id=item["node_id"],
+                task_id=item["task_id"],
+            )
+            resumed_nodes.append(str(item["node_key"]))
+        if (
+            resumed_nodes
+            or repaired_timeout_branch.get("repaired")
+            or repaired_receipt_branch.get("repaired")
+            or repaired_structure_request_branch.get("repaired")
+            or requeued_incomplete_evaluators
+            or adapted_candidate_receipts
+            or adapted_structure_request_receipts
+            or requeued_receipt_recoveries
+        ):
+            conn.execute(
+                "UPDATE runtime_jobs SET state = 'active', updated_at = ? WHERE id = ?",
+                (now, job_id),
+            )
+        return {
+            "dead_worker_tasks": [item["task_id"] for item in dead],
+            "detected_crashed_tasks": list(detected),
+            "session_sync": session_sync,
+            "reclaimed_dead_advance_lock": reclaimed_dead_advance_lock,
+            "resumed_nodes": resumed_nodes,
+            "timeout_branch_repair": repaired_timeout_branch,
+            "receipt_branch_repair": repaired_receipt_branch,
+            "structure_request_branch_repair": (
+                repaired_structure_request_branch
+            ),
+            "requeued_incomplete_evaluators": requeued_incomplete_evaluators,
+            "adapted_candidate_receipts": adapted_candidate_receipts,
+            "adapted_structure_request_receipts": (
+                adapted_structure_request_receipts
+            ),
+            "requeued_receipt_recoveries": requeued_receipt_recoveries,
+        }
+
+
+def _reclaim_dead_phase4g8_advance_lock(
+    conn: sqlite3.Connection,
+    job_id: str,
+) -> dict[str, Any]:
+    """Release only a Phase 4G8 runtime-daemon lock whose owner PID is dead."""
+
+    row = conn.execute(
+        "SELECT advance_lock, claim_expires_at, metadata_json FROM runtime_jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()
+    if row is None or not row["advance_lock"]:
+        return {"reclaimed": False, "reason": "no_advance_lock"}
+    try:
+        metadata = json.loads(row["metadata_json"] or "{}")
+    except (TypeError, json.JSONDecodeError):
+        metadata = {}
+    owner = str(row["advance_lock"])
+    parts = owner.split(":")
+    if not metadata.get("phase4g8_run_id") or len(parts) < 4 or parts[0] != "runtime-daemon":
+        return {"reclaimed": False, "reason": "lock_not_phase4g8_runtime_daemon"}
+    try:
+        owner_pid = int(parts[-2])
+    except ValueError:
+        return {"reclaimed": False, "reason": "lock_owner_pid_invalid"}
+    if _pid_is_alive(owner_pid):
+        return {
+            "reclaimed": False,
+            "reason": "lock_owner_alive",
+            "owner_pid": owner_pid,
+        }
+    result = rk.release_runtime_advance_lock(
+        conn,
+        job_id,
+        owner=owner,
+        force=True,
+    )
+    if not result.get("released"):
+        return {
+            "reclaimed": False,
+            "reason": "lock_release_rejected",
+            "owner_pid": owner_pid,
+        }
+    rk._event(
+        conn,
+        job_id,
+        "phase4g8_dead_advance_lock_reclaimed",
+        {
+            "owner": owner,
+            "owner_pid": owner_pid,
+            "prior_claim_expires_at": row["claim_expires_at"],
+        },
+    )
+    return {
+        "reclaimed": True,
+        "owner": owner,
+        "owner_pid": owner_pid,
+        "prior_claim_expires_at": row["claim_expires_at"],
+    }
+
+
+def _requeue_incomplete_evaluator_nodes(
+    conn: sqlite3.Connection,
+    job_id: str,
+) -> list[str]:
+    """Retry fixed-target evaluators whose prior feedback could not be extracted."""
+
+    rows = conn.execute(
+        """
+        SELECT n.*, tr.metadata AS run_metadata
+          FROM execution_nodes n
+          JOIN task_runs tr ON tr.task_id = n.latest_task_id
+         WHERE n.job_id = ? AND n.node_type = 'verification' AND n.state = 'blocked'
+           AND tr.id = (
+               SELECT MAX(latest.id) FROM task_runs latest
+                WHERE latest.task_id = n.latest_task_id
+           )
+         ORDER BY n.created_at
+        """,
+        (job_id,),
+    ).fetchall()
+    now = int(time.time())
+    requeued: list[str] = []
+    for row in rows:
+        try:
+            receipt = json.loads(row["run_metadata"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        result = receipt.get("official_evaluator_result")
+        coverage = result.get("feedback_coverage") if isinstance(result, dict) else None
+        if not (
+            receipt.get("infrastructure_invalid") is True
+            and isinstance(result, dict)
+            and (
+                result.get("error") == "evaluator_feedback_extraction_incomplete"
+                or (
+                    isinstance(coverage, dict)
+                    and coverage.get("status") == "extraction_incomplete"
+                )
+            )
+        ):
+            continue
+        conn.execute(
+            """
+            UPDATE execution_nodes
+               SET state = 'ready', latest_task_id = NULL, latest_run_id = NULL,
+                   output_summary = NULL, completed_at = NULL, updated_at = ?
+             WHERE id = ? AND state = 'blocked'
+            """,
+            (now, row["id"]),
+        )
+        rk._event(
+            conn,
+            job_id,
+            "phase4g8_incomplete_evaluator_requeued",
+            {
+                "node_key": row["node_key"],
+                "prior_task_id": row["latest_task_id"],
+                "reason": "evaluator_feedback_extraction_incomplete",
+            },
+            node_id=row["id"],
+            task_id=row["latest_task_id"],
+        )
+        requeued.append(str(row["node_key"]))
+    return requeued
+
+
+def _ingest_adaptable_candidate_receipts(
+    conn: sqlite3.Connection,
+    job_id: str,
+) -> list[str]:
+    """Recover terminal Phase 4G8 candidate receipts accepted by a new adapter."""
+
+    rows = conn.execute(
+        """
+        SELECT n.*, m.id AS materialization_id, m.task_id AS materialization_task_id
+          FROM execution_nodes n
+          JOIN node_materializations m ON m.node_id = n.id
+         WHERE n.job_id = ? AND n.node_type != 'verification' AND n.state = 'failed'
+           AND m.attempt = (
+               SELECT MAX(latest.attempt) FROM node_materializations latest
+                WHERE latest.node_id = n.id
+           )
+           AND m.status = 'receipt_invalid'
+         ORDER BY n.created_at
+        """,
+        (job_id,),
+    ).fetchall()
+    recovered: list[str] = []
+    for row in rows:
+        snapshot = kb.task_progress_snapshot(
+            conn,
+            row["materialization_task_id"],
+        )
+        if snapshot is None or not isinstance(snapshot.evidence, dict):
+            continue
+        evidence = dict(snapshot.evidence)
+        if not rk._is_codex_lane_evidence(evidence):
+            continue
+        adapted = rk._runtime_receipt_from_evidence(
+            evidence,
+            dict(row),
+            conn=conn,
+        )
+        if not (
+            isinstance(adapted, dict)
+            and adapted.get("receipt_adapter") == "phase4g8_candidate_shape_v1"
+        ):
+            continue
+        job = conn.execute(
+            "SELECT workspace_path FROM runtime_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        current_revision = collect_git_evidence(job["workspace_path"]).get(
+            "workspace_revision"
+        )
+        if adapted.get("workspace_revision") != current_revision:
+            raise RuntimeError(
+                "cannot adapt terminal candidate receipt after workspace revision changed"
+            )
+        now = int(time.time())
+        conn.execute(
+            """
+            UPDATE execution_nodes
+               SET state = 'running', output_summary = NULL,
+                   completed_at = NULL, updated_at = ?
+             WHERE id = ? AND state = 'failed'
+            """,
+            (now, row["id"]),
+        )
+        if not rk.ingest_runtime_node_evidence(conn, row["id"]):
+            raise RuntimeError("adaptable Phase 4G8 candidate receipt was not ingested")
+        recovered.append(str(row["node_key"]))
+    return recovered
+
+
+def _ingest_adaptable_structure_request_receipts(
+    conn: sqlite3.Connection,
+    job_id: str,
+) -> list[str]:
+    """Recover a terminal Phase 4G8 structure request accepted by its adapter."""
+
+    rows = conn.execute(
+        """
+        SELECT n.*, m.id AS materialization_id, m.task_id AS materialization_task_id
+          FROM execution_nodes n
+          JOIN node_materializations m ON m.node_id = n.id
+         WHERE n.job_id = ? AND n.node_type != 'verification' AND n.state = 'failed'
+           AND m.attempt = (
+               SELECT MAX(latest.attempt) FROM node_materializations latest
+                WHERE latest.node_id = n.id
+           )
+           AND m.status = 'receipt_invalid'
+         ORDER BY n.created_at
+        """,
+        (job_id,),
+    ).fetchall()
+    recovered: list[str] = []
+    for row in rows:
+        snapshot = kb.task_progress_snapshot(
+            conn,
+            row["materialization_task_id"],
+        )
+        if snapshot is None or not isinstance(snapshot.evidence, dict):
+            continue
+        evidence = dict(snapshot.evidence)
+        if not rk._is_codex_lane_evidence(evidence):
+            continue
+        adapted = rk._runtime_receipt_from_evidence(
+            evidence,
+            dict(row),
+            conn=conn,
+        )
+        if not (
+            isinstance(adapted, dict)
+            and adapted.get("receipt_adapter")
+            == "phase4g8_structure_request_shape_v1"
+        ):
+            continue
+        job = conn.execute(
+            "SELECT workspace_path FROM runtime_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        current_revision = collect_git_evidence(job["workspace_path"]).get(
+            "workspace_revision"
+        )
+        if adapted.get("workspace_revision") != current_revision:
+            raise RuntimeError(
+                "cannot adapt terminal structure request after workspace revision changed"
+            )
+        now = int(time.time())
+        conn.execute(
+            """
+            UPDATE execution_nodes
+               SET state = 'running', output_summary = NULL,
+                   completed_at = NULL, updated_at = ?
+             WHERE id = ? AND state = 'failed'
+            """,
+            (now, row["id"]),
+        )
+        if not rk.ingest_runtime_node_evidence(conn, row["id"]):
+            raise RuntimeError("adaptable Phase 4G8 structure request was not ingested")
+        recovered.append(str(row["node_key"]))
+    return recovered
+
+
+def _requeue_mixed_budget_receipt_failures(
+    conn: sqlite3.Connection,
+    job_id: str,
+) -> list[str]:
+    """Repair receipt failures that an earlier infra failure wrongly exhausted."""
+
+    rows = conn.execute(
+        """
+        SELECT n.*, m.id AS materialization_id, m.status AS materialization_status,
+               m.task_id AS materialization_task_id, m.attempt
+          FROM execution_nodes n
+          JOIN node_materializations m ON m.node_id = n.id
+         WHERE n.job_id = ? AND n.node_type != 'verification' AND n.state = 'failed'
+           AND m.attempt = (
+               SELECT MAX(latest.attempt) FROM node_materializations latest
+                WHERE latest.node_id = n.id
+           )
+           AND m.status IN ('receipt_missing', 'receipt_invalid')
+         ORDER BY n.created_at
+        """,
+        (job_id,),
+    ).fetchall()
+    now = int(time.time())
+    receipt_limit = int(
+        rk.DEFAULT_RUNTIME_RECOVERY_POLICY["receipt_recovery_limit"]
+    )
+    requeued: list[str] = []
+    for row in rows:
+        event = conn.execute(
+            """
+            SELECT payload_json FROM execution_events
+             WHERE job_id = ? AND node_id = ?
+               AND event_type = 'node_recovery_not_retryable'
+             ORDER BY id DESC LIMIT 1
+            """,
+            (job_id, row["id"]),
+        ).fetchone()
+        try:
+            event_payload = json.loads(event["payload_json"] or "{}") if event else {}
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if event_payload.get("recovery_reason") not in {
+            "receipt_missing",
+            "receipt_invalid",
+        }:
+            continue
+        receipt_count = conn.execute(
+            """
+            SELECT COUNT(*) AS count FROM node_materializations
+             WHERE node_id = ? AND status IN ('receipt_missing', 'receipt_invalid')
+            """,
+            (row["id"],),
+        ).fetchone()["count"]
+        infra_count = conn.execute(
+            """
+            SELECT COUNT(*) AS count FROM node_materializations
+             WHERE node_id = ? AND status IN ('lost', 'stale', 'timed_out', 'crashed')
+            """,
+            (row["id"],),
+        ).fetchone()["count"]
+        if int(receipt_count or 0) > receipt_limit or int(infra_count or 0) < 1:
+            continue
+        conn.execute(
+            """
+            UPDATE execution_nodes
+               SET state = 'ready', latest_task_id = NULL, latest_run_id = NULL,
+                   output_summary = NULL, completed_at = NULL, updated_at = ?
+             WHERE id = ? AND state = 'failed'
+            """,
+            (now, row["id"]),
+        )
+        rk._event(
+            conn,
+            job_id,
+            "phase4g8_receipt_recovery_requeued",
+            {
+                "node_key": row["node_key"],
+                "prior_task_id": row["materialization_task_id"],
+                "prior_materialization_id": row["materialization_id"],
+                "prior_materialization_status": row["materialization_status"],
+                "receipt_failure_count": int(receipt_count or 0),
+                "infra_failure_count": int(infra_count or 0),
+                "reason": "recovery_budget_category_repair",
+            },
+            node_id=row["id"],
+            task_id=row["materialization_task_id"],
+        )
+        requeued.append(str(row["node_key"]))
+    return requeued
+
+
+def _repair_resume_receipt_recovery_branch(
+    conn: sqlite3.Connection,
+    job_id: str,
+) -> dict[str, Any]:
+    """Supersede a speculative strategy node created from a bad receipt."""
+
+    repair_event = conn.execute(
+        """
+        SELECT * FROM execution_events
+         WHERE job_id = ? AND event_type = 'phase4g8_receipt_recovery_requeued'
+         ORDER BY id DESC LIMIT 1
+        """,
+        (job_id,),
+    ).fetchone()
+    if repair_event is None or repair_event["node_id"] is None:
+        return {"repaired": False, "reason": "no_receipt_recovery_requeue"}
+    primary = conn.execute(
+        "SELECT * FROM execution_nodes WHERE id = ? AND job_id = ?",
+        (repair_event["node_id"], job_id),
+    ).fetchone()
+    if primary is None:
+        return {"repaired": False, "reason": "primary_node_missing"}
+    receipt_materialization = conn.execute(
+        """
+        SELECT m.*, tr.metadata AS run_metadata
+          FROM node_materializations m
+          LEFT JOIN task_runs tr ON tr.task_id = m.task_id
+             AND tr.id = (
+                 SELECT MAX(latest.id) FROM task_runs latest
+                  WHERE latest.task_id = m.task_id
+             )
+         WHERE m.node_id = ? AND m.status IN ('receipt_missing', 'receipt_invalid')
+         ORDER BY m.attempt DESC LIMIT 1
+        """,
+        (primary["id"],),
+    ).fetchone()
+    if receipt_materialization is None:
+        return {"repaired": False, "reason": "receipt_failure_missing"}
+    strategy_nodes = conn.execute(
+        """
+        SELECT * FROM execution_nodes
+         WHERE job_id = ? AND node_type = 'strategy_update'
+           AND created_at >= ?
+         ORDER BY created_at
+        """,
+        (job_id, receipt_materialization["completed_at"] or 0),
+    ).fetchall()
+    if not strategy_nodes:
+        return {"repaired": False, "reason": "no_speculative_strategy_branch"}
+    if len(strategy_nodes) != 1:
+        raise RuntimeError(
+            "cannot repair receipt recovery branch with multiple strategy nodes"
+        )
+    strategy = strategy_nodes[0]
+    terminal_fact = conn.execute(
+        """
+        SELECT 1 FROM execution_events
+         WHERE job_id = ? AND node_id = ?
+           AND event_type IN ('node_candidate_ready', 'node_completed', 'node_failed')
+         LIMIT 1
+        """,
+        (job_id, strategy["id"]),
+    ).fetchone()
+    if terminal_fact is not None:
+        raise RuntimeError(
+            "cannot repair receipt recovery branch after strategy terminal evidence"
+        )
+    try:
+        receipt_run_metadata = json.loads(
+            receipt_materialization["run_metadata"] or "{}"
+        )
+    except (TypeError, json.JSONDecodeError):
+        return {"repaired": False, "reason": "receipt_run_metadata_invalid"}
+    receipt = receipt_run_metadata.get("runtime_receipt")
+    expected_revision = (
+        receipt.get("workspace_revision") if isinstance(receipt, dict) else None
+    )
+    job = conn.execute(
+        "SELECT workspace_path FROM runtime_jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()
+    current_revision = collect_git_evidence(job["workspace_path"]).get(
+        "workspace_revision"
+    )
+    if not expected_revision or current_revision != expected_revision:
+        raise RuntimeError(
+            "cannot repair receipt recovery branch after candidate revision changed"
+        )
+    valid_strategy_receipt = False
+    strategy_tasks = conn.execute(
+        """
+        SELECT t.id, t.result, tr.metadata
+          FROM node_materializations m
+          JOIN tasks t ON t.id = m.task_id
+          LEFT JOIN task_runs tr ON tr.task_id = t.id
+             AND tr.id = (
+                 SELECT MAX(latest.id) FROM task_runs latest
+                  WHERE latest.task_id = t.id
+             )
+         WHERE m.node_id = ?
+         ORDER BY m.attempt
+        """,
+        (strategy["id"],),
+    ).fetchall()
+    for task in strategy_tasks:
+        try:
+            metadata = json.loads(task["metadata"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            metadata = {}
+        if isinstance(metadata.get("runtime_receipt"), dict):
+            valid_strategy_receipt = True
+            break
+    if valid_strategy_receipt:
+        raise RuntimeError(
+            "cannot repair receipt recovery branch after strategy receipt"
+        )
+    now = int(time.time())
+    task_ids = [str(task["id"]) for task in strategy_tasks]
+    if task_ids:
+        placeholders = ",".join("?" for _ in task_ids)
+        conn.execute(
+            f"""
+            UPDATE tasks
+               SET status = 'archived', claim_lock = NULL, claim_expires = NULL,
+                   worker_pid = NULL, current_run_id = NULL,
+                   result = COALESCE(result, 'Superseded after Phase 4G8 receipt recovery repair.')
+             WHERE id IN ({placeholders})
+            """,
+            task_ids,
+        )
+    conn.execute(
+        """
+        UPDATE node_materializations
+           SET status = CASE
+                   WHEN status IN ('candidate_ready', 'succeeded', 'failed', 'blocked')
+                   THEN status ELSE 'crashed' END,
+               completed_at = COALESCE(completed_at, ?)
+         WHERE node_id = ?
+        """,
+        (now, strategy["id"]),
+    )
+    conn.execute(
+        """
+        UPDATE execution_nodes
+           SET state = 'superseded', latest_task_id = NULL, latest_run_id = NULL,
+               output_summary = 'Superseded after receipt recovery branch repair.',
+               completed_at = ?, updated_at = ?
+         WHERE id = ?
+        """,
+        (now, now, strategy["id"]),
+    )
+    conn.execute(
+        """
+        UPDATE backend_worker_sessions
+           SET status = 'completed', completed_at = COALESCE(completed_at, ?),
+               updated_at = ?
+         WHERE node_id = ?
+        """,
+        (now, now, strategy["id"]),
+    )
+    rk._event(
+        conn,
+        job_id,
+        "phase4g8_receipt_recovery_branch_repaired",
+        {
+            "primary_node_key": primary["node_key"],
+            "superseded_node_key": strategy["node_key"],
+            "receipt_materialization_id": receipt_materialization["id"],
+            "workspace_revision": current_revision,
+            "reason": "speculative_strategy_created_from_invalid_receipt",
+        },
+        node_id=primary["id"],
+    )
+    return {
+        "repaired": True,
+        "primary_node_key": str(primary["node_key"]),
+        "superseded_nodes": [str(strategy["node_key"])],
+        "workspace_revision": current_revision,
+    }
+
+
+def _repair_resume_structure_request_branch(
+    conn: sqlite3.Connection,
+    job_id: str,
+) -> dict[str, Any]:
+    """Supersede speculative strategy work after a structure request is accepted."""
+
+    adapter_event = conn.execute(
+        """
+        SELECT * FROM execution_events
+         WHERE job_id = ? AND event_type = 'runtime_receipt_adapted'
+           AND json_extract(payload_json, '$.adapter') =
+               'phase4g8_structure_request_shape_v1'
+         ORDER BY id DESC LIMIT 1
+        """,
+        (job_id,),
+    ).fetchone()
+    if adapter_event is None or adapter_event["node_id"] is None:
+        return {
+            "repaired": False,
+            "consumed": False,
+            "reason": "no_adapted_structure_request",
+            "superseded_nodes": [],
+        }
+    materialization = conn.execute(
+        """
+        SELECT m.*, tr.ended_at AS receipt_ended_at
+          FROM node_materializations m
+          LEFT JOIN task_runs tr ON tr.task_id = m.task_id
+             AND tr.id = (
+                 SELECT MAX(latest.id) FROM task_runs latest
+                  WHERE latest.task_id = m.task_id
+             )
+         WHERE m.node_id = ? AND m.task_id = ?
+         ORDER BY m.attempt DESC LIMIT 1
+        """,
+        (adapter_event["node_id"], adapter_event["task_id"]),
+    ).fetchone()
+    if materialization is None:
+        raise RuntimeError("adapted structure request materialization is missing")
+    all_strategy_nodes = conn.execute(
+        """
+        SELECT * FROM execution_nodes
+         WHERE job_id = ? AND node_type = 'strategy_update'
+           AND created_at >= ?
+         ORDER BY created_at
+        """,
+        (
+            job_id,
+            materialization["receipt_ended_at"]
+            or materialization["completed_at"]
+            or materialization["created_at"],
+        ),
+    ).fetchall()
+    if not all_strategy_nodes:
+        return {
+            "repaired": False,
+            "consumed": True,
+            "reason": "no_speculative_strategy_branch",
+            "superseded_nodes": [],
+        }
+    now = int(time.time())
+    superseded: list[str] = []
+    for strategy in all_strategy_nodes:
+        strategy_task_ids = {
+            str(row["task_id"])
+            for row in conn.execute(
+                "SELECT task_id FROM node_materializations WHERE node_id = ?",
+                (strategy["id"],),
+            ).fetchall()
+            if row["task_id"]
+        }
+        if strategy["latest_task_id"]:
+            strategy_task_ids.add(str(strategy["latest_task_id"]))
+        if strategy_task_ids:
+            placeholders = ",".join("?" for _ in strategy_task_ids)
+            conn.execute(
+                f"""
+                UPDATE tasks
+                   SET status = 'archived', claim_lock = NULL, claim_expires = NULL,
+                       worker_pid = NULL, current_run_id = NULL,
+                       result = COALESCE(
+                           result,
+                           'Superseded by accepted worker structure request.'
+                       )
+                 WHERE id IN ({placeholders})
+                """,
+                tuple(sorted(strategy_task_ids)),
+            )
+        conn.execute(
+            """
+            UPDATE node_materializations
+               SET status = CASE
+                       WHEN status IN (
+                           'candidate_ready', 'succeeded', 'failed', 'blocked'
+                       ) THEN status ELSE 'crashed' END,
+                   completed_at = COALESCE(completed_at, ?)
+             WHERE node_id = ?
+            """,
+            (now, strategy["id"]),
+        )
+        conn.execute(
+            """
+            UPDATE backend_worker_sessions
+               SET status = 'completed', completed_at = COALESCE(completed_at, ?),
+                   updated_at = ?
+             WHERE node_id = ?
+            """,
+            (now, now, strategy["id"]),
+        )
+        if strategy["state"] == "superseded":
+            continue
+        terminal_fact = conn.execute(
+            """
+            SELECT 1 FROM execution_events
+             WHERE job_id = ? AND node_id = ?
+               AND event_type IN (
+                   'node_candidate_ready', 'node_completed', 'node_failed'
+               )
+             LIMIT 1
+            """,
+            (job_id, strategy["id"]),
+        ).fetchone()
+        if terminal_fact is not None:
+            raise RuntimeError(
+                "cannot supersede strategy work with terminal evidence after "
+                "a structure request"
+            )
+        conn.execute(
+            """
+            UPDATE execution_nodes
+               SET state = 'superseded', latest_task_id = NULL,
+                   latest_run_id = NULL,
+                   output_summary =
+                       'Superseded after worker structure request acceptance.',
+                   completed_at = ?, updated_at = ?
+             WHERE id = ?
+            """,
+            (now, now, strategy["id"]),
+        )
+        superseded.append(str(strategy["node_key"]))
+    if not superseded:
+        return {
+            "repaired": False,
+            "consumed": True,
+            "reason": "speculative_strategy_already_superseded",
+            "superseded_nodes": [],
+        }
+    rk._event(
+        conn,
+        job_id,
+        "phase4g8_structure_request_branch_repaired",
+        {
+            "source_node_id": adapter_event["node_id"],
+            "source_task_id": adapter_event["task_id"],
+            "superseded_nodes": superseded,
+            "reason": "accepted_structure_request_precedes_speculative_strategy",
+        },
+        node_id=adapter_event["node_id"],
+        task_id=adapter_event["task_id"],
+    )
+    return {
+        "repaired": True,
+        "consumed": True,
+        "reason": "accepted_structure_request",
+        "superseded_nodes": superseded,
+    }
+
+
+def _repair_resume_timeout_branch(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
+    """Repair the narrow pre-fix state where resume was stale-timed-out first."""
+
+    primary = conn.execute(
+        """
+        SELECT n.*, m.id AS materialization_id, m.task_id AS materialization_task_id,
+               m.status AS materialization_status
+          FROM execution_nodes n
+          JOIN node_materializations m ON m.node_id = n.id
+         WHERE n.job_id = ? AND n.node_type = 'implementation'
+         ORDER BY n.created_at, m.attempt DESC LIMIT 1
+        """,
+        (job_id,),
+    ).fetchone()
+    if primary is None or primary["state"] != "failed" or primary["materialization_status"] != "timed_out":
+        return {"repaired": False, "reason": "no_matching_timeout_branch"}
+    timeout_event = conn.execute(
+        """
+        SELECT 1 FROM execution_events
+         WHERE job_id = ? AND node_id = ? AND event_type = 'worker_run_timeout'
+         LIMIT 1
+        """,
+        (job_id, primary["id"]),
+    ).fetchone()
+    session = conn.execute(
+        "SELECT * FROM backend_worker_sessions WHERE node_id = ? ORDER BY created_at LIMIT 1",
+        (primary["id"],),
+    ).fetchone()
+    if timeout_event is None or session is None or session["status"] != "interrupted":
+        return {"repaired": False, "reason": "timeout_provenance_or_session_missing"}
+    job = conn.execute("SELECT workspace_path FROM runtime_jobs WHERE id = ?", (job_id,)).fetchone()
+    current_revision = rk._workspace_revision(job["workspace_path"])
+    if session["workspace_revision"] != current_revision:
+        raise RuntimeError("cannot repair resume timeout branch after workspace revision changed")
+    recovery_nodes = conn.execute(
+        """
+        SELECT n.*, m.id AS materialization_id, m.task_id AS materialization_task_id,
+               m.status AS materialization_status
+          FROM execution_nodes n
+          LEFT JOIN node_materializations m ON m.node_id = n.id
+         WHERE n.job_id = ? AND n.created_at > ? AND n.node_type = 'strategy_update'
+         ORDER BY n.created_at
+        """,
+        (job_id, primary["created_at"]),
+    ).fetchall()
+    if len(recovery_nodes) != 1:
+        return {"repaired": False, "reason": "recovery_branch_not_unique"}
+    recovery = recovery_nodes[0]
+    task = conn.execute(
+        "SELECT result FROM tasks WHERE id = ?",
+        (recovery["materialization_task_id"],),
+    ).fetchone()
+    if task is None or task["result"]:
+        raise RuntimeError("cannot repair resume timeout branch after recovery produced a receipt")
+    now = int(time.time())
+    conn.execute(
+        """
+        UPDATE tasks
+           SET status = 'blocked', claim_lock = NULL, claim_expires = NULL,
+               worker_pid = NULL, current_run_id = NULL,
+               result = 'Superseded after Phase 4G8 resume timeout repair.'
+         WHERE id IN (?, ?)
+        """,
+        (primary["materialization_task_id"], recovery["materialization_task_id"]),
+    )
+    conn.execute(
+        """
+        UPDATE node_materializations
+           SET status = 'crashed', completed_at = COALESCE(completed_at, ?)
+         WHERE id = ?
+        """,
+        (now, recovery["materialization_id"]),
+    )
+    conn.execute(
+        """
+        UPDATE execution_nodes
+           SET state = 'superseded', latest_task_id = NULL, latest_run_id = NULL,
+               output_summary = 'Superseded after runner resume timeout misclassification.',
+               completed_at = ?, updated_at = ?
+         WHERE id = ?
+        """,
+        (now, now, recovery["id"]),
+    )
+    conn.execute(
+        """
+        UPDATE execution_nodes
+           SET state = 'ready', latest_task_id = NULL, latest_run_id = NULL,
+               output_summary = NULL, completed_at = NULL, updated_at = ?
+         WHERE id = ?
+        """,
+        (now, primary["id"]),
+    )
+    recovery_session = conn.execute(
+        "SELECT id FROM backend_worker_sessions WHERE node_id = ?",
+        (recovery["id"],),
+    ).fetchone()
+    if recovery_session is not None:
+        conn.execute(
+            """
+            UPDATE backend_worker_sessions
+               SET status = 'completed', completed_at = COALESCE(completed_at, ?), updated_at = ?
+             WHERE id = ?
+            """,
+            (now, now, recovery_session["id"]),
+        )
+    rk._event(
+        conn,
+        job_id,
+        "phase4g8_resume_timeout_repaired",
+        {
+            "primary_node_key": primary["node_key"],
+            "superseded_node_key": recovery["node_key"],
+            "workspace_revision": current_revision,
+            "preserved_timeout_events": True,
+        },
+        node_id=primary["id"],
+    )
+    return {
+        "repaired": True,
+        "primary_node_key": str(primary["node_key"]),
+        "superseded_nodes": [str(recovery["node_key"])],
+        "workspace_revision": current_revision,
+    }
+
+
+def _reconstruct_resume_state(job_id: str, *, case_size: str) -> dict[str, Any]:
+    with kb.connect() as conn:
+        materializations = conn.execute(
+            "SELECT task_id, status FROM node_materializations WHERE job_id = ? ORDER BY created_at",
+            (job_id,),
+        ).fetchall()
+        sessions = conn.execute(
+            "SELECT resume_count FROM backend_worker_sessions WHERE job_id = ?",
+            (job_id,),
+        ).fetchall()
+        dead_running = []
+        for row in conn.execute(
+            """
+            SELECT t.id, t.worker_pid
+              FROM execution_nodes n JOIN tasks t ON t.id = n.latest_task_id
+             WHERE n.job_id = ? AND t.status = 'running' AND t.worker_pid IS NOT NULL
+            """,
+            (job_id,),
+        ):
+            if not _pid_is_alive(int(row["worker_pid"])):
+                dead_running.append(str(row["id"]))
+        if len(dead_running) > 1:
+            raise RuntimeError("resume run has multiple dead running tasks and requires operator repair")
+        evaluator_attempts = _official_evaluator_attempts(conn, job_id)
+        accepted_checkpoints = _accepted_checkpoint_count(conn, job_id)
+    worker_interrupted = bool(
+        dead_running or any(str(row["status"]) == "crashed" for row in materializations)
+    )
+    resumed_session = any(int(row["resume_count"] or 0) > 0 for row in sessions)
+    evaluator_provenance = evaluator_attempts[-1]["provenance"] if evaluator_attempts else {}
+    boundaries: dict[str, bool] = {
+        "daemon_restarted": True,
+        "worker_process_started": bool(materializations),
+        "independent_evaluator_process": bool(evaluator_provenance.get("producer_session_id")),
+        "fixed_revision_evaluated": bool(evaluator_provenance.get("target_revision")),
+    }
+    if case_size in {"medium", "large"}:
+        boundaries.update({
+            "worker_process_interrupted": worker_interrupted,
+            "worker_backend_session_resumed": resumed_session,
+        })
+    return {
+        "boundaries": boundaries,
+        "worker_interrupted": worker_interrupted,
+        "dead_running_task_id": dead_running[0] if dead_running else None,
+        "prior_materialization_count": len(materializations),
+        "prior_session_resume_count": sum(int(row["resume_count"] or 0) for row in sessions),
+        "accepted_checkpoint_count": accepted_checkpoints,
+        "prior_evaluator_attempt_count": len(evaluator_attempts),
+    }
+
+
+def _write_runner_state(
+    path: Path,
+    *,
+    run_id: str,
+    job_id: str,
+    case_size: str,
+    qualification_spec_path: Path,
+    worker_toolchain: Path,
+    worker_uid: int,
+    worker_gid: int,
+    resumed: bool,
+) -> None:
+    _write_json(path, {
+        "schema": "hermes_phase4g8_runner_state_v1",
+        "run_id": run_id,
+        "job_id": job_id,
+        "case_size": case_size,
+        "qualification_spec_path": str(qualification_spec_path.resolve()),
+        "qualification_spec_sha256": hashlib.sha256(
+            qualification_spec_path.resolve().read_bytes()
+        ).hexdigest(),
+        "worker_toolchain": str(worker_toolchain.resolve()),
+        "worker_identity": {"uid": int(worker_uid), "gid": int(worker_gid)},
+        "resumed": bool(resumed),
+        "updated_at": int(time.time()),
+    })
+
+
+def _pid_is_alive(pid: int) -> bool:
+    if int(pid) <= 0:
+        return False
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
 
 
 def _start_daemon(config: supervisor.RuntimeSupervisorDaemonConfig, decision: Any, compaction: Any):
@@ -1125,6 +2909,15 @@ def _official_evaluator_attempts(conn: sqlite3.Connection, job_id: str) -> list[
         """,
         (job_id,),
     ).fetchall()
+    consumed_verifier_ids: set[str] = set()
+    for event in conn.execute(
+        "SELECT payload_json FROM execution_events WHERE job_id = ? "
+        "AND event_type = 'evaluator_failure_feedback_consumed'",
+        (job_id,),
+    ).fetchall():
+        payload = rk._loads(event["payload_json"])
+        if payload.get("source_verifier_node_id"):
+            consumed_verifier_ids.add(str(payload["source_verifier_node_id"]))
     attempts: list[dict[str, Any]] = []
     for row in rows:
         try:
@@ -1143,8 +2936,90 @@ def _official_evaluator_attempts(conn: sqlite3.Connection, job_id: str) -> list[
             "node_id": str(row["node_id"]),
             "result": result,
             "provenance": provenance if isinstance(provenance, dict) else {},
+            "feedback_consumed": str(row["node_id"]) in consumed_verifier_ids,
         })
     return attempts
+
+
+def _evaluator_progress_status(attempts: list[dict[str, Any]]) -> dict[str, Any]:
+    def extraction_incomplete(attempt: dict[str, Any]) -> bool:
+        result = attempt.get("result", {})
+        coverage = result.get("feedback_coverage")
+        return bool(
+            result.get("error") == "evaluator_feedback_extraction_incomplete"
+            or (
+                isinstance(coverage, dict)
+                and coverage.get("status") == "extraction_incomplete"
+            )
+        )
+
+    effective = [
+        attempt
+        for attempt in attempts
+        if attempt.get("result", {}).get("error") not in {
+            "stale_target_revision",
+            "evaluator_feedback_extraction_incomplete",
+        }
+        and not extraction_incomplete(attempt)
+    ]
+    history: list[dict[str, Any]] = []
+    no_progress_streak = 0
+    previous: Optional[dict[str, Any]] = None
+    for attempt in effective:
+        result = attempt.get("result", {})
+        current = {
+            "node_id": attempt.get("node_id"),
+            "feedback_consumed": bool(attempt.get("feedback_consumed")),
+            "fail_to_pass_passed": int((result.get("fail_to_pass") or {}).get("passed") or 0),
+            "pass_to_pass_passed": int((result.get("pass_to_pass") or {}).get("passed") or 0),
+            "failure_signature": rk._evaluator_failure_signature(result),
+        }
+        if previous is None:
+            progress = True
+            count_progress = False
+            signature_changed = False
+        else:
+            count_progress = bool(
+                current["fail_to_pass_passed"] >= previous["fail_to_pass_passed"]
+                and current["pass_to_pass_passed"] >= previous["pass_to_pass_passed"]
+                and (
+                    current["fail_to_pass_passed"] > previous["fail_to_pass_passed"]
+                    or current["pass_to_pass_passed"] > previous["pass_to_pass_passed"]
+                )
+            )
+            signature_changed = bool(
+                current["failure_signature"] != previous["failure_signature"]
+            )
+            progress = count_progress or signature_changed
+        no_progress_streak = 0 if progress else no_progress_streak + 1
+        current.update({
+            "count_progress": count_progress,
+            "signature_changed": signature_changed,
+            "progress": progress,
+            "no_progress_streak": no_progress_streak,
+        })
+        history.append(current)
+        previous = current
+    latest_resolved = bool(
+        attempts and attempts[-1].get("result", {}).get("resolved") is True
+    )
+    return {
+        "attempt_count": len(attempts),
+        "effective_failure_count": sum(
+            attempt.get("result", {}).get("resolved") is not True
+            for attempt in effective
+        ),
+        "latest_resolved": latest_resolved,
+        "latest_feedback_extraction_incomplete": bool(
+            attempts and extraction_incomplete(attempts[-1])
+        ),
+        "latest_feedback_consumed": bool(
+            effective and effective[-1].get("feedback_consumed")
+        ),
+        "no_progress_streak": no_progress_streak,
+        "history": history,
+        "exhausted": False,
+    }
 
 
 def _evaluator_failure_budget_status(
@@ -1154,24 +3029,13 @@ def _evaluator_failure_budget_status(
 ) -> dict[str, Any]:
     if int(max_unresolved_evaluator_attempts) < 1:
         raise ValueError("max_unresolved_evaluator_attempts must be positive")
-    failure_count = sum(
-        attempt.get("result", {}).get("resolved") is not True
-        and attempt.get("result", {}).get("error") not in {"stale_target_revision"}
-        for attempt in attempts
-    )
-    latest_resolved = bool(
-        attempts and attempts[-1].get("result", {}).get("resolved") is True
-    )
+    status = _evaluator_progress_status(attempts)
     return {
-        "attempt_count": len(attempts),
-        "failure_count": failure_count,
+        **status,
+        "failure_count": status["effective_failure_count"],
         "max_unresolved_evaluator_attempts": int(max_unresolved_evaluator_attempts),
-        "latest_resolved": latest_resolved,
-        "exhausted": bool(
-            attempts
-            and not latest_resolved
-            and failure_count >= int(max_unresolved_evaluator_attempts)
-        ),
+        "deprecated_fixed_attempt_budget_ignored": True,
+        "exhausted": False,
     }
 
 

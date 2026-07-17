@@ -93,6 +93,17 @@ def test_runtime_codex_model_source_prefers_isolated_codex_home(tmp_path, monkey
     assert source["explicit_api_key"] == "test-secret"
 
 
+def test_parse_runtime_goal_items_defaults_to_worker_owned_verification():
+    items = kc._parse_runtime_goal_items(["result:ship the complete result"])
+
+    assert items == [{
+        "item_key": "result",
+        "description": "ship the complete result",
+        "required": True,
+        "verifier_required": False,
+    }]
+
+
 # ---------------------------------------------------------------------------
 # run_slash smoke tests (end-to-end via the same entry both CLI and gateway use)
 # ---------------------------------------------------------------------------

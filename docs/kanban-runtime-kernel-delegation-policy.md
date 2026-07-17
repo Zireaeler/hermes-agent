@@ -98,8 +98,8 @@ terminal evidence / structural receipt
 初始 node 的目标应描述完整交付责任，例如：
 
 ```text
-在当前仓库实现并验证 OAuth 登录，包括必要接口、前端接入、错误处理、
-测试和本地验证；不部署生产环境。
+在当前仓库完成请求的功能，包括理解现有行为、实现、错误处理、
+测试、debug 和本地验证；不执行生产部署。
 ```
 
 node contract 应能够表达：目标关联、workspace scope、允许能力、成功 evidence、验证要求、
@@ -109,6 +109,16 @@ node contract 应能够表达：目标关联、workspace scope、允许能力、
 checkpoint 或 blocker event，供 Kanban lifecycle、recovery 和 observability 使用。这些局部
 事件不应自动触发 Decision Provider 重规划。
 
+普通开发任务默认采用 `worker_owned` verification。Primary worker 对同一责任内的实现、测试、
+debug 和本地验证负责；其 terminal evidence 可以在满足 goal contract 后直接完成 goal，不需要
+额外创建 verification node。仅仅由另一个进程重跑 implementation worker 自己编写的测试，不能
+提供独立的需求 oracle，因此不是创建 durable verifier 的充分理由。
+
+只有 goal contract 显式声明 `verifier_required=true`，并且 runtime 配置了与 implementation
+独立的验证来源时，才进入 `required_evaluator` / `candidate_ready` 路径。独立来源可以是受保护的
+外部 oracle、固定的验收套件、独立审计责任或明确的 human approval；任务规模、文件数量、模型
+不确定性和“多一轮 review 更稳妥”都不能自行提升 verification authority。
+
 ## 5. 允许创建额外 Runtime Node 的条件
 
 创建多个 durable runtime node 时，至少必须存在下列一种结构性理由。
@@ -116,7 +126,8 @@ checkpoint 或 blocker event，供 Kanban lifecycle、recovery 和 observability
 ### 5.1 `independent_verification`
 
 需要不继承实现者假设的独立验证，例如安全审计、兼容性验证或高风险验证。此类 verifier
-应具有独立责任与 evidence，不应仅作为 implementation worker 的内部 subagent。
+应具有独立责任与 evidence，不应仅作为 implementation worker 的内部 subagent。该理由只在
+关联 goal item 已显式声明 `verifier_required=true` 且存在独立验证来源时成立。
 
 ### 5.2 `capability_boundary`
 

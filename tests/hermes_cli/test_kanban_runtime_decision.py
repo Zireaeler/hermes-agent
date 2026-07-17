@@ -1523,8 +1523,8 @@ def test_runtime_complete_node_records_kanban_evidence_without_ingest(kanban_hom
     assert status["progress_ledger"] == []
 
 
-def test_runtime_cli_drives_multiround_goal_loop_with_evidence_bridge(kanban_home):
-    created = json.loads(kc.run_slash("runtime create 'phase3c multiround runtime loop' --json"))
+def test_runtime_cli_completes_worker_owned_goal_with_evidence_bridge(kanban_home):
+    created = json.loads(kc.run_slash("runtime create 'phase3c worker-owned runtime loop' --json"))
     job_id = created["id"]
 
     first = json.loads(kc.run_slash(f"runtime advance {job_id} --loop --fake-provider --json"))
@@ -1534,48 +1534,30 @@ def test_runtime_cli_drives_multiround_goal_loop_with_evidence_bridge(kanban_hom
 
     implementation_evidence = {
         "verdict": "succeeded",
-        "summary": "implementation produced self-reported goal evidence",
+        "summary": "implementation produced and locally verified goal evidence",
         "claimed_goal_items": ["initial-runtime-result"],
-        "verification": {"passed": False, "summary": "not independently verified"},
+        "verification": {"commands": ["pytest"], "passed": True, "summary": "passed"},
     }
     json.loads(
         kc.run_slash(
             f"runtime complete-node {job_id} implement-initial-runtime-result "
-            "--summary 'implementation produced self-reported goal evidence' "
+            "--summary 'implementation produced and locally verified goal evidence' "
             f"--metadata '{_runtime_metadata_arg(implementation_evidence)}' --json"
-        )
-    )
-    second = json.loads(kc.run_slash(f"runtime advance {job_id} --loop --fake-provider --json"))
-    assert second["state"] == "waiting_worker"
-    assert any("implement-initial-runtime-result" in step["ingested_nodes"] for step in second["steps"])
-    assert any(step["patch_status"] == "applied" for step in second["steps"])
-    assert any("verify-initial-runtime-result" in step["materialized_nodes"] for step in second["steps"])
-
-    verifier_evidence = _independent_verifier_evidence(job_id, "verify-initial-runtime-result", {
-        "verdict": "succeeded",
-        "summary": "verification passed for the runtime goal",
-        "claimed_goal_items": ["initial-runtime-result"],
-        "verification": {"commands": ["pytest"], "passed": True, "summary": "passed"},
-    })
-    json.loads(
-        kc.run_slash(
-            f"runtime complete-node {job_id} verify-initial-runtime-result "
-            "--summary 'verification passed for the runtime goal' "
-            f"--metadata '{_runtime_metadata_arg(verifier_evidence)}' --json"
         )
     )
     final = json.loads(kc.run_slash(f"runtime advance {job_id} --loop --fake-provider --json"))
     assert final["state"] == "done"
-    assert any("verify-initial-runtime-result" in step["ingested_nodes"] for step in final["steps"])
+    assert any("implement-initial-runtime-result" in step["ingested_nodes"] for step in final["steps"])
 
     status = json.loads(kc.run_slash(f"runtime status {job_id} --json"))
     assert status["job"]["state"] == "done"
     assert status["goal_items"][0]["state"] == "satisfied"
-    assert any(row["verification_state"] == "independently_verified" for row in status["progress_ledger"])
-    assert len(status["materializations"]) == 2
+    assert any(row["verification_state"] == "implementation_verified" for row in status["progress_ledger"])
+    assert all(node["node_type"] != "verification" for node in status["nodes"])
+    assert len(status["materializations"]) == 1
 
     decisions = json.loads(kc.run_slash(f"runtime decision {job_id} --json"))
-    assert len(decisions) >= 2
+    assert len(decisions) == 1
     assert any(row["validator_result"]["status"] == "applied" for row in decisions)
 
 
@@ -1608,25 +1590,6 @@ def test_runtime_cli_resumes_and_completes_after_goal_waiver(kanban_home):
     resumed = json.loads(kc.run_slash(f"runtime advance {job_id} --loop --provider none --json"))
     assert resumed["state"] == "waiting_decision"
     assert any("implement-core-result" in step["ingested_nodes"] for step in resumed["steps"])
-
-    verification = json.loads(kc.run_slash(f"runtime advance {job_id} --loop --fake-provider --json"))
-    assert verification["state"] == "waiting_worker"
-    assert any("verify-core-result" in step["materialized_nodes"] for step in verification["steps"])
-    verifier_evidence = _independent_verifier_evidence(job_id, "verify-core-result", {
-        "verdict": "succeeded",
-        "summary": "independent verification passed for core result",
-        "claimed_goal_items": ["core-result"],
-        "verification": {"commands": ["pytest"], "passed": True, "summary": "passed"},
-    })
-    json.loads(
-        kc.run_slash(
-            f"runtime complete-node {job_id} verify-core-result "
-            "--summary 'independent verification passed for core result' "
-            f"--metadata '{_runtime_metadata_arg(verifier_evidence)}' --json"
-        )
-    )
-    verified = json.loads(kc.run_slash(f"runtime advance {job_id} --loop --provider none --json"))
-    assert any("verify-core-result" in step["ingested_nodes"] for step in verified["steps"])
 
     waived = json.loads(
         kc.run_slash(

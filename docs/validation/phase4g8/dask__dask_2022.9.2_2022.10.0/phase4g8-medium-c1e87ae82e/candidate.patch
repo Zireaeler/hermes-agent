@@ -1,0 +1,1389 @@
+diff --git a/dask/array/backends.py b/dask/array/backends.py
+index 2609fbe..69b1203 100644
+--- a/dask/array/backends.py
++++ b/dask/array/backends.py
+@@ -2,6 +2,7 @@ import math
+ 
+ import numpy as np
+ 
++from dask.backends import CreationDispatch, DaskBackendEntrypoint
+ from dask.array import chunk
+ from dask.array.dispatch import (
+     concatenate_lookup,
+@@ -17,6 +18,32 @@ from dask.array.numpy_compat import divide as np_divide
+ from dask.array.numpy_compat import ma_divide
+ from dask.array.percentile import _percentile
+ 
++
++class ArrayBackendEntrypoint(DaskBackendEntrypoint):
++    """Base class for Dask Array creation backends."""
++
++    @classmethod
++    def from_array(cls, data, **kwargs):
++        raise NotImplementedError
++
++
++class NumpyBackendEntrypoint(ArrayBackendEntrypoint):
++    @classmethod
++    def from_array(cls, data, **kwargs):
++        from dask.array.core import _from_array
++
++        return _from_array(data, **kwargs)
++
++    @classmethod
++    def to_backend(cls, data, **kwargs):
++        return data
++
++
++array_creation_dispatch = CreationDispatch(
++    module_name="array", default="numpy", entrypoint_root="dask.array.backends"
++)
++array_creation_dispatch.register_backend("numpy", NumpyBackendEntrypoint)
++
+ concatenate_lookup.register((object, np.ndarray), np.concatenate)
+ tensordot_lookup.register((object, np.ndarray), np.tensordot)
+ einsum_lookup.register((object, np.ndarray), np.einsum)
+diff --git a/dask/array/core.py b/dask/array/core.py
+index 7932135..3f25dae 100644
+--- a/dask/array/core.py
++++ b/dask/array/core.py
+@@ -1417,6 +1417,12 @@ class Array(DaskMethodsMixin):
+     def __dask_tokenize__(self):
+         return self.name
+ 
++    def to_backend(self, backend=None, **kwargs):
++        """Move this collection to a registered array backend."""
++        from dask.array.backends import array_creation_dispatch
++
++        return array_creation_dispatch.dispatch(backend).to_backend(self, **kwargs)
++
+     __dask_optimize__ = globalmethod(
+         optimize, key="array_optimize", falsey=dont_optimize
+     )
+@@ -1876,6 +1882,14 @@ class Array(DaskMethodsMixin):
+         if value is np.ma.masked:
+             value = np.ma.masked_all((), dtype=self.dtype)
+ 
++        if np.issubdtype(self.dtype, np.integer) and not is_dask_collection(value):
++            try:
++                contains_nan = np.isnan(value).any()
++            except TypeError:
++                contains_nan = False
++            if contains_nan:
++                raise ValueError("cannot convert float NaN to integer")
++
+         ## Use the "where" method for cases when key is an Array
+         if isinstance(key, Array):
+             from dask.array.routines import where
+@@ -2853,10 +2867,7 @@ class Array(DaskMethodsMixin):
+         """
+         Copy array.  This is a no-op for dask.arrays, which are immutable
+         """
+-        if self.npartitions == 1:
+-            return self.map_blocks(M.copy)
+-        else:
+-            return Array(self.dask, self.name, self.chunks, meta=self)
++        return Array(self.dask, self.name, self.chunks, meta=self)
+ 
+     def __deepcopy__(self, memo):
+         c = self.copy()
+@@ -3285,6 +3296,34 @@ def from_array(
+     getitem=None,
+     meta=None,
+     inline_array=False,
++    backend=None,
++):
++    from dask.array.backends import array_creation_dispatch
++
++    return array_creation_dispatch.from_array(
++        x,
++        chunks=chunks,
++        name=name,
++        lock=lock,
++        asarray=asarray,
++        fancy=fancy,
++        getitem=getitem,
++        meta=meta,
++        inline_array=inline_array,
++        backend=backend,
++    )
++
++
++def _from_array(
++    x,
++    chunks="auto",
++    name=None,
++    lock=False,
++    asarray=None,
++    fancy=True,
++    getitem=None,
++    meta=None,
++    inline_array=False,
+ ):
+     """Create dask array from something that looks like an array.
+ 
+@@ -3513,6 +3552,9 @@ def from_array(
+     return Array(dsk, name, chunks, meta=meta, dtype=getattr(x, "dtype", None))
+ 
+ 
++from_array.__doc__ = _from_array.__doc__
++
++
+ def from_zarr(
+     url,
+     component=None,
+diff --git a/dask/array/tests/test_array_core.py b/dask/array/tests/test_array_core.py
+index ffb9c63..21867a0 100644
+--- a/dask/array/tests/test_array_core.py
++++ b/dask/array/tests/test_array_core.py
+@@ -2716,7 +2716,8 @@ def test_from_array_copy():
+     assert y.npartitions == 1
+     y_c = y.copy()
+     assert y is not y_c
+-    assert y.compute() is not y_c.compute()
++    assert y.name == y_c.name
++    assert y.dask is y_c.dask
+ 
+ 
+ def test_from_array_dask_array():
+@@ -3592,6 +3593,33 @@ def test_copy_mutate():
+     assert memo[id(x)] is y2
+ 
+ 
++def test_copy_is_graph_noop_for_single_partition():
++    x = da.arange(5, chunks=5)
++    y = x.copy()
++
++    assert y is not x
++    assert y.name == x.name
++    assert y.dask is x.dask
++
++
++def test_from_array_backend_dispatch():
++    from dask.array.backends import ArrayBackendEntrypoint, array_creation_dispatch
++
++    class TestBackend(ArrayBackendEntrypoint):
++        @classmethod
++        def from_array(cls, data, **kwargs):
++            return data, kwargs["chunks"]
++
++        @classmethod
++        def to_backend(cls, data, **kwargs):
++            return data, kwargs
++
++    array_creation_dispatch.register_backend("test", TestBackend)
++    assert da.from_array([1, 2], chunks=1, backend="test") == ([1, 2], 1)
++    x = da.arange(2, chunks=1)
++    assert x.to_backend("test", option=True) == (x, {"option": True})
++
++
+ def test_npartitions():
+     assert da.ones(5, chunks=(2,)).npartitions == 3
+     assert da.ones((5, 5), chunks=(2, 3)).npartitions == 6
+diff --git a/dask/array/tests/test_slicing.py b/dask/array/tests/test_slicing.py
+index 3ae7dd5..10ec2df 100644
+--- a/dask/array/tests/test_slicing.py
++++ b/dask/array/tests/test_slicing.py
+@@ -1051,3 +1051,9 @@ def test_slice_array_null_dimension():
+     array = da.from_array(np.zeros((3, 0)))
+     expected = np.zeros((3, 0))[[0]]
+     assert_eq(array[[0]], expected)
++
++
++def test_setitem_nan_into_integer_array_raises():
++    x = da.arange(5, chunks=2)
++    with pytest.raises(ValueError, match="cannot convert float NaN to integer"):
++        x[0] = np.nan
+diff --git a/dask/base.py b/dask/base.py
+index 1af3559..beadb0f 100644
+--- a/dask/base.py
++++ b/dask/base.py
+@@ -947,6 +947,7 @@ normalize_token.register(
+         complex,
+         type(Ellipsis),
+         datetime.date,
++        datetime.time,
+         datetime.timedelta,
+         pathlib.PurePath,
+     ),
+@@ -954,6 +955,11 @@ normalize_token.register(
+ )
+ 
+ 
++@normalize_token.register(datetime.datetime)
++def normalize_datetime(dt):
++    return dt.isoformat()
++
++
+ @normalize_token.register(dict)
+ def normalize_dict(d):
+     return normalize_token(sorted(d.items(), key=str))
+diff --git a/dask/dask-schema.yaml b/dask/dask-schema.yaml
+index dab8101..722c281 100644
+--- a/dask/dask-schema.yaml
++++ b/dask/dask-schema.yaml
+@@ -37,6 +37,10 @@ properties:
+     type: object
+     properties:
+ 
++      backend:
++        type: string
++        description: Default backend used to create Dask DataFrames.
++
+       shuffle-compression:
+         type:
+         - string
+@@ -67,6 +71,10 @@ properties:
+     type: object
+     properties:
+ 
++      backend:
++        type: string
++        description: Default backend used to create Dask Arrays.
++
+       svg:
+         type: object
+         properties:
+diff --git a/dask/dask.yaml b/dask/dask.yaml
+index b4e83fc..48ce9bd 100644
+--- a/dask/dask.yaml
++++ b/dask/dask.yaml
+@@ -7,12 +7,14 @@ tokenize:
+   ensure-deterministic: false  # If true, tokenize will error instead of falling back to uuids
+ 
+ dataframe:
++  backend: pandas
+   shuffle-compression: null  # compression for on disk-shuffling. Partd supports ZLib, BZ2, SNAPPY, BLOSC
+   parquet:
+     metadata-task-size-local: 512  # Number of files per local metadata-processing task
+     metadata-task-size-remote: 16  # Number of files per remote metadata-processing task
+ 
+ array:
++  backend: numpy
+   svg:
+     size: 120  # pixels
+   slicing:
+diff --git a/dask/dataframe/backends.py b/dask/dataframe/backends.py
+index f26b560..44499e6 100644
+--- a/dask/dataframe/backends.py
++++ b/dask/dataframe/backends.py
+@@ -15,6 +15,8 @@ from pandas.api.types import (
+     union_categoricals,
+ )
+ 
++from dask.backends import CreationDispatch, DaskBackendEntrypoint
++
+ from dask.array.dispatch import percentile_lookup
+ from dask.array.percentile import _percentile
+ from dask.dataframe.core import DataFrame, Index, Scalar, Series, _Frame
+@@ -45,6 +47,34 @@ from dask.dataframe.utils import (
+ from dask.sizeof import SimpleSizeof, sizeof
+ from dask.utils import is_arraylike, is_series_like, typename
+ 
++
++class DataFrameBackendEntrypoint(DaskBackendEntrypoint):
++    """Base class for Dask DataFrame creation backends."""
++
++    @classmethod
++    def from_dict(cls, data, **kwargs):
++        raise NotImplementedError
++
++
++class PandasBackendEntrypoint(DataFrameBackendEntrypoint):
++    @classmethod
++    def from_dict(cls, data, **kwargs):
++        from dask.dataframe.core import DataFrame
++
++        return DataFrame._from_dict(data, **kwargs)
++
++    @classmethod
++    def to_backend(cls, data, **kwargs):
++        return data
++
++
++dataframe_creation_dispatch = CreationDispatch(
++    module_name="dataframe",
++    default="pandas",
++    entrypoint_root="dask.dataframe.backends",
++)
++dataframe_creation_dispatch.register_backend("pandas", PandasBackendEntrypoint)
++
+ ##########
+ # Pandas #
+ ##########
+diff --git a/dask/dataframe/core.py b/dask/dataframe/core.py
+index cc82fd7..7523575 100644
+--- a/dask/dataframe/core.py
++++ b/dask/dataframe/core.py
+@@ -171,6 +171,12 @@ class Scalar(DaskMethodsMixin, OperatorMethodMixin):
+     def __dask_tokenize__(self):
+         return self._name
+ 
++    def to_backend(self, backend=None, **kwargs):
++        """Move this collection to a registered dataframe backend."""
++        from dask.dataframe.backends import dataframe_creation_dispatch
++
++        return dataframe_creation_dispatch.dispatch(backend).to_backend(self, **kwargs)
++
+     def __dask_layers__(self):
+         return (self._name,)
+ 
+@@ -356,6 +362,12 @@ class _Frame(DaskMethodsMixin, OperatorMethodMixin):
+     def __dask_tokenize__(self):
+         return self._name
+ 
++    def to_backend(self, backend=None, **kwargs):
++        """Move this collection to a registered dataframe backend."""
++        from dask.dataframe.backends import dataframe_creation_dispatch
++
++        return dataframe_creation_dispatch.dispatch(backend).to_backend(self, **kwargs)
++
+     __dask_optimize__ = globalmethod(
+         optimize, key="dataframe_optimize", falsey=dont_optimize
+     )
+@@ -562,7 +574,7 @@ Dask Name: {name}, {layers}"""
+         return self.map_partitions(
+             getattr,
+             "index",
+-            token=self._name + "-index",
++            token=key_split(self._name) + "-index",
+             meta=self._meta.index,
+             enforce_metadata=False,
+         )
+@@ -6068,6 +6080,20 @@ class DataFrame(_Frame):
+         >>> import dask.dataframe as dd
+         >>> ddf = dd.DataFrame.from_dict({"num1": [1, 2, 3, 4], "num2": [7, 8, 9, 10]}, npartitions=2)
+         """
++        from dask.dataframe.backends import dataframe_creation_dispatch
++
++        return dataframe_creation_dispatch.from_dict(
++            data,
++            npartitions=npartitions,
++            orient=orient,
++            dtype=dtype,
++            columns=columns,
++        )
++
++    @classmethod
++    def _from_dict(
++        cls, data, *, npartitions, orient="columns", dtype=None, columns=None
++    ):
+         from dask.dataframe.io import from_pandas
+ 
+         collection_types = {type(v) for v in data.values() if is_dask_collection(v)}
+diff --git a/dask/dataframe/groupby.py b/dask/dataframe/groupby.py
+index e2db913..44ee3b8 100644
+--- a/dask/dataframe/groupby.py
++++ b/dask/dataframe/groupby.py
+@@ -331,6 +331,38 @@ def _groupby_aggregate(
+     return aggfunc(grouped, **kwargs)
+ 
+ 
++def _groupby_aggregate_spec(
++    df, arg=None, levels=None, dropna=None, sort=False, observed=None
++):
++    dropna = {"dropna": dropna} if dropna is not None else {}
++    observed = {"observed": observed} if observed is not None else {}
++    grouped = df.groupby(level=levels, sort=sort, **observed, **dropna)
++    return grouped.aggregate(arg)
++
++
++def _set_groupby_columns(df, columns):
++    df = df.copy()
++    df.columns = columns
++    return df
++
++
++def _contains_median(arg):
++    if isinstance(arg, dict):
++        return any(_contains_median(value) for value in arg.values())
++    if isinstance(arg, (list, tuple)):
++        return any(_contains_median(value) for value in arg)
++    return funcname(arg) == "median"
++
++
++def _check_median_requires_shuffle(arg, shuffle):
++    if _contains_median(arg) and shuffle is not None and not shuffle:
++        raise ValueError("In order to aggregate with 'median', you must use shuffling.")
++
++
++def _normalized_spec_contains_median(spec):
++    return any(funcname(func) == "median" for _, func, _ in spec)
++
++
+ def _apply_chunk(df, *by, dropna=None, observed=None, **kwargs):
+     func = kwargs.pop("chunk")
+     columns = kwargs.pop("columns")
+@@ -346,6 +378,37 @@ def _apply_chunk(df, *by, dropna=None, observed=None, **kwargs):
+         return func(g[columns], **kwargs)
+ 
+ 
++def _non_agg_chunk(df, *by, key=None, dropna=None, observed=None):
++    """Move unaggregated rows onto an index containing their group keys."""
++    dropna = {"dropna": dropna} if dropna is not None else {}
++    observed = {"observed": observed} if observed is not None else {}
++
++    if is_series_like(df):
++        df = df.to_frame()
++    grouped = _groupby_raise_unaligned(
++        df, by=by, group_keys=True, sort=False, **observed, **dropna
++    )
++    if key is not None:
++        grouped = grouped[key]
++    if len(df):
++        result = grouped.apply(lambda x: x).reset_index(level=-1, drop=True)
++    else:
++        result = df if key is None else df[key]
++        result = result.copy()
++        result.index = grouped.size().index
++    if is_series_like(result):
++        result = result.to_frame()
++    elif key is None:
++        group_columns = [
++            col
++            for col in by
++            if (np.isscalar(col) or isinstance(col, tuple)) and col in result
++        ]
++        if group_columns:
++            result = result.drop(columns=group_columns)
++    return result
++
++
+ def _var_chunk(df, *by):
+     if is_series_like(df):
+         df = df.to_frame()
+@@ -1493,37 +1556,172 @@ class _GroupBy:
+         )
+ 
+     @derived_from(pd.core.groupby.GroupBy)
+-    def sum(self, split_every=None, split_out=1, min_count=None):
+-        result = self._aca_agg(
+-            token="sum", func=M.sum, split_every=split_every, split_out=split_out
+-        )
++    def sum(self, split_every=None, split_out=1, min_count=None, shuffle=None):
++        if shuffle:
++            result = self.aggregate(
++                "sum",
++                split_every=split_every,
++                split_out=split_out,
++                shuffle=shuffle,
++            )
++        else:
++            result = self._aca_agg(
++                token="sum", func=M.sum, split_every=split_every, split_out=split_out
++            )
+         if min_count:
+-            return result.where(self.count() >= min_count, other=np.NaN)
++            return result.where(
++                self.count(
++                    split_every=split_every,
++                    split_out=split_out,
++                    shuffle=shuffle,
++                )
++                >= min_count,
++                other=np.NaN,
++            )
+         else:
+             return result
+ 
+     @derived_from(pd.core.groupby.GroupBy)
+-    def prod(self, split_every=None, split_out=1, min_count=None):
+-        result = self._aca_agg(
+-            token="prod", func=M.prod, split_every=split_every, split_out=split_out
+-        )
++    def prod(self, split_every=None, split_out=1, min_count=None, shuffle=None):
++        if shuffle:
++            result = self.aggregate(
++                "prod",
++                split_every=split_every,
++                split_out=split_out,
++                shuffle=shuffle,
++            )
++        else:
++            result = self._aca_agg(
++                token="prod", func=M.prod, split_every=split_every, split_out=split_out
++            )
+         if min_count:
+-            return result.where(self.count() >= min_count, other=np.NaN)
++            return result.where(
++                self.count(
++                    split_every=split_every,
++                    split_out=split_out,
++                    shuffle=shuffle,
++                )
++                >= min_count,
++                other=np.NaN,
++            )
+         else:
+             return result
+ 
+     @derived_from(pd.core.groupby.GroupBy)
+-    def min(self, split_every=None, split_out=1):
++    def min(self, split_every=None, split_out=1, shuffle=None):
++        if shuffle:
++            return self.aggregate(
++                "min",
++                split_every=split_every,
++                split_out=split_out,
++                shuffle=shuffle,
++            )
+         return self._aca_agg(
+             token="min", func=M.min, split_every=split_every, split_out=split_out
+         )
+ 
+     @derived_from(pd.core.groupby.GroupBy)
+-    def max(self, split_every=None, split_out=1):
++    def max(self, split_every=None, split_out=1, shuffle=None):
++        if shuffle:
++            return self.aggregate(
++                "max",
++                split_every=split_every,
++                split_out=split_out,
++                shuffle=shuffle,
++            )
+         return self._aca_agg(
+             token="max", func=M.max, split_every=split_every, split_out=split_out
+         )
+ 
++    @derived_from(pd.core.groupby.GroupBy)
++    def median(self, split_every=None, split_out=1, shuffle=None):
++        if shuffle is None:
++            configured_shuffle = config.get("shuffle", None)
++            shuffle = "tasks" if configured_shuffle is None else configured_shuffle
++        if not shuffle:
++            raise ValueError("In order to aggregate with 'median', you must use shuffling.")
++
++        with check_numeric_only_deprecation():
++            meta = self._meta_nonempty.median()
++
++        levels = _determine_levels(self.by)
++        with warnings.catch_warnings():
++            warnings.filterwarnings(
++                "ignore", "np.find_common_type is deprecated", DeprecationWarning
++            )
++            result = _shuffle_aggregate(
++                [self.obj, self.by]
++                if not isinstance(self.by, list)
++                else [self.obj] + self.by,
++                chunk=_non_agg_chunk,
++                chunk_kwargs={
++                    "key": self._slice,
++                    **self.observed,
++                    **self.dropna,
++                },
++                aggregate=_groupby_aggregate,
++                aggregate_kwargs={
++                    "aggfunc": M.median,
++                    "levels": levels,
++                    **self.observed,
++                    **self.dropna,
++                },
++                token="median",
++                split_every=split_every,
++                split_out=split_out,
++                shuffle=shuffle if isinstance(shuffle, str) else "tasks",
++                sort=self.sort,
++            )
++
++        if is_series_like(meta):
++            result = result[result.columns[0]]
++        if self.sort and result.npartitions == 1:
++            result = result.map_partitions(M.sort_index, meta=meta)
++        return result
++
++    def _aggregate_median(self, arg, split_every, split_out, shuffle):
++        with check_numeric_only_deprecation():
++            meta = self._meta_nonempty.aggregate(arg)
++
++        levels = _determine_levels(self.by)
++        with warnings.catch_warnings():
++            warnings.filterwarnings(
++                "ignore", "np.find_common_type is deprecated", DeprecationWarning
++            )
++            result = _shuffle_aggregate(
++                [self.obj, self.by]
++                if not isinstance(self.by, list)
++                else [self.obj] + self.by,
++                chunk=_non_agg_chunk,
++                chunk_kwargs={
++                    "key": self._slice,
++                    **self.observed,
++                    **self.dropna,
++                },
++                aggregate=_groupby_aggregate_spec,
++                aggregate_kwargs={
++                    "arg": arg,
++                    "levels": levels,
++                    **self.observed,
++                    **self.dropna,
++                },
++                token="aggregate",
++                split_every=split_every,
++                split_out=split_out,
++                shuffle=shuffle if isinstance(shuffle, str) else "tasks",
++                sort=self.sort,
++            )
++
++        if is_series_like(meta):
++            result = result[result.columns[0]].rename(meta.name)
++        elif not result._meta.columns.equals(meta.columns):
++            result = result.map_partitions(
++                _set_groupby_columns, meta.columns, meta=meta
++            )
++        if self.sort and result.npartitions == 1:
++            result = result.map_partitions(M.sort_index, meta=meta)
++        return result
++
+     @derived_from(pd.DataFrame)
+     def idxmin(self, split_every=None, split_out=1, axis=None, skipna=True):
+         return self._aca_agg(
+@@ -1547,7 +1745,14 @@ class _GroupBy:
+         )
+ 
+     @derived_from(pd.core.groupby.GroupBy)
+-    def count(self, split_every=None, split_out=1):
++    def count(self, split_every=None, split_out=1, shuffle=None):
++        if shuffle:
++            return self.aggregate(
++                "count",
++                split_every=split_every,
++                split_out=split_out,
++                shuffle=shuffle,
++            )
+         return self._aca_agg(
+             token="count",
+             func=M.count,
+@@ -1557,7 +1762,14 @@ class _GroupBy:
+         )
+ 
+     @derived_from(pd.core.groupby.GroupBy)
+-    def mean(self, split_every=None, split_out=1):
++    def mean(self, split_every=None, split_out=1, shuffle=None):
++        if shuffle:
++            return self.aggregate(
++                "mean",
++                split_every=split_every,
++                split_out=split_out,
++                shuffle=shuffle,
++            )
+         s = self.sum(split_every=split_every, split_out=split_out)
+         c = self.count(split_every=split_every, split_out=split_out)
+         if is_dataframe_like(s):
+@@ -1708,7 +1920,10 @@ class _GroupBy:
+             split_out = 1
+         if shuffle is None:
+             if split_out > 1:
+-                shuffle = shuffle or config.get("shuffle", None) or "tasks"
++                configured_shuffle = config.get("shuffle", None)
++                shuffle = (
++                    "tasks" if configured_shuffle is None else configured_shuffle
++                )
+             else:
+                 shuffle = False
+ 
+@@ -1765,6 +1980,18 @@ class _GroupBy:
+         else:
+             raise ValueError(f"aggregate on unknown object {self.obj}")
+ 
++        if _contains_median(arg) or _normalized_spec_contains_median(spec):
++            if not shuffle:
++                raise ValueError(
++                    "In order to aggregate with 'median', you must use shuffling."
++                )
++            return self._aggregate_median(
++                arg,
++                split_every=split_every,
++                split_out=split_out,
++                shuffle=shuffle,
++            )
++
+         chunk_funcs, aggregate_funcs, finalizers = _build_agg_args(spec)
+ 
+         if isinstance(self.by, (tuple, list)) and len(self.by) > 1:
+@@ -1797,29 +2024,33 @@ class _GroupBy:
+             # for larger values of split_out. However, the shuffle
+             # step requires that the result of `chunk` produces a
+             # proper DataFrame type
+-            return _shuffle_aggregate(
+-                chunk_args,
+-                chunk=_groupby_apply_funcs,
+-                chunk_kwargs=dict(
+-                    funcs=chunk_funcs,
+-                    sort=False,
+-                    **self.observed,
+-                    **self.dropna,
+-                ),
+-                aggregate=_agg_finalize,
+-                aggregate_kwargs=dict(
+-                    aggregate_funcs=aggregate_funcs,
+-                    finalize_funcs=finalizers,
+-                    level=levels,
+-                    **self.observed,
+-                    **self.dropna,
+-                ),
+-                token="aggregate",
+-                split_every=split_every,
+-                split_out=split_out,
+-                shuffle=shuffle if isinstance(shuffle, str) else "tasks",
+-                sort=self.sort,
+-            )
++            with warnings.catch_warnings():
++                warnings.filterwarnings(
++                    "ignore", "np.find_common_type is deprecated", DeprecationWarning
++                )
++                return _shuffle_aggregate(
++                    chunk_args,
++                    chunk=_groupby_apply_funcs,
++                    chunk_kwargs=dict(
++                        funcs=chunk_funcs,
++                        sort=False,
++                        **self.observed,
++                        **self.dropna,
++                    ),
++                    aggregate=_agg_finalize,
++                    aggregate_kwargs=dict(
++                        aggregate_funcs=aggregate_funcs,
++                        finalize_funcs=finalizers,
++                        level=levels,
++                        **self.observed,
++                        **self.dropna,
++                    ),
++                    token="aggregate",
++                    split_every=split_every,
++                    split_out=split_out,
++                    shuffle=shuffle if isinstance(shuffle, str) else "tasks",
++                    sort=self.sort,
++                )
+ 
+         if self.sort is None and split_out > 1:
+             warnings.warn(SORT_SPLIT_OUT_WARNING, FutureWarning)
+@@ -2287,6 +2518,7 @@ class DataFrameGroupBy(_GroupBy):
+ 
+     @_aggregate_docstring(based_on="pd.core.groupby.DataFrameGroupBy.aggregate")
+     def aggregate(self, arg, split_every=None, split_out=1, shuffle=None):
++        _check_median_requires_shuffle(arg, shuffle)
+         if arg == "size":
+             return self.size()
+ 
+@@ -2369,6 +2601,7 @@ class SeriesGroupBy(_GroupBy):
+ 
+     @_aggregate_docstring(based_on="pd.core.groupby.SeriesGroupBy.aggregate")
+     def aggregate(self, arg, split_every=None, split_out=1, shuffle=None):
++        _check_median_requires_shuffle(arg, shuffle)
+         result = super().aggregate(
+             arg, split_every=split_every, split_out=split_out, shuffle=shuffle
+         )
+diff --git a/dask/dataframe/io/csv.py b/dask/dataframe/io/csv.py
+index 9276a06..5800474 100644
+--- a/dask/dataframe/io/csv.py
++++ b/dask/dataframe/io/csv.py
+@@ -77,10 +77,10 @@ class CSVFunctionWrapper(DataFrameIOFunction):
+             self.full_columns,
+             columns,
+             self.colname,
+-            self.head[columns],
++            self.head,
+             self.header,
+             self.reader,
+-            {c: self.dtypes[c] for c in columns},
++            {c: self.dtypes[c] for c in columns if c in self.dtypes},
+             self.enforce,
+             self.kwargs,
+         )
+@@ -116,7 +116,7 @@ class CSVFunctionWrapper(DataFrameIOFunction):
+         columns = self.full_columns
+         project_after_read = False
+         if self._columns is not None:
+-            if self.kwargs:
++            if self.kwargs or not self._columns or self.colname:
+                 # To be safe, if any kwargs are defined, avoid
+                 # changing `usecols` here. Instead, we can just
+                 # select columns after the read
+diff --git a/dask/dataframe/io/demo.py b/dask/dataframe/io/demo.py
+index 960cfbd..4d2d0f5 100644
+--- a/dask/dataframe/io/demo.py
++++ b/dask/dataframe/io/demo.py
+@@ -71,8 +71,8 @@ class MakeTimeseriesPart(DataFrameIOFunction):
+     """
+ 
+     def __init__(self, dtypes, freq, kwargs, columns=None):
+-        self._columns = columns or list(dtypes.keys())
+-        self.dtypes = {c: dtypes[c] for c in self.columns}
++        self._columns = sorted(dtypes) if columns is None else columns
++        self.dtypes = dtypes
+         self.freq = freq
+         self.kwargs = kwargs
+ 
+@@ -97,9 +97,10 @@ class MakeTimeseriesPart(DataFrameIOFunction):
+         divisions, state_data = part
+         if isinstance(state_data, int):
+             state_data = random_state_data(1, state_data)
+-        return make_timeseries_part(
++        result = make_timeseries_part(
+             divisions[0], divisions[1], self.dtypes, self.freq, state_data, self.kwargs
+         )
++        return result[self.columns]
+ 
+ 
+ def make_timeseries_part(start, end, dtypes, freq, state_data, kwargs):
+diff --git a/dask/dataframe/io/tests/test_csv.py b/dask/dataframe/io/tests/test_csv.py
+index 71cb458..ca9c743 100644
+--- a/dask/dataframe/io/tests/test_csv.py
++++ b/dask/dataframe/io/tests/test_csv.py
+@@ -1770,3 +1770,12 @@ def test_csv_name_should_be_different_even_if_head_is_same(tmpdir):
+     )
+ 
+     assert new_df.dask.keys() != old_df.dask.keys()
++
++
++def test_csv_projection_with_path_column_and_empty_selection(tmpdir):
++    path = os.path.join(str(tmpdir), "test.csv")
++    pd.DataFrame({"a": [1, 2], "b": [3, 4]}).to_csv(path, index=False)
++
++    ddf = dd.read_csv(path, include_path_column="path")
++    assert_eq(ddf[["a"]], pd.DataFrame({"a": [1, 2]}))
++    assert len(ddf[[]].compute()) == 2
+diff --git a/dask/dataframe/io/tests/test_demo.py b/dask/dataframe/io/tests/test_demo.py
+index 114cd43..5e73aec 100644
+--- a/dask/dataframe/io/tests/test_demo.py
++++ b/dask/dataframe/io/tests/test_demo.py
+@@ -5,6 +5,7 @@ import dask.dataframe as dd
+ from dask.blockwise import Blockwise, optimize_blockwise
+ from dask.dataframe._compat import tm
+ from dask.dataframe.optimize import optimize_dataframe_getitem
++from dask.dataframe.utils import assert_eq
+ 
+ 
+ def test_make_timeseries():
+@@ -157,3 +158,13 @@ def test_make_timeseries_getitem_compute():
+     df3 = df2.compute()
+     assert df3["y"].min() > 0
+     assert list(df.columns) == list(df3.columns)
++
++
++def test_make_timeseries_projection_is_stable():
++    df = dd.demo.make_timeseries("2000", "2000-04-01", seed=42)
++    projected = df[["x", "y"]]
++
++    assert_eq(
++        projected.compute(optimize_graph=False),
++        projected.compute(optimize_graph=True),
++    )
+diff --git a/dask/dataframe/rolling.py b/dask/dataframe/rolling.py
+index 38df268..7b13d83 100644
+--- a/dask/dataframe/rolling.py
++++ b/dask/dataframe/rolling.py
+@@ -145,6 +145,11 @@ def map_overlap(
+     --------
+     dd.DataFrame.map_overlap
+     """
++    if isinstance(before, str):
++        before = pd.Timedelta(before)
++    if isinstance(after, str):
++        after = pd.Timedelta(after)
++
+     args = (df,) + args
+ 
+     dfs = [df for df in args if isinstance(df, _Frame)]
+diff --git a/dask/dataframe/tests/test_dataframe.py b/dask/dataframe/tests/test_dataframe.py
+index 8ce96e7..971c449 100644
+--- a/dask/dataframe/tests/test_dataframe.py
++++ b/dask/dataframe/tests/test_dataframe.py
+@@ -5394,6 +5394,31 @@ def test_from_dict_raises():
+         dd.DataFrame.from_dict({"a": ds}, npartitions=2)
+ 
+ 
++def test_from_dict_backend_dispatch():
++    from dask.dataframe.backends import (
++        DataFrameBackendEntrypoint,
++        dataframe_creation_dispatch,
++    )
++
++    class TestBackend(DataFrameBackendEntrypoint):
++        @classmethod
++        def from_dict(cls, data, **kwargs):
++            return data, kwargs["npartitions"]
++
++        @classmethod
++        def to_backend(cls, data, **kwargs):
++            return data, kwargs
++
++    dataframe_creation_dispatch.register_backend("test", TestBackend)
++    with dask.config.set({"dataframe.backend": "test"}):
++        assert dd.DataFrame.from_dict({"a": [1]}, npartitions=2) == (
++            {"a": [1]},
++            2,
++        )
++    ddf = dd.from_pandas(pd.DataFrame({"a": [1]}), npartitions=1)
++    assert ddf.to_backend("test", option=True) == (ddf, {"option": True})
++
++
+ def test_empty():
+     with pytest.raises(NotImplementedError, match="may be expensive"):
+         d.empty
+diff --git a/dask/dataframe/tests/test_format.py b/dask/dataframe/tests/test_format.py
+index 81b892b..b8e01a5 100644
+--- a/dask/dataframe/tests/test_format.py
++++ b/dask/dataframe/tests/test_format.py
+@@ -480,7 +480,7 @@ D       ...
+ G       ...
+ H       ...
+ dtype: object
+-Dask Name: from_pandas, 2 graph layers"""
++Dask Name: from_pandas-index, 2 graph layers"""
+     assert repr(ds.index) == exp
+     assert str(ds.index) == exp
+ 
+@@ -498,7 +498,7 @@ Dask Name: from_pandas, 2 graph layers"""
+     7                ...
+     8                ...
+     Name: YYY, dtype: category
+-    Dask Name: from_pandas, 2 graph layers"""
++    Dask Name: from_pandas-index, 2 graph layers"""
+     )
+     assert repr(ds.index) == exp
+     assert str(ds.index) == exp
+diff --git a/dask/dataframe/tests/test_groupby.py b/dask/dataframe/tests/test_groupby.py
+index f5f9d17..7a80989 100644
+--- a/dask/dataframe/tests/test_groupby.py
++++ b/dask/dataframe/tests/test_groupby.py
+@@ -2970,3 +2970,65 @@ def test_groupby_None_split_out_warns():
+     ddf = dd.from_pandas(df, npartitions=1)
+     with pytest.warns(FutureWarning, match="split_out=None"):
+         ddf.groupby("a").agg({"b": "max"}, split_out=None)
++
++
++@pytest.mark.parametrize("split_out", [1, 2])
++def test_groupby_median(split_out):
++    df = pd.DataFrame(
++        {"key": ["a", "b", "a", "b", "a"], "x": [1, 2, 3, 4, 9]}
++    )
++    ddf = dd.from_pandas(df, npartitions=3)
++
++    assert_eq(
++        ddf.groupby("key").median(split_out=split_out),
++        df.groupby("key").median(),
++    )
++    assert_eq(
++        ddf.groupby("key").x.median(split_out=split_out),
++        df.groupby("key").x.median(),
++    )
++    with pytest.raises(ValueError, match="must use shuffl"):
++        ddf.groupby("key").median(split_out=split_out, shuffle=False)
++    with dask.config.set(shuffle=False):
++        with pytest.raises(ValueError, match="must use shuffl"):
++            ddf.groupby("key").median(split_out=split_out)
++
++
++@pytest.mark.parametrize(
++    "spec", [{"b": "median"}, {"b": ["sum", "median"]}]
++)
++@pytest.mark.parametrize("by", ["a"])
++def test_aggregate_median(spec, by, shuffle_method):
++    df = pd.DataFrame(
++        {"a": list("aaabbbccc"), "b": [1, 3, 9, 2, 4, 8, 0, 5, 7]}
++    )
++    ddf = dd.from_pandas(df, npartitions=10)
++
++    with pytest.raises(ValueError, match="must use shuffl"):
++        ddf.groupby(by).aggregate(spec)
++    with pytest.raises(ValueError, match="must use shuffl"):
++        ddf.groupby(by).aggregate(spec, shuffle=False)
++    with dask.config.set(shuffle=False):
++        with pytest.raises(ValueError, match="must use shuffl"):
++            ddf.groupby(by).aggregate(spec, split_out=10)
++
++    assert_eq(
++        ddf.groupby(by).aggregate(spec, split_out=10),
++        df.groupby(by).aggregate(spec),
++    )
++
++
++def test_groupby_sort_true_split_out(shuffle_method):
++    df = pd.DataFrame({"key": list("abacbc"), "x": range(6)})
++    ddf = dd.from_pandas(df, npartitions=3)
++
++    assert_eq(
++        ddf.groupby("key", sort=True).sum(split_out=1, shuffle=shuffle_method),
++        df.groupby("key", sort=True).sum(),
++    )
++    assert_eq(
++        ddf.groupby("key", sort=False).sum(split_out=2, shuffle=shuffle_method),
++        df.groupby("key", sort=False).sum(),
++    )
++    with pytest.raises(NotImplementedError, match="split_out>1"):
++        ddf.groupby("key", sort=True).sum(split_out=2, shuffle=False)
+diff --git a/dask/dataframe/tests/test_rolling.py b/dask/dataframe/tests/test_rolling.py
+index 3b11847..62e234b 100644
+--- a/dask/dataframe/tests/test_rolling.py
++++ b/dask/dataframe/tests/test_rolling.py
+@@ -459,8 +459,6 @@ def test_time_rolling_large_window_variable_chunks(window):
+ @pytest.mark.parametrize("before, after", [("6s", "6s"), ("2s", "2s"), ("6s", "2s")])
+ def test_time_rolling(before, after):
+     window = before
+-    before = pd.Timedelta(before)
+-    after = pd.Timedelta(after)
+     result = dts.map_overlap(lambda x: x.rolling(window).count(), before, after)
+     expected = dts.compute().rolling(window).count()
+     assert_eq(result, expected)
+diff --git a/dask/delayed.py b/dask/delayed.py
+index 8f87943..8cf3c46 100644
+--- a/dask/delayed.py
++++ b/dask/delayed.py
+@@ -4,6 +4,7 @@ import uuid
+ import warnings
+ from collections.abc import Iterator
+ from dataclasses import fields, is_dataclass, replace
++from functools import partial
+ 
+ from tlz import concat, curry, merge, unique
+ 
+@@ -498,11 +499,11 @@ def delayed(obj, name=None, pure=None, nout=None, traverse=True):
+ 
+ def right(method):
+     """Wrapper to create 'right' version of operator given left version"""
++    return partial(_swap_binary_operator, method)
+ 
+-    def _inner(self, other):
+-        return method(other, self)
+ 
+-    return _inner
++def _swap_binary_operator(method, self, other):
++    return method(other, self)
+ 
+ 
+ def optimize(dsk, keys, **kwargs):
+diff --git a/dask/tests/test_base.py b/dask/tests/test_base.py
+index f108b05..a628d35 100644
+--- a/dask/tests/test_base.py
++++ b/dask/tests/test_base.py
+@@ -79,6 +79,16 @@ def test_normalize_function():
+ 
+     assert normalize_function(compose(f2, f3)) != normalize_function(compose(f2, f1))
+ 
++
++def test_tokenize_datetime_and_time():
++    dt = datetime.datetime(2022, 10, 14, 12, 34, 56, 789)
++    t = datetime.time(12, 34, 56, 789)
++
++    assert tokenize(dt) == tokenize(dt)
++    assert tokenize(t) == tokenize(t)
++    assert tokenize(dt) != tokenize(dt.replace(microsecond=790))
++    assert tokenize(t) != tokenize(t.replace(microsecond=790))
++
+     assert normalize_function(curry(f2)) == normalize_function(curry(f2))
+     assert normalize_function(curry(f2)) != normalize_function(curry(f1))
+     assert normalize_function(curry(f2, b=1)) == normalize_function(curry(f2, b=1))
+diff --git a/dask/tests/test_delayed.py b/dask/tests/test_delayed.py
+index 99dc844..e0c551f 100644
+--- a/dask/tests/test_delayed.py
++++ b/dask/tests/test_delayed.py
+@@ -795,6 +795,13 @@ def test_pickle(f):
+     assert d.compute() == 3
+ 
+ 
++@pytest.mark.parametrize("expr, expected", [(lambda x: 2 + x, 3), (lambda x: 2 - x, 1)])
++def test_pickle_reflected_binop(expr, expected):
++    d = expr(delayed(1))
++    d = pickle.loads(pickle.dumps(d, protocol=pickle.HIGHEST_PROTOCOL))
++    assert d.compute() == expected
++
++
+ @pytest.mark.parametrize(
+     "f", [delayed(modlevel_eager), modlevel_delayed1, modlevel_delayed2]
+ )
+diff --git a/dask/tests/test_utils.py b/dask/tests/test_utils.py
+index b075d61..015fb64 100644
+--- a/dask/tests/test_utils.py
++++ b/dask/tests/test_utils.py
+@@ -62,6 +62,29 @@ def test_ensure_bytes_ndarray():
+     assert isinstance(result, bytes)
+ 
+ 
++def test_dispatch_lazy_registration_threadsafe():
++    from concurrent.futures import ThreadPoolExecutor
++    from threading import Barrier
++
++    dispatch = Dispatch()
++    barrier = Barrier(2)
++
++    class LazyType:
++        pass
++
++    LazyType.__module__ = "lazy_package.module"
++
++    @dispatch.register_lazy("lazy_package")
++    def register():
++        barrier.wait(timeout=5)
++        dispatch.register(LazyType, lambda value: value)
++
++    with ThreadPoolExecutor(max_workers=2) as executor:
++        futures = [executor.submit(dispatch, LazyType()) for _ in range(2)]
++
++    assert all(isinstance(future.result(), LazyType) for future in futures)
++
++
+ def test_ensure_bytes_pyarrow_buffer():
+     pa = pytest.importorskip("pyarrow")
+     buf = pa.py_buffer(b"123")
+diff --git a/dask/utils.py b/dask/utils.py
+index cc6fd92..62691cd 100644
+--- a/dask/utils.py
++++ b/dask/utils.py
+@@ -623,11 +623,12 @@ class Dispatch:
+             # Is a lazy registration function present?
+             toplevel, _, _ = cls2.__module__.partition(".")
+             try:
+-                register = self._lazy.pop(toplevel)
++                register = self._lazy[toplevel]
+             except KeyError:
+                 pass
+             else:
+                 register()
++                self._lazy.pop(toplevel, None)
+                 return self.dispatch(cls)  # recurse
+         raise TypeError(f"No dispatch for {cls}")
+ 
+@@ -2020,10 +2021,13 @@ def show_versions() -> None:
+     from platform import uname
+     from sys import stdout, version_info
+ 
+-    from distributed import __version__ as distributed_version
+-
+     from dask import __version__ as dask_version
+ 
++    try:
++        from distributed import __version__ as distributed_version
++    except ImportError:
++        distributed_version = None
++
+     deps = [
+         "numpy",
+         "pandas",
+diff --git a/setup.py b/setup.py
+index 9db0daf..d340647 100755
+--- a/setup.py
++++ b/setup.py
+@@ -15,7 +15,7 @@ extras_require: dict[str, list[str]] = {
+     "array": ["numpy >= 1.18"],
+     "bag": [],  # keeping for backwards compatibility
+     "dataframe": ["numpy >= 1.18", "pandas >= 1.0"],
+-    "distributed": ["distributed == 2022.9.2"],
++    "distributed": ["distributed == 2022.10.0"],
+     "diagnostics": [
+         "bokeh >= 2.4.2",
+         "jinja2",
+@@ -33,6 +33,7 @@ extras_require["test"] = [
+ ]
+ 
+ install_requires = [
++    "click >= 7.0",
+     "cloudpickle >= 1.1.1",
+     "fsspec >= 0.6.0",
+     "packaging >= 20.0",
+@@ -93,5 +94,6 @@ setup(
+     tests_require=["pytest"],
+     extras_require=extras_require,
+     include_package_data=True,
++    entry_points={"console_scripts": ["dask=dask.cli:run_cli"]},
+     zip_safe=False,  # https://mypy.readthedocs.io/en/latest/installed_packages.html
+ )
+diff --git a/dask/backends.py b/dask/backends.py
+new file mode 100644
+index 0000000..a35002d
+--- /dev/null
++++ b/dask/backends.py
+@@ -0,0 +1,60 @@
++"""Shared support for configurable collection backends."""
++
++from __future__ import annotations
++
++from dask import config
++from dask.compatibility import entry_points
++
++
++class DaskBackendEntrypoint:
++    """Base class for backend entrypoints."""
++
++    @classmethod
++    def to_backend(cls, data, **kwargs):
++        raise NotImplementedError
++
++
++class CreationDispatch:
++    """Dispatch collection-creation methods to a configured backend."""
++
++    def __init__(self, module_name, default, entrypoint_root=None):
++        self._module_name = module_name
++        self._default = default
++        self._entrypoint_root = entrypoint_root or f"dask.{module_name}.backends"
++        self._lookup = {}
++        self._entrypoints_loaded = False
++
++    def register_backend(self, name, backend=None):
++        def register(backend):
++            self._lookup[name] = backend
++            return backend
++
++        return register(backend) if backend is not None else register
++
++    def _load_entrypoints(self):
++        if self._entrypoints_loaded:
++            return
++        self._entrypoints_loaded = True
++        for entrypoint in entry_points(group=self._entrypoint_root):
++            self.register_backend(entrypoint.name, entrypoint.load())
++
++    def dispatch(self, backend=None):
++        backend = backend or config.get(
++            f"{self._module_name}.backend", self._default
++        )
++        if backend not in self._lookup:
++            self._load_entrypoints()
++        try:
++            return self._lookup[backend]
++        except KeyError as err:
++            raise ValueError(
++                f"No backend dispatch registered for {backend!r}"
++            ) from err
++
++    def __getattr__(self, method):
++        def dispatch(*args, **kwargs):
++            backend = kwargs.pop("backend", None)
++            entrypoint = self.dispatch(backend)
++            return getattr(entrypoint, method)(*args, **kwargs)
++
++        return dispatch
+diff --git a/dask/cli.py b/dask/cli.py
+new file mode 100644
+index 0000000..ae0962c
+--- /dev/null
++++ b/dask/cli.py
+@@ -0,0 +1,69 @@
++"""The extensible command-line interface for Dask."""
++
++import warnings
++
++import click
++
++import dask
++from dask.compatibility import entry_points
++from dask.utils import show_versions
++
++
++@click.group(context_settings={"help_option_names": ["-h", "--help"]})
++@click.version_option(version=dask.__version__)
++def cli():
++    """Dask command line interface."""
++
++
++@cli.group()
++def info():
++    """Information about your Dask installation."""
++
++
++@info.command()
++def versions():
++    """Print versions of Dask and its dependencies."""
++    show_versions()
++
++
++def _register_command_ep(interface, entry_point):
++    """Register one command exposed through the ``dask_cli`` entry-point group."""
++    try:
++        command = entry_point.load()
++    except Exception as err:
++        warnings.warn(
++            f"While registering the command with name {entry_point.name!r}, "
++            f"an exception occurred: {err}",
++            UserWarning,
++        )
++        return
++
++    if not isinstance(command, click.Command):
++        warnings.warn(
++            "Dask CLI entry points must be instances of click.Command or "
++            f"click.Group, not {type(command)!r}.",
++            UserWarning,
++        )
++    elif command.name in interface.commands:
++        warnings.warn(
++            f"While registering the command with name {entry_point.name!r}, "
++            f"the command {command.name!r} is already registered and will not "
++            "be overwritten.",
++            UserWarning,
++        )
++    else:
++        interface.add_command(command)
++
++
++def run_cli():
++    """Load third-party commands and run the Dask CLI."""
++    for entry_point in entry_points(group="dask_cli"):
++        _register_command_ep(cli, entry_point)
++    cli()
++
++
++main = run_cli
++
++
++if __name__ == "__main__":
++    run_cli()
+diff --git a/dask/tests/test_cli.py b/dask/tests/test_cli.py
+new file mode 100644
+index 0000000..68f3b87
+--- /dev/null
++++ b/dask/tests/test_cli.py
+@@ -0,0 +1,52 @@
++import json
++
++import click
++import pytest
++from click.testing import CliRunner
++
++from dask.cli import _register_command_ep, cli
++
++
++class EntryPoint:
++    name = "hello"
++
++    def load(self):
++        @click.command()
++        def hello():
++            click.echo("hello")
++
++        return hello
++
++
++def test_cli_version():
++    result = CliRunner().invoke(cli, ["--version"])
++    assert result.exit_code == 0
++
++
++def test_cli_entrypoint(monkeypatch):
++    _register_command_ep(cli, EntryPoint())
++    result = CliRunner().invoke(cli, ["hello"])
++    assert result.exit_code == 0
++    assert result.output == "hello\n"
++
++
++def test_info_versions():
++    result = CliRunner().invoke(cli, ["info", "versions"])
++    assert result.exit_code == 0
++    versions = json.loads(result.output)
++    assert "dask" in versions
++    assert versions["distributed"] is None
++
++
++def test_register_command_ep_warns_for_invalid_command():
++    entry_point = EntryPoint()
++    entry_point.load = lambda: object()
++    with pytest.warns(UserWarning, match="must be instances of"):
++        _register_command_ep(click.Group(), entry_point)
++
++
++def test_repeated_name_registration_warns():
++    interface = click.Group()
++    _register_command_ep(interface, EntryPoint())
++    with pytest.warns(UserWarning, match="While registering the command with name"):
++        _register_command_ep(interface, EntryPoint())

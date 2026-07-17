@@ -1,0 +1,1523 @@
+{
+  "schema": "hermes_phase4g8_real_case_v1",
+  "run_id": "phase4g8-large-a101c61de3",
+  "job_id": "rjob_0534a88c6028",
+  "status": "completed_unresolved",
+  "classification": "runtime-correct/task-failed",
+  "worker_identity": {
+    "uid": 200879457,
+    "gid": 268642969
+  },
+  "worker_environment": {
+    "schema": "hermes_phase4g8_worker_toolchain_v1",
+    "cache_key": "d44541775af83af343ec",
+    "official_image": "xingyaoww/sweb.eval.x86_64.iterative_s_dvc-3760",
+    "image_id": "sha256:cd8af7f1566242aceab8707f57ad4aac857fe20fc7a97d235ba5abeec5b3d49f",
+    "image_content_identity": "xingyaoww/sweb.eval.x86_64.iterative_s_dvc-3760@sha256:cd8af7f1566242aceab8707f57ad4aac857fe20fc7a97d235ba5abeec5b3d49f",
+    "repo_digests": [
+      "xingyaoww/sweb.eval.x86_64.iterative_s_dvc-3760@sha256:cd8af7f1566242aceab8707f57ad4aac857fe20fc7a97d235ba5abeec5b3d49f"
+    ],
+    "setup_sha256": "e1d30742e01d1388d9df387291e08cc6de1d9553852e64d79506ae1c1d53bcb4",
+    "setup_env_sha256": "9efa934a00fca30cb988fc83b818be70e079a24eef70db58c59c43f89e020a15",
+    "resolved_environment_sha256": "666a583a499a3ec2f65ad7f658b2ce28ba6c6c0db1997ef40d7dce63c26ce0f6",
+    "environment_fingerprint": {
+      "package_count": 168,
+      "python_implementation": "CPython",
+      "python_version": "3.9.19",
+      "schema": "hermes_phase4g8_environment_fingerprint_v1",
+      "selected_packages": {
+        "numpy": "1.20.0",
+        "pytest": "7.4.4"
+      },
+      "sha256": "666a583a499a3ec2f65ad7f658b2ce28ba6c6c0db1997ef40d7dce63c26ce0f6"
+    },
+    "parity_status": "passed"
+  },
+  "worker_approval": {
+    "configured": true,
+    "policy": "on-request",
+    "reviewer": "auto_review",
+    "auto_review_policy_version": "phase4g8-dangerous-operations-v1",
+    "auto_review_policy_sha256": "71121855720c07665e7b98031f95485a4c180a723dcc7f012d38a22afde05016",
+    "guardian_approval_enabled": true,
+    "exec_policy_version": "phase4g8-exec-policy-v1",
+    "exec_policy_sha256": "0defe5084bc4fc56de084d1298780cdadb620006f327d8041988771dd8ceb8e5"
+  },
+  "model_source": {
+    "source": "codex_config",
+    "provider": "MySub2api",
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high",
+    "base_url_sha256": "d7006f4957539674e207643c9937cbcdc637ab6ef7a3e3e4b85e2a054a6b241b"
+  },
+  "model_transport_audit": {
+    "schema": "hermes_phase4g8_model_transport_audit_v1",
+    "websocket_recovery_observed": true,
+    "worker_error_event_count": 39,
+    "completed_turn_count": 14,
+    "note": "transient model transport errors were retried; worker turns subsequently completed"
+  },
+  "candidate_evidence": {
+    "schema": "hermes_phase4g8_candidate_evidence_v1",
+    "status": "archived",
+    "base_commit": "fc42ca721c25bdd24875c999e37fb4f589ecd63c",
+    "workspace_revision": "git:fc42ca721c25bdd24875c999e37fb4f589ecd63c:worktree:0bdf93d5ee3090689bb40dd7f0ea9bb54b3a81fb2ffd3b293adb96057aaa4fb7",
+    "patch_sha256": "fa4f39ec8fc86cea6d6fec42737dc6662398b9f755f74c096e76c3ef86d94fdc",
+    "patch_bytes": 94524,
+    "changed_files": [
+      "dvc/cli.py",
+      "dvc/command/base.py",
+      "dvc/command/diff.py",
+      "dvc/command/metrics.py",
+      "dvc/command/params.py",
+      "dvc/command/plot.py",
+      "dvc/command/remote.py",
+      "dvc/command/repro.py",
+      "dvc/command/run.py",
+      "dvc/command/update.py",
+      "dvc/compat.py",
+      "dvc/config.py",
+      "dvc/istextfile.py",
+      "dvc/output/__init__.py",
+      "dvc/output/base.py",
+      "dvc/remote/s3.py",
+      "dvc/repo/__init__.py",
+      "dvc/repo/commit.py",
+      "dvc/repo/diff.py",
+      "dvc/repo/imp_url.py",
+      "dvc/repo/metrics/diff.py",
+      "dvc/repo/params/diff.py",
+      "dvc/repo/plot/__init__.py",
+      "dvc/repo/plot/data.py",
+      "dvc/repo/plot/template.py",
+      "dvc/repo/reproduce.py",
+      "dvc/repo/run.py",
+      "dvc/repo/tree.py",
+      "dvc/repo/update.py",
+      "dvc/schema.py",
+      "dvc/scm/git/__init__.py",
+      "dvc/serialize.py",
+      "dvc/stage/__init__.py",
+      "dvc/stage/cache.py",
+      "dvc/stage/exceptions.py",
+      "dvc/stage/loader.py",
+      "dvc/stage/params.py",
+      "dvc/utils/__init__.py",
+      "dvc/utils/diff.py",
+      "dvc/utils/fs.py",
+      "dvc/utils/stage.py",
+      "dvc/version.py",
+      "scripts/completion/dvc.bash",
+      "scripts/completion/dvc.zsh",
+      "setup.py",
+      "tests/func/test_diff.py",
+      "tests/func/test_dvcfile.py",
+      "tests/func/test_plot.py",
+      "tests/func/test_remote.py",
+      "tests/func/test_repro.py",
+      "tests/func/test_run_multistage.py",
+      "tests/func/test_run_single_stage.py",
+      "tests/unit/command/test_metrics.py",
+      "tests/unit/command/test_params.py",
+      "tests/unit/command/test_repro.py",
+      "tests/unit/command/test_run.py",
+      "tests/unit/command/test_update.py",
+      "tests/unit/repo/test_tree.py",
+      "tests/unit/test_stage.py",
+      "tests/unit/utils/test_utils.py",
+      "dvc/command/plots.py",
+      "dvc/repo/plots/",
+      "dvc/stage/run.py",
+      "dvc/stage/stage.py",
+      "tests/unit/command/test_plots.py",
+      "tests/unit/repo/test_plots.py"
+    ],
+    "protected_oracle_included": false,
+    "patch_ref": "candidate.patch"
+  },
+  "evaluator_provenance": {
+    "producer_kind": "official_evaluator",
+    "producer_node_id": "rnode_c73ab3fb7c10",
+    "producer_task_id": "t_0acd1817",
+    "producer_session_id": "official-evaluator:phase4g8-large-a101c61de3:185053:d71b6b7a",
+    "target_revision": "git:fc42ca721c25bdd24875c999e37fb4f589ecd63c:worktree:f6baf53a3121d58be5b203fd28504f5efc324d4a932b0a8d98169b75fa58b023",
+    "target_materialization_id": "mat_05c5b59f7320",
+    "target_evidence_ref": "node:rnode_9ee69d7cb134:materialization:mat_05c5b59f7320",
+    "independent_from_session_id": "019f6b33-1f94-7943-84fe-1db2107a132f"
+  },
+  "run_report": {
+    "schema": "hermes_phase4g8_run_report_v1",
+    "instance_id": "iterative__dvc_1.0.0a1_1.0.0a2",
+    "job_id": "rjob_0534a88c6028",
+    "classification": "runtime-correct/task-failed",
+    "runtime_validation": {
+      "passed": true,
+      "failures": [],
+      "consistency": {
+        "status": "passed",
+        "violation_count": 0,
+        "warning_count": 0
+      },
+      "checkpoint_chain": {
+        "status": "valid",
+        "selection_mode": "latest_checkpoint",
+        "latest_checkpoint_id": "dchk_9e59695583c7",
+        "selected_checkpoint_id": "dchk_9e59695583c7",
+        "selected_checkpoint": {
+          "id": "dchk_9e59695583c7",
+          "job_id": "rjob_0534a88c6028",
+          "decision_session_id": "dses_085f817eaaf1",
+          "revision": 14,
+          "checkpoint_json": "{\"artifact_index\": [], \"do_not_repeat\": [{\"source_refs\": [{\"patch_id\": \"gpatch_cfb1f074ce34\"}, {\"patch_id\": \"gpatch_4e863ab63181\"}, {\"patch_id\": \"gpatch_a28d2b641e09\"}, {\"patch_id\": \"gpatch_4ec07355856d\"}, {\"patch_id\": \"gpatch_61d523b29f4f\"}, {\"patch_id\": \"gpatch_d00570fb61e9\"}, {\"patch_id\": \"gpatch_f3dce85cfbb7\"}], \"summary\": \"Do not submit strategy_update with changes_from_previous_attempts as a scalar string; repeated scalar-shaped submissions were rejected, while accepted strategy updates used a non-empty list of concrete differences.\"}, {\"source_refs\": [{\"patch_base_revision\": 4}, {\"patch_base_revision\": 5}, {\"patch_base_revision\": 11}, {\"patch_base_revision\": 12}], \"summary\": \"Do not reuse historical expected revisions 4, 5, 11, or 12 for a new decision; the authoritative graph has advanced to revision 14 and stale bases must be refreshed before validation.\"}, {\"source_refs\": [{\"patch_id\": \"gpatch_d00570fb61e9\"}, {\"patch_id\": \"gpatch_f3dce85cfbb7\"}, {\"patch_id\": \"gpatch_0ce51ac87ab6\"}], \"summary\": \"Do not use forbidden release_node or direct complete_job operations, and do not mark the required goal complete from local worker claims; completion requires independent verifier evidence.\"}, {\"source_refs\": [{\"patch_id\": \"gpatch_d00570fb61e9\"}, {\"patch_id\": \"gpatch_cd0c80f0b8f6\"}, {\"patch_id\": \"gpatch_0ce51ac87ab6\"}], \"summary\": \"Do not create remediation work without explicit linkage to the open required goal or a catalogued open gap; preserve goal_item_keys or gap_keys in any validator-bound node operation.\"}, {\"source_refs\": [{\"patch_id\": \"gpatch_f3dce85cfbb7\"}, {\"patch_id\": \"gpatch_cd0c80f0b8f6\"}, {\"patch_id\": \"gpatch_0ce51ac87ab6\"}], \"summary\": \"Do not repeat unchanged official-evaluator runs or speculative API oscillation without new bounded diagnostics and a fresh workspace revision.\"}], \"goal_contract_revision\": 1, \"graph_frontier\": [{\"node_key\": \"resolve-opaque-evaluator-parity-efsig-6e79adf9\", \"node_type\": \"strategy_update\", \"source_refs\": [{\"node_key\": \"resolve-opaque-evaluator-parity-efsig-6e79adf9\"}], \"state\": \"ready\", \"summary\": \"Ready anti-stuck remediation strategy: audit the complete objective, obtain bounded parity diagnostics, repair root contract mismatches, and validate targeted plus broad regressions without accessing protected evaluator source.\"}, {\"node_key\": \"verify-official-evaluator-resolved-0e5aa45a\", \"node_type\": \"verification\", \"source_refs\": [{\"node_key\": \"verify-official-evaluator-resolved-0e5aa45a\"}], \"state\": \"failed\", \"summary\": \"Failed official verification with the stable plots, command-diff, and stage path-conversion residual set.\"}, {\"node_key\": \"verify-official-evaluator-resolved-404dcfaf\", \"node_type\": \"verification\", \"source_refs\": [{\"node_key\": \"verify-official-evaluator-resolved-404dcfaf\"}], \"state\": \"failed\", \"summary\": \"Failed broad official verification exposing no-commit diff, remote-default, stage-name, repro, and compatibility defects.\"}, {\"node_key\": \"verify-official-evaluator-resolved-522a377e\", \"node_type\": \"verification\", \"source_refs\": [{\"node_key\": \"verify-official-evaluator-resolved-522a377e\"}], \"state\": \"failed\", \"summary\": \"Failed official verification with the stable residual evaluator signature.\"}, {\"node_key\": \"verify-official-evaluator-resolved-5af58f6b\", \"node_type\": \"verification\", \"source_refs\": [{\"node_key\": \"verify-official-evaluator-resolved-5af58f6b\"}], \"state\": \"failed\", \"summary\": \"Failed official verification exposing plots API, update batching, revision-label, dry-run, and path-conversion mismatches.\"}, {\"node_key\": \"verify-official-evaluator-resolved-86e58653\", \"node_type\": \"verification\", \"source_refs\": [{\"node_key\": \"verify-official-evaluator-resolved-86e58653\"}], \"state\": \"failed\", \"summary\": \"Failed official verification including missing dry-run logging and the stable residual clusters.\"}, {\"node_key\": \"verify-official-evaluator-resolved-88eeb0cc\", \"node_type\": \"verification\", \"source_refs\": [{\"node_key\": \"verify-official-evaluator-resolved-88eeb0cc\"}], \"state\": \"failed\", \"summary\": \"Failed official verification with plots, command-diff, dry-run, and path-conversion failures.\"}, {\"node_key\": \"verify-official-evaluator-resolved-926a1ce0\", \"node_type\": \"verification\", \"source_refs\": [{\"node_key\": \"verify-official-evaluator-resolved-926a1ce0\"}], \"state\": \"failed\", \"summary\": \"Failed official verification including the plots diff revs-versus-revisions contract mismatch.\"}, {\"node_key\": \"verify-official-evaluator-resolved-a8dc1097\", \"node_type\": \"verification\", \"source_refs\": [{\"node_key\": \"verify-official-evaluator-resolved-a8dc1097\"}], \"state\": \"failed\", \"summary\": \"Failed official verification with the stable eleven-test residual signature.\"}, {\"node_key\": \"verify-official-evaluator-resolved-c0aab400\", \"node_type\": \"verification\", \"source_refs\": [{\"node_key\": \"verify-official-evaluator-resolved-c0aab400\"}], \"state\": \"failed\", \"summary\": \"Failed official verification exposing plots parser/output, remote-default, stage-name, update, and revision-helper regressions.\"}], \"human_decisions\": [], \"key_decisions\": [], \"known_failure_boundaries\": [{\"source_refs\": [{\"node_key\": \"verify-official-evaluator-resolved-0e5aa45a\"}, {\"node_key\": \"verify-official-evaluator-resolved-522a377e\"}, {\"node_key\": \"verify-official-evaluator-resolved-a8dc1097\"}], \"summary\": \"The stable residual evaluator boundary includes five plots functional failures, five unit command-diff failures, and TestPathConversion; several runs provide only test identifiers, so parity-visible assertions remain required.\"}, {\"source_refs\": [{\"node_key\": \"verify-official-evaluator-resolved-404dcfaf\"}, {\"node_key\": \"verify-official-evaluator-resolved-5af58f6b\"}, {\"node_key\": \"verify-official-evaluator-resolved-c0aab400\"}], \"summary\": \"Broader evaluator attempts also exposed incompatible command/repository signatures, parser failures, remote-default exit behavior, invalid stage-name handling, update batching, dry-run logging, and revision normalization.\"}], \"metadata\": {\"checkpoint_is_non_authoritative_context\": true, \"current_graph_revision\": 14, \"database_is_authoritative\": true, \"db_revision\": 14, \"graph_revision\": 14, \"job_state\": \"active\", \"ledger_revision\": 14, \"profile_hash\": \"c25e4e401d15dc9054b062f60487b4ced18202993ae2f6c6933f32b95ba9af23\", \"profile_name\": \"validator_boundary_compaction\", \"profile_path\": \"docs/kanban-runtime-kernel-compaction-profiles/validator_boundary_compaction.md\", \"profile_version\": \"1\", \"provider_audit\": {\"fallback_used\": false, \"input_token_estimate\": 66072, \"output_token_estimate\": 2587, \"parse_status\": \"parsed\", \"provider_input_entry_id\": 80, \"provider_latency_ms\": 82692, \"provider_model\": \"gpt-5.6-sol\", \"provider_name\": \"custom\", \"provider_validation\": {\"status\": \"accepted\"}, \"reason\": \"rejection_threshold\", \"request_entry_id\": 79, \"request_ref\": \"b69895dc4b45a0258a0241abc6528e24f3d960fb1d6647c0d51c95f70fa42053\", \"response_ref\": \"3fcbb4b7238b8084bc230b4009ac8806d9878351a5e3e147e4c58608836419e7\", \"retry_count\": 0}, \"provider_generated\": true, \"required_goal_item\": \"official-evaluator-resolved\", \"required_goal_state\": \"open\", \"source_fingerprint\": \"66e289dd2a4d9b8783251fdbfcefaf1ee7fb2c41420abfc69ddd6b52b7ca0f16\", \"source_segment_id\": \"dseg_ec268757b2ed\"}, \"next_strategy_constraints\": [{\"source_refs\": [{\"goal_item_key\": \"official-evaluator-resolved\"}, {\"gap_key\": \"official-evaluator-resolved:failed_required_node\"}], \"summary\": \"Keep the next decision linked to the required official-evaluator-resolved goal or one of its current catalogued gaps; new nodes require goal-or-gap linkage.\"}, {\"source_refs\": [{\"node_key\": \"resolve-opaque-evaluator-parity-efsig-6e79adf9\"}], \"summary\": \"Continue from the ready anti-stuck strategy and require bounded diagnostics for representative plots, command-diff, and stage path-conversion failures before further compatibility edits or reevaluation.\"}], \"objective_summary\": \"Implement the complete DVC 1.0.0a1-to-1.0.0a2 change set and pass the fixed official SWE-EVO evaluator; the required evaluator goal remains open after repeated failures concentrated in plots, command diff, stage path conversion, and related compatibility contracts.\", \"open_blockers\": [{\"source_refs\": [{\"gap_key\": \"official-evaluator-resolved:failed_required_node\"}, {\"node_key\": \"verify-official-evaluator-resolved-0e5aa45a\"}], \"summary\": \"Independent evaluation still fails the required goal, including a stable core of plots, command-diff, and stage path-conversion tests.\"}, {\"source_refs\": [{\"gap_key\": \"runtime:stale:official-evaluator-resolved:failed_required_node\"}, {\"node_key\": \"verify-official-evaluator-resolved-a8dc1097\"}], \"summary\": \"Repeated local implementation claims have not displaced failed independent evaluator evidence.\"}, {\"source_refs\": [{\"gap_key\": \"runtime:stale:runtime:no_runnable_for_open_goal\"}, {\"node_key\": \"resolve-opaque-evaluator-parity-efsig-6e79adf9\"}], \"summary\": \"The runtime records stale/no-progress status and requires genuinely new diagnostic or workspace evidence rather than another unchanged evaluator retry.\"}], \"open_goal_gaps\": [{\"gap_key\": \"official-evaluator-resolved:failed_required_node\", \"gap_type\": \"failed_required_node\", \"source_refs\": [{\"gap_key\": \"official-evaluator-resolved:failed_required_node\"}], \"summary\": \"The required official-evaluator-resolved goal remains blocked by failed independent verification nodes.\"}, {\"gap_key\": \"runtime:stale:official-evaluator-resolved:failed_required_node\", \"gap_type\": \"stale_or_no_progress\", \"source_refs\": [{\"gap_key\": \"runtime:stale:official-evaluator-resolved:failed_required_node\"}], \"summary\": \"The failed-required-node gap has not yet produced verified progress.\"}, {\"gap_key\": \"runtime:stale:runtime:no_runnable_for_open_goal\", \"gap_type\": \"stale_or_no_progress\", \"source_refs\": [{\"gap_key\": \"runtime:stale:runtime:no_runnable_for_open_goal\"}], \"summary\": \"The runtime still records a stale no-runnable-for-open-goal condition despite the current remediation strategy frontier.\"}], \"rejected_approaches\": [], \"satisfied_goal_items\": [], \"validator_rejection_lessons\": [{\"base_revision\": 4, \"source_refs\": [{\"patch_base_revision\": 4}, {\"patch_id\": \"gpatch_cfb1f074ce34\"}], \"summary\": \"A strategy_update at base revision 4 was rejected with reason `strategy_update requires changes_from_previous_attempts`; the scalar-string field shape was not accepted even though the field appeared in the submitted operation.\"}, {\"base_revision\": 5, \"source_refs\": [{\"patch_base_revision\": 5}, {\"patch_id\": \"gpatch_4e863ab63181\"}, {\"patch_id\": \"gpatch_a28d2b641e09\"}], \"summary\": \"Two strategy_update submissions at base revision 5 were rejected with reason `strategy_update requires changes_from_previous_attempts`; do not treat semantic prose in a scalar field as satisfying the validator shape.\"}, {\"base_revision\": 11, \"source_refs\": [{\"patch_base_revision\": 11}, {\"patch_id\": \"gpatch_4ec07355856d\"}], \"summary\": \"The strategy_update at base revision 11 was rejected with reason `strategy_update requires changes_from_previous_attempts`; the same scalar-string shape repeated the prior validator failure.\"}, {\"base_revision\": 12, \"source_refs\": [{\"patch_base_revision\": 12}, {\"patch_id\": \"gpatch_61d523b29f4f\"}], \"summary\": \"The strategy_update at base revision 12 was rejected with reason `strategy_update requires changes_from_previous_attempts`; subsequent decisions must use the validator-accepted non-empty structured form rather than repeating the rejected scalar form.\"}]}",
+          "reason": "rejection_threshold",
+          "transcript_ref": "decision_segment:dseg_ec268757b2ed",
+          "created_at": 1784209938,
+          "source_segment_id": "dseg_ec268757b2ed",
+          "profile_name": "validator_boundary_compaction",
+          "profile_version": "1",
+          "profile_hash": "c25e4e401d15dc9054b062f60487b4ced18202993ae2f6c6933f32b95ba9af23",
+          "profile_path": "docs/kanban-runtime-kernel-compaction-profiles/validator_boundary_compaction.md",
+          "checkpoint_revision": 14,
+          "db_revision": 14,
+          "graph_revision": 14,
+          "ledger_revision": 14,
+          "covered_event_start": null,
+          "covered_event_end": null,
+          "covered_decision_start": "kdec_1959a9c8539f",
+          "covered_decision_end": "kdec_ecb7558c4284",
+          "covered_entry_start": 18,
+          "covered_entry_end": 81,
+          "payload_json": "{\"artifact_index\": [], \"do_not_repeat\": [{\"source_refs\": [{\"patch_id\": \"gpatch_cfb1f074ce34\"}, {\"patch_id\": \"gpatch_4e863ab63181\"}, {\"patch_id\": \"gpatch_a28d2b641e09\"}, {\"patch_id\": \"gpatch_4ec07355856d\"}, {\"patch_id\": \"gpatch_61d523b29f4f\"}, {\"patch_id\": \"gpatch_d00570fb61e9\"}, {\"patch_id\": \"gpatch_f3dce85cfbb7\"}], \"summary\": \"Do not submit strategy_update with changes_from_previous_attempts as a scalar string; repeated scalar-shaped submissions were rejected, while accepted strategy updates used a non-empty list of concrete differences.\"}, {\"source_refs\": [{\"patch_base_revision\": 4}, {\"patch_base_revision\": 5}, {\"patch_base_revision\": 11}, {\"patch_base_revision\": 12}], \"summary\": \"Do not reuse historical expected revisions 4, 5, 11, or 12 for a new decision; the authoritative graph has advanced to revision 14 and stale bases must be refreshed before validation.\"}, {\"source_refs\": [{\"patch_id\": \"gpatch_d00570fb61e9\"}, {\"patch_id\": \"gpatch_f3dce85cfbb7\"}, {\"patch_id\": \"gpatch_0ce51ac87ab6\"}], \"summary\": \"Do not use forbidden release_node or direct complete_job operations, and do not mark the required goal complete from local worker claims; completion requires independent verifier evidence.\"}, {\"source_refs\": [{\"patch_id\": \"gpatch_d00570fb61e9\"}, {\"patch_id\": \"gpatch_cd0c80f0b8f6\"}, {\"patch_id\": \"gpatch_0ce51ac87ab6\"}], \"summary\": \"Do not create remediation work without explicit linkage to the open required goal or a catalogued open gap; preserve goal_item_keys or gap_keys in any validator-bound node operation.\"}, {\"source_refs\": [{\"patch_id\": \"gpatch_f3dce85cfbb7\"}, {\"patch_id\": \"gpatch_cd0c80f0b8f6\"}, {\"patch_id\": \"gpatch_0ce51ac87ab6\"}], \"summary\": \"Do not repeat unchanged official-evaluator runs or speculative API oscillation without new bounded diagnostics and a fresh workspace revision.\"}], \"goal_contract_revision\": 1, \"graph_frontier\": [{\"node_key\": \"resolve-opaque-evaluator-parity-efsig-6e79adf9\", \"node_type\": \"strategy_update\", \"source_refs\": [{\"node_key\": \"resolve-opaque-evaluator-parity-efsig-6e79adf9\"}], \"state\": \"ready\", \"summary\": \"Ready anti-stuck remediation strategy: audit the complete objective, obtain bounded parity diagnostics, repair root contract mismatches, and validate targeted plus broad regressions without accessing protected evaluator source.\"}, {\"node_key\": \"verify-official-evaluator-resolved-0e5aa45a\", \"node_type\": \"verification\", \"source_refs\": [{\"node_key\": \"verify-official-evaluator-resolved-0e5aa45a\"}], \"state\": \"failed\", \"summary\": \"Failed official verification with the stable plots, command-diff, and stage path-conversion residual set.\"}, {\"node_key\": \"verify-official-evaluator-resolved-404dcfaf\", \"node_type\": \"verification\", \"source_refs\": [{\"node_key\": \"verify-official-evaluator-resolved-404dcfaf\"}], \"state\": \"failed\", \"summary\": \"Failed broad official verification exposing no-commit diff, remote-default, stage-name, repro, and compatibility defects.\"}, {\"node_key\": \"verify-official-evaluator-resolved-522a377e\", \"node_type\": \"verification\", \"source_refs\": [{\"node_key\": \"verify-official-evaluator-resolved-522a377e\"}], \"state\": \"failed\", \"summary\": \"Failed official verification with the stable residual evaluator signature.\"}, {\"node_key\": \"verify-official-evaluator-resolved-5af58f6b\", \"node_type\": \"verification\", \"source_refs\": [{\"node_key\": \"verify-official-evaluator-resolved-5af58f6b\"}], \"state\": \"failed\", \"summary\": \"Failed official verification exposing plots API, update batching, revision-label, dry-run, and path-conversion mismatches.\"}, {\"node_key\": \"verify-official-evaluator-resolved-86e58653\", \"node_type\": \"verification\", \"source_refs\": [{\"node_key\": \"verify-official-evaluator-resolved-86e58653\"}], \"state\": \"failed\", \"summary\": \"Failed official verification including missing dry-run logging and the stable residual clusters.\"}, {\"node_key\": \"verify-official-evaluator-resolved-88eeb0cc\", \"node_type\": \"verification\", \"source_refs\": [{\"node_key\": \"verify-official-evaluator-resolved-88eeb0cc\"}], \"state\": \"failed\", \"summary\": \"Failed official verification with plots, command-diff, dry-run, and path-conversion failures.\"}, {\"node_key\": \"verify-official-evaluator-resolved-926a1ce0\", \"node_type\": \"verification\", \"source_refs\": [{\"node_key\": \"verify-official-evaluator-resolved-926a1ce0\"}], \"state\": \"failed\", \"summary\": \"Failed official verification including the plots diff revs-versus-revisions contract mismatch.\"}, {\"node_key\": \"verify-official-evaluator-resolved-a8dc1097\", \"node_type\": \"verification\", \"source_refs\": [{\"node_key\": \"verify-official-evaluator-resolved-a8dc1097\"}], \"state\": \"failed\", \"summary\": \"Failed official verification with the stable eleven-test residual signature.\"}, {\"node_key\": \"verify-official-evaluator-resolved-c0aab400\", \"node_type\": \"verification\", \"source_refs\": [{\"node_key\": \"verify-official-evaluator-resolved-c0aab400\"}], \"state\": \"failed\", \"summary\": \"Failed official verification exposing plots parser/output, remote-default, stage-name, update, and revision-helper regressions.\"}], \"human_decisions\": [], \"key_decisions\": [], \"known_failure_boundaries\": [{\"source_refs\": [{\"node_key\": \"verify-official-evaluator-resolved-0e5aa45a\"}, {\"node_key\": \"verify-official-evaluator-resolved-522a377e\"}, {\"node_key\": \"verify-official-evaluator-resolved-a8dc1097\"}], \"summary\": \"The stable residual evaluator boundary includes five plots functional failures, five unit command-diff failures, and TestPathConversion; several runs provide only test identifiers, so parity-visible assertions remain required.\"}, {\"source_refs\": [{\"node_key\": \"verify-official-evaluator-resolved-404dcfaf\"}, {\"node_key\": \"verify-official-evaluator-resolved-5af58f6b\"}, {\"node_key\": \"verify-official-evaluator-resolved-c0aab400\"}], \"summary\": \"Broader evaluator attempts also exposed incompatible command/repository signatures, parser failures, remote-default exit behavior, invalid stage-name handling, update batching, dry-run logging, and revision normalization.\"}], \"metadata\": {\"checkpoint_is_non_authoritative_context\": true, \"current_graph_revision\": 14, \"database_is_authoritative\": true, \"db_revision\": 14, \"graph_revision\": 14, \"job_state\": \"active\", \"ledger_revision\": 14, \"profile_hash\": \"c25e4e401d15dc9054b062f60487b4ced18202993ae2f6c6933f32b95ba9af23\", \"profile_name\": \"validator_boundary_compaction\", \"profile_path\": \"docs/kanban-runtime-kernel-compaction-profiles/validator_boundary_compaction.md\", \"profile_version\": \"1\", \"provider_audit\": {\"fallback_used\": false, \"input_token_estimate\": 66072, \"output_token_estimate\": 2587, \"parse_status\": \"parsed\", \"provider_input_entry_id\": 80, \"provider_latency_ms\": 82692, \"provider_model\": \"gpt-5.6-sol\", \"provider_name\": \"custom\", \"provider_validation\": {\"status\": \"accepted\"}, \"reason\": \"rejection_threshold\", \"request_entry_id\": 79, \"request_ref\": \"b69895dc4b45a0258a0241abc6528e24f3d960fb1d6647c0d51c95f70fa42053\", \"response_ref\": \"3fcbb4b7238b8084bc230b4009ac8806d9878351a5e3e147e4c58608836419e7\", \"retry_count\": 0}, \"provider_generated\": true, \"required_goal_item\": \"official-evaluator-resolved\", \"required_goal_state\": \"open\", \"source_fingerprint\": \"66e289dd2a4d9b8783251fdbfcefaf1ee7fb2c41420abfc69ddd6b52b7ca0f16\", \"source_segment_id\": \"dseg_ec268757b2ed\"}, \"next_strategy_constraints\": [{\"source_refs\": [{\"goal_item_key\": \"official-evaluator-resolved\"}, {\"gap_key\": \"official-evaluator-resolved:failed_required_node\"}], \"summary\": \"Keep the next decision linked to the required official-evaluator-resolved goal or one of its current catalogued gaps; new nodes require goal-or-gap linkage.\"}, {\"source_refs\": [{\"node_key\": \"resolve-opaque-evaluator-parity-efsig-6e79adf9\"}], \"summary\": \"Continue from the ready anti-stuck strategy and require bounded diagnostics for representative plots, command-diff, and stage path-conversion failures before further compatibility edits or reevaluation.\"}], \"objective_summary\": \"Implement the complete DVC 1.0.0a1-to-1.0.0a2 change set and pass the fixed official SWE-EVO evaluator; the required evaluator goal remains open after repeated failures concentrated in plots, command diff, stage path conversion, and related compatibility contracts.\", \"open_blockers\": [{\"source_refs\": [{\"gap_key\": \"official-evaluator-resolved:failed_required_node\"}, {\"node_key\": \"verify-official-evaluator-resolved-0e5aa45a\"}], \"summary\": \"Independent evaluation still fails the required goal, including a stable core of plots, command-diff, and stage path-conversion tests.\"}, {\"source_refs\": [{\"gap_key\": \"runtime:stale:official-evaluator-resolved:failed_required_node\"}, {\"node_key\": \"verify-official-evaluator-resolved-a8dc1097\"}], \"summary\": \"Repeated local implementation claims have not displaced failed independent evaluator evidence.\"}, {\"source_refs\": [{\"gap_key\": \"runtime:stale:runtime:no_runnable_for_open_goal\"}, {\"node_key\": \"resolve-opaque-evaluator-parity-efsig-6e79adf9\"}], \"summary\": \"The runtime records stale/no-progress status and requires genuinely new diagnostic or workspace evidence rather than another unchanged evaluator retry.\"}], \"open_goal_gaps\": [{\"gap_key\": \"official-evaluator-resolved:failed_required_node\", \"gap_type\": \"failed_required_node\", \"source_refs\": [{\"gap_key\": \"official-evaluator-resolved:failed_required_node\"}], \"summary\": \"The required official-evaluator-resolved goal remains blocked by failed independent verification nodes.\"}, {\"gap_key\": \"runtime:stale:official-evaluator-resolved:failed_required_node\", \"gap_type\": \"stale_or_no_progress\", \"source_refs\": [{\"gap_key\": \"runtime:stale:official-evaluator-resolved:failed_required_node\"}], \"summary\": \"The failed-required-node gap has not yet produced verified progress.\"}, {\"gap_key\": \"runtime:stale:runtime:no_runnable_for_open_goal\", \"gap_type\": \"stale_or_no_progress\", \"source_refs\": [{\"gap_key\": \"runtime:stale:runtime:no_runnable_for_open_goal\"}], \"summary\": \"The runtime still records a stale no-runnable-for-open-goal condition despite the current remediation strategy frontier.\"}], \"rejected_approaches\": [], \"satisfied_goal_items\": [], \"validator_rejection_lessons\": [{\"base_revision\": 4, \"source_refs\": [{\"patch_base_revision\": 4}, {\"patch_id\": \"gpatch_cfb1f074ce34\"}], \"summary\": \"A strategy_update at base revision 4 was rejected with reason `strategy_update requires changes_from_previous_attempts`; the scalar-string field shape was not accepted even though the field appeared in the submitted operation.\"}, {\"base_revision\": 5, \"source_refs\": [{\"patch_base_revision\": 5}, {\"patch_id\": \"gpatch_4e863ab63181\"}, {\"patch_id\": \"gpatch_a28d2b641e09\"}], \"summary\": \"Two strategy_update submissions at base revision 5 were rejected with reason `strategy_update requires changes_from_previous_attempts`; do not treat semantic prose in a scalar field as satisfying the validator shape.\"}, {\"base_revision\": 11, \"source_refs\": [{\"patch_base_revision\": 11}, {\"patch_id\": \"gpatch_4ec07355856d\"}], \"summary\": \"The strategy_update at base revision 11 was rejected with reason `strategy_update requires changes_from_previous_attempts`; the same scalar-string shape repeated the prior validator failure.\"}, {\"base_revision\": 12, \"source_refs\": [{\"patch_base_revision\": 12}, {\"patch_id\": \"gpatch_61d523b29f4f\"}], \"summary\": \"The strategy_update at base revision 12 was rejected with reason `strategy_update requires changes_from_previous_attempts`; subsequent decisions must use the validator-accepted non-empty structured form rather than repeating the rejected scalar form.\"}]}",
+          "payload_text": "{\n  \"artifact_index\": [],\n  \"do_not_repeat\": [\n    {\n      \"source_refs\": [\n        {\n          \"patch_id\": \"gpatch_cfb1f074ce34\"\n        },\n        {\n          \"patch_id\": \"gpatch_4e863ab63181\"\n        },\n        {\n          \"patch_id\": \"gpatch_a28d2b641e09\"\n        },\n        {\n          \"patch_id\": \"gpatch_4ec07355856d\"\n        },\n        {\n          \"patch_id\": \"gpatch_61d523b29f4f\"\n        },\n        {\n          \"patch_id\": \"gpatch_d00570fb61e9\"\n        },\n        {\n          \"patch_id\": \"gpatch_f3dce85cfbb7\"\n        }\n      ],\n      \"summary\": \"Do not submit strategy_update with changes_from_previous_attempts as a scalar string; repeated scalar-shaped submissions were rejected, while accepted strategy updates used a non-empty list of concrete differences.\"\n    },\n    {\n      \"source_refs\": [\n        {\n          \"patch_base_revision\": 4\n        },\n        {\n          \"patch_base_revision\": 5\n        },\n        {\n          \"patch_base_revision\": 11\n        },\n        {\n          \"patch_base_revision\": 12\n        }\n      ],\n      \"summary\": \"Do not reuse historical expected revisions 4, 5, 11, or 12 for a new decision; the authoritative graph has advanced to revision 14 and stale bases must be refreshed before validation.\"\n    },\n    {\n      \"source_refs\": [\n        {\n          \"patch_id\": \"gpatch_d00570fb61e9\"\n        },\n        {\n          \"patch_id\": \"gpatch_f3dce85cfbb7\"\n        },\n        {\n          \"patch_id\": \"gpatch_0ce51ac87ab6\"\n        }\n      ],\n      \"summary\": \"Do not use forbidden release_node or direct complete_job operations, and do not mark the required goal complete from local worker claims; completion requires independent verifier evidence.\"\n    },\n    {\n      \"source_refs\": [\n        {\n          \"patch_id\": \"gpatch_d00570fb61e9\"\n        },\n        {\n          \"patch_id\": \"gpatch_cd0c80f0b8f6\"\n        },\n        {\n          \"patch_id\": \"gpatch_0ce51ac87ab6\"\n        }\n      ],\n      \"summary\": \"Do not create remediation work without explicit linkage to the open required goal or a catalogued open gap; preserve goal_item_keys or gap_keys in any validator-bound node operation.\"\n    },\n    {\n      \"source_refs\": [\n        {\n          \"patch_id\": \"gpatch_f3dce85cfbb7\"\n        },\n        {\n          \"patch_id\": \"gpatch_cd0c80f0b8f6\"\n        },\n        {\n          \"patch_id\": \"gpatch_0ce51ac87ab6\"\n        }\n      ],\n      \"summary\": \"Do not repeat unchanged official-evaluator runs or speculative API oscillation without new bounded diagnostics and a fresh workspace revision.\"\n    }\n  ],\n  \"goal_contract_revision\": 1,\n  \"graph_frontier\": [\n    {\n      \"node_key\": \"resolve-opaque-evaluator-parity-efsig-6e79adf9\",\n      \"node_type\": \"strategy_update\",\n      \"source_refs\": [\n        {\n          \"node_key\": \"resolve-opaque-evaluator-parity-efsig-6e79adf9\"\n        }\n      ],\n      \"state\": \"ready\",\n      \"summary\": \"Ready anti-stuck remediation strategy: audit the complete objective, obtain bounded parity diagnostics, repair root contract mismatches, and validate targeted plus broad regressions without accessing protected evaluator source.\"\n    },\n    {\n      \"node_key\": \"verify-official-evaluator-resolved-0e5aa45a\",\n      \"node_type\": \"verification\",\n      \"source_refs\": [\n        {\n          \"node_key\": \"verify-official-evaluator-resolved-0e5aa45a\"\n        }\n      ],\n      \"state\": \"failed\",\n      \"summary\": \"Failed official verification with the stable plots, command-diff, and stage path-conversion residual set.\"\n    },\n    {\n      \"node_key\": \"verify-official-evaluator-resolved-404dcfaf\",\n      \"node_type\": \"verification\",\n      \"source_refs\": [\n        {\n          \"node_key\": \"verify-official-evaluator-resolved-404dcfaf\"\n        }\n      ],\n      \"state\": \"failed\",\n      \"summary\": \"Failed broad official verification exposing no-commit diff, remote-default, stage-name, repro, and compatibility defects.\"\n    },\n    {\n      \"node_key\": \"verify-official-evaluator-resolved-522a377e\",\n      \"node_type\": \"verification\",\n      \"source_refs\": [\n        {\n          \"node_key\": \"verify-official-evaluator-resolved-522a377e\"\n        }\n      ],\n      \"state\": \"failed\",\n      \"summary\": \"Failed official verification with the stable residual evaluator signature.\"\n    },\n    {\n      \"node_key\": \"verify-official-evaluator-resolved-5af58f6b\",\n      \"node_type\": \"verification\",\n      \"source_refs\": [\n        {\n          \"node_key\": \"verify-official-evaluator-resolved-5af58f6b\"\n        }\n      ],\n      \"state\": \"failed\",\n      \"summary\": \"Failed official verification exposing plots API, update batching, revision-label, dry-run, and path-conversion mismatches.\"\n    },\n    {\n      \"node_key\": \"verify-official-evaluator-resolved-86e58653\",\n      \"node_type\": \"verification\",\n      \"source_refs\": [\n        {\n          \"node_key\": \"verify-official-evaluator-resolved-86e58653\"\n        }\n      ],\n      \"state\": \"failed\",\n      \"summary\": \"Failed official verification including missing dry-run logging and the stable residual clusters.\"\n    },\n    {\n      \"node_key\": \"verify-official-evaluator-resolved-88eeb0cc\",\n      \"node_type\": \"verification\",\n      \"source_refs\": [\n        {\n          \"node_key\": \"verify-official-evaluator-resolved-88eeb0cc\"\n        }\n      ],\n      \"state\": \"failed\",\n      \"summary\": \"Failed official verification with plots, command-diff, dry-run, and path-conversion failures.\"\n    },\n    {\n      \"node_key\": \"verify-official-evaluator-resolved-926a1ce0\",\n      \"node_type\": \"verification\",\n      \"source_refs\": [\n        {\n          \"node_key\": \"verify-official-evaluator-resolved-926a1ce0\"\n        }\n      ],\n      \"state\": \"failed\",\n      \"summary\": \"Failed official verification including the plots diff revs-versus-revisions contract mismatch.\"\n    },\n    {\n      \"node_key\": \"verify-official-evaluator-resolved-a8dc1097\",\n      \"node_type\": \"verification\",\n      \"source_refs\": [\n        {\n          \"node_key\": \"verify-official-evaluator-resolved-a8dc1097\"\n        }\n      ],\n      \"state\": \"failed\",\n      \"summary\": \"Failed official verification with the stable eleven-test residual signature.\"\n    },\n    {\n      \"node_key\": \"verify-official-evaluator-resolved-c0aab400\",\n      \"node_type\": \"verification\",\n      \"source_refs\": [\n        {\n          \"node_key\": \"verify-official-evaluator-resolved-c0aab400\"\n        }\n      ],\n      \"state\": \"failed\",\n      \"summary\": \"Failed official verification exposing plots parser/output, remote-default, stage-name, update, and revision-helper regressions.\"\n    }\n  ],\n  \"human_decisions\": [],\n  \"key_decisions\": [],\n  \"known_failure_boundaries\": [\n    {\n      \"source_refs\": [\n        {\n          \"node_key\": \"verify-official-evaluator-resolved-0e5aa45a\"\n        },\n        {\n          \"node_key\": \"verify-official-evaluator-resolved-522a377e\"\n        },\n        {\n          \"node_key\": \"verify-official-evaluator-resolved-a8dc1097\"\n        }\n      ],\n      \"summary\": \"The stable residual evaluator boundary includes five plots functional failures, five unit command-diff failures, and TestPathConversion; several runs provide only test identifiers, so parity-visible assertions remain required.\"\n    },\n    {\n      \"source_refs\": [\n        {\n          \"node_key\": \"verify-official-evaluator-resolved-404dcfaf\"\n        },\n        {\n          \"node_key\": \"verify-official-evaluator-resolved-5af58f6b\"\n        },\n        {\n          \"node_key\": \"verify-official-evaluator-resolved-c0aab400\"\n        }\n      ],\n      \"summary\": \"Broader evaluator attempts also exposed incompatible command/repository signatures, parser failures, remote-default exit behavior, invalid stage-name handling, update batching, dry-run logging, and revision normalization.\"\n    }\n  ],\n  \"metadata\": {\n    \"checkpoint_is_non_authoritative_context\": true,\n    \"current_graph_revision\": 14,\n    \"database_is_authoritative\": true,\n    \"db_revision\": 14,\n    \"graph_revision\": 14,\n    \"job_state\": \"active\",\n    \"ledger_revision\": 14,\n    \"profile_hash\": \"c25e4e401d15dc9054b062f60487b4ced18202993ae2f6c6933f32b95ba9af23\",\n    \"profile_name\": \"validator_boundary_compaction\",\n    \"profile_path\": \"docs/kanban-runtime-kernel-compaction-profiles/validator_boundary_compaction.md\",\n    \"profile_version\": \"1\",\n    \"provider_audit\": {\n      \"fallback_used\": false,\n      \"input_token_estimate\": 66072,\n      \"output_token_estimate\": 2587,\n      \"parse_status\": \"parsed\",\n      \"provider_input_entry_id\": 80,\n      \"provider_latency_ms\": 82692,\n      \"provider_model\": \"gpt-5.6-sol\",\n      \"provider_name\": \"custom\",\n      \"provider_validation\": {\n        \"status\": \"accepted\"\n      },\n      \"reason\": \"rejection_threshold\",\n      \"request_entry_id\": 79,\n      \"request_ref\": \"b69895dc4b45a0258a0241abc6528e24f3d960fb1d6647c0d51c95f70fa42053\",\n      \"response_ref\": \"3fcbb4b7238b8084bc230b4009ac8806d9878351a5e3e147e4c58608836419e7\",\n      \"retry_count\": 0\n    },\n    \"provider_generated\": true,\n    \"required_goal_item\": \"official-evaluator-resolved\",\n    \"required_goal_state\": \"open\",\n    \"source_fingerprint\": \"66e289dd2a4d9b8783251fdbfcefaf1ee7fb2c41420abfc69ddd6b52b7ca0f16\",\n    \"source_segment_id\": \"dseg_ec268757b2ed\"\n  },\n  \"next_strategy_constraints\": [\n    {\n      \"source_refs\": [\n        {\n          \"goal_item_key\": \"official-evaluator-resolved\"\n        },\n        {\n          \"gap_key\": \"official-evaluator-resolved:failed_required_node\"\n        }\n      ],\n      \"summary\": \"Keep the next decision linked to the required official-evaluator-resolved goal or one of its current catalogued gaps; new nodes require goal-or-gap linkage.\"\n    },\n    {\n      \"source_refs\": [\n        {\n          \"node_key\": \"resolve-opaque-evaluator-parity-efsig-6e79adf9\"\n        }\n      ],\n      \"summary\": \"Continue from the ready anti-stuck strategy and require bounded diagnostics for representative plots, command-diff, and stage path-conversion failures before further compatibility edits or reevaluation.\"\n    }\n  ],\n  \"objective_summary\": \"Implement the complete DVC 1.0.0a1-to-1.0.0a2 change set and pass the fixed official SWE-EVO evaluator; the required evaluator goal remains open after repeated failures concentrated in plots, command diff, stage path conversion, and related compatibility contracts.\",\n  \"open_blockers\": [\n    {\n      \"source_refs\": [\n        {\n          \"gap_key\": \"official-evaluator-resolved:failed_required_node\"\n        },\n        {\n          \"node_key\": \"verify-official-evaluator-resolved-0e5aa45a\"\n        }\n      ],\n      \"summary\": \"Independent evaluation still fails the required goal, including a stable core of plots, command-diff, and stage path-conversion tests.\"\n    },\n    {\n      \"source_refs\": [\n        {\n          \"gap_key\": \"runtime:stale:official-evaluator-resolved:failed_required_node\"\n        },\n        {\n          \"node_key\": \"verify-official-evaluator-resolved-a8dc1097\"\n        }\n      ],\n      \"summary\": \"Repeated local implementation claims have not displaced failed independent evaluator evidence.\"\n    },\n    {\n      \"source_refs\": [\n        {\n          \"gap_key\": \"runtime:stale:runtime:no_runnable_for_open_goal\"\n        },\n        {\n          \"node_key\": \"resolve-opaque-evaluator-parity-efsig-6e79adf9\"\n        }\n      ],\n      \"summary\": \"The runtime records stale/no-progress status and requires genuinely new diagnostic or workspace evidence rather than another unchanged evaluator retry.\"\n    }\n  ],\n  \"open_goal_gaps\": [\n    {\n      \"gap_key\": \"official-evaluator-resolved:failed_required_node\",\n      \"gap_type\": \"failed_required_node\",\n      \"source_refs\": [\n        {\n          \"gap_key\": \"official-evaluator-resolved:failed_required_node\"\n        }\n      ],\n      \"summary\": \"The required official-evaluator-resolved goal remains blocked by failed independent verification nodes.\"\n    },\n    {\n      \"gap_key\": \"runtime:stale:official-evaluator-resolved:failed_required_node\",\n      \"gap_type\": \"stale_or_no_progress\",\n      \"source_refs\": [\n        {\n          \"gap_key\": \"runtime:stale:official-evaluator-resolved:failed_required_node\"\n        }\n      ],\n      \"summary\": \"The failed-required-node gap has not yet produced verified progress.\"\n    },\n    {\n      \"gap_key\": \"runtime:stale:runtime:no_runnable_for_open_goal\",\n      \"gap_type\": \"stale_or_no_progress\",\n      \"source_refs\": [\n        {\n          \"gap_key\": \"runtime:stale:runtime:no_runnable_for_open_goal\"\n        }\n      ],\n      \"summary\": \"The runtime still records a stale no-runnable-for-open-goal condition despite the current remediation strategy frontier.\"\n    }\n  ],\n  \"rejected_approaches\": [],\n  \"satisfied_goal_items\": [],\n  \"validator_rejection_lessons\": [\n    {\n      \"base_revision\": 4,\n      \"source_refs\": [\n        {\n          \"patch_base_revision\": 4\n        },\n        {\n          \"patch_id\": \"gpatch_cfb1f074ce34\"\n        }\n      ],\n      \"summary\": \"A strategy_update at base revision 4 was rejected with reason `strategy_update requires changes_from_previous_attempts`; the scalar-string field shape was not accepted even though the field appeared in the submitted operation.\"\n    },\n    {\n      \"base_revision\": 5,\n      \"source_refs\": [\n        {\n          \"patch_base_revision\": 5\n        },\n        {\n          \"patch_id\": \"gpatch_4e863ab63181\"\n        },\n        {\n          \"patch_id\": \"gpatch_a28d2b641e09\"\n        }\n      ],\n      \"summary\": \"Two strategy_update submissions at base revision 5 were rejected with reason `strategy_update requires changes_from_previous_attempts`; do not treat semantic prose in a scalar field as satisfying the validator shape.\"\n    },\n    {\n      \"base_revision\": 11,\n      \"source_refs\": [\n        {\n          \"patch_base_revision\": 11\n        },\n        {\n          \"patch_id\": \"gpatch_4ec07355856d\"\n        }\n      ],\n      \"summary\": \"The strategy_update at base revision 11 was rejected with reason `strategy_update requires changes_from_previous_attempts`; the same scalar-string shape repeated the prior validator failure.\"\n    },\n    {\n      \"base_revision\": 12,\n      \"source_refs\": [\n        {\n          \"patch_base_revision\": 12\n        },\n        {\n          \"patch_id\": \"gpatch_61d523b29f4f\"\n        }\n      ],\n      \"summary\": \"The strategy_update at base revision 12 was rejected with reason `strategy_update requires changes_from_previous_attempts`; subsequent decisions must use the validator-accepted non-empty structured form rather than repeating the rejected scalar form.\"\n    }\n  ]\n}",
+          "validator_status": "accepted",
+          "reject_reason": null,
+          "supersedes_checkpoint_id": "dchk_d60733721c5c",
+          "metadata_json": "{\"fallback_used\": false, \"input_token_estimate\": 66072, \"output_token_estimate\": 2587, \"parse_status\": \"parsed\", \"provider_input_entry_id\": 80, \"provider_latency_ms\": 82692, \"provider_model\": \"gpt-5.6-sol\", \"provider_name\": \"custom\", \"provider_validation\": {\"status\": \"accepted\"}, \"reason\": \"rejection_threshold\", \"request_entry_id\": 79, \"request_ref\": \"b69895dc4b45a0258a0241abc6528e24f3d960fb1d6647c0d51c95f70fa42053\", \"response_ref\": \"3fcbb4b7238b8084bc230b4009ac8806d9878351a5e3e147e4c58608836419e7\", \"retry_count\": 0}",
+          "checkpoint": {
+            "artifact_index": [],
+            "do_not_repeat": [
+              {
+                "source_refs": [
+                  {
+                    "patch_id": "gpatch_cfb1f074ce34"
+                  },
+                  {
+                    "patch_id": "gpatch_4e863ab63181"
+                  },
+                  {
+                    "patch_id": "gpatch_a28d2b641e09"
+                  },
+                  {
+                    "patch_id": "gpatch_4ec07355856d"
+                  },
+                  {
+                    "patch_id": "gpatch_61d523b29f4f"
+                  },
+                  {
+                    "patch_id": "gpatch_d00570fb61e9"
+                  },
+                  {
+                    "patch_id": "gpatch_f3dce85cfbb7"
+                  }
+                ],
+                "summary": "Do not submit strategy_update with changes_from_previous_attempts as a scalar string; repeated scalar-shaped submissions were rejected, while accepted strategy updates used a non-empty list of concrete differences."
+              },
+              {
+                "source_refs": [
+                  {
+                    "patch_base_revision": 4
+                  },
+                  {
+                    "patch_base_revision": 5
+                  },
+                  {
+                    "patch_base_revision": 11
+                  },
+                  {
+                    "patch_base_revision": 12
+                  }
+                ],
+                "summary": "Do not reuse historical expected revisions 4, 5, 11, or 12 for a new decision; the authoritative graph has advanced to revision 14 and stale bases must be refreshed before validation."
+              },
+              {
+                "source_refs": [
+                  {
+                    "patch_id": "gpatch_d00570fb61e9"
+                  },
+                  {
+                    "patch_id": "gpatch_f3dce85cfbb7"
+                  },
+                  {
+                    "patch_id": "gpatch_0ce51ac87ab6"
+                  }
+                ],
+                "summary": "Do not use forbidden release_node or direct complete_job operations, and do not mark the required goal complete from local worker claims; completion requires independent verifier evidence."
+              },
+              {
+                "source_refs": [
+                  {
+                    "patch_id": "gpatch_d00570fb61e9"
+                  },
+                  {
+                    "patch_id": "gpatch_cd0c80f0b8f6"
+                  },
+                  {
+                    "patch_id": "gpatch_0ce51ac87ab6"
+                  }
+                ],
+                "summary": "Do not create remediation work without explicit linkage to the open required goal or a catalogued open gap; preserve goal_item_keys or gap_keys in any validator-bound node operation."
+              },
+              {
+                "source_refs": [
+                  {
+                    "patch_id": "gpatch_f3dce85cfbb7"
+                  },
+                  {
+                    "patch_id": "gpatch_cd0c80f0b8f6"
+                  },
+                  {
+                    "patch_id": "gpatch_0ce51ac87ab6"
+                  }
+                ],
+                "summary": "Do not repeat unchanged official-evaluator runs or speculative API oscillation without new bounded diagnostics and a fresh workspace revision."
+              }
+            ],
+            "goal_contract_revision": 1,
+            "graph_frontier": [
+              {
+                "node_key": "resolve-opaque-evaluator-parity-efsig-6e79adf9",
+                "node_type": "strategy_update",
+                "source_refs": [
+                  {
+                    "node_key": "resolve-opaque-evaluator-parity-efsig-6e79adf9"
+                  }
+                ],
+                "state": "ready",
+                "summary": "Ready anti-stuck remediation strategy: audit the complete objective, obtain bounded parity diagnostics, repair root contract mismatches, and validate targeted plus broad regressions without accessing protected evaluator source."
+              },
+              {
+                "node_key": "verify-official-evaluator-resolved-0e5aa45a",
+                "node_type": "verification",
+                "source_refs": [
+                  {
+                    "node_key": "verify-official-evaluator-resolved-0e5aa45a"
+                  }
+                ],
+                "state": "failed",
+                "summary": "Failed official verification with the stable plots, command-diff, and stage path-conversion residual set."
+              },
+              {
+                "node_key": "verify-official-evaluator-resolved-404dcfaf",
+                "node_type": "verification",
+                "source_refs": [
+                  {
+                    "node_key": "verify-official-evaluator-resolved-404dcfaf"
+                  }
+                ],
+                "state": "failed",
+                "summary": "Failed broad official verification exposing no-commit diff, remote-default, stage-name, repro, and compatibility defects."
+              },
+              {
+                "node_key": "verify-official-evaluator-resolved-522a377e",
+                "node_type": "verification",
+                "source_refs": [
+                  {
+                    "node_key": "verify-official-evaluator-resolved-522a377e"
+                  }
+                ],
+                "state": "failed",
+                "summary": "Failed official verification with the stable residual evaluator signature."
+              },
+              {
+                "node_key": "verify-official-evaluator-resolved-5af58f6b",
+                "node_type": "verification",
+                "source_refs": [
+                  {
+                    "node_key": "verify-official-evaluator-resolved-5af58f6b"
+                  }
+                ],
+                "state": "failed",
+                "summary": "Failed official verification exposing plots API, update batching, revision-label, dry-run, and path-conversion mismatches."
+              },
+              {
+                "node_key": "verify-official-evaluator-resolved-86e58653",
+                "node_type": "verification",
+                "source_refs": [
+                  {
+                    "node_key": "verify-official-evaluator-resolved-86e58653"
+                  }
+                ],
+                "state": "failed",
+                "summary": "Failed official verification including missing dry-run logging and the stable residual clusters."
+              },
+              {
+                "node_key": "verify-official-evaluator-resolved-88eeb0cc",
+                "node_type": "verification",
+                "source_refs": [
+                  {
+                    "node_key": "verify-official-evaluator-resolved-88eeb0cc"
+                  }
+                ],
+                "state": "failed",
+                "summary": "Failed official verification with plots, command-diff, dry-run, and path-conversion failures."
+              },
+              {
+                "node_key": "verify-official-evaluator-resolved-926a1ce0",
+                "node_type": "verification",
+                "source_refs": [
+                  {
+                    "node_key": "verify-official-evaluator-resolved-926a1ce0"
+                  }
+                ],
+                "state": "failed",
+                "summary": "Failed official verification including the plots diff revs-versus-revisions contract mismatch."
+              },
+              {
+                "node_key": "verify-official-evaluator-resolved-a8dc1097",
+                "node_type": "verification",
+                "source_refs": [
+                  {
+                    "node_key": "verify-official-evaluator-resolved-a8dc1097"
+                  }
+                ],
+                "state": "failed",
+                "summary": "Failed official verification with the stable eleven-test residual signature."
+              },
+              {
+                "node_key": "verify-official-evaluator-resolved-c0aab400",
+                "node_type": "verification",
+                "source_refs": [
+                  {
+                    "node_key": "verify-official-evaluator-resolved-c0aab400"
+                  }
+                ],
+                "state": "failed",
+                "summary": "Failed official verification exposing plots parser/output, remote-default, stage-name, update, and revision-helper regressions."
+              }
+            ],
+            "human_decisions": [],
+            "key_decisions": [],
+            "known_failure_boundaries": [
+              {
+                "source_refs": [
+                  {
+                    "node_key": "verify-official-evaluator-resolved-0e5aa45a"
+                  },
+                  {
+                    "node_key": "verify-official-evaluator-resolved-522a377e"
+                  },
+                  {
+                    "node_key": "verify-official-evaluator-resolved-a8dc1097"
+                  }
+                ],
+                "summary": "The stable residual evaluator boundary includes five plots functional failures, five unit command-diff failures, and TestPathConversion; several runs provide only test identifiers, so parity-visible assertions remain required."
+              },
+              {
+                "source_refs": [
+                  {
+                    "node_key": "verify-official-evaluator-resolved-404dcfaf"
+                  },
+                  {
+                    "node_key": "verify-official-evaluator-resolved-5af58f6b"
+                  },
+                  {
+                    "node_key": "verify-official-evaluator-resolved-c0aab400"
+                  }
+                ],
+                "summary": "Broader evaluator attempts also exposed incompatible command/repository signatures, parser failures, remote-default exit behavior, invalid stage-name handling, update batching, dry-run logging, and revision normalization."
+              }
+            ],
+            "metadata": {
+              "checkpoint_is_non_authoritative_context": true,
+              "current_graph_revision": 14,
+              "database_is_authoritative": true,
+              "db_revision": 14,
+              "graph_revision": 14,
+              "job_state": "active",
+              "ledger_revision": 14,
+              "profile_hash": "c25e4e401d15dc9054b062f60487b4ced18202993ae2f6c6933f32b95ba9af23",
+              "profile_name": "validator_boundary_compaction",
+              "profile_path": "docs/kanban-runtime-kernel-compaction-profiles/validator_boundary_compaction.md",
+              "profile_version": "1",
+              "provider_audit": {
+                "fallback_used": false,
+                "input_token_estimate": 66072,
+                "output_token_estimate": 2587,
+                "parse_status": "parsed",
+                "provider_input_entry_id": 80,
+                "provider_latency_ms": 82692,
+                "provider_model": "gpt-5.6-sol",
+                "provider_name": "custom",
+                "provider_validation": {
+                  "status": "accepted"
+                },
+                "reason": "rejection_threshold",
+                "request_entry_id": 79,
+                "request_ref": "b69895dc4b45a0258a0241abc6528e24f3d960fb1d6647c0d51c95f70fa42053",
+                "response_ref": "3fcbb4b7238b8084bc230b4009ac8806d9878351a5e3e147e4c58608836419e7",
+                "retry_count": 0
+              },
+              "provider_generated": true,
+              "required_goal_item": "official-evaluator-resolved",
+              "required_goal_state": "open",
+              "source_fingerprint": "66e289dd2a4d9b8783251fdbfcefaf1ee7fb2c41420abfc69ddd6b52b7ca0f16",
+              "source_segment_id": "dseg_ec268757b2ed"
+            },
+            "next_strategy_constraints": [
+              {
+                "source_refs": [
+                  {
+                    "goal_item_key": "official-evaluator-resolved"
+                  },
+                  {
+                    "gap_key": "official-evaluator-resolved:failed_required_node"
+                  }
+                ],
+                "summary": "Keep the next decision linked to the required official-evaluator-resolved goal or one of its current catalogued gaps; new nodes require goal-or-gap linkage."
+              },
+              {
+                "source_refs": [
+                  {
+                    "node_key": "resolve-opaque-evaluator-parity-efsig-6e79adf9"
+                  }
+                ],
+                "summary": "Continue from the ready anti-stuck strategy and require bounded diagnostics for representative plots, command-diff, and stage path-conversion failures before further compatibility edits or reevaluation."
+              }
+            ],
+            "objective_summary": "Implement the complete DVC 1.0.0a1-to-1.0.0a2 change set and pass the fixed official SWE-EVO evaluator; the required evaluator goal remains open after repeated failures concentrated in plots, command diff, stage path conversion, and related compatibility contracts.",
+            "open_blockers": [
+              {
+                "source_refs": [
+                  {
+                    "gap_key": "official-evaluator-resolved:failed_required_node"
+                  },
+                  {
+                    "node_key": "verify-official-evaluator-resolved-0e5aa45a"
+                  }
+                ],
+                "summary": "Independent evaluation still fails the required goal, including a stable core of plots, command-diff, and stage path-conversion tests."
+              },
+              {
+                "source_refs": [
+                  {
+                    "gap_key": "runtime:stale:official-evaluator-resolved:failed_required_node"
+                  },
+                  {
+                    "node_key": "verify-official-evaluator-resolved-a8dc1097"
+                  }
+                ],
+                "summary": "Repeated local implementation claims have not displaced failed independent evaluator evidence."
+              },
+              {
+                "source_refs": [
+                  {
+                    "gap_key": "runtime:stale:runtime:no_runnable_for_open_goal"
+                  },
+                  {
+                    "node_key": "resolve-opaque-evaluator-parity-efsig-6e79adf9"
+                  }
+                ],
+                "summary": "The runtime records stale/no-progress status and requires genuinely new diagnostic or workspace evidence rather than another unchanged evaluator retry."
+              }
+            ],
+            "open_goal_gaps": [
+              {
+                "gap_key": "official-evaluator-resolved:failed_required_node",
+                "gap_type": "failed_required_node",
+                "source_refs": [
+                  {
+                    "gap_key": "official-evaluator-resolved:failed_required_node"
+                  }
+                ],
+                "summary": "The required official-evaluator-resolved goal remains blocked by failed independent verification nodes."
+              },
+              {
+                "gap_key": "runtime:stale:official-evaluator-resolved:failed_required_node",
+                "gap_type": "stale_or_no_progress",
+                "source_refs": [
+                  {
+                    "gap_key": "runtime:stale:official-evaluator-resolved:failed_required_node"
+                  }
+                ],
+                "summary": "The failed-required-node gap has not yet produced verified progress."
+              },
+              {
+                "gap_key": "runtime:stale:runtime:no_runnable_for_open_goal",
+                "gap_type": "stale_or_no_progress",
+                "source_refs": [
+                  {
+                    "gap_key": "runtime:stale:runtime:no_runnable_for_open_goal"
+                  }
+                ],
+                "summary": "The runtime still records a stale no-runnable-for-open-goal condition despite the current remediation strategy frontier."
+              }
+            ],
+            "rejected_approaches": [],
+            "satisfied_goal_items": [],
+            "validator_rejection_lessons": [
+              {
+                "base_revision": 4,
+                "source_refs": [
+                  {
+                    "patch_base_revision": 4
+                  },
+                  {
+                    "patch_id": "gpatch_cfb1f074ce34"
+                  }
+                ],
+                "summary": "A strategy_update at base revision 4 was rejected with reason `strategy_update requires changes_from_previous_attempts`; the scalar-string field shape was not accepted even though the field appeared in the submitted operation."
+              },
+              {
+                "base_revision": 5,
+                "source_refs": [
+                  {
+                    "patch_base_revision": 5
+                  },
+                  {
+                    "patch_id": "gpatch_4e863ab63181"
+                  },
+                  {
+                    "patch_id": "gpatch_a28d2b641e09"
+                  }
+                ],
+                "summary": "Two strategy_update submissions at base revision 5 were rejected with reason `strategy_update requires changes_from_previous_attempts`; do not treat semantic prose in a scalar field as satisfying the validator shape."
+              },
+              {
+                "base_revision": 11,
+                "source_refs": [
+                  {
+                    "patch_base_revision": 11
+                  },
+                  {
+                    "patch_id": "gpatch_4ec07355856d"
+                  }
+                ],
+                "summary": "The strategy_update at base revision 11 was rejected with reason `strategy_update requires changes_from_previous_attempts`; the same scalar-string shape repeated the prior validator failure."
+              },
+              {
+                "base_revision": 12,
+                "source_refs": [
+                  {
+                    "patch_base_revision": 12
+                  },
+                  {
+                    "patch_id": "gpatch_61d523b29f4f"
+                  }
+                ],
+                "summary": "The strategy_update at base revision 12 was rejected with reason `strategy_update requires changes_from_previous_attempts`; subsequent decisions must use the validator-accepted non-empty structured form rather than repeating the rejected scalar form."
+              }
+            ]
+          },
+          "payload": {
+            "artifact_index": [],
+            "do_not_repeat": [
+              {
+                "source_refs": [
+                  {
+                    "patch_id": "gpatch_cfb1f074ce34"
+                  },
+                  {
+                    "patch_id": "gpatch_4e863ab63181"
+                  },
+                  {
+                    "patch_id": "gpatch_a28d2b641e09"
+                  },
+                  {
+                    "patch_id": "gpatch_4ec07355856d"
+                  },
+                  {
+                    "patch_id": "gpatch_61d523b29f4f"
+                  },
+                  {
+                    "patch_id": "gpatch_d00570fb61e9"
+                  },
+                  {
+                    "patch_id": "gpatch_f3dce85cfbb7"
+                  }
+                ],
+                "summary": "Do not submit strategy_update with changes_from_previous_attempts as a scalar string; repeated scalar-shaped submissions were rejected, while accepted strategy updates used a non-empty list of concrete differences."
+              },
+              {
+                "source_refs": [
+                  {
+                    "patch_base_revision": 4
+                  },
+                  {
+                    "patch_base_revision": 5
+                  },
+                  {
+                    "patch_base_revision": 11
+                  },
+                  {
+                    "patch_base_revision": 12
+                  }
+                ],
+                "summary": "Do not reuse historical expected revisions 4, 5, 11, or 12 for a new decision; the authoritative graph has advanced to revision 14 and stale bases must be refreshed before validation."
+              },
+              {
+                "source_refs": [
+                  {
+                    "patch_id": "gpatch_d00570fb61e9"
+                  },
+                  {
+                    "patch_id": "gpatch_f3dce85cfbb7"
+                  },
+                  {
+                    "patch_id": "gpatch_0ce51ac87ab6"
+                  }
+                ],
+                "summary": "Do not use forbidden release_node or direct complete_job operations, and do not mark the required goal complete from local worker claims; completion requires independent verifier evidence."
+              },
+              {
+                "source_refs": [
+                  {
+                    "patch_id": "gpatch_d00570fb61e9"
+                  },
+                  {
+                    "patch_id": "gpatch_cd0c80f0b8f6"
+                  },
+                  {
+                    "patch_id": "gpatch_0ce51ac87ab6"
+                  }
+                ],
+                "summary": "Do not create remediation work without explicit linkage to the open required goal or a catalogued open gap; preserve goal_item_keys or gap_keys in any validator-bound node operation."
+              },
+              {
+                "source_refs": [
+                  {
+                    "patch_id": "gpatch_f3dce85cfbb7"
+                  },
+                  {
+                    "patch_id": "gpatch_cd0c80f0b8f6"
+                  },
+                  {
+                    "patch_id": "gpatch_0ce51ac87ab6"
+                  }
+                ],
+                "summary": "Do not repeat unchanged official-evaluator runs or speculative API oscillation without new bounded diagnostics and a fresh workspace revision."
+              }
+            ],
+            "goal_contract_revision": 1,
+            "graph_frontier": [
+              {
+                "node_key": "resolve-opaque-evaluator-parity-efsig-6e79adf9",
+                "node_type": "strategy_update",
+                "source_refs": [
+                  {
+                    "node_key": "resolve-opaque-evaluator-parity-efsig-6e79adf9"
+                  }
+                ],
+                "state": "ready",
+                "summary": "Ready anti-stuck remediation strategy: audit the complete objective, obtain bounded parity diagnostics, repair root contract mismatches, and validate targeted plus broad regressions without accessing protected evaluator source."
+              },
+              {
+                "node_key": "verify-official-evaluator-resolved-0e5aa45a",
+                "node_type": "verification",
+                "source_refs": [
+                  {
+                    "node_key": "verify-official-evaluator-resolved-0e5aa45a"
+                  }
+                ],
+                "state": "failed",
+                "summary": "Failed official verification with the stable plots, command-diff, and stage path-conversion residual set."
+              },
+              {
+                "node_key": "verify-official-evaluator-resolved-404dcfaf",
+                "node_type": "verification",
+                "source_refs": [
+                  {
+                    "node_key": "verify-official-evaluator-resolved-404dcfaf"
+                  }
+                ],
+                "state": "failed",
+                "summary": "Failed broad official verification exposing no-commit diff, remote-default, stage-name, repro, and compatibility defects."
+              },
+              {
+                "node_key": "verify-official-evaluator-resolved-522a377e",
+                "node_type": "verification",
+                "source_refs": [
+                  {
+                    "node_key": "verify-official-evaluator-resolved-522a377e"
+                  }
+                ],
+                "state": "failed",
+                "summary": "Failed official verification with the stable residual evaluator signature."
+              },
+              {
+                "node_key": "verify-official-evaluator-resolved-5af58f6b",
+                "node_type": "verification",
+                "source_refs": [
+                  {
+                    "node_key": "verify-official-evaluator-resolved-5af58f6b"
+                  }
+                ],
+                "state": "failed",
+                "summary": "Failed official verification exposing plots API, update batching, revision-label, dry-run, and path-conversion mismatches."
+              },
+              {
+                "node_key": "verify-official-evaluator-resolved-86e58653",
+                "node_type": "verification",
+                "source_refs": [
+                  {
+                    "node_key": "verify-official-evaluator-resolved-86e58653"
+                  }
+                ],
+                "state": "failed",
+                "summary": "Failed official verification including missing dry-run logging and the stable residual clusters."
+              },
+              {
+                "node_key": "verify-official-evaluator-resolved-88eeb0cc",
+                "node_type": "verification",
+                "source_refs": [
+                  {
+                    "node_key": "verify-official-evaluator-resolved-88eeb0cc"
+                  }
+                ],
+                "state": "failed",
+                "summary": "Failed official verification with plots, command-diff, dry-run, and path-conversion failures."
+              },
+              {
+                "node_key": "verify-official-evaluator-resolved-926a1ce0",
+                "node_type": "verification",
+                "source_refs": [
+                  {
+                    "node_key": "verify-official-evaluator-resolved-926a1ce0"
+                  }
+                ],
+                "state": "failed",
+                "summary": "Failed official verification including the plots diff revs-versus-revisions contract mismatch."
+              },
+              {
+                "node_key": "verify-official-evaluator-resolved-a8dc1097",
+                "node_type": "verification",
+                "source_refs": [
+                  {
+                    "node_key": "verify-official-evaluator-resolved-a8dc1097"
+                  }
+                ],
+                "state": "failed",
+                "summary": "Failed official verification with the stable eleven-test residual signature."
+              },
+              {
+                "node_key": "verify-official-evaluator-resolved-c0aab400",
+                "node_type": "verification",
+                "source_refs": [
+                  {
+                    "node_key": "verify-official-evaluator-resolved-c0aab400"
+                  }
+                ],
+                "state": "failed",
+                "summary": "Failed official verification exposing plots parser/output, remote-default, stage-name, update, and revision-helper regressions."
+              }
+            ],
+            "human_decisions": [],
+            "key_decisions": [],
+            "known_failure_boundaries": [
+              {
+                "source_refs": [
+                  {
+                    "node_key": "verify-official-evaluator-resolved-0e5aa45a"
+                  },
+                  {
+                    "node_key": "verify-official-evaluator-resolved-522a377e"
+                  },
+                  {
+                    "node_key": "verify-official-evaluator-resolved-a8dc1097"
+                  }
+                ],
+                "summary": "The stable residual evaluator boundary includes five plots functional failures, five unit command-diff failures, and TestPathConversion; several runs provide only test identifiers, so parity-visible assertions remain required."
+              },
+              {
+                "source_refs": [
+                  {
+                    "node_key": "verify-official-evaluator-resolved-404dcfaf"
+                  },
+                  {
+                    "node_key": "verify-official-evaluator-resolved-5af58f6b"
+                  },
+                  {
+                    "node_key": "verify-official-evaluator-resolved-c0aab400"
+                  }
+                ],
+                "summary": "Broader evaluator attempts also exposed incompatible command/repository signatures, parser failures, remote-default exit behavior, invalid stage-name handling, update batching, dry-run logging, and revision normalization."
+              }
+            ],
+            "metadata": {
+              "checkpoint_is_non_authoritative_context": true,
+              "current_graph_revision": 14,
+              "database_is_authoritative": true,
+              "db_revision": 14,
+              "graph_revision": 14,
+              "job_state": "active",
+              "ledger_revision": 14,
+              "profile_hash": "c25e4e401d15dc9054b062f60487b4ced18202993ae2f6c6933f32b95ba9af23",
+              "profile_name": "validator_boundary_compaction",
+              "profile_path": "docs/kanban-runtime-kernel-compaction-profiles/validator_boundary_compaction.md",
+              "profile_version": "1",
+              "provider_audit": {
+                "fallback_used": false,
+                "input_token_estimate": 66072,
+                "output_token_estimate": 2587,
+                "parse_status": "parsed",
+                "provider_input_entry_id": 80,
+                "provider_latency_ms": 82692,
+                "provider_model": "gpt-5.6-sol",
+                "provider_name": "custom",
+                "provider_validation": {
+                  "status": "accepted"
+                },
+                "reason": "rejection_threshold",
+                "request_entry_id": 79,
+                "request_ref": "b69895dc4b45a0258a0241abc6528e24f3d960fb1d6647c0d51c95f70fa42053",
+                "response_ref": "3fcbb4b7238b8084bc230b4009ac8806d9878351a5e3e147e4c58608836419e7",
+                "retry_count": 0
+              },
+              "provider_generated": true,
+              "required_goal_item": "official-evaluator-resolved",
+              "required_goal_state": "open",
+              "source_fingerprint": "66e289dd2a4d9b8783251fdbfcefaf1ee7fb2c41420abfc69ddd6b52b7ca0f16",
+              "source_segment_id": "dseg_ec268757b2ed"
+            },
+            "next_strategy_constraints": [
+              {
+                "source_refs": [
+                  {
+                    "goal_item_key": "official-evaluator-resolved"
+                  },
+                  {
+                    "gap_key": "official-evaluator-resolved:failed_required_node"
+                  }
+                ],
+                "summary": "Keep the next decision linked to the required official-evaluator-resolved goal or one of its current catalogued gaps; new nodes require goal-or-gap linkage."
+              },
+              {
+                "source_refs": [
+                  {
+                    "node_key": "resolve-opaque-evaluator-parity-efsig-6e79adf9"
+                  }
+                ],
+                "summary": "Continue from the ready anti-stuck strategy and require bounded diagnostics for representative plots, command-diff, and stage path-conversion failures before further compatibility edits or reevaluation."
+              }
+            ],
+            "objective_summary": "Implement the complete DVC 1.0.0a1-to-1.0.0a2 change set and pass the fixed official SWE-EVO evaluator; the required evaluator goal remains open after repeated failures concentrated in plots, command diff, stage path conversion, and related compatibility contracts.",
+            "open_blockers": [
+              {
+                "source_refs": [
+                  {
+                    "gap_key": "official-evaluator-resolved:failed_required_node"
+                  },
+                  {
+                    "node_key": "verify-official-evaluator-resolved-0e5aa45a"
+                  }
+                ],
+                "summary": "Independent evaluation still fails the required goal, including a stable core of plots, command-diff, and stage path-conversion tests."
+              },
+              {
+                "source_refs": [
+                  {
+                    "gap_key": "runtime:stale:official-evaluator-resolved:failed_required_node"
+                  },
+                  {
+                    "node_key": "verify-official-evaluator-resolved-a8dc1097"
+                  }
+                ],
+                "summary": "Repeated local implementation claims have not displaced failed independent evaluator evidence."
+              },
+              {
+                "source_refs": [
+                  {
+                    "gap_key": "runtime:stale:runtime:no_runnable_for_open_goal"
+                  },
+                  {
+                    "node_key": "resolve-opaque-evaluator-parity-efsig-6e79adf9"
+                  }
+                ],
+                "summary": "The runtime records stale/no-progress status and requires genuinely new diagnostic or workspace evidence rather than another unchanged evaluator retry."
+              }
+            ],
+            "open_goal_gaps": [
+              {
+                "gap_key": "official-evaluator-resolved:failed_required_node",
+                "gap_type": "failed_required_node",
+                "source_refs": [
+                  {
+                    "gap_key": "official-evaluator-resolved:failed_required_node"
+                  }
+                ],
+                "summary": "The required official-evaluator-resolved goal remains blocked by failed independent verification nodes."
+              },
+              {
+                "gap_key": "runtime:stale:official-evaluator-resolved:failed_required_node",
+                "gap_type": "stale_or_no_progress",
+                "source_refs": [
+                  {
+                    "gap_key": "runtime:stale:official-evaluator-resolved:failed_required_node"
+                  }
+                ],
+                "summary": "The failed-required-node gap has not yet produced verified progress."
+              },
+              {
+                "gap_key": "runtime:stale:runtime:no_runnable_for_open_goal",
+                "gap_type": "stale_or_no_progress",
+                "source_refs": [
+                  {
+                    "gap_key": "runtime:stale:runtime:no_runnable_for_open_goal"
+                  }
+                ],
+                "summary": "The runtime still records a stale no-runnable-for-open-goal condition despite the current remediation strategy frontier."
+              }
+            ],
+            "rejected_approaches": [],
+            "satisfied_goal_items": [],
+            "validator_rejection_lessons": [
+              {
+                "base_revision": 4,
+                "source_refs": [
+                  {
+                    "patch_base_revision": 4
+                  },
+                  {
+                    "patch_id": "gpatch_cfb1f074ce34"
+                  }
+                ],
+                "summary": "A strategy_update at base revision 4 was rejected with reason `strategy_update requires changes_from_previous_attempts`; the scalar-string field shape was not accepted even though the field appeared in the submitted operation."
+              },
+              {
+                "base_revision": 5,
+                "source_refs": [
+                  {
+                    "patch_base_revision": 5
+                  },
+                  {
+                    "patch_id": "gpatch_4e863ab63181"
+                  },
+                  {
+                    "patch_id": "gpatch_a28d2b641e09"
+                  }
+                ],
+                "summary": "Two strategy_update submissions at base revision 5 were rejected with reason `strategy_update requires changes_from_previous_attempts`; do not treat semantic prose in a scalar field as satisfying the validator shape."
+              },
+              {
+                "base_revision": 11,
+                "source_refs": [
+                  {
+                    "patch_base_revision": 11
+                  },
+                  {
+                    "patch_id": "gpatch_4ec07355856d"
+                  }
+                ],
+                "summary": "The strategy_update at base revision 11 was rejected with reason `strategy_update requires changes_from_previous_attempts`; the same scalar-string shape repeated the prior validator failure."
+              },
+              {
+                "base_revision": 12,
+                "source_refs": [
+                  {
+                    "patch_base_revision": 12
+                  },
+                  {
+                    "patch_id": "gpatch_61d523b29f4f"
+                  }
+                ],
+                "summary": "The strategy_update at base revision 12 was rejected with reason `strategy_update requires changes_from_previous_attempts`; subsequent decisions must use the validator-accepted non-empty structured form rather than repeating the rejected scalar form."
+              }
+            ]
+          },
+          "metadata": {
+            "fallback_used": false,
+            "input_token_estimate": 66072,
+            "output_token_estimate": 2587,
+            "parse_status": "parsed",
+            "provider_input_entry_id": 80,
+            "provider_latency_ms": 82692,
+            "provider_model": "gpt-5.6-sol",
+            "provider_name": "custom",
+            "provider_validation": {
+              "status": "accepted"
+            },
+            "reason": "rejection_threshold",
+            "request_entry_id": 79,
+            "request_ref": "b69895dc4b45a0258a0241abc6528e24f3d960fb1d6647c0d51c95f70fa42053",
+            "response_ref": "3fcbb4b7238b8084bc230b4009ac8806d9878351a5e3e147e4c58608836419e7",
+            "retry_count": 0
+          }
+        },
+        "active_segment_id": "dseg_ae54e032204f",
+        "checked_checkpoint_count": 3,
+        "errors": [],
+        "checks": [
+          {
+            "checkpoint_id": "dchk_9e59695583c7",
+            "errors": []
+          },
+          {
+            "checkpoint_id": "dchk_d60733721c5c",
+            "errors": []
+          },
+          {
+            "checkpoint_id": "dchk_15bc8478c121",
+            "errors": []
+          }
+        ]
+      },
+      "compaction_fallback_count": 0,
+      "duplicate_terminal_fact_count": 0,
+      "duplicate_ledger_fact_count": 0,
+      "premature_done": false,
+      "process_boundaries": {
+        "daemon_process_started": true,
+        "daemon_restarted": true,
+        "worker_process_started": true,
+        "independent_evaluator_process": true,
+        "fixed_revision_evaluated": true,
+        "filesystem_isolation_preflight": true,
+        "worker_evaluator_environment_parity_preflight": true,
+        "worker_auto_review_preflight": true,
+        "worker_process_interrupted": true,
+        "worker_backend_session_resumed": true,
+        "daemon_hard_crash": true,
+        "expired_lease_takeover": true,
+        "receipt_before_ingest_restart": true,
+        "two_real_checkpoints": true,
+        "structure_request_persisted": true,
+        "evidence_backed_graph_expansion": true,
+        "run_owned_processes_stopped": true
+      },
+      "credential_scan_hits": 0,
+      "source_config_unchanged": true
+    },
+    "capability_validation": {
+      "passed": false,
+      "official_resolved": false,
+      "runtime_job_state": "waiting_worker",
+      "fail_to_pass": {
+        "passed": 55,
+        "failed": 13,
+        "total": 68,
+        "failed_tests": [
+          "tests/func/plots/test_plots.py::test_plot_no_data",
+          "tests/func/plots/test_plots.py::test_plot_wrong_metric_type",
+          "tests/func/plots/test_plots.py::test_should_raise_on_no_template",
+          "tests/func/plots/test_plots.py::test_should_raise_on_no_template_and_datafile",
+          "tests/func/plots/test_plots.py::test_throw_on_no_metric_at_all",
+          "tests/unit/command/test_diff.py::test_default",
+          "tests/unit/command/test_diff.py::test_no_changes",
+          "tests/unit/command/test_diff.py::test_show_hash",
+          "tests/unit/command/test_diff.py::test_show_json",
+          "tests/unit/command/test_diff.py::test_show_json_and_hash",
+          "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions0-False-expected_revisions0]",
+          "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions1-True-expected_revisions1]",
+          "tests/unit/stage/test_run.py::test_run_stage_dry"
+        ],
+        "failed_tests_truncated": 0
+      },
+      "pass_to_pass": {
+        "passed": 241,
+        "failed": 1,
+        "total": 242,
+        "failed_tests": [
+          "tests/unit/stage/test_stage.py::TestPathConversion::test"
+        ],
+        "failed_tests_truncated": 0
+      }
+    },
+    "metrics": {
+      "wall_time_seconds": 15526,
+      "case_size": "large",
+      "operator_termination": "stopped_after_final_evaluator",
+      "resource_exhausted": false,
+      "evaluator_attempt_count": 13,
+      "effective_evaluator_attempt_count": 12,
+      "evaluator_failure_count": 13,
+      "evaluator_progression": [
+        {
+          "attempt": 1,
+          "task_id": "t_5aa501cf",
+          "node_id": "rnode_6b2f4717f423",
+          "fail_to_pass_passed": 0,
+          "fail_to_pass_total": 68,
+          "pass_to_pass_passed": 242,
+          "pass_to_pass_total": 242,
+          "resolved": false,
+          "feedback_consumed": false,
+          "feedback_coverage": "extraction_incomplete",
+          "failure_signature": "efsig_45eeeecd722b799a71e4d836",
+          "phase": "qualification-retry",
+          "target_revision": "git:fc42ca721c25bdd24875c999e37fb4f589ecd63c:worktree:4dd10cb04866c7d98b634f0085ff8016b737c23b315060933db7706b5b4cebd8"
+        },
+        {
+          "attempt": 2,
+          "task_id": "t_2e41ec07",
+          "node_id": "rnode_6b2f4717f423",
+          "fail_to_pass_passed": 0,
+          "fail_to_pass_total": 68,
+          "pass_to_pass_passed": 242,
+          "pass_to_pass_total": 242,
+          "resolved": false,
+          "feedback_consumed": false,
+          "feedback_coverage": "current_failure_complete",
+          "failure_signature": "efsig_6c7d094c0a0eff08e0bff724",
+          "phase": "primary-same-session",
+          "target_revision": "git:fc42ca721c25bdd24875c999e37fb4f589ecd63c:worktree:4dd10cb04866c7d98b634f0085ff8016b737c23b315060933db7706b5b4cebd8"
+        },
+        {
+          "attempt": 3,
+          "task_id": "t_46787c24",
+          "node_id": "rnode_050dd9986d2d",
+          "fail_to_pass_passed": 43,
+          "fail_to_pass_total": 68,
+          "pass_to_pass_passed": 241,
+          "pass_to_pass_total": 242,
+          "resolved": false,
+          "feedback_consumed": false,
+          "feedback_coverage": "current_failure_complete",
+          "failure_signature": "efsig_f78069fd3faca64ce6b33890",
+          "phase": "primary-same-session",
+          "target_revision": "git:fc42ca721c25bdd24875c999e37fb4f589ecd63c:worktree:af4b104a72f8dc6196768a160f1bacaa775b2f18e1f3d404af4ac32affc981ba"
+        },
+        {
+          "attempt": 4,
+          "task_id": "t_0e665fa4",
+          "node_id": "rnode_944179d77a34",
+          "fail_to_pass_passed": 52,
+          "fail_to_pass_total": 68,
+          "pass_to_pass_passed": 241,
+          "pass_to_pass_total": 242,
+          "resolved": false,
+          "feedback_consumed": false,
+          "feedback_coverage": "current_failure_complete",
+          "failure_signature": "efsig_25ddd4724dda9f34c3ee671f",
+          "phase": "primary-same-session",
+          "target_revision": "git:fc42ca721c25bdd24875c999e37fb4f589ecd63c:worktree:d9f5a49b44f9a297ef2becb11d0033f310cc12329d3dd437368aef3c034b97eb"
+        },
+        {
+          "attempt": 5,
+          "task_id": "t_7528ed3c",
+          "node_id": "rnode_5cb00c688c6c",
+          "fail_to_pass_passed": 56,
+          "fail_to_pass_total": 68,
+          "pass_to_pass_passed": 241,
+          "pass_to_pass_total": 242,
+          "resolved": false,
+          "feedback_consumed": true,
+          "feedback_coverage": "current_failure_complete",
+          "failure_signature": "efsig_e6be4df49d41f60580eaa5b9",
+          "phase": "primary-same-session",
+          "target_revision": "git:fc42ca721c25bdd24875c999e37fb4f589ecd63c:worktree:f22641de5d1b8438c8a878d128b41072fd5a387ddc839b39cbaa05381c9df085"
+        },
+        {
+          "attempt": 6,
+          "task_id": "t_892154d8",
+          "node_id": "rnode_352fea93e501",
+          "fail_to_pass_passed": 57,
+          "fail_to_pass_total": 68,
+          "pass_to_pass_passed": 241,
+          "pass_to_pass_total": 242,
+          "resolved": false,
+          "feedback_consumed": true,
+          "feedback_coverage": "current_failure_complete",
+          "failure_signature": "efsig_26e54caf4b7cf088c5b52730",
+          "phase": "primary-same-session",
+          "target_revision": "git:fc42ca721c25bdd24875c999e37fb4f589ecd63c:worktree:9c2ca2089633322798bc94a96c2cb48a92ac427d3d416ea9e3c996a2857645fe"
+        },
+        {
+          "attempt": 7,
+          "task_id": "t_e861bb5b",
+          "node_id": "rnode_f36caadf332c",
+          "fail_to_pass_passed": 57,
+          "fail_to_pass_total": 68,
+          "pass_to_pass_passed": 241,
+          "pass_to_pass_total": 242,
+          "resolved": false,
+          "feedback_consumed": true,
+          "feedback_coverage": "current_failure_complete",
+          "failure_signature": "efsig_6c7e26fa9123d2559ab35c4f",
+          "phase": "primary-same-session",
+          "target_revision": "git:fc42ca721c25bdd24875c999e37fb4f589ecd63c:worktree:337a39327a9c4c5b2fff1b4e6bd675d4e56697221d431784a41725bfaf576047"
+        },
+        {
+          "attempt": 8,
+          "task_id": "t_c034370f",
+          "node_id": "rnode_bbda359a4c76",
+          "fail_to_pass_passed": 58,
+          "fail_to_pass_total": 68,
+          "pass_to_pass_passed": 241,
+          "pass_to_pass_total": 242,
+          "resolved": false,
+          "feedback_consumed": true,
+          "feedback_coverage": "current_failure_complete",
+          "failure_signature": "efsig_6e79adf9db6e5b1836b5e7e6",
+          "phase": "primary-same-session",
+          "target_revision": "git:fc42ca721c25bdd24875c999e37fb4f589ecd63c:worktree:16229e8c60cbb4e10505aeb4297733a0b50690fa9db9563d2fa8203612a7797c"
+        },
+        {
+          "attempt": 9,
+          "task_id": "t_ef25a2ba",
+          "node_id": "rnode_b41d75e974fe",
+          "fail_to_pass_passed": 58,
+          "fail_to_pass_total": 68,
+          "pass_to_pass_passed": 241,
+          "pass_to_pass_total": 242,
+          "resolved": false,
+          "feedback_consumed": true,
+          "feedback_coverage": "current_failure_complete",
+          "failure_signature": "efsig_6e79adf9db6e5b1836b5e7e6",
+          "phase": "primary-same-session",
+          "target_revision": "git:fc42ca721c25bdd24875c999e37fb4f589ecd63c:worktree:16229e8c60cbb4e10505aeb4297733a0b50690fa9db9563d2fa8203612a7797c"
+        },
+        {
+          "attempt": 10,
+          "task_id": "t_7106c456",
+          "node_id": "rnode_fc286e2f67e2",
+          "fail_to_pass_passed": 58,
+          "fail_to_pass_total": 68,
+          "pass_to_pass_passed": 241,
+          "pass_to_pass_total": 242,
+          "resolved": false,
+          "feedback_consumed": false,
+          "feedback_coverage": "current_failure_complete",
+          "failure_signature": "efsig_6e79adf9db6e5b1836b5e7e6",
+          "phase": "primary-same-session",
+          "target_revision": "git:fc42ca721c25bdd24875c999e37fb4f589ecd63c:worktree:2c8937a934df646de4608557706d373ed3f9ba1c49d0581d6fcbaab7ee8ed2d8"
+        },
+        {
+          "attempt": 11,
+          "task_id": "t_d95904f4",
+          "node_id": "rnode_f09a4d7d4ff0",
+          "fail_to_pass_passed": 55,
+          "fail_to_pass_total": 68,
+          "pass_to_pass_passed": 241,
+          "pass_to_pass_total": 242,
+          "resolved": false,
+          "feedback_consumed": true,
+          "feedback_coverage": "current_failure_complete",
+          "failure_signature": "efsig_763483ff8f87807dc53af5e2",
+          "phase": "expanded-strategy",
+          "target_revision": "git:fc42ca721c25bdd24875c999e37fb4f589ecd63c:worktree:7ce3baf0ca33ac545d73f63e4739a3d2d34fc26296b494d45cd5bd2616fd6989"
+        },
+        {
+          "attempt": 12,
+          "task_id": "t_d2e2d1b8",
+          "node_id": "rnode_e10e05b75123",
+          "fail_to_pass_passed": 56,
+          "fail_to_pass_total": 68,
+          "pass_to_pass_passed": 241,
+          "pass_to_pass_total": 242,
+          "resolved": false,
+          "feedback_consumed": true,
+          "feedback_coverage": "current_failure_complete",
+          "failure_signature": "efsig_887952be0296826579702444",
+          "phase": "expanded-strategy",
+          "target_revision": "git:fc42ca721c25bdd24875c999e37fb4f589ecd63c:worktree:555cb70c1649e4d9c72ade8d2cb8a4b37a7f8bb9eb940db4faa1a24374fe0eea"
+        },
+        {
+          "attempt": 13,
+          "task_id": "t_0acd1817",
+          "node_id": "rnode_c73ab3fb7c10",
+          "fail_to_pass_passed": 55,
+          "fail_to_pass_total": 68,
+          "pass_to_pass_passed": 241,
+          "pass_to_pass_total": 242,
+          "resolved": false,
+          "feedback_consumed": false,
+          "feedback_coverage": "current_failure_complete",
+          "failure_signature": "efsig_e65c5026654a94fe69a05c16",
+          "phase": "expanded-strategy",
+          "target_revision": "git:fc42ca721c25bdd24875c999e37fb4f589ecd63c:worktree:f6baf53a3121d58be5b203fd28504f5efc324d4a932b0a8d98169b75fa58b023"
+        }
+      ],
+      "best_primary_fail_to_pass": 58,
+      "best_primary_pass_to_pass": 241,
+      "final_fail_to_pass": 55,
+      "final_pass_to_pass": 241,
+      "baseline_pass_to_pass": 242,
+      "accepted_checkpoint_count": 3,
+      "decision_round_count": 10,
+      "applied_patch_count": 5,
+      "rejected_patch_count": 5,
+      "primary_session_resume_count": 12,
+      "expanded_strategy_session_resume_count": 3,
+      "durable_worker_thread_count": 2,
+      "superseded_strategy_node_count": 3,
+      "worker_usage": {
+        "input_tokens": 95787924,
+        "cached_input_tokens": 93099264,
+        "output_tokens": 244495,
+        "reasoning_output_tokens": 108839,
+        "cache_hit_ratio": 0.971931,
+        "accounting_note": "sum of the final cumulative usage snapshot for the primary and expanded strategy Codex threads; evaluator usage excluded"
+      },
+      "worker_error_event_count": 39,
+      "worker_completed_turn_count": 14,
+      "local_validation_peak": {
+        "unit_passed": 428,
+        "unit_skipped": 9,
+        "functional_passed": 735,
+        "functional_skipped": 47,
+        "functional_environment_deselected": 15
+      },
+      "candidate_changed_file_count": 66,
+      "candidate_patch_bytes": 94524,
+      "evaluator_progress": {
+        "attempt_count": 13,
+        "effective_failure_count": 12,
+        "latest_resolved": false,
+        "latest_feedback_extraction_incomplete": false,
+        "latest_feedback_consumed": false,
+        "no_progress_streak": 0,
+        "history": [
+          {
+            "node_id": "rnode_6b2f4717f423",
+            "feedback_consumed": false,
+            "fail_to_pass_passed": 0,
+            "pass_to_pass_passed": 242,
+            "failure_signature": "efsig_6c7d094c0a0eff08e0bff724",
+            "count_progress": false,
+            "signature_changed": false,
+            "progress": true,
+            "no_progress_streak": 0
+          },
+          {
+            "node_id": "rnode_050dd9986d2d",
+            "feedback_consumed": false,
+            "fail_to_pass_passed": 43,
+            "pass_to_pass_passed": 241,
+            "failure_signature": "efsig_f78069fd3faca64ce6b33890",
+            "count_progress": false,
+            "signature_changed": true,
+            "progress": true,
+            "no_progress_streak": 0
+          },
+          {
+            "node_id": "rnode_944179d77a34",
+            "feedback_consumed": false,
+            "fail_to_pass_passed": 52,
+            "pass_to_pass_passed": 241,
+            "failure_signature": "efsig_25ddd4724dda9f34c3ee671f",
+            "count_progress": true,
+            "signature_changed": true,
+            "progress": true,
+            "no_progress_streak": 0
+          },
+          {
+            "node_id": "rnode_5cb00c688c6c",
+            "feedback_consumed": true,
+            "fail_to_pass_passed": 56,
+            "pass_to_pass_passed": 241,
+            "failure_signature": "efsig_e6be4df49d41f60580eaa5b9",
+            "count_progress": true,
+            "signature_changed": true,
+            "progress": true,
+            "no_progress_streak": 0
+          },
+          {
+            "node_id": "rnode_352fea93e501",
+            "feedback_consumed": true,
+            "fail_to_pass_passed": 57,
+            "pass_to_pass_passed": 241,
+            "failure_signature": "efsig_26e54caf4b7cf088c5b52730",
+            "count_progress": true,
+            "signature_changed": true,
+            "progress": true,
+            "no_progress_streak": 0
+          },
+          {
+            "node_id": "rnode_f36caadf332c",
+            "feedback_consumed": true,
+            "fail_to_pass_passed": 57,
+            "pass_to_pass_passed": 241,
+            "failure_signature": "efsig_6c7e26fa9123d2559ab35c4f",
+            "count_progress": false,
+            "signature_changed": true,
+            "progress": true,
+            "no_progress_streak": 0
+          },
+          {
+            "node_id": "rnode_bbda359a4c76",
+            "feedback_consumed": true,
+            "fail_to_pass_passed": 58,
+            "pass_to_pass_passed": 241,
+            "failure_signature": "efsig_6e79adf9db6e5b1836b5e7e6",
+            "count_progress": true,
+            "signature_changed": true,
+            "progress": true,
+            "no_progress_streak": 0
+          },
+          {
+            "node_id": "rnode_b41d75e974fe",
+            "feedback_consumed": true,
+            "fail_to_pass_passed": 58,
+            "pass_to_pass_passed": 241,
+            "failure_signature": "efsig_6e79adf9db6e5b1836b5e7e6",
+            "count_progress": false,
+            "signature_changed": false,
+            "progress": false,
+            "no_progress_streak": 1
+          },
+          {
+            "node_id": "rnode_fc286e2f67e2",
+            "feedback_consumed": false,
+            "fail_to_pass_passed": 58,
+            "pass_to_pass_passed": 241,
+            "failure_signature": "efsig_6e79adf9db6e5b1836b5e7e6",
+            "count_progress": false,
+            "signature_changed": false,
+            "progress": false,
+            "no_progress_streak": 2
+          },
+          {
+            "node_id": "rnode_f09a4d7d4ff0",
+            "feedback_consumed": true,
+            "fail_to_pass_passed": 55,
+            "pass_to_pass_passed": 241,
+            "failure_signature": "efsig_763483ff8f87807dc53af5e2",
+            "count_progress": false,
+            "signature_changed": true,
+            "progress": true,
+            "no_progress_streak": 0
+          },
+          {
+            "node_id": "rnode_e10e05b75123",
+            "feedback_consumed": true,
+            "fail_to_pass_passed": 56,
+            "pass_to_pass_passed": 241,
+            "failure_signature": "efsig_887952be0296826579702444",
+            "count_progress": true,
+            "signature_changed": true,
+            "progress": true,
+            "no_progress_streak": 0
+          },
+          {
+            "node_id": "rnode_c73ab3fb7c10",
+            "feedback_consumed": false,
+            "fail_to_pass_passed": 55,
+            "pass_to_pass_passed": 241,
+            "failure_signature": "efsig_e65c5026654a94fe69a05c16",
+            "count_progress": false,
+            "signature_changed": true,
+            "progress": true,
+            "no_progress_streak": 0
+          }
+        ],
+        "exhausted": false
+      }
+    },
+    "generated_at": 1784215318
+  },
+  "termination": {
+    "reason": "operator_stopped_after_final_evaluator",
+    "official_resolved": false,
+    "resource_exhausted": false,
+    "pending_remediation_materialized": true
+  },
+  "paths": {
+    "root": "/tmp/hermes-phase4g8-real/iterative__dvc_1.0.0a1_1.0.0a2/phase4g8-large-a101c61de3",
+    "report": "/tmp/hermes-phase4g8-real/iterative__dvc_1.0.0a1_1.0.0a2/phase4g8-large-a101c61de3/reports/run-report.json",
+    "capability_trace": {
+      "json": "/tmp/hermes-phase4g8-real/iterative__dvc_1.0.0a1_1.0.0a2/phase4g8-large-a101c61de3/reports/capability-trace.json",
+      "markdown": "/tmp/hermes-phase4g8-real/iterative__dvc_1.0.0a1_1.0.0a2/phase4g8-large-a101c61de3/reports/capability-trace.md"
+    },
+    "orchestration_usefulness": "/tmp/hermes-phase4g8-real/iterative__dvc_1.0.0a1_1.0.0a2/phase4g8-large-a101c61de3/reports/orchestration-usefulness.md"
+  },
+  "generated_at": 1784215318
+}
