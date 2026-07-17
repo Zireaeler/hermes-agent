@@ -315,10 +315,12 @@ def run_arm2(
     execute_real: bool,
     max_wall_seconds: float,
     worker_timeout_seconds: int,
+    resume_run: Path | None = None,
 ) -> dict[str, Any]:
     payload = p4g8_run.run_phase4g8_real_case(
         qualification_spec_path=qualification_spec_path,
-        run_root=run_root,
+        run_root=None if resume_run is not None else run_root,
+        resume_run=resume_run,
         source_codex_home=source_codex_home,
         case_size="large",
         execute_real=execute_real,
@@ -369,7 +371,9 @@ def run_arm2(
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--spec", required=True)
-    parser.add_argument("--run-root", required=True)
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--run-root")
+    target.add_argument("--resume-run")
     parser.add_argument("--source-codex-home", default=str(Path.home() / ".codex"))
     parser.add_argument(
         "--artifact-root",
@@ -385,12 +389,13 @@ def main() -> int:
     args = _parse_args()
     report = run_arm2(
         qualification_spec_path=Path(args.spec),
-        run_root=Path(args.run_root),
+        run_root=Path(args.run_root or args.resume_run),
         source_codex_home=Path(args.source_codex_home),
         artifact_root=Path(args.artifact_root),
         execute_real=bool(args.execute_real),
         max_wall_seconds=float(args.max_wall_seconds),
         worker_timeout_seconds=int(args.worker_timeout_seconds),
+        resume_run=Path(args.resume_run) if args.resume_run else None,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
     return 0

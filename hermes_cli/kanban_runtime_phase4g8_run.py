@@ -1616,6 +1616,9 @@ def _prepare_resumed_runtime_job(job_id: str) -> dict[str, Any]:
             )
         session_sync = rk.sync_runtime_backend_sessions(conn, job_id)
         reclaimed_dead_advance_lock = _reclaim_dead_phase4g8_advance_lock(conn, job_id)
+        repaired_contribution_attribution_branch = (
+            _repair_resume_contribution_attribution_branch(conn, job_id)
+        )
         repaired_timeout_branch = _repair_resume_timeout_branch(conn, job_id)
         requeued_incomplete_evaluators = _requeue_incomplete_evaluator_nodes(conn, job_id)
         adapted_candidate_receipts = _ingest_adaptable_candidate_receipts(
@@ -1643,6 +1646,9 @@ def _prepare_resumed_runtime_job(job_id: str) -> dict[str, Any]:
         )
         resumed_nodes: list[str] = []
         superseded_nodes = set(repaired_timeout_branch.get("superseded_nodes") or [])
+        superseded_nodes.update(
+            repaired_contribution_attribution_branch.get("superseded_nodes") or []
+        )
         superseded_nodes.update(
             repaired_receipt_branch.get("superseded_nodes") or []
         )
@@ -1736,6 +1742,9 @@ def _prepare_resumed_runtime_job(job_id: str) -> dict[str, Any]:
             "reclaimed_dead_advance_lock": reclaimed_dead_advance_lock,
             "resumed_nodes": resumed_nodes,
             "timeout_branch_repair": repaired_timeout_branch,
+            "contribution_attribution_branch_repair": (
+                repaired_contribution_attribution_branch
+            ),
             "receipt_branch_repair": repaired_receipt_branch,
             "structure_request_branch_repair": (
                 repaired_structure_request_branch
@@ -1747,6 +1756,205 @@ def _prepare_resumed_runtime_job(job_id: str) -> dict[str, Any]:
             ),
             "requeued_receipt_recoveries": requeued_receipt_recoveries,
         }
+
+
+def _repair_resume_contribution_attribution_branch(
+    conn: sqlite3.Connection,
+    job_id: str,
+) -> dict[str, Any]:
+    """Replay a receipt rejected by the pre-lineage contribution validator."""
+
+    failure = conn.execute(
+        """
+        SELECT event.*, node.node_key, node.state AS node_state
+          FROM execution_events event
+          JOIN execution_nodes node ON node.id = event.node_id
+         WHERE event.job_id = ?
+           AND event.event_type = 'contribution_attribution_failed'
+         ORDER BY event.id DESC LIMIT 1
+        """,
+        (job_id,),
+    ).fetchone()
+    if failure is None:
+        return {"repaired": False, "reason": "no_contribution_attribution_failure"}
+    if failure["node_state"] != "failed":
+        return {"repaired": False, "reason": "attribution_node_not_failed"}
+    failure_payload = json.loads(failure["payload_json"] or "{}")
+    violations = [str(value) for value in failure_payload.get("violations") or []]
+    prefix = "modified_contribution_not_observed:"
+    if not violations or any(not value.startswith(prefix) for value in violations):
+        return {"repaired": False, "reason": "attribution_failure_not_lineage_only"}
+    missing_artifacts = {value.removeprefix(prefix) for value in violations}
+    prior_events = conn.execute(
+        """
+        SELECT id, payload_json FROM execution_events
+         WHERE job_id = ? AND node_id = ?
+           AND event_type = 'contribution_attribution_verified' AND id < ?
+         ORDER BY id DESC
+        """,
+        (job_id, failure["node_id"], failure["id"]),
+    ).fetchall()
+    prior_modified: set[str] = set()
+    for event in prior_events:
+        payload = json.loads(event["payload_json"] or "{}")
+        prior_modified.update(
+            str(value) for value in payload.get("modified_contributions") or []
+        )
+    if not missing_artifacts <= prior_modified:
+        return {"repaired": False, "reason": "verified_lineage_missing"}
+    materialization = conn.execute(
+        """
+        SELECT materialization.*, run.metadata AS run_metadata
+          FROM node_materializations materialization
+          JOIN task_runs run ON run.task_id = materialization.task_id
+             AND run.id = (
+                 SELECT MAX(latest.id) FROM task_runs latest
+                  WHERE latest.task_id = materialization.task_id
+             )
+         WHERE materialization.node_id = ?
+           AND materialization.task_id = ?
+         ORDER BY materialization.attempt DESC LIMIT 1
+        """,
+        (failure["node_id"], failure["task_id"]),
+    ).fetchone()
+    if materialization is None:
+        return {"repaired": False, "reason": "failed_materialization_missing"}
+    run_metadata = json.loads(materialization["run_metadata"] or "{}")
+    receipt = run_metadata.get("runtime_receipt")
+    if not isinstance(receipt, dict):
+        return {"repaired": False, "reason": "failed_receipt_missing"}
+    receipt_modified = {
+        str(value) for value in receipt.get("modified_contributions") or []
+    }
+    if not missing_artifacts <= receipt_modified:
+        return {"repaired": False, "reason": "failed_receipt_lineage_mismatch"}
+    job = conn.execute(
+        "SELECT workspace_path FROM runtime_jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()
+    current_revision = collect_git_evidence(job["workspace_path"]).get(
+        "workspace_revision"
+    )
+    if not receipt.get("workspace_revision") or current_revision != receipt.get(
+        "workspace_revision"
+    ):
+        raise RuntimeError(
+            "cannot repair contribution attribution after candidate revision changed"
+        )
+    speculative_nodes = conn.execute(
+        """
+        SELECT * FROM execution_nodes
+         WHERE job_id = ? AND id != ? AND node_type = 'strategy_update'
+           AND created_at >= ? AND state NOT IN ('superseded', 'cancelled')
+         ORDER BY created_at
+        """,
+        (job_id, failure["node_id"], failure["created_at"]),
+    ).fetchall()
+    for node in speculative_nodes:
+        produced_receipt = conn.execute(
+            """
+            SELECT 1
+              FROM node_materializations materialization
+              JOIN task_runs run ON run.task_id = materialization.task_id
+             WHERE materialization.node_id = ?
+               AND json_type(run.metadata, '$.runtime_receipt') = 'object'
+             LIMIT 1
+            """,
+            (node["id"],),
+        ).fetchone()
+        if produced_receipt is not None:
+            raise RuntimeError(
+                "cannot repair contribution attribution after strategy receipt"
+            )
+    now = int(time.time())
+    for node in speculative_nodes:
+        conn.execute(
+            """
+            UPDATE tasks
+               SET status = 'archived', claim_lock = NULL, claim_expires = NULL,
+                   worker_pid = NULL, current_run_id = NULL,
+                   result = COALESCE(
+                       result,
+                       'Superseded after contribution attribution lineage repair.'
+                   )
+             WHERE id IN (
+                 SELECT task_id FROM node_materializations WHERE node_id = ?
+             )
+            """,
+            (node["id"],),
+        )
+        conn.execute(
+            """
+            UPDATE node_materializations
+               SET status = CASE
+                       WHEN status IN ('candidate_ready', 'succeeded', 'failed', 'blocked')
+                       THEN status ELSE 'crashed' END,
+                   completed_at = COALESCE(completed_at, ?)
+             WHERE node_id = ?
+            """,
+            (now, node["id"]),
+        )
+        conn.execute(
+            """
+            UPDATE execution_nodes
+               SET state = 'superseded', latest_task_id = NULL,
+                   latest_run_id = NULL,
+                   output_summary =
+                       'Superseded after contribution attribution lineage repair.',
+                   completed_at = ?, updated_at = ?
+             WHERE id = ?
+            """,
+            (now, now, node["id"]),
+        )
+        conn.execute(
+            """
+            UPDATE backend_worker_sessions
+               SET status = 'completed', completed_at = COALESCE(completed_at, ?),
+                   updated_at = ?
+             WHERE node_id = ?
+            """,
+            (now, now, node["id"]),
+        )
+    conn.execute(
+        """
+        UPDATE execution_nodes
+           SET state = 'running', completed_at = NULL, updated_at = ?
+         WHERE id = ? AND state = 'failed'
+        """,
+        (now, failure["node_id"]),
+    )
+    conn.execute(
+        """
+        UPDATE node_materializations
+           SET status = 'running', completed_at = NULL
+         WHERE id = ?
+        """,
+        (materialization["id"],),
+    )
+    if not rk.ingest_runtime_node_evidence(conn, str(failure["node_id"])):
+        raise RuntimeError("contribution attribution receipt replay was not ingested")
+    rk._event(
+        conn,
+        job_id,
+        "phase4g8_contribution_attribution_branch_repaired",
+        {
+            "primary_node_key": failure["node_key"],
+            "failed_event_id": failure["id"],
+            "replayed_materialization_id": materialization["id"],
+            "workspace_revision": current_revision,
+            "restored_lineage": sorted(missing_artifacts),
+            "superseded_nodes": [str(node["node_key"]) for node in speculative_nodes],
+        },
+        node_id=failure["node_id"],
+        task_id=failure["task_id"],
+    )
+    return {
+        "repaired": True,
+        "primary_node_key": str(failure["node_key"]),
+        "restored_lineage": sorted(missing_artifacts),
+        "superseded_nodes": [str(node["node_key"]) for node in speculative_nodes],
+        "workspace_revision": current_revision,
+    }
 
 
 def _reclaim_dead_phase4g8_advance_lock(

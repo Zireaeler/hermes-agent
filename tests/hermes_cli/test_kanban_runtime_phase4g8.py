@@ -1116,6 +1116,198 @@ def test_reconstruct_resume_state_recovers_dead_worker_and_session(kanban_home):
     assert refreshed_session["status"] == "interrupted"
 
 
+def test_resume_repairs_pre_lineage_contribution_attribution_failure(
+    kanban_home,
+    tmp_path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _run("git", "init", "--quiet", cwd=workspace)
+    _run("git", "config", "user.email", "phase4g8@example.invalid", cwd=workspace)
+    _run("git", "config", "user.name", "Phase4G8 Test", cwd=workspace)
+    (workspace / "result.txt").write_text("candidate\n", encoding="utf-8")
+    _run("git", "add", "result.txt", cwd=workspace)
+    _run("git", "commit", "--quiet", "-m", "candidate", cwd=workspace)
+    revision = p4g8_run.collect_git_evidence(str(workspace))["workspace_revision"]
+    with kb.connect() as conn:
+        root = kb.create_task(conn, title="phase4g8 attribution repair", initial_status="running")
+        job_id = rk.create_runtime_job(
+            conn,
+            root,
+            "repair contribution attribution",
+            workspace_path=str(workspace),
+            goal_items=[{
+                "item_key": "result",
+                "description": "result",
+                "required": True,
+                "verifier_required": True,
+            }],
+            initialization_mode="fixture",
+            runtime_metadata={
+                "orchestration_policy": {
+                    "mode": "early_structure_assessment",
+                    "require_contribution_attribution": True,
+                },
+            },
+        )
+        primary = conn.execute(
+            "SELECT * FROM execution_nodes WHERE job_id = ? ORDER BY created_at LIMIT 1",
+            (job_id,),
+        ).fetchone()
+        task_id = kb.create_task(
+            conn,
+            title="primary remediation",
+            assignee="phase4g8-codex",
+            initial_status="blocked",
+            tenant=f"runtime:{job_id}",
+            workspace_path=str(workspace),
+        )
+        receipt = {
+            "schema": "runtime_worker_receipt_v1",
+            "verdict": "candidate_ready",
+            "workspace_revision": revision,
+            "modified_contributions": ["artifact-a", "artifact-b"],
+            "accepted_contributions": [],
+            "rejected_contributions": [],
+            "changed_files": ["a.py"],
+        }
+        run_id = conn.execute(
+            """
+            INSERT INTO task_runs (
+                task_id, profile, status, started_at, ended_at, metadata
+            ) VALUES (?, 'phase4g8-codex', 'blocked', 1, 2, ?)
+            """,
+            (task_id, json.dumps({"runtime_receipt": receipt})),
+        ).lastrowid
+        materialization_id = "mat_attribution_repair"
+        conn.execute(
+            """
+                INSERT INTO node_materializations (
+                    id, job_id, node_id, task_id, attempt, status, run_id,
+                    created_at, started_at, completed_at, metadata_json
+                ) VALUES (?, ?, ?, ?, 3, 'failed', ?, 1, 1, 2, '{}')
+            """,
+            (materialization_id, job_id, primary["id"], task_id, run_id),
+        )
+        conn.execute(
+            """
+            UPDATE execution_nodes
+               SET state = 'failed', latest_task_id = ?, latest_run_id = ?,
+                   completed_at = 2
+             WHERE id = ?
+            """,
+            (task_id, run_id, primary["id"]),
+        )
+        rk._event(
+            conn,
+            job_id,
+            "contribution_attribution_verified",
+            {
+                "node_key": primary["node_key"],
+                "modified_contributions": ["artifact-a", "artifact-b"],
+            },
+            node_id=primary["id"],
+            task_id=task_id,
+        )
+        failure_id = rk._event(
+            conn,
+            job_id,
+            "contribution_attribution_failed",
+            {
+                "node_key": primary["node_key"],
+                "violations": [
+                    "modified_contribution_not_observed:artifact-b",
+                ],
+            },
+            node_id=primary["id"],
+            task_id=task_id,
+        )
+        strategy_task_id = kb.create_task(
+            conn,
+            title="speculative attribution recovery",
+            assignee="phase4g8-codex",
+            initial_status="blocked",
+            tenant=f"runtime:{job_id}",
+            workspace_path=str(workspace),
+        )
+        strategy_id = "rnode_speculative_attribution"
+        now = int(time.time())
+        conn.execute(
+            """
+            INSERT INTO execution_nodes (
+                id, job_id, node_key, node_type, state, title, description,
+                latest_task_id, assumptions_json, constraints_json, metadata_json,
+                created_at, updated_at
+            ) VALUES (?, ?, 'speculative-attribution-recovery', 'strategy_update',
+                      'failed', 'speculative', 'speculative', ?, '{}', '{}', '{}', ?, ?)
+            """,
+            (strategy_id, job_id, strategy_task_id, now, now),
+        )
+        strategy_run_id = conn.execute(
+            """
+            INSERT INTO task_runs (task_id, profile, status, started_at, ended_at, metadata)
+            VALUES (?, 'phase4g8-codex', 'failed', 1, 2, '{}')
+            """,
+            (strategy_task_id,),
+        ).lastrowid
+        conn.execute(
+            "UPDATE tasks SET status = 'failed' WHERE id = ?",
+            (strategy_task_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO node_materializations (
+                id, job_id, node_id, task_id, attempt, status, run_id,
+                created_at, started_at, completed_at, metadata_json
+            ) VALUES ('mat_speculative_attribution', ?, ?, ?, 1, 'failed', ?, 1, 1, 2, '{}')
+            """,
+            (job_id, strategy_id, strategy_task_id, strategy_run_id),
+        )
+
+        replayed = []
+
+        def replay_receipt(replay_conn, node_id, board=None):
+            replayed.append(node_id)
+            replay_conn.execute(
+                "UPDATE execution_nodes SET state = 'candidate_ready' WHERE id = ?",
+                (node_id,),
+            )
+            return True
+
+        monkeypatch.setattr(rk, "ingest_runtime_node_evidence", replay_receipt)
+        repair = p4g8_run._repair_resume_contribution_attribution_branch(
+            conn,
+            job_id,
+        )
+
+        assert repair == {
+            "repaired": True,
+            "primary_node_key": primary["node_key"],
+            "restored_lineage": ["artifact-b"],
+            "superseded_nodes": ["speculative-attribution-recovery"],
+            "workspace_revision": revision,
+        }
+        assert replayed == [primary["id"]]
+        assert conn.execute(
+            "SELECT state FROM execution_nodes WHERE id = ?",
+            (primary["id"],),
+        ).fetchone()["state"] == "candidate_ready"
+        assert conn.execute(
+            "SELECT state FROM execution_nodes WHERE id = ?",
+            (strategy_id,),
+        ).fetchone()["state"] == "superseded"
+        repair_event = conn.execute(
+            """
+            SELECT payload_json FROM execution_events
+             WHERE job_id = ?
+               AND event_type = 'phase4g8_contribution_attribution_branch_repaired'
+            """,
+            (job_id,),
+        ).fetchone()
+        assert json.loads(repair_event["payload_json"])["failed_event_id"] == failure_id
+
+
 def test_resume_requeues_incomplete_fixed_target_evaluator(kanban_home):
     with kb.connect() as conn:
         root = kb.create_task(conn, title="phase4g8 evaluator resume", initial_status="running")
