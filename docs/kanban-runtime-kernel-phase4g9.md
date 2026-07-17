@@ -298,3 +298,52 @@ and suppression of nested subagent orchestration inside Runtime workers.
 
 Those changes are explicitly outside the Arm 1 goal and must not be inferred
 from or implemented by this document.
+
+---
+
+## 12. Frozen Arm 1 Baseline
+
+Arm 1 completed on 2026-07-17. The immutable comparison baseline is:
+
+```text
+resolved: false
+FAIL_TO_PASS: 7/68
+PASS_TO_PASS: 242/242
+parent wall time: 4667.077 seconds
+implementation subagents: 8
+peak implementation concurrency: 4 including parent
+time-weighted average implementation concurrency: 3.270567
+official evaluator invocations: 1
+evaluator feedback turns: 0
+```
+
+The pre-run frozen protocol is the Section 1-11 document at commit `0059774`,
+with SHA-256 `05578a73404caa1550bceb5a97ba89d3dfc7b3036e5de6939288a2269f792b38`.
+This result section was appended only after the terminal candidate and one-shot
+evaluation were complete.
+
+The exact candidate patch SHA-256 is:
+
+```text
+494c5e7bb04a8a33e85de387e7d541f7197eacfc2b57a73b4565641278636931
+```
+
+The native Codex rollout stores collaboration message bodies as encrypted
+content. The archive therefore records task names, sender/target, timing,
+tool result, and ciphertext hashes rather than pretending plaintext prompts
+were observable. The redacted outer event stream did not expose spawn calls.
+This limitation does not affect child-session identity or concurrency evidence.
+
+The post-terminal patch collector initially failed on generated non-UTF-8
+pytest artifacts. Recovery removed only top-level `.pytest-*` directories,
+did not resume Codex, and invoked the evaluator exactly once. Exact model-proxy
+request counters were not persisted before that collector failure and remain
+an explicit observability gap.
+
+The archived report and architecture conclusion are under:
+
+```text
+docs/validation/phase4g9/
+  iterative__dvc_1.0.0a1_1.0.0a2/
+    phase4g9-arm1-native-20260717/
+```

@@ -139,11 +139,27 @@ def test_execution_summary_states_one_shot_measurement():
         "worker": {
             "parent_thread_id": "parent",
             "subagent_count": 1,
-            "collaboration_calls": [{
-                "tool": "spawn_agent",
-                "receiver_thread_ids": ["child"],
-                "prompt": "Own module A",
-            }],
+            "rollouts": {
+                "sessions": [{
+                    "thread_id": "child",
+                    "kind": "orchestration_subagent",
+                    "agent_path": "/root/unit_runner",
+                    "agent_nickname": "Hubble",
+                    "depth": 1,
+                    "duration_seconds": 60,
+                    "compaction_count": 0,
+                }],
+                "aggregate_usage": {
+                    "input_tokens": 1000,
+                    "cached_input_tokens": 800,
+                    "output_tokens": 100,
+                    "reasoning_output_tokens": 20,
+                },
+                "aggregate_cache_hit_ratio": 0.8,
+                "peak_implementation_concurrency": 2,
+                "implementation_compaction_count": 0,
+                "collaboration_call_counts": {"spawn_agent": 1},
+            },
             "terminal_message": "Tests pass locally.",
         },
         "evaluator": {
@@ -156,9 +172,10 @@ def test_execution_summary_states_one_shot_measurement():
     rendered = arm1.render_execution_summary(report)
 
     assert "FAIL_TO_PASS: `60/68`" in rendered
-    assert "Native subagents observed: `1`" in rendered
+    assert "Native implementation/audit subagents: `1`" in rendered
     assert "The official evaluator ran once" in rendered
-    assert "Own module A" in rendered
+    assert "unit_runner" in rendered
+    assert "real native-orchestra baseline" in rendered
 
 
 def test_rollout_summary_aggregates_parent_and_child_tokens(tmp_path):
@@ -191,6 +208,30 @@ def test_rollout_summary_aggregates_parent_and_child_tokens(tmp_path):
                 "agent_path": "/root/unit_runner",
                 "agent_nickname": "Hubble",
             }}}},
+        },
+        {
+            "timestamp": "2026-07-17T00:00:30Z",
+            "type": "session_meta",
+            "payload": {"id": "parent", "source": "exec"},
+        },
+        {
+            "timestamp": "2026-07-17T00:00:10Z",
+            "type": "event_msg",
+            "payload": {"type": "context_compacted"},
+        },
+        {
+            "timestamp": "2026-07-17T00:01:00Z",
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "namespace": "collaboration",
+                "name": "send_message",
+            },
+        },
+        {
+            "timestamp": "2026-07-17T00:01:15Z",
+            "type": "event_msg",
+            "payload": {"type": "context_compacted"},
         },
         {
             "timestamp": "2026-07-17T00:01:30Z",
@@ -227,6 +268,13 @@ def test_rollout_summary_aggregates_parent_and_child_tokens(tmp_path):
     assert summary["orchestration_subagent_count"] == 1
     assert summary["guardian_count"] == 0
     assert summary["max_orchestration_depth"] == 1
+    assert summary["implementation_compaction_count"] == 1
+    assert summary["collaboration_call_counts"] == {"send_message": 1}
+    child_summary = next(
+        session for session in summary["sessions"]
+        if session["kind"] == "orchestration_subagent"
+    )
+    assert child_summary["thread_id"] == "child"
 
 
 def test_cleanup_worker_test_artifacts_preserves_candidate_files(tmp_path):
@@ -243,3 +291,12 @@ def test_cleanup_worker_test_artifacts_preserves_candidate_files(tmp_path):
     assert not (tmp_path / ".pytest-run").exists()
     assert not (tmp_path / ".pytest_cache").exists()
     assert candidate.read_text(encoding="utf-8") == "candidate\n"
+
+
+def test_collaboration_result_does_not_treat_agent_failure_text_as_tool_failure():
+    assert arm1._collaboration_result_status(
+        '{"agents":[{"last_task_message":"13 tests failed"}]}'
+    ) == "completed"
+    assert arm1._collaboration_result_status(
+        "collab spawn failed: agent thread limit reached"
+    ) == "failed"

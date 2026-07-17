@@ -275,11 +275,19 @@ def summarize_rollout_sessions(codex_home: Path, *, parent_thread_id: Optional[s
         depth: Optional[int] = None
         first_timestamp = ""
         last_timestamp = ""
+        session_started: Optional[float] = None
         usage = {key: 0 for key in (
             "input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens"
         )}
         event_count = 0
+        session_event_count = 0
         compaction_count = 0
+        collaboration_counts: dict[str, int] = {}
+        collaboration_events: list[dict[str, Any]] = []
+        pending_collaboration: dict[str, int] = {}
+        task_started_count = 0
+        task_complete_count = 0
+        terminal_message = ""
         with path.open("r", encoding="utf-8", errors="replace") as handle:
             for line in handle:
                 try:
@@ -290,19 +298,24 @@ def summarize_rollout_sessions(codex_home: Path, *, parent_thread_id: Optional[s
                     continue
                 event_count += 1
                 timestamp = str(event.get("timestamp") or "")
-                if timestamp:
-                    first_timestamp = first_timestamp or timestamp
-                    last_timestamp = timestamp
                 payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-                if event.get("type") == "session_meta":
+                if event.get("type") == "session_meta" and not thread_id:
                     thread_id = str(payload.get("id") or payload.get("session_id") or thread_id)
                     source = payload.get("source") or payload.get("thread_source")
+                    first_timestamp = timestamp
+                    session_started = _parse_timestamp(timestamp)
                     subagent = source.get("subagent") if isinstance(source, dict) else None
                     spawned = subagent.get("thread_spawn") if isinstance(subagent, dict) else None
                     if isinstance(spawned, dict):
                         agent_path = str(spawned.get("agent_path") or "") or None
                         agent_nickname = str(spawned.get("agent_nickname") or "") or None
                         depth = int(spawned.get("depth") or 0)
+                event_timestamp = _parse_timestamp(timestamp)
+                if session_started is None or event_timestamp is None or event_timestamp < session_started:
+                    continue
+                session_event_count += 1
+                if timestamp:
+                    last_timestamp = max(last_timestamp, timestamp)
                 if event.get("type") == "event_msg" and payload.get("type") == "token_count":
                     info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
                     total = (
@@ -314,6 +327,50 @@ def summarize_rollout_sessions(codex_home: Path, *, parent_thread_id: Optional[s
                         usage[key] = max(usage[key], int(total.get(key) or 0))
                 if event.get("type") == "event_msg" and payload.get("type") == "context_compacted":
                     compaction_count += 1
+                if event.get("type") == "event_msg" and payload.get("type") == "task_started":
+                    task_started_count += 1
+                if event.get("type") == "event_msg" and payload.get("type") == "task_complete":
+                    task_complete_count += 1
+                if event.get("type") == "response_item" and payload.get("type") == "function_call":
+                    if payload.get("namespace") == "collaboration":
+                        name = str(payload.get("name") or "unknown")
+                        collaboration_counts[name] = collaboration_counts.get(name, 0) + 1
+                        arguments = _json_object(payload.get("arguments"))
+                        message = str(arguments.pop("message", "") or "")
+                        collaboration_events.append({
+                            "timestamp": timestamp or None,
+                            "tool": name,
+                            "task_name": arguments.get("task_name"),
+                            "target": arguments.get("target"),
+                            "fork_turns": arguments.get("fork_turns"),
+                            "timeout_ms": arguments.get("timeout_ms"),
+                            "message_encrypted": bool(message),
+                            "message_sha256": (
+                                hashlib.sha256(message.encode("utf-8")).hexdigest()
+                                if message else None
+                            ),
+                            "result_status": "not_observed",
+                        })
+                        call_id = str(payload.get("call_id") or "")
+                        if call_id:
+                            pending_collaboration[call_id] = len(collaboration_events) - 1
+                if event.get("type") == "response_item" and payload.get("type") == "function_call_output":
+                    call_id = str(payload.get("call_id") or "")
+                    if call_id in pending_collaboration:
+                        output = redact_sensitive_text(str(payload.get("output") or ""))
+                        target = collaboration_events[pending_collaboration.pop(call_id)]
+                        target["result_status"] = _collaboration_result_status(output)
+                        target["result_summary"] = output[:500]
+                if event.get("type") == "response_item" and payload.get("type") == "message":
+                    if payload.get("role") == "assistant":
+                        content = payload.get("content") if isinstance(payload.get("content"), list) else []
+                        text_parts = [
+                            str(item.get("text") or "")
+                            for item in content
+                            if isinstance(item, dict) and item.get("type") in {"output_text", "input_text"}
+                        ]
+                        if any(text_parts):
+                            terminal_message = redact_sensitive_text("\n".join(text_parts))
         if not thread_id:
             continue
         kind = _rollout_kind(source, thread_id=thread_id, parent_thread_id=parent_thread_id)
@@ -329,13 +386,20 @@ def summarize_rollout_sessions(codex_home: Path, *, parent_thread_id: Optional[s
             "duration_seconds": _timestamp_delta(first_timestamp, last_timestamp),
             "usage": usage,
             "event_count": event_count,
+            "session_event_count": session_event_count,
             "compaction_count": compaction_count,
+            "collaboration_call_counts": collaboration_counts,
+            "collaboration_events": collaboration_events,
+            "task_started_count": task_started_count,
+            "task_complete_count": task_complete_count,
+            "terminal_status": "completed" if task_complete_count else "not_observed",
+            "terminal_message": terminal_message,
         })
     totals = {
         key: sum(int(session["usage"].get(key) or 0) for session in sessions)
         for key in ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens")
     }
-    intervals = [
+    all_intervals = [
         (_parse_timestamp(session["started_at"]), _parse_timestamp(session["finished_at"]))
         for session in sessions
         if session.get("started_at") and session.get("finished_at")
@@ -346,12 +410,37 @@ def summarize_rollout_sessions(codex_home: Path, *, parent_thread_id: Optional[s
     )
     orchestration_sessions = [session for session in sessions if session["kind"] == "orchestration_subagent"]
     guardian_sessions = [session for session in sessions if session["kind"] == "guardian"]
+    implementation_sessions = [
+        session for session in sessions if session["kind"] in {"parent", "orchestration_subagent"}
+    ]
+    implementation_usage = {
+        key: sum(int(session["usage"].get(key) or 0) for session in implementation_sessions)
+        for key in ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens")
+    }
+    guardian_usage = {
+        key: sum(int(session["usage"].get(key) or 0) for session in guardian_sessions)
+        for key in ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens")
+    }
+    implementation_cache_hit_ratio = (
+        round(implementation_usage["cached_input_tokens"] / implementation_usage["input_tokens"], 6)
+        if implementation_usage["input_tokens"] > 0 else None
+    )
+    collaboration_call_counts: dict[str, int] = {}
+    for session in implementation_sessions:
+        for name, count in session.get("collaboration_call_counts", {}).items():
+            collaboration_call_counts[name] = collaboration_call_counts.get(name, 0) + int(count)
     return {
         "session_count": len(sessions),
         "sessions": sessions,
         "aggregate_usage": totals,
+        "implementation_usage": implementation_usage,
+        "guardian_usage": guardian_usage,
         "aggregate_cache_hit_ratio": cache_hit_ratio,
-        "peak_observed_concurrency": _peak_concurrency(intervals),
+        "implementation_cache_hit_ratio": implementation_cache_hit_ratio,
+        "peak_observed_concurrency": _peak_concurrency(all_intervals),
+        "peak_implementation_concurrency": _session_peak_concurrency(implementation_sessions),
+        "peak_subagent_concurrency": _session_peak_concurrency(orchestration_sessions),
+        "implementation_concurrency_profile": _session_concurrency_profile(implementation_sessions),
         "orchestration_subagent_count": len(orchestration_sessions),
         "guardian_count": len(guardian_sessions),
         "max_orchestration_depth": max(
@@ -359,6 +448,31 @@ def summarize_rollout_sessions(codex_home: Path, *, parent_thread_id: Optional[s
             default=0,
         ),
         "native_compaction_count": sum(int(session.get("compaction_count") or 0) for session in sessions),
+        "implementation_compaction_count": sum(
+            int(session.get("compaction_count") or 0) for session in implementation_sessions
+        ),
+        "collaboration_call_counts": collaboration_call_counts,
+        "implementation_turn_count": sum(
+            int(session.get("task_started_count") or 0) for session in implementation_sessions
+        ),
+        "collaboration_events": [
+            {"actor_thread_id": session["thread_id"], **event}
+            for session in implementation_sessions
+            for event in session.get("collaboration_events", [])
+        ],
+        "failed_collaboration_call_count": sum(
+            1
+            for session in implementation_sessions
+            for event in session.get("collaboration_events", [])
+            if event.get("result_status") == "failed"
+        ),
+        "thread_limit_rejection_count": sum(
+            1
+            for session in implementation_sessions
+            for event in session.get("collaboration_events", [])
+            if event.get("result_status") == "failed"
+            and "thread limit reached" in str(event.get("result_summary") or "").lower()
+        ),
     }
 
 
@@ -465,6 +579,7 @@ def run_native_arm1(
         paths["codex_home"],
         parent_thread_id=event_summary.get("parent_thread_id"),
     )
+    event_summary = _merge_rollout_identity(event_summary, rollout_summary)
     candidate_patch = swe_evo.collect_candidate_patch(paths["workspace"], FROZEN_BASE_COMMIT)
     candidate_sha = hashlib.sha256(candidate_patch.encode("utf-8")).hexdigest()
     _write_text(paths["reports"] / "candidate.patch", candidate_patch)
@@ -566,6 +681,7 @@ def finalize_existing_terminal_arm1(
     _reclaim_workspace(workspace)
     test_artifact_cleanup = cleanup_worker_test_artifacts(workspace)
     rollout_summary = summarize_rollout_sessions(codex_home, parent_thread_id=str(parent_thread_id))
+    event_summary = _merge_rollout_identity(event_summary, rollout_summary)
     candidate_patch = swe_evo.collect_candidate_patch(workspace, FROZEN_BASE_COMMIT)
     candidate_sha = hashlib.sha256(candidate_patch.encode("utf-8")).hexdigest()
     candidate = {
@@ -633,13 +749,67 @@ def finalize_existing_terminal_arm1(
     return report
 
 
+def refresh_existing_arm1_report(*, run_root: Path) -> dict[str, Any]:
+    """Rebuild derived rollout metrics without invoking Codex or the evaluator."""
+
+    run_root = run_root.expanduser().resolve()
+    reports = run_root / "reports"
+    report_path = reports / "run-report.json"
+    event_path = run_root / "worker-events" / "codex-exec.jsonl"
+    codex_home = run_root / "codex-home"
+    if not report_path.is_file() or not event_path.is_file() or not codex_home.is_dir():
+        raise ValueError("existing Phase 4G9 report layout is incomplete")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if report.get("schema") != ARM1_REPORT_SCHEMA or report.get("evaluator_invocation_count") != 1:
+        raise ValueError("existing report is not a completed Phase 4G9 Arm 1 result")
+    if _codex_processes_for_workspace(run_root / "workspace"):
+        raise RuntimeError("cannot refresh a report while its native Codex process is running")
+
+    raw_lines = event_path.read_text(encoding="utf-8", errors="strict").splitlines()
+    event_summary = summarize_exec_events(raw_lines)
+    parent_thread_id = event_summary.get("parent_thread_id")
+    if not parent_thread_id:
+        raise ValueError("existing Phase 4G9 event stream has no parent thread")
+    rollout_summary = summarize_rollout_sessions(codex_home, parent_thread_id=str(parent_thread_id))
+    event_summary = _merge_rollout_identity(event_summary, rollout_summary)
+    preserved = {
+        key: value for key, value in report["worker"].items()
+        if key not in event_summary and key != "rollouts"
+    }
+    report["worker"] = {**preserved, **event_summary, "rollouts": rollout_summary}
+    report["report_refresh"] = {
+        "derived_metrics_refreshed_at": int(time.time()),
+        "codex_reinvoked": False,
+        "evaluator_reinvoked": False,
+        "reason": "correct forked rollout identity and derived orchestration metrics",
+    }
+    _write_json(report_path, report)
+    _write_text(reports / "execution-summary.md", render_execution_summary(report))
+    return report
+
+
 def render_execution_summary(report: dict[str, Any]) -> str:
     worker = report["worker"]
     evaluator = report["evaluator"]
     fail = evaluator.get("fail_to_pass") or {}
     p2p = evaluator.get("pass_to_pass") or {}
-    collab = worker.get("collaboration_calls") or []
-    spawn_calls = [call for call in collab if call.get("tool") == "spawn_agent"]
+    rollouts = worker.get("rollouts") or {}
+    sessions = rollouts.get("sessions") or []
+    subagents = [session for session in sessions if session.get("kind") == "orchestration_subagent"]
+    guardians = [session for session in sessions if session.get("kind") == "guardian"]
+    usage = rollouts.get("implementation_usage") or rollouts.get("aggregate_usage") or {}
+    guardian_usage = rollouts.get("guardian_usage") or {}
+    calls = rollouts.get("collaboration_call_counts") or {}
+    concurrency = rollouts.get("implementation_concurrency_profile") or {}
+    failed_calls = int(rollouts.get("failed_collaboration_call_count") or 0)
+    thread_limit_rejections = int(rollouts.get("thread_limit_rejection_count") or 0)
+    spawn_note = (
+        f"The `{calls.get('spawn_agent', 0)}` spawn calls produced `{len(subagents)}` sessions; "
+        f"`{failed_calls}` collaboration calls failed, including `{thread_limit_rejections}` "
+        "thread-limit rejections. The parent retried or reused agents after slots opened."
+        if failed_calls else
+        f"The `{calls.get('spawn_agent', 0)}` spawn calls produced `{len(subagents)}` sessions."
+    )
     lines = [
         "# Phase 4G9 Arm 1: Native Codex Orchestra",
         "",
@@ -650,7 +820,15 @@ def render_execution_summary(report: dict[str, Any]) -> str:
         f"- PASS_TO_PASS: `{p2p.get('passed', 0)}/{p2p.get('total', 0)}`",
         f"- Wall time: `{report.get('wall_time_seconds')}s`",
         f"- Parent thread: `{worker.get('parent_thread_id') or 'unavailable'}`",
-        f"- Native subagents observed: `{worker.get('subagent_count', 0)}`",
+        f"- Native implementation/audit subagents: `{len(subagents)}`",
+        f"- Guardian approval sidecars (excluded from worker count): `{len(guardians)}`",
+        f"- Peak implementation concurrency (parent included): "
+        f"`{rollouts.get('peak_implementation_concurrency', 0)}`",
+        f"- Time-weighted average implementation concurrency: "
+        f"`{concurrency.get('average_concurrency', 0)}`",
+        f"- Implementation turns observed: `{rollouts.get('implementation_turn_count', 0)}`",
+        f"- Native implementation context compactions: "
+        f"`{rollouts.get('implementation_compaction_count', 0)}`",
         f"- Candidate patch: `{report['candidate']['patch_bytes']} bytes`, "
         f"`{len(report['candidate']['changed_files'])}` changed files",
         "",
@@ -664,16 +842,52 @@ def render_execution_summary(report: dict[str, Any]) -> str:
         "## Native Allocation",
         "",
     ]
-    if spawn_calls:
-        for index, call in enumerate(spawn_calls, start=1):
-            receivers = ", ".join(call.get("receiver_thread_ids") or []) or "unknown"
-            prompt = str(call.get("prompt") or "").replace("\n", " ").strip()
-            lines.append(f"{index}. `{receivers}`: {prompt[:500]}")
+    if subagents:
+        lines.extend([
+            "| Agent | Depth | Duration | Compactions | Responsibility signal |",
+            "| --- | ---: | ---: | ---: | --- |",
+        ])
+        for session in subagents:
+            path = str(session.get("agent_path") or "unknown")
+            task_name = path.rsplit("/", 1)[-1]
+            nickname = str(session.get("agent_nickname") or "unnamed")
+            lines.append(
+                f"| `{task_name}` ({nickname}) | {session.get('depth') or 0} | "
+                f"{session.get('duration_seconds') or 0}s | {session.get('compaction_count') or 0} | "
+                f"{_responsibility_label(task_name)} |"
+            )
     else:
         lines.append("The parent created no observable native subagents.")
     lines.extend([
         "",
-        "## Parent Terminal Summary",
+        "All native subagents shared the parent workspace. They were ephemeral Codex threads, not "
+        "durable Hermes nodes or isolated worktrees. One depth-1 agent created the depth-2 "
+        "`targets_scan` agent.",
+        "",
+        "Observed collaboration calls: " + ", ".join(
+            f"`{name}={count}`" for name, count in sorted(calls.items())
+        ) + ".",
+        spawn_note,
+        "",
+        "## Token And Cache Observation",
+        "",
+        f"- Implementation input tokens: `{usage.get('input_tokens', 0)}`",
+        f"- Cached input tokens: `{usage.get('cached_input_tokens', 0)}`",
+        f"- Implementation output tokens: `{usage.get('output_tokens', 0)}`",
+        f"- Reasoning output tokens: `{usage.get('reasoning_output_tokens', 0)}`",
+        f"- Observed implementation cache ratio: "
+        f"`{rollouts.get('implementation_cache_hit_ratio')}`",
+        f"- Guardian input/output tokens: `{guardian_usage.get('input_tokens', 0)}` / "
+        f"`{guardian_usage.get('output_tokens', 0)}`",
+        "",
+        "These are sums of each rollout's final cumulative token counters. Guardian usage is "
+        "excluded from the implementation rows and separately identifiable in `run-report.json`; exact "
+        "model-proxy request counts were not recoverable after the post-terminal collector failure.",
+        "",
+        "## Parent-Reported Terminal Summary",
+        "",
+        "The following is the parent's terminal claim before any official evaluator access. The "
+        "official `7/68` result above is authoritative for benchmark quality.",
         "",
         str(worker.get("terminal_message") or "No terminal parent message was captured."),
         "",
@@ -682,6 +896,19 @@ def render_execution_summary(report: dict[str, Any]) -> str:
         "This is a single-run architecture baseline, not a model leaderboard result. Hidden tests, "
         "gold content, prior candidates, and evaluator diagnostics were not available to the native "
         "orchestra before termination.",
+        "",
+        "## Architecture Reading",
+        "",
+        "The native parent used its orchestra actively: it filled the four-thread implementation "
+        "budget, exchanged follow-up messages, reused completed slots, and delegated one nested scan. "
+        "This is a real native-orchestra baseline rather than a disguised single-agent run.",
+        "",
+        "The one-shot hidden-oracle result was still only "
+        f"`{fail.get('passed', 0)}/{fail.get('total', 0)}` FAIL_TO_PASS with "
+        f"`{p2p.get('passed', 0)}/{p2p.get('total', 0)}` PASS_TO_PASS. This does not prove that "
+        "Hermes orchestration is stronger: the earlier Kernel Large run received repeated official "
+        "evaluator feedback, while this frozen Arm 1 received none. A fair Arm 2 comparison must use "
+        "the same one-shot evaluator boundary and quality gate.",
         "",
     ])
     return "\n".join(lines)
@@ -846,6 +1073,27 @@ def _counts(values: Any) -> dict[str, int]:
     return counts
 
 
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if not isinstance(value, str):
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return dict(parsed) if isinstance(parsed, dict) else {}
+
+
+def _collaboration_result_status(output: str) -> str:
+    normalized = output.strip().lower()
+    if normalized.startswith("error"):
+        return "failed"
+    if normalized.startswith("collab ") and " failed" in normalized.splitlines()[0]:
+        return "failed"
+    return "completed"
+
+
 def _rollout_kind(source: Any, *, thread_id: str, parent_thread_id: Optional[str]) -> str:
     if thread_id == parent_thread_id:
         return "parent"
@@ -855,6 +1103,31 @@ def _rollout_kind(source: Any, *, thread_id: str, parent_thread_id: Optional[str
     if isinstance(subagent, dict) and subagent.get("other") == "guardian":
         return "guardian"
     return "other_internal"
+
+
+def _merge_rollout_identity(event_summary: dict[str, Any], rollout_summary: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(event_summary)
+    subagents = [
+        session for session in rollout_summary.get("sessions", [])
+        if session.get("kind") == "orchestration_subagent"
+    ]
+    merged["child_thread_ids"] = [str(session["thread_id"]) for session in subagents]
+    merged["subagent_count"] = len(subagents)
+    return merged
+
+
+def _responsibility_label(task_name: str) -> str:
+    labels = {
+        "plots_diff": "plots, diff, CLI behavior",
+        "tree_stream": "tree streaming and pulling",
+        "stage_run": "stage, run cache, dry-run",
+        "integration_audit": "cross-area integration audit",
+        "unit_runner": "broad unit-test validation",
+        "compat_edges": "compatibility and target normalization",
+        "targets_scan": "nested target API scan",
+        "pyupgrade_audit": "Python 3.6 migration audit",
+    }
+    return labels.get(task_name, task_name.replace("_", " "))
 
 
 def _parse_timestamp(value: Any) -> Optional[float]:
@@ -884,10 +1157,49 @@ def _peak_concurrency(intervals: list[tuple[Optional[float], Optional[float]]]) 
         points.append((finished, -1))
     current = 0
     peak = 0
-    for _timestamp, delta in sorted(points, key=lambda point: (point[0], -point[1])):
+    for _timestamp, delta in sorted(points, key=lambda point: (point[0], point[1])):
         current += delta
         peak = max(peak, current)
     return peak
+
+
+def _session_peak_concurrency(sessions: list[dict[str, Any]]) -> int:
+    return _peak_concurrency([
+        (_parse_timestamp(session.get("started_at")), _parse_timestamp(session.get("finished_at")))
+        for session in sessions
+    ])
+
+
+def _session_concurrency_profile(sessions: list[dict[str, Any]]) -> dict[str, Any]:
+    points: list[tuple[float, int]] = []
+    for session in sessions:
+        started = _parse_timestamp(session.get("started_at"))
+        finished = _parse_timestamp(session.get("finished_at"))
+        if started is None or finished is None or finished < started:
+            continue
+        points.extend([(started, 1), (finished, -1)])
+    if not points:
+        return {"observed_seconds": 0.0, "average_concurrency": 0.0, "seconds_by_level": {}}
+    ordered = sorted(points, key=lambda point: (point[0], point[1]))
+    current = 0
+    previous = ordered[0][0]
+    by_level: dict[int, float] = {}
+    for timestamp, delta in ordered:
+        if timestamp > previous:
+            by_level[current] = by_level.get(current, 0.0) + timestamp - previous
+        current += delta
+        previous = timestamp
+    observed = sum(seconds for level, seconds in by_level.items() if level > 0)
+    weighted = sum(level * seconds for level, seconds in by_level.items() if level > 0)
+    return {
+        "observed_seconds": round(observed, 3),
+        "average_concurrency": round(weighted / observed, 6) if observed else 0.0,
+        "seconds_by_level": {
+            str(level): round(seconds, 3)
+            for level, seconds in sorted(by_level.items())
+            if level > 0
+        },
+    }
 
 
 def _sha256_file(path: Path) -> str:
@@ -916,13 +1228,18 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-wall-seconds", type=float, default=21_600)
     parser.add_argument("--execute-real", action="store_true", required=True)
     parser.add_argument("--finalize-existing-terminal", action="store_true")
+    parser.add_argument("--refresh-existing-report", action="store_true")
     return parser.parse_args()
 
 
 def main() -> int:
     args = _parse_args()
     try:
-        if args.finalize_existing_terminal:
+        if args.finalize_existing_terminal and args.refresh_existing_report:
+            raise ValueError("choose only one existing-run operation")
+        if args.refresh_existing_report:
+            report = refresh_existing_arm1_report(run_root=Path(args.run_root))
+        elif args.finalize_existing_terminal:
             report = finalize_existing_terminal_arm1(
                 qualification_spec_path=Path(args.spec),
                 run_root=Path(args.run_root),
