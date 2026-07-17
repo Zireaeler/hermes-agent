@@ -26,7 +26,9 @@
 
 - 修改 66 个路径；
 - patch 大小 94,524 bytes；
-- primary 和 expanded strategy 使用两个隔离的 Codex thread；
+- Execution Graph 共创建 17 个 nodes：5 个非 evaluator worker nodes 和 12 个 benchmark verification nodes；
+- 5 个 worker nodes 中 4 个实际启动，3 个最终 superseded，任务主路径保留 2 个有效 worker nodes；
+- 2 个有效 worker 分别是 primary implementation 和 expanded strategy，并使用隔离的 Codex thread；
 - 10 次 Decision Provider patch，其中 5 accepted、5 rejected；
 - 13 个 evaluator run receipt，其中第一个因诊断提取不完整不计入有效能力序列；
 - 3 个真实 compaction checkpoint；

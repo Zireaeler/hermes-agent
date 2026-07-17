@@ -124,6 +124,8 @@ Run：`phase4g8-large-a101c61de3`
 - consistency violation/warning：`0/0`；
 - duplicate terminal/ledger fact：`0/0`；
 - 3 个 real compaction checkpoint accepted，fallback `0`；
+- Execution Graph：17 个 nodes；其中 5 个非 evaluator worker nodes（2 个最终有效、3 个
+  superseded），12 个 benchmark verification nodes；
 - primary session resume `12` 次，expanded strategy resume `3` 次；
 - candidate：66 个 changed paths、94,524 bytes；
 - worker SIGKILL、daemon hard crash、expired lease takeover、receipt-before-ingest recovery、

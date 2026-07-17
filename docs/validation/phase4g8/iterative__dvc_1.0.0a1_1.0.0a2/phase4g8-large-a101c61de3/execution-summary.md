@@ -59,13 +59,33 @@ Small 和 Medium 主要验证单一或较集中的变更。DVC Large 的目标�
 
 ## 执行结构
 
+Node 数量必须区分“创建过”“启动过”和“最终有效”：
+
+```text
+17 execution nodes
+├── 5 non-evaluator worker nodes
+│   ├── 1 primary implementation node
+│   └── 4 strategy_update nodes
+│       ├── 1 最终参与 expanded strategy
+│       └── 3 superseded
+└── 12 benchmark verification nodes
+```
+
+5 个 worker nodes 中有 4 个实际产生 materialization；另 1 个 speculative strategy node 在启动前就被 Runtime supersede。最终未被 supersede、实际构成任务主路径的是 2 个：primary implementation 和 evidence-backed expanded strategy。这里的“2 个有效 worker”不等于系统总共只创建了 2 个 worker nodes。
+
 | 项目 | 结果 |
 | --- | ---: |
 | Decision Provider rounds | 10 |
 | Applied graph patches | 5 |
 | Rejected graph patches | 5 |
-| 有效 durable worker threads | 2 |
-| Superseded speculative strategy nodes | 3 |
+| Execution nodes 总数 | 17 |
+| 非 evaluator worker nodes | 5 |
+| 实际 materialized worker nodes | 4 |
+| 最终有效 worker nodes | 2 |
+| Superseded worker nodes | 3 |
+| Benchmark verification nodes | 12 |
+| Node materialization attempts | 33（worker 20，evaluator 13） |
+| Non-evaluator Codex backend threads | 5（最终有效 2，speculative/failed 3） |
 | Primary session resume | 12 |
 | Expanded strategy session resume | 3 |
 | Official evaluator receipts | 13 |
@@ -85,7 +105,7 @@ Expanded strategy thread：
 019f6b33-1f94-7943-84fe-1db2107a132f
 ```
 
-两个 durable node 使用独立 Codex context。新 strategy worker 没有读取 primary 的隐藏推理，只得到 Runtime 提供的 goal、gap、checkpoint、bounded evaluator evidence 和 workspace。
+两个最终有效的 durable node 使用独立 Codex context。新 strategy worker 没有读取 primary 的隐藏推理，只得到 Runtime 提供的 goal、gap、checkpoint、bounded evaluator evidence 和 workspace。其余 3 个 strategy nodes 属于运行中发现并清理的 speculative branches，不计入最终任务主路径，但必须计入“系统创建过的 worker node”总数。
 
 ## 完整执行过程
 
