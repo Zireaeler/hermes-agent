@@ -2409,6 +2409,8 @@ def test_isolated_codex_home_copies_only_model_source_and_preserves_source(tmp_p
     assert "http://10.203.20.1:43210/v1" in isolated_config
     assert "https://model.example.invalid/v1" not in isolated_config
     assert 'model_reasoning_effort = "high"' in isolated_config
+    assert parsed_config["model_context_window"] == 353_400
+    assert parsed_config["model_auto_compact_token_limit"] == 230_000
     assert parsed_config["approval_policy"] == "on-request"
     assert parsed_config["approvals_reviewer"] == "auto_review"
     assert parsed_config["features"]["guardian_approval"] is True
@@ -2431,6 +2433,8 @@ def test_isolated_codex_home_copies_only_model_source_and_preserves_source(tmp_p
         "stream_max_retries": 20,
         "websocket_connect_timeout_ms": 8000,
     }
+    assert report["context_window_tokens"] == 353_400
+    assert report["auto_compact_token_limit"] == 230_000
     assert report["approval"] == p4g8.audit_phase4g8_codex_auto_review(target / "config.toml")
     assert report["approval"]["configured"] is True
     assert report["approval"]["policy"] == "on-request"

@@ -28,6 +28,8 @@ from agent.redact import redact_sensitive_text
 
 
 QUALIFICATION_SPEC_SCHEMA = "hermes_phase4g8_qualification_v1"
+PHASE4G8_CODEX_CONTEXT_WINDOW_TOKENS = 353_400
+PHASE4G8_CODEX_AUTO_COMPACT_TOKEN_LIMIT = 230_000
 LOCKED_MANIFEST_SCHEMA = "hermes_phase4g8_locked_task_v1"
 QUALIFICATION_REPORT_SCHEMA = "hermes_phase4g8_qualification_report_v1"
 EVALUATOR_RESULT_SCHEMA = "hermes_phase4g8_evaluator_result_v1"
@@ -502,6 +504,8 @@ def prepare_isolated_codex_home(
     transport_settings = _isolated_provider_transport_settings(provider)
     lines = [
         f"model = {json.dumps(selected_model)}",
+        f"model_context_window = {PHASE4G8_CODEX_CONTEXT_WINDOW_TOKENS}",
+        f"model_auto_compact_token_limit = {PHASE4G8_CODEX_AUTO_COMPACT_TOKEN_LIMIT}",
         f"approval_policy = {json.dumps(PHASE4G8_CODEX_APPROVAL_POLICY)}",
         f"approvals_reviewer = {json.dumps(PHASE4G8_CODEX_APPROVAL_REVIEWER)}",
     ]
@@ -562,6 +566,8 @@ def prepare_isolated_codex_home(
         "isolated_provider": isolated_provider,
         "model": selected_model,
         "reasoning_effort": reasoning_effort,
+        "context_window_tokens": PHASE4G8_CODEX_CONTEXT_WINDOW_TOKENS,
+        "auto_compact_token_limit": PHASE4G8_CODEX_AUTO_COMPACT_TOKEN_LIMIT,
         "provider_transport": transport_settings,
         "proxy_base_url": proxy_base_url.rstrip("/"),
         "copied_session_history": False,
