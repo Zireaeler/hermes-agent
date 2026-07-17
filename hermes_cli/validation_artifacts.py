@@ -305,7 +305,8 @@ def _verify_manifest_payload(root: Path, manifest: dict[str, Any]) -> None:
         path = root / str(item.get("path") or "")
         if not path.is_file() or path.is_symlink():
             raise ArtifactArchiveError(f"archived artifact is missing: {item.get('path')}")
-        if path.stat().st_size != int(item.get("bytes") or -1):
+        expected_bytes = item.get("bytes")
+        if not isinstance(expected_bytes, int) or path.stat().st_size != expected_bytes:
             raise ArtifactArchiveError(f"archived artifact size mismatch: {item.get('path')}")
         if _sha256_file(path) != item.get("sha256"):
             raise ArtifactArchiveError(f"archived artifact hash mismatch: {item.get('path')}")

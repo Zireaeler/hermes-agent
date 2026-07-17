@@ -180,3 +180,44 @@ Infra 完成需要证明：
 真实 Arm 1 完成需要从 clean base 启动新 run，并运行到 `official_resolved` 或记录明确的真实
 boundary。无论最终是否 resolved，都必须生成可读过程报告；只有 resolved 才能作为完整
 native ultra capability baseline。
+
+## 10. 实测后固定的基础设施规则
+
+2026-07-17 完整 Arm 1 暴露了四项不能继续依赖人工监控补救的基础设施要求：
+
+### 10.1 每轮 worker 前恢复 workspace ownership
+
+Official evaluator 可能以 root 身份重建或修改 candidate workspace。Runner 必须在每个 fresh/resume
+worker turn 前重新将 workspace 交给冻结的 worker UID/GID，并恢复 Git-index executable mode。
+只在 candidate freeze 前 reclaim 不足以保证下一轮可执行。
+
+### 10.2 使用 run-local temporary directory
+
+Worker 环境必须设置：
+
+```text
+TMPDIR=<run-root>/worker-tmp
+TMP=<run-root>/worker-tmp
+TEMP=<run-root>/worker-tmp
+```
+
+该目录在每轮前与 workspace 一起恢复 worker ownership。这样既防止测试 artifact 污染全局
+`/tmp`，也减少 worker 读取历史 run artifact 的机会。对旧 run 的历史污染仍必须如实记录，不能
+通过后处理删除事实。
+
+### 10.3 Operator stop 是持久请求
+
+长时间实验不能依靠杀 runner 表达正常停止。Run root 支持 `operator-stop-request.json`；runner 在
+当前 evaluator 和 lineage state 已持久化后读取请求并停止。请求必须包含 reason 和 timestamp，
+最终 report 必须区分 operator stop、resource boundary、infrastructure failure 和 resolved。
+
+### 10.4 中断恢复不得制造虚假 candidate
+
+Runner 自身被中断后，finalizer 可以从 runner-state、每轮 candidate、evaluator invocation 和同一
+parent session 重建 report。只有同时具有 frozen candidate 与 evaluator 的连续轮次进入正式
+lineage。已启动但没有 candidate/evaluator 的 partial turn 单独标记为
+`discarded_without_candidate_or_evaluator`，原始 event 保留但不计为任务失败轮。
+
+Finalizer 必须先生成并校验 stable artifact manifest，确认 sessions、worker events、evaluator runs、
+reports 和 runner state 均有稳定副本后，才允许清理 source run 中可重建的 workspace、home 或测试
+临时目录。

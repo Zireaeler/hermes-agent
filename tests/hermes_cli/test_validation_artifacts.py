@@ -81,6 +81,24 @@ def test_archive_validation_run_is_idempotent_after_verified_copy(tmp_path):
     assert first["files"] == second["files"]
 
 
+def test_archive_validation_run_accepts_zero_byte_lock_files(tmp_path):
+    run = _validation_run(tmp_path)
+    lock = run / "codex-home" / ".tmp" / "plugins.sync.lock"
+    lock.parent.mkdir()
+    lock.touch()
+
+    manifest = artifacts.archive_validation_run(
+        run,
+        artifact_root=tmp_path / "artifacts",
+        phase="phase4g9",
+        instance_id="fixture",
+    )
+
+    archived = Path(manifest["artifact_path"])
+    assert (archived / "codex-home" / ".tmp" / "plugins.sync.lock").stat().st_size == 0
+    assert artifacts.verify_artifact_manifest(archived / "manifest.json")["status"] == "verified"
+
+
 def test_cleanup_requires_matching_verified_manifest_and_allowlisted_entries(tmp_path):
     run = _validation_run(tmp_path)
     manifest = artifacts.archive_validation_run(

@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 import tomllib
@@ -226,6 +227,7 @@ def test_iterative_runner_resumes_same_parent_until_resolved(tmp_path, monkeypat
         "protected": run_root / "protected",
         "worker_events": run_root / "worker-events",
         "reports": run_root / "reports",
+        "worker_tmp": run_root / "worker-tmp",
         "worker_toolchain": run_root / "toolchain",
     }
 
@@ -286,6 +288,7 @@ def test_iterative_runner_resumes_same_parent_until_resolved(tmp_path, monkeypat
         }
 
     monkeypatch.setattr(arm1, "_run_native_codex_turn", fake_turn)
+    monkeypatch.setattr(arm1, "_prepare_worker_turn_paths", lambda _paths: None)
     monkeypatch.setattr(arm1, "_reclaim_workspace", lambda _path: None)
 
     def fake_candidate(_paths, *, candidate_round, terminal_message):
@@ -375,6 +378,177 @@ def test_iterative_runner_resumes_same_parent_until_resolved(tmp_path, monkeypat
     assert calls[0]["resume_session_id"] is None
     assert calls[1]["resume_session_id"] == "parent"
     assert "tests/test_x.py::test_x" in calls[1]["prompt"]
+
+
+def test_prepare_worker_turn_paths_reclaims_workspace_and_private_tmp(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    worker_tmp = tmp_path / "worker-tmp"
+    workspace.mkdir()
+    calls = []
+    monkeypatch.setattr(
+        arm1.p4g8,
+        "prepare_worker_workspace",
+        lambda path, **kwargs: calls.append((path, kwargs)),
+    )
+
+    arm1._prepare_worker_turn_paths({
+        "root": tmp_path,
+        "workspace": workspace,
+        "worker_tmp": worker_tmp,
+    })
+
+    assert worker_tmp.is_dir()
+    assert calls == [
+        (workspace, {"worker_uid": arm1.WORKER_UID, "worker_gid": arm1.WORKER_GID}),
+        (worker_tmp, {"worker_uid": arm1.WORKER_UID, "worker_gid": arm1.WORKER_GID}),
+    ]
+
+
+def test_operator_stop_request_round_trip(tmp_path):
+    request = arm1.request_operator_stop(tmp_path, reason="evaluated plateau")
+
+    assert request["schema"] == "hermes_phase4g9_operator_stop_v1"
+    assert arm1._load_operator_stop_request(tmp_path) == request
+
+
+def test_finalize_interrupted_iterative_discards_uncommitted_next_turn(tmp_path, monkeypatch):
+    protected = tmp_path / "qualification" / "protected"
+    protected.mkdir(parents=True)
+    spec_path = protected / "qualification-spec.json"
+    spec_path.write_text("{}\n", encoding="utf-8")
+    run_root = tmp_path / "run"
+    workspace = run_root / "workspace"
+    codex_home = run_root / "codex-home"
+    reports = run_root / "reports"
+    events = run_root / "worker-events" / "turns"
+    evaluator_runs = run_root / "evaluator-runs"
+    for path in (workspace, codex_home, reports / "candidates", events, evaluator_runs):
+        path.mkdir(parents=True)
+
+    patch = "patch-1"
+    patch_sha = hashlib.sha256(patch.encode("utf-8")).hexdigest()
+    candidate = {
+        "round": 1,
+        "base_commit": arm1.FROZEN_BASE_COMMIT,
+        "revision": f"patch-sha256:{patch_sha}",
+        "patch_sha256": patch_sha,
+        "patch_bytes": len(patch),
+        "changed_files": ["dvc/example.py"],
+        "terminal_message": "candidate complete",
+    }
+    (reports / "candidates" / "round-001.patch").write_text(patch, encoding="utf-8")
+    (reports / "candidates" / "round-001.json").write_text(
+        json.dumps(candidate), encoding="utf-8"
+    )
+    event_lines = [
+        json.dumps({"type": "thread.started", "thread_id": "parent"}),
+        json.dumps({
+            "type": "item.completed",
+            "item": {"id": "msg", "type": "agent_message", "text": "candidate complete"},
+        }),
+        json.dumps({"type": "turn.completed", "usage": {"input_tokens": 10}}),
+    ]
+    (events / "round-001.jsonl").write_text("\n".join(event_lines) + "\n", encoding="utf-8")
+    (events / "round-001.stderr.log").write_text("", encoding="utf-8")
+    (events / "round-002.live.jsonl").write_text(
+        json.dumps({"type": "turn.started"}) + "\n", encoding="utf-8"
+    )
+    (events / "round-002.live.stderr.log").write_text("connection refused\n", encoding="utf-8")
+
+    evaluator = {
+        "resolved": False,
+        "fail_to_pass": {"passed": 3, "failed": 1, "total": 4, "failed_tests": ["test_x"]},
+        "pass_to_pass": {"passed": 5, "failed": 0, "total": 5, "failed_tests": []},
+        "feedback_coverage": {"status": "current_failure_complete"},
+    }
+    invocation = {
+        "invocation": 1,
+        "candidate_round": 1,
+        "candidate_revision": candidate["revision"],
+        "result": evaluator,
+    }
+    (evaluator_runs / "invocation-001.json").write_text(
+        json.dumps(invocation), encoding="utf-8"
+    )
+    round_summary = {
+        "round": 1,
+        "candidate_revision": candidate["revision"],
+        "worker_mode": "fresh",
+        "worker_return_code": 0,
+        "worker_timed_out": False,
+        "worker_wall_time_seconds": 12,
+        "fail_to_pass": evaluator["fail_to_pass"],
+        "pass_to_pass": evaluator["pass_to_pass"],
+        "evaluator_invocations": [1],
+        "is_best_after_round": True,
+    }
+    (run_root / "runner-state.json").write_text(json.dumps({
+        "schema": arm1.ARM1_REPORT_SCHEMA,
+        "run_id": "iterative-test",
+        "parent_thread_id": "parent",
+        "candidate_rounds": [round_summary],
+        "best_candidate_round": 1,
+        "evaluator_invocation_count": 1,
+    }), encoding="utf-8")
+    (run_root / "active-turn.json").write_text(json.dumps({
+        "candidate_round": 2,
+        "mode": "resume",
+        "started_at": 123,
+        "live_event_file": "worker-events/turns/round-002.live.jsonl",
+        "live_stderr_file": "worker-events/turns/round-002.live.stderr.log",
+    }), encoding="utf-8")
+
+    session_dir = codex_home / "sessions" / "2026" / "07" / "17"
+    session_dir.mkdir(parents=True)
+    (session_dir / "parent.jsonl").write_text("\n".join(json.dumps(item) for item in [
+        {
+            "timestamp": "2026-07-17T00:00:00Z",
+            "type": "session_meta",
+            "payload": {"id": "parent", "source": "exec"},
+        },
+        {
+            "timestamp": "2026-07-17T00:01:00Z",
+            "type": "event_msg",
+            "payload": {"type": "task_complete"},
+        },
+    ]) + "\n", encoding="utf-8")
+
+    spec = {
+        "instance_id": arm1.FROZEN_INSTANCE_ID,
+        "base_commit": arm1.FROZEN_BASE_COMMIT,
+        "dataset_revision": "dataset",
+    }
+    monkeypatch.setattr(arm1.p4g8, "load_qualification_spec", lambda _path: spec)
+    monkeypatch.setattr(arm1.p4g8_run, "_require_qualified", lambda *_args: None)
+    monkeypatch.setattr(arm1, "_codex_processes_for_workspace", lambda _path: [])
+    monkeypatch.setattr(arm1, "_reclaim_workspace", lambda _path: None)
+    monkeypatch.setattr(arm1, "_existing_config_audit", lambda *_args: {"model": "test"})
+    monkeypatch.setattr(arm1.swe_evo, "collect_candidate_patch", lambda *_args: patch)
+    monkeypatch.setattr(arm1, "_codex_version", lambda: "codex-test")
+    archived = []
+    monkeypatch.setattr(
+        arm1.validation_artifacts,
+        "archive_validation_run",
+        lambda *args, **kwargs: archived.append((args, kwargs)) or {"status": "verified"},
+    )
+    monkeypatch.setattr(arm1.validation_artifacts, "model_source_redactions", lambda *_args: {})
+
+    report = arm1.finalize_interrupted_iterative_arm1(
+        qualification_spec_path=spec_path,
+        run_root=run_root,
+        source_codex_home=tmp_path / "source-home",
+        execute_real=True,
+        artifact_root=tmp_path / "artifacts",
+    )
+
+    assert report["candidate_round_count"] == 1
+    assert report["evaluator_invocation_count"] == 1
+    assert report["best_candidate_round"] == 1
+    assert report["interrupted_uncommitted_turn"]["round"] == 2
+    assert report["integrity"]["discarded_partial_turn_without_candidate"] is True
+    assert not (run_root / "active-turn.json").exists()
+    assert (run_root / "interrupted-turn.json").is_file()
+    assert archived
 
 
 def test_exec_event_summary_extracts_native_subagents_and_usage():
@@ -625,6 +799,85 @@ def test_rollout_summary_aggregates_parent_and_child_tokens(tmp_path):
         if session["kind"] == "orchestration_subagent"
     )
     assert child_summary["thread_id"] == "child"
+
+
+def test_rollout_summary_excludes_forked_parent_history_from_child_metrics(tmp_path):
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    events = [
+        {
+            "timestamp": "2026-07-17T00:00:00.000Z",
+            "type": "session_meta",
+            "payload": {"id": "child", "source": {"subagent": {"thread_spawn": {
+                "parent_thread_id": "parent",
+                "depth": 1,
+                "agent_path": "/root/audit",
+            }}}},
+        },
+        {
+            "timestamp": "2026-07-17T00:00:00.001Z",
+            "type": "event_msg",
+            "payload": {"type": "task_started"},
+        },
+        {
+            "timestamp": "2026-07-17T00:00:00.002Z",
+            "type": "event_msg",
+            "payload": {"type": "token_count", "info": {"total_token_usage": {
+                "input_tokens": 1000,
+                "cached_input_tokens": 800,
+                "output_tokens": 100,
+                "reasoning_output_tokens": 40,
+            }}},
+        },
+        {
+            "timestamp": "2026-07-17T00:00:00.003Z",
+            "type": "event_msg",
+            "payload": {"type": "context_compacted"},
+        },
+        {
+            "timestamp": "2026-07-17T00:00:00.004Z",
+            "type": "event_msg",
+            "payload": {"type": "task_complete"},
+        },
+        {
+            "timestamp": "2026-07-17T00:00:01.000Z",
+            "type": "event_msg",
+            "payload": {"type": "task_started"},
+        },
+        {
+            "timestamp": "2026-07-17T00:00:02.000Z",
+            "type": "event_msg",
+            "payload": {"type": "token_count", "info": {"total_token_usage": {
+                "input_tokens": 1150,
+                "cached_input_tokens": 900,
+                "output_tokens": 130,
+                "reasoning_output_tokens": 50,
+            }}},
+        },
+        {
+            "timestamp": "2026-07-17T00:00:03.000Z",
+            "type": "event_msg",
+            "payload": {"type": "task_complete"},
+        },
+    ]
+    (sessions / "child.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n",
+        encoding="utf-8",
+    )
+
+    summary = arm1.summarize_rollout_sessions(tmp_path, parent_thread_id="parent")
+    child = summary["sessions"][0]
+
+    assert child["usage"] == {
+        "input_tokens": 150,
+        "cached_input_tokens": 100,
+        "output_tokens": 30,
+        "reasoning_output_tokens": 10,
+    }
+    assert child["compaction_count"] == 0
+    assert child["task_started_count"] == 1
+    assert child["task_complete_count"] == 1
+    assert child["started_at"] == "2026-07-17T00:00:01.000Z"
 
 
 def test_cleanup_worker_test_artifacts_preserves_candidate_files(tmp_path):
