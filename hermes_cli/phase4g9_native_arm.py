@@ -270,12 +270,16 @@ def summarize_rollout_sessions(codex_home: Path, *, parent_thread_id: Optional[s
     for path in sorted((codex_home / "sessions").rglob("*.jsonl")):
         thread_id = ""
         source: Any = None
+        agent_path: Optional[str] = None
+        agent_nickname: Optional[str] = None
+        depth: Optional[int] = None
         first_timestamp = ""
         last_timestamp = ""
         usage = {key: 0 for key in (
             "input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens"
         )}
         event_count = 0
+        compaction_count = 0
         with path.open("r", encoding="utf-8", errors="replace") as handle:
             for line in handle:
                 try:
@@ -293,6 +297,12 @@ def summarize_rollout_sessions(codex_home: Path, *, parent_thread_id: Optional[s
                 if event.get("type") == "session_meta":
                     thread_id = str(payload.get("id") or payload.get("session_id") or thread_id)
                     source = payload.get("source") or payload.get("thread_source")
+                    subagent = source.get("subagent") if isinstance(source, dict) else None
+                    spawned = subagent.get("thread_spawn") if isinstance(subagent, dict) else None
+                    if isinstance(spawned, dict):
+                        agent_path = str(spawned.get("agent_path") or "") or None
+                        agent_nickname = str(spawned.get("agent_nickname") or "") or None
+                        depth = int(spawned.get("depth") or 0)
                 if event.get("type") == "event_msg" and payload.get("type") == "token_count":
                     info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
                     total = (
@@ -302,17 +312,24 @@ def summarize_rollout_sessions(codex_home: Path, *, parent_thread_id: Optional[s
                     )
                     for key in usage:
                         usage[key] = max(usage[key], int(total.get(key) or 0))
+                if event.get("type") == "event_msg" and payload.get("type") == "context_compacted":
+                    compaction_count += 1
         if not thread_id:
             continue
+        kind = _rollout_kind(source, thread_id=thread_id, parent_thread_id=parent_thread_id)
         sessions.append({
             "thread_id": thread_id,
-            "kind": "parent" if thread_id == parent_thread_id else "subagent",
+            "kind": kind,
             "source": source,
+            "agent_path": agent_path,
+            "agent_nickname": agent_nickname,
+            "depth": depth,
             "started_at": first_timestamp or None,
             "finished_at": last_timestamp or None,
             "duration_seconds": _timestamp_delta(first_timestamp, last_timestamp),
             "usage": usage,
             "event_count": event_count,
+            "compaction_count": compaction_count,
         })
     totals = {
         key: sum(int(session["usage"].get(key) or 0) for session in sessions)
@@ -327,12 +344,21 @@ def summarize_rollout_sessions(codex_home: Path, *, parent_thread_id: Optional[s
         round(totals["cached_input_tokens"] / totals["input_tokens"], 6)
         if totals["input_tokens"] > 0 else None
     )
+    orchestration_sessions = [session for session in sessions if session["kind"] == "orchestration_subagent"]
+    guardian_sessions = [session for session in sessions if session["kind"] == "guardian"]
     return {
         "session_count": len(sessions),
         "sessions": sessions,
         "aggregate_usage": totals,
         "aggregate_cache_hit_ratio": cache_hit_ratio,
         "peak_observed_concurrency": _peak_concurrency(intervals),
+        "orchestration_subagent_count": len(orchestration_sessions),
+        "guardian_count": len(guardian_sessions),
+        "max_orchestration_depth": max(
+            (int(session.get("depth") or 0) for session in orchestration_sessions),
+            default=0,
+        ),
+        "native_compaction_count": sum(int(session.get("compaction_count") or 0) for session in sessions),
     }
 
 
@@ -434,6 +460,7 @@ def run_native_arm1(
             "native Codex did not start a thread; the run is infrastructure-invalid and was not evaluated"
         )
     _reclaim_workspace(paths["workspace"])
+    test_artifact_cleanup = cleanup_worker_test_artifacts(paths["workspace"])
     rollout_summary = summarize_rollout_sessions(
         paths["codex_home"],
         parent_thread_id=event_summary.get("parent_thread_id"),
@@ -480,6 +507,7 @@ def run_native_arm1(
         "config": config_audit,
         "model_transport": model_transport,
         "candidate": candidate,
+        "test_artifact_cleanup": test_artifact_cleanup,
         "evaluator_invocation_count": evaluator_invocations,
         "evaluator": evaluator,
         "integrity": {
@@ -493,6 +521,115 @@ def run_native_arm1(
     }
     _write_json(paths["reports"] / "run-report.json", report)
     _write_text(paths["reports"] / "execution-summary.md", render_execution_summary(report))
+    return report
+
+
+def finalize_existing_terminal_arm1(
+    *,
+    qualification_spec_path: Path,
+    run_root: Path,
+    source_codex_home: Path,
+    execute_real: bool,
+) -> dict[str, Any]:
+    """Recover a terminal Arm 1 whose post-worker patch collector failed before evaluation."""
+
+    if not execute_real:
+        raise ValueError("Phase 4G9 Arm 1 finalization requires execute_real=True")
+    spec_path = qualification_spec_path.expanduser().resolve()
+    spec = p4g8.load_qualification_spec(spec_path)
+    p4g8_run._require_qualified(spec, spec_path)
+    run_root = run_root.expanduser().resolve()
+    workspace = run_root / "workspace"
+    codex_home = run_root / "codex-home"
+    worker_events = run_root / "worker-events"
+    reports = run_root / "reports"
+    if spec.get("instance_id") != FROZEN_INSTANCE_ID or spec.get("base_commit") != FROZEN_BASE_COMMIT:
+        raise ValueError("Phase 4G9 Arm 1 requires the frozen DVC Large instance")
+    if not (workspace / ".git").is_dir() or not codex_home.is_dir():
+        raise ValueError("existing Phase 4G9 terminal layout is incomplete")
+    if (reports / "run-report.json").exists() or (reports / "candidate.json").exists():
+        raise ValueError("existing Phase 4G9 run has already entered candidate finalization")
+    running = _codex_processes_for_workspace(workspace)
+    if running:
+        raise RuntimeError(f"native Codex is still running for the workspace: {running}")
+    event_path = worker_events / "codex-exec.jsonl"
+    if not event_path.is_file():
+        raise ValueError("existing Phase 4G9 run has no Codex event stream")
+    raw_lines = event_path.read_text(encoding="utf-8", errors="strict").splitlines()
+    event_summary = summarize_exec_events(raw_lines)
+    parent_thread_id = event_summary.get("parent_thread_id")
+    if not parent_thread_id:
+        raise ValueError("existing Phase 4G9 event stream has no parent thread")
+    if not _parent_rollout_completed(codex_home, str(parent_thread_id)):
+        raise ValueError("existing Phase 4G9 parent rollout is not terminal")
+
+    _reclaim_workspace(workspace)
+    test_artifact_cleanup = cleanup_worker_test_artifacts(workspace)
+    rollout_summary = summarize_rollout_sessions(codex_home, parent_thread_id=str(parent_thread_id))
+    candidate_patch = swe_evo.collect_candidate_patch(workspace, FROZEN_BASE_COMMIT)
+    candidate_sha = hashlib.sha256(candidate_patch.encode("utf-8")).hexdigest()
+    candidate = {
+        "base_commit": FROZEN_BASE_COMMIT,
+        "patch_sha256": candidate_sha,
+        "patch_bytes": len(candidate_patch.encode("utf-8")),
+        "changed_files": _changed_files(workspace),
+        "frozen_at": int(time.time()),
+    }
+    _write_text(reports / "candidate.patch", candidate_patch)
+    _write_json(reports / "candidate.json", candidate)
+
+    evaluator = p4g8._run_evaluator(spec, workspace)
+    isolated_config = codex_home / "config.toml"
+    source_codex_home = source_codex_home.expanduser().resolve()
+    protocol_path = Path(__file__).resolve().parent.parent / "docs" / "kanban-runtime-kernel-phase4g9.md"
+    parent_session = next(
+        (session for session in rollout_summary["sessions"] if session["kind"] == "parent"),
+        {},
+    )
+    started_at = _parse_timestamp(parent_session.get("started_at"))
+    report = {
+        "schema": ARM1_REPORT_SCHEMA,
+        "protocol_version": ARM1_PROTOCOL_VERSION,
+        "run_id": run_root.name,
+        "instance_id": FROZEN_INSTANCE_ID,
+        "dataset_revision": spec["dataset_revision"],
+        "started_at": int(started_at) if started_at is not None else None,
+        "finished_at": int(time.time()),
+        "wall_time_seconds": parent_session.get("duration_seconds"),
+        "worker": {
+            "kind": "standalone_native_codex_parent",
+            "codex_cli_version": _codex_version(),
+            "return_code": 0,
+            "timed_out": False,
+            "runtime_kernel_used": False,
+            "decision_provider_used": False,
+            "evaluator_feedback_turns": 0,
+            **event_summary,
+            "rollouts": rollout_summary,
+        },
+        "config": _existing_config_audit(source_codex_home, codex_home),
+        "model_transport": {
+            "status": "counts_unavailable_after_post_terminal_collector_failure",
+            "websocket_configured": True,
+            "worker_tool_network_isolated": True,
+        },
+        "candidate": candidate,
+        "test_artifact_cleanup": test_artifact_cleanup,
+        "evaluator_invocation_count": 1,
+        "evaluator": evaluator,
+        "integrity": {
+            "protocol_sha256": _sha256_file(protocol_path),
+            "source_codex_home_unchanged": "pre_run_hash_not_persisted_before_collector_failure",
+            "gold_or_protected_tests_exposed_to_worker": False,
+            "historical_candidate_exposed_to_worker": False,
+            "evaluator_before_terminal_candidate": 0,
+            "evaluator_after_terminal_candidate": 1,
+            "recovered_from_post_terminal_collector_failure": True,
+            "recovery_did_not_resume_codex": True,
+        },
+    }
+    _write_json(reports / "run-report.json", report)
+    _write_text(reports / "execution-summary.md", render_execution_summary(report))
     return report
 
 
@@ -591,6 +728,25 @@ def _prepare_layout(root: Path, spec: dict[str, Any]) -> dict[str, Path]:
     return paths
 
 
+def cleanup_worker_test_artifacts(workspace: Path) -> dict[str, Any]:
+    """Remove only top-level pytest basetemp/cache directories before patch collection."""
+
+    removed: list[str] = []
+    removed_bytes = 0
+    for path in sorted(workspace.glob(".pytest*")):
+        if not path.is_dir() or path.is_symlink():
+            continue
+        removed_bytes += p4g8_run._path_tree_size(path)
+        shutil.rmtree(path)
+        removed.append(path.name)
+    return {
+        "policy": "top_level_pytest_artifacts_only",
+        "removed_count": len(removed),
+        "removed_bytes": removed_bytes,
+        "removed_paths": removed,
+    }
+
+
 def _changed_files(workspace: Path) -> list[str]:
     result = subprocess.run(
         ["git", "status", "--porcelain=v1", "--untracked-files=all"],
@@ -624,6 +780,60 @@ def _codex_version() -> str:
     return (result.stdout or result.stderr).strip()
 
 
+def _parent_rollout_completed(codex_home: Path, parent_thread_id: str) -> bool:
+    for path in (codex_home / "sessions").rglob(f"*{parent_thread_id}.jsonl"):
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+                if event.get("type") == "event_msg" and payload.get("type") == "task_complete":
+                    return True
+    return False
+
+
+def _codex_processes_for_workspace(workspace: Path) -> list[int]:
+    needle = str(workspace).encode("utf-8")
+    found: list[int] = []
+    for path in Path("/proc").glob("[0-9]*/cmdline"):
+        try:
+            cmdline = path.read_bytes()
+        except (OSError, PermissionError):
+            continue
+        if b"codex" in cmdline and needle in cmdline:
+            found.append(int(path.parent.name))
+    return sorted(found)
+
+
+def _existing_config_audit(source_home: Path, codex_home: Path) -> dict[str, Any]:
+    config = tomllib.loads((codex_home / "config.toml").read_text(encoding="utf-8"))
+    return {
+        "protocol_version": ARM1_PROTOCOL_VERSION,
+        "source_hashes_after": {
+            "config.toml": _sha256_file(source_home / "config.toml"),
+            "auth.json": _sha256_file(source_home / "auth.json"),
+        },
+        "isolated_hashes": {
+            "config.toml": _sha256_file(codex_home / "config.toml"),
+            "auth.json": _sha256_file(codex_home / "auth.json"),
+            "rules/default.rules": _sha256_file(codex_home / "rules" / "default.rules"),
+        },
+        "model": config.get("model"),
+        "reasoning_effort": config.get("model_reasoning_effort"),
+        "wire_reasoning_effort": "max",
+        "multi_agent_mode": "proactive",
+        "max_threads_including_parent": FROZEN_MAX_THREADS,
+        "max_threads_source": "codex-0.144.4-multi-agent-v2-default",
+        "provider_transport": p4g8._isolated_provider_transport_settings(
+            config["model_providers"]["phase4g9_proxy"]
+        ),
+        "copied_session_history": False,
+        "copied_memory_or_plugins": False,
+    }
+
+
 def _redact_jsonl(lines: list[str]) -> str:
     return "\n".join(redact_sensitive_text(line) for line in lines) + ("\n" if lines else "")
 
@@ -634,6 +844,17 @@ def _counts(values: Any) -> dict[str, int]:
         key = str(value or "unknown")
         counts[key] = counts.get(key, 0) + 1
     return counts
+
+
+def _rollout_kind(source: Any, *, thread_id: str, parent_thread_id: Optional[str]) -> str:
+    if thread_id == parent_thread_id:
+        return "parent"
+    subagent = source.get("subagent") if isinstance(source, dict) else None
+    if isinstance(subagent, dict) and "thread_spawn" in subagent:
+        return "orchestration_subagent"
+    if isinstance(subagent, dict) and subagent.get("other") == "guardian":
+        return "guardian"
+    return "other_internal"
 
 
 def _parse_timestamp(value: Any) -> Optional[float]:
@@ -694,19 +915,28 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--source-codex-home", default="~/.codex")
     parser.add_argument("--max-wall-seconds", type=float, default=21_600)
     parser.add_argument("--execute-real", action="store_true", required=True)
+    parser.add_argument("--finalize-existing-terminal", action="store_true")
     return parser.parse_args()
 
 
 def main() -> int:
     args = _parse_args()
     try:
-        report = run_native_arm1(
-            qualification_spec_path=Path(args.spec),
-            run_root=Path(args.run_root),
-            source_codex_home=Path(args.source_codex_home),
-            execute_real=bool(args.execute_real),
-            max_wall_seconds=float(args.max_wall_seconds),
-        )
+        if args.finalize_existing_terminal:
+            report = finalize_existing_terminal_arm1(
+                qualification_spec_path=Path(args.spec),
+                run_root=Path(args.run_root),
+                source_codex_home=Path(args.source_codex_home),
+                execute_real=bool(args.execute_real),
+            )
+        else:
+            report = run_native_arm1(
+                qualification_spec_path=Path(args.spec),
+                run_root=Path(args.run_root),
+                source_codex_home=Path(args.source_codex_home),
+                execute_real=bool(args.execute_real),
+                max_wall_seconds=float(args.max_wall_seconds),
+            )
     except Exception as exc:
         print(json.dumps({
             "status": "failed",

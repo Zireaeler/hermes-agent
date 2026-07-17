@@ -185,7 +185,12 @@ def test_rollout_summary_aggregates_parent_and_child_tokens(tmp_path):
         {
             "timestamp": "2026-07-17T00:00:30Z",
             "type": "session_meta",
-            "payload": {"id": "child", "source": "subagent"},
+            "payload": {"id": "child", "source": {"subagent": {"thread_spawn": {
+                "parent_thread_id": "parent",
+                "depth": 1,
+                "agent_path": "/root/unit_runner",
+                "agent_nickname": "Hubble",
+            }}}},
         },
         {
             "timestamp": "2026-07-17T00:01:30Z",
@@ -216,4 +221,25 @@ def test_rollout_summary_aggregates_parent_and_child_tokens(tmp_path):
     }
     assert summary["aggregate_cache_hit_ratio"] == 0.666667
     assert summary["peak_observed_concurrency"] == 2
-    assert {session["kind"] for session in summary["sessions"]} == {"parent", "subagent"}
+    assert {session["kind"] for session in summary["sessions"]} == {
+        "parent", "orchestration_subagent"
+    }
+    assert summary["orchestration_subagent_count"] == 1
+    assert summary["guardian_count"] == 0
+    assert summary["max_orchestration_depth"] == 1
+
+
+def test_cleanup_worker_test_artifacts_preserves_candidate_files(tmp_path):
+    (tmp_path / ".pytest-run").mkdir()
+    (tmp_path / ".pytest-run" / "invalid-byte-fixture").write_bytes(b"\xbd")
+    (tmp_path / ".pytest_cache").mkdir()
+    candidate = tmp_path / "dvc" / "command" / "plots.py"
+    candidate.parent.mkdir(parents=True)
+    candidate.write_text("candidate\n", encoding="utf-8")
+
+    cleanup = arm1.cleanup_worker_test_artifacts(tmp_path)
+
+    assert cleanup["removed_count"] == 2
+    assert not (tmp_path / ".pytest-run").exists()
+    assert not (tmp_path / ".pytest_cache").exists()
+    assert candidate.read_text(encoding="utf-8") == "candidate\n"
