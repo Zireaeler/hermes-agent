@@ -186,3 +186,34 @@ derived report, candidate, command list, session summary, and collaboration
 event summary survive in Git, but the original isolated Codex homes and raw
 worker event stream were deleted without a stable raw archive. Its per-run
 catalog records those entries as lost rather than implying complete retention.
+
+## 9. Implemented Gate
+
+`hermes_cli.validation_artifacts` implements the archive and cleanup gate:
+
+- raw evidence is copied through a staging directory and atomically promoted;
+- `auth.json` is omitted;
+- exact model-source API key and base URL values are replaced in text traces;
+- every archived payload file receives source/archive SHA-256, size, and
+  redaction-count metadata;
+- the completed manifest is read back and every archived hash is verified;
+- cleanup rejects missing, invalid, tampered, or wrong-run manifests;
+- cleanup rejects every entry outside the rebuildable allowlist.
+
+Phase 4G8 completed-run compaction now archives `codex-homes`, `service`,
+`hermes-home`, reports, and any worker/provider event directories before it
+removes workspace, home, or seed state. Phase 4G9 native runs archive
+`codex-home`, `worker-events`, `provider-trace`, and reports before returning a
+successful real-run result.
+
+The artifact root is configurable with `HERMES_VALIDATION_ARTIFACT_ROOT` or the
+Phase 4G9 `--artifact-root` option. The default is:
+
+```text
+/root/hermes-validation-artifacts
+```
+
+The current provider trace records the transport audit and counters. Full
+per-request HTTP/WebSocket body capture remains a separate observability
+extension; its absence must be stated in a run catalog rather than inferred
+from the transport summary.

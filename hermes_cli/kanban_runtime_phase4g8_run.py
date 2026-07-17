@@ -24,6 +24,7 @@ from hermes_cli import kanban_runtime_phase4g8 as p4g8
 from hermes_cli import phase4g8_capability_trace as capability_trace
 from hermes_cli import phase4g8_swe_evo as swe_evo
 from hermes_cli import kanban_runtime_supervisor as supervisor
+from hermes_cli import validation_artifacts
 from hermes_cli.codex_worker import (
     _safe_env_for_codex,
     collect_git_evidence,
@@ -639,7 +640,11 @@ def run_phase4g8_real_case(
             namespace.close()
 
 
-def _compact_completed_phase4g8_runs(instance_root: Path) -> list[dict[str, Any]]:
+def _compact_completed_phase4g8_runs(
+    instance_root: Path,
+    *,
+    artifact_root: Optional[Path] = None,
+) -> list[dict[str, Any]]:
     """Remove only rebuildable state while retaining raw execution evidence."""
 
     if not instance_root.is_dir():
@@ -665,41 +670,39 @@ def _compact_completed_phase4g8_runs(instance_root: Path) -> list[dict[str, Any]
         ):
             continue
 
-        removed: list[str] = []
-        bytes_removed = 0
         rebuildable_entries = {"workspace", "home", "codex-home-seed"}
-        for child in sorted(run_root.iterdir()):
-            if child.name not in rebuildable_entries:
-                continue
-            bytes_removed += _path_tree_size(child)
-            try:
-                if child.is_dir() and not child.is_symlink():
-                    shutil.rmtree(child)
-                else:
-                    child.unlink()
-            except OSError as exc:
-                results.append({
-                    "run_id": run_root.name,
-                    "status": "retained_after_cleanup_error",
-                    "error": type(exc).__name__,
-                })
-                break
-            removed.append(child.name)
-        else:
-            preserved = sorted(child.name for child in run_root.iterdir())
-            retention = {
-                "schema": "hermes_phase4g8_run_retention_v1",
-                "run_id": run_root.name,
-                "status": "compacted_rebuildable_state_only",
-                "bytes_removed": bytes_removed,
-                "removed_entries": removed,
-                "preserved_entries": preserved,
-                "raw_evidence_retained": True,
-                "deletion_policy": "workspace_home_seed_allowlist",
-                "compacted_at": int(time.time()),
-            }
-            _write_json(retention_path, retention)
-            results.append(retention)
+        expected = {"reports"}
+        if report.get("status") != "infrastructure_invalid":
+            expected.update({"codex-homes", "service", "hermes-home"})
+        archive = validation_artifacts.archive_validation_run(
+            run_root,
+            artifact_root=artifact_root,
+            phase="phase4g8",
+            instance_id=instance_root.name,
+            expected_entries=expected,
+        )
+        cleanup = validation_artifacts.cleanup_rebuildable_entries(
+            run_root,
+            manifest_path=Path(str(archive["artifact_path"])) / "manifest.json",
+            entries=rebuildable_entries,
+        )
+        preserved = sorted(child.name for child in run_root.iterdir())
+        retention = {
+            "schema": "hermes_phase4g8_run_retention_v1",
+            "run_id": run_root.name,
+            "status": "compacted_after_verified_raw_archive",
+            "bytes_removed": cleanup["bytes_removed"],
+            "removed_entries": cleanup["removed_entries"],
+            "preserved_entries": preserved,
+            "raw_evidence_retained": True,
+            "artifact_path": archive["artifact_path"],
+            "artifact_file_count": archive["file_count"],
+            "artifact_total_bytes": archive["total_bytes"],
+            "deletion_policy": "verified_archive_then_workspace_home_seed_allowlist",
+            "compacted_at": int(time.time()),
+        }
+        _write_json(retention_path, retention)
+        results.append(retention)
     return results
 
 

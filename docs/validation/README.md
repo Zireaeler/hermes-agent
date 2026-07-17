@@ -7,6 +7,10 @@ artifact store identified by each run's `artifact-catalog.md`.
 
 Retention rules: [Runtime Validation Artifact Retention](../kanban-runtime-validation-artifact-retention.md).
 
+New real runs use `/root/hermes-validation-artifacts` by default. A verified
+`manifest.json` there is required before the supported cleanup path can remove
+rebuildable run entries.
+
 ## Phase 4G8
 
 - [Phase 4G8 validation index](phase4g8/README.md)

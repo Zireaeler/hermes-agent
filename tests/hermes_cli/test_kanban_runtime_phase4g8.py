@@ -918,11 +918,16 @@ def test_fresh_run_compacts_only_rebuildable_state_and_preserves_raw_evidence(tm
     (active / "workspace").mkdir(parents=True)
     (active / "workspace" / "keep.bin").write_bytes(b"active")
 
-    first = p4g8_run._compact_completed_phase4g8_runs(instance_root)
-    second = p4g8_run._compact_completed_phase4g8_runs(instance_root)
+    artifact_root = tmp_path / "artifacts"
+    first = p4g8_run._compact_completed_phase4g8_runs(
+        instance_root, artifact_root=artifact_root
+    )
+    second = p4g8_run._compact_completed_phase4g8_runs(
+        instance_root, artifact_root=artifact_root
+    )
 
     assert len(first) == 1
-    assert first[0]["status"] == "compacted_rebuildable_state_only"
+    assert first[0]["status"] == "compacted_after_verified_raw_archive"
     assert first[0]["bytes_removed"] >= 4096
     assert not (completed / "workspace").exists()
     assert (completed / "hermes-home" / "kanban.db").is_file()
@@ -936,6 +941,8 @@ def test_fresh_run_compacts_only_rebuildable_state_and_preserves_raw_evidence(tm
         "codex-homes", "hermes-home", "reports", "service", "worker-events"
     ]
     assert retention["raw_evidence_retained"] is True
+    assert Path(retention["artifact_path"]).is_dir()
+    assert (Path(retention["artifact_path"]) / "manifest.json").is_file()
     assert (active / "workspace" / "keep.bin").is_file()
     assert second == []
 
@@ -947,6 +954,10 @@ def test_candidate_patch_evidence_survives_completed_run_compaction(tmp_path):
     reports = completed / "reports"
     workspace.mkdir(parents=True)
     reports.mkdir()
+    for name in ("codex-homes", "service", "hermes-home"):
+        path = completed / name
+        path.mkdir()
+        (path / "evidence.txt").write_text(name + "\n", encoding="utf-8")
     _run("git", "init", "--quiet", cwd=workspace)
     _run("git", "config", "user.email", "phase4g8@example.invalid", cwd=workspace)
     _run("git", "config", "user.name", "Phase4G8 Test", cwd=workspace)
@@ -971,11 +982,13 @@ def test_candidate_patch_evidence_survives_completed_run_compaction(tmp_path):
         encoding="utf-8",
     )
 
-    compacted = p4g8_run._compact_completed_phase4g8_runs(instance_root)
+    compacted = p4g8_run._compact_completed_phase4g8_runs(
+        instance_root, artifact_root=tmp_path / "artifacts"
+    )
 
     patch = (reports / "candidate.patch").read_bytes()
     persisted = json.loads((reports / "candidate-evidence.json").read_text(encoding="utf-8"))
-    assert compacted[0]["status"] == "compacted_rebuildable_state_only"
+    assert compacted[0]["status"] == "compacted_after_verified_raw_archive"
     assert not workspace.exists()
     assert b"tracked.txt" in patch
     assert b"new.txt" in patch

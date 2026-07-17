@@ -20,6 +20,7 @@ from agent.redact import redact_sensitive_text
 from hermes_cli import kanban_runtime_phase4g8 as p4g8
 from hermes_cli import kanban_runtime_phase4g8_run as p4g8_run
 from hermes_cli import phase4g8_swe_evo as swe_evo
+from hermes_cli import validation_artifacts
 
 
 ARM1_REPORT_SCHEMA = "hermes_phase4g9_native_arm1_v1"
@@ -483,6 +484,7 @@ def run_native_arm1(
     source_codex_home: Path,
     execute_real: bool,
     max_wall_seconds: float = 21_600,
+    artifact_root: Optional[Path] = None,
 ) -> dict[str, Any]:
     """Run one native Codex parent and evaluate its frozen terminal candidate once."""
 
@@ -567,6 +569,7 @@ def run_native_arm1(
         _write_text(paths["worker_events"] / "codex-exec.jsonl", _redact_jsonl(raw_lines))
         _write_text(paths["worker_events"] / "codex-stderr.log", redact_sensitive_text(stderr))
         model_transport = network.transport_audit()
+        _write_json(paths["provider_trace"] / "transport-audit.json", model_transport)
 
     event_summary = summarize_exec_events(raw_lines)
     if not event_summary.get("parent_thread_id"):
@@ -636,6 +639,14 @@ def run_native_arm1(
     }
     _write_json(paths["reports"] / "run-report.json", report)
     _write_text(paths["reports"] / "execution-summary.md", render_execution_summary(report))
+    validation_artifacts.archive_validation_run(
+        run_root,
+        artifact_root=artifact_root,
+        phase="phase4g9",
+        instance_id=FROZEN_INSTANCE_ID,
+        redactions=validation_artifacts.model_source_redactions(source_codex_home),
+        expected_entries={"codex-home", "worker-events", "provider-trace", "reports"},
+    )
     return report
 
 
@@ -645,6 +656,7 @@ def finalize_existing_terminal_arm1(
     run_root: Path,
     source_codex_home: Path,
     execute_real: bool,
+    artifact_root: Optional[Path] = None,
 ) -> dict[str, Any]:
     """Recover a terminal Arm 1 whose post-worker patch collector failed before evaluation."""
 
@@ -744,8 +756,20 @@ def finalize_existing_terminal_arm1(
             "recovery_did_not_resume_codex": True,
         },
     }
+    provider_trace = run_root / "provider-trace"
+    provider_trace.mkdir(exist_ok=True)
+    os.chmod(provider_trace, 0o700)
+    _write_json(provider_trace / "transport-audit.json", report["model_transport"])
     _write_json(reports / "run-report.json", report)
     _write_text(reports / "execution-summary.md", render_execution_summary(report))
+    validation_artifacts.archive_validation_run(
+        run_root,
+        artifact_root=artifact_root,
+        phase="phase4g9",
+        instance_id=FROZEN_INSTANCE_ID,
+        redactions=validation_artifacts.model_source_redactions(source_codex_home),
+        expected_entries={"codex-home", "worker-events", "provider-trace", "reports"},
+    )
     return report
 
 
@@ -926,12 +950,14 @@ def _prepare_layout(root: Path, spec: dict[str, Any]) -> dict[str, Path]:
         "workspace": root / "workspace",
         "protected": root / "protected",
         "worker_events": root / "worker-events",
+        "provider_trace": root / "provider-trace",
         "reports": root / "reports",
     }
-    for key in ("home", "protected", "worker_events", "reports"):
+    for key in ("home", "protected", "worker_events", "provider_trace", "reports"):
         paths[key].mkdir()
     os.chmod(paths["protected"], 0o700)
     os.chmod(paths["worker_events"], 0o700)
+    os.chmod(paths["provider_trace"], 0o700)
     os.chmod(paths["reports"], 0o700)
     subprocess.run(["git", "init", "--quiet", str(paths["workspace"])], check=True)
     subprocess.run(["git", "remote", "add", "source", mirror.as_uri()], cwd=paths["workspace"], check=True)
@@ -1225,6 +1251,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--spec", required=True)
     parser.add_argument("--run-root", required=True)
     parser.add_argument("--source-codex-home", default="~/.codex")
+    parser.add_argument(
+        "--artifact-root",
+        default=str(validation_artifacts.default_artifact_root()),
+    )
     parser.add_argument("--max-wall-seconds", type=float, default=21_600)
     parser.add_argument("--execute-real", action="store_true", required=True)
     parser.add_argument("--finalize-existing-terminal", action="store_true")
@@ -1245,6 +1275,7 @@ def main() -> int:
                 run_root=Path(args.run_root),
                 source_codex_home=Path(args.source_codex_home),
                 execute_real=bool(args.execute_real),
+                artifact_root=Path(args.artifact_root),
             )
         else:
             report = run_native_arm1(
@@ -1253,6 +1284,7 @@ def main() -> int:
                 source_codex_home=Path(args.source_codex_home),
                 execute_real=bool(args.execute_real),
                 max_wall_seconds=float(args.max_wall_seconds),
+                artifact_root=Path(args.artifact_root),
             )
     except Exception as exc:
         print(json.dumps({
