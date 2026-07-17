@@ -1545,14 +1545,17 @@ def build_codex_resume_prompt(
     task_id: str,
     lane: str,
     continuity: dict[str, Any],
+    task_context: str,
+    model: Optional[str] = None,
 ) -> str:
+    latest_context = build_codex_prompt(task_context, lane=lane, model=model).rstrip()
     remediation_bundle = continuity.get("remediation_bundle")
     if (
         continuity.get("resume_reason") == "official_evaluator_failure"
         and isinstance(remediation_bundle, dict)
         and remediation_bundle.get("schema") == "runtime_evaluator_failure_bundle_v1"
     ):
-        return (
+        instruction = (
             f"Continue the same Hermes Runtime Kernel implementation responsibility for task `{task_id}` "
             f"on lane `{lane}`. The prior candidate was evaluated at a fixed revision by an "
             "independent official evaluator and did not satisfy the goal.\n\n"
@@ -1593,17 +1596,35 @@ def build_codex_resume_prompt(
             "or independent-verification boundary, return a terminal `structure_request`; do not "
             "create or complete runtime nodes directly."
         )
-    return (
+        return f"{latest_context}\n\n## Runtime continuation instruction\n\n{instruction}"
+    is_contribution_integration = "Frozen dependency contributions:" in task_context
+    if is_contribution_integration:
+        instruction = (
+            f"Continue the same Hermes Runtime Kernel integration responsibility for task `{task_id}` "
+            f"on lane `{lane}`.\n\n"
+            f"Previous materialization: {continuity.get('resume_from_materialization_id') or '-'}\n"
+            f"Workspace revision: {continuity.get('workspace_revision') or '-'}\n\n"
+            "The latest task context above is authoritative for this materialization and contains "
+            "new frozen dependency contributions. Inspect each declared patch and hash, apply or "
+            "adapt the contributions before reimplementing their responsibilities, resolve shared "
+            "integration surfaces, and classify every artifact ID exactly once in the final receipt. "
+            "Do not treat a clean primary workspace as evidence that the child work was lost. Resume "
+            "from the existing session context, own the merged result and verification, and do not "
+            "create or complete runtime nodes directly."
+        )
+        return f"{latest_context}\n\n## Runtime continuation instruction\n\n{instruction}"
+    instruction = (
         f"Continue the same Hermes Runtime Kernel worker responsibility for task `{task_id}` "
-        f"on lane `{lane}`. The prior materialization ended because of infrastructure failure.\n\n"
+        f"on lane `{lane}`. The prior materialization ended without terminal completion.\n\n"
         f"Previous materialization: {continuity.get('resume_from_materialization_id') or '-'}\n"
         f"Workspace revision: {continuity.get('workspace_revision') or '-'}\n\n"
-        "Resume from the existing workspace and session context. Re-check the original node "
-        "acceptance criteria, complete any unfinished implementation and verification, and do "
-        "not treat partial prior progress as terminal success. Finish with the full Markdown "
-        "receipt and final `runtime_worker_receipt_v1` fenced JSON object required by the original "
-        "task. Do not create or complete runtime nodes directly."
+        "The latest task context above is authoritative for this materialization. Resume from the "
+        "existing workspace and session context, consume any new dependency or runtime evidence in "
+        "that context, re-check the node acceptance criteria, and complete unfinished implementation "
+        "and verification. Do not treat partial prior progress as terminal success. Finish with the "
+        "required receipt and do not create or complete runtime nodes directly."
     )
+    return f"{latest_context}\n\n## Runtime continuation instruction\n\n{instruction}"
 
 
 def _finish_blocked(
@@ -1907,7 +1928,13 @@ def run_codex_worker(
         with kb.connect() as conn:
             task_context = kb.build_worker_context(conn, task_id)
         prompt = (
-            build_codex_resume_prompt(task_id=task_id, lane=lane, continuity=continuity)
+            build_codex_resume_prompt(
+                task_id=task_id,
+                lane=lane,
+                continuity=continuity,
+                task_context=task_context,
+                model=model,
+            )
             if resume_session_id
             else build_codex_prompt(task_context, lane=lane, model=model)
         )

@@ -1715,6 +1715,7 @@ def test_codex_resume_records_resumed_session_and_receipt(
 ):
     old_path = os.environ.get("PATH", "")
     argv_path = tmp_path / "resume-argv.json"
+    prompt_path = tmp_path / "resume-prompt.txt"
     session_id = "019f0000-0000-7000-8000-000000000001"
     receipt = (
         "Progress:\n- [x] resumed original work\n\n"
@@ -1747,7 +1748,7 @@ def test_codex_resume_records_resumed_session_and_receipt(
         "#!/usr/bin/env python3\n"
         "import json, pathlib, sys\n"
         f"pathlib.Path({str(argv_path)!r}).write_text(json.dumps(sys.argv), encoding='utf-8')\n"
-        "_ = sys.stdin.read()\n"
+        f"pathlib.Path({str(prompt_path)!r}).write_text(sys.stdin.read(), encoding='utf-8')\n"
         f"sys.stdout.write({body!r})\n",
         encoding="utf-8",
     )
@@ -1766,6 +1767,15 @@ def test_codex_resume_records_resumed_session_and_receipt(
     )
     with kb.connect() as conn:
         tid, task = _claim_for_codex(conn)
+        conn.execute(
+            "UPDATE tasks SET body = ? WHERE id = ?",
+            (
+                "Frozen dependency contributions:\n"
+                '[{"artifact_id":"art_resume_context","patch_ref":"/tmp/resume.patch"}]\n'
+                "Runtime footer: {}",
+                tid,
+            ),
+        )
         run_id = task.current_run_id
 
     assert run_codex_worker(
@@ -1781,6 +1791,11 @@ def test_codex_resume_records_resumed_session_and_receipt(
 
     argv = json.loads(argv_path.read_text(encoding="utf-8"))
     assert argv[-5:] == ["exec", "resume", "--json", session_id, "-"]
+    prompt = prompt_path.read_text(encoding="utf-8")
+    assert "art_resume_context" in prompt
+    assert "/tmp/resume.patch" in prompt
+    assert "new frozen dependency contributions" in prompt
+    assert "infrastructure failure" not in prompt
     with kb.connect() as conn:
         run = kb.latest_run(conn, tid)
         events = kb.list_events(conn, tid)

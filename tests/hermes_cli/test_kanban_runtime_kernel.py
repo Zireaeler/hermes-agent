@@ -2300,7 +2300,9 @@ def test_required_evaluator_failure_resumes_same_node_session_and_retargets_eval
         task_id=primary["latest_task_id"],
         lane="codex-test",
         continuity=continuity,
+        task_context="LATEST MATERIALIZATION CONTEXT",
     )
+    assert "LATEST MATERIALIZATION CONTEXT" in resume_prompt
     assert "Requested changes to address before finishing" in resume_prompt
     assert bundle["bundle_id"] in resume_prompt
     assert "hidden test patches" in resume_prompt
@@ -2498,8 +2500,10 @@ def test_official_diagnostics_reach_same_session_resume_prompt_end_to_end(
         task_id=primary["latest_task_id"],
         lane="codex-test",
         continuity=continuity,
+        task_context="LATEST MATERIALIZATION CONTEXT",
     )
 
+    assert "LATEST MATERIALIZATION CONTEXT" in prompt
     for value in [
         *failed_test_ids,
         "must be instances of",
@@ -2541,6 +2545,34 @@ def test_evaluator_v2_diagnostics_never_fall_back_to_text_after_case_rejection()
     assert diagnostics["truncated"] is True
     assert diagnostics["source_sha256"] == "a" * 64
     assert "raw fallback" not in json.dumps(diagnostics)
+
+
+def test_resume_prompt_preserves_latest_frozen_contribution_context():
+    task_context = """# Runtime node
+
+Frozen dependency contributions:
+[{"artifact_id":"art_child_1","patch_ref":"/tmp/contribution.patch"}]
+
+Apply or adapt every contribution and classify it in the final receipt.
+
+Runtime footer: {"runtime_job_id":"rjob_test"}
+"""
+    prompt = cw.build_codex_resume_prompt(
+        task_id="task-integration",
+        lane="codex-test",
+        continuity={
+            "resume_from_materialization_id": "mat-assessment",
+            "workspace_revision": "git:base",
+        },
+        task_context=task_context,
+    )
+
+    assert "art_child_1" in prompt
+    assert "/tmp/contribution.patch" in prompt
+    assert "accepted_contributions" in prompt
+    assert "new frozen dependency contributions" in prompt
+    assert "apply or adapt" in prompt.lower()
+    assert "infrastructure failure" not in prompt
 
 
 def test_evaluator_v3_diagnostics_preserve_relation_and_safe_conditions():

@@ -334,6 +334,19 @@ Early checkpoint 后 primary session 的 resume eligibility 需要：
 - checkpoint event 尚未被消费；
 - integration dependencies 已满足或明确被 waiver。
 
+恢复同一 backend session 不等于复用旧 prompt。每次 materialization 的最新 worker context 必须作为
+新的 user turn 进入原 session，至少包含本轮新增 dependency summary、frozen contribution
+artifact、patch ref/hash、integration classification contract 和 Runtime footer。Reason-specific
+resume instruction 只能追加到最新 worker context，不能替代它；也不得把所有普通 resume
+错误描述为 infrastructure failure。
+
+可观测性必须证明恢复后的 session JSONL 同时包含：
+
+- 原 backend session id；
+- 新 materialization id；
+- 本轮新增 artifact id 与 patch ref；
+- integration 或 remediation 的原因特定指令。
+
 Assessment checkpoint 是预期 pause，不计入 crash recovery resume limit。Resume reason 固定为：
 
 ```text
