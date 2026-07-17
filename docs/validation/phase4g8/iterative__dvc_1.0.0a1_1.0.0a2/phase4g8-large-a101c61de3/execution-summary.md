@@ -14,16 +14,35 @@
 
 这次运行证明了两件不同的事：
 
-1. Hermes 的长周期执行、同 session 恢复、独立 evaluator、checkpoint、故障恢复和完成判定确实有用。
+1. Hermes 的长周期执行、同 session 恢复、checkpoint、故障恢复和结构升级确实有用；本 benchmark 还验证了预设 external oracle 的接入。
 2. 新增 durable worker 并不天然提高任务质量。本次扩图增加了实现覆盖，但没有保护 primary 已获得的最佳 revision，最终 official 分数下降。
 
 因此，本次结果不能写成“Large 成功完成”，也不能写成“Runtime 没有价值”。准确结论是：
 
 > Runtime correctness 通过，任务未解决；primary 长周期 worker 取得了主要能力增益，evidence-backed graph expansion 发现了更多真实缺口，但当前 candidate 策略缺少 best-revision preservation 和 regression-aware rollback。
 
+## 适用边界：Evaluator 不是默认生产路径
+
+Small、Medium、Large 都是 benchmark task，任务开始前已经存在完整、固定、独立的 official test oracle。因此 evaluator 在这些 run 中有明确语义：衡量 candidate 是否满足已知但对 worker 隔离的标准。
+
+这不代表 Hermes 之后处理普通开发任务时也应默认创建 evaluator。一般任务通常只有目标描述、现有项目测试、worker 自己补充的测试、运行产物和必要的人工验收，并没有一套预先准备好的 hidden test set。此时再创建一个只会重跑 worker 测试或泛化审查的 evaluator，不能提供与 SWE-EVO oracle 等价的独立证据，反而会增加流程和上下文成本。
+
+生产默认路径应是：
+
+```text
+Goal / current gap
+  -> one coherent primary worker
+  -> worker-owned inspection, implementation, testing and debugging
+  -> receipt with changed artifacts, commands, evidence and remaining risks
+  -> local reducer checks explicit goal contract and required policy gates
+  -> complete, blocked, human_required, or evidence-backed structure expansion
+```
+
+只有 goal contract 本身提供了独立验收机制，或任务跨越高风险/权限/责任边界时，才启用独立 verification。例如：已有 acceptance suite、协议 conformance checker、部署 smoke、security review、合规审批或 human acceptance。Benchmark evaluator 是其中一个特殊实例，不是默认模板。
+
 ## 为什么要单独跑 Large
 
-Small 和 Medium 主要验证单一或较集中的变更。DVC Large 的目标覆盖 CLI、plots、diff、stage、run-cache、tree、remote、serialization、completion scripts 等多个区域，不能通过一次局部补丁合理代表完成。
+Small 和 Medium 主要验证单一或较集中的变更。DVC Large 的目标覆盖 CLI、plots、diff、stage、run-cache、tree、remote、serialization、completion scripts 等多个区域，不能通过一次局部补丁合理代表完成。这里使用 evaluator 是因为 SWE-EVO 已提供固定 oracle，不是因为复杂任务天然需要 evaluator。
 
 本次测试刻意不预拆成 analysis、implementation、testing 等多个 node。初始 graph 只创建一个 coherent primary responsibility，由同一 Codex session 负责：
 
@@ -263,7 +282,7 @@ Primary 将 F2P 从 `0` 提升到 `58`，strategy worker 又补齐多个实际 S
 
 进程恢复、DB facts、checkpoint、evaluator provenance 和 completion invariant 全部通过。
 
-### 主要缺口是 candidate strategy
+### 主要缺口是跨 worker 的 workspace/candidate 管理
 
 Runtime 当时没有维护 immutable best-known candidate：
 
@@ -275,7 +294,9 @@ best primary revision: 58/68
 expanded strategy final: 55/68
 ```
 
-新 worker 的广覆盖修改没有先证明“保留全部已通过行为”，Runtime 也没有在 score 下降后自动回到 `58/68` revision。于是本地工程覆盖增加，却没有转化为 official oracle 增益。
+新 worker 的广覆盖修改没有保护 primary 已建立的稳定 milestone，Runtime 也没有在新证据变差后回到该 revision。于是本地工程覆盖增加，却没有转化为 official oracle 增益。
+
+“保留稳定 milestone、隔离探索分支、允许比较后选择或回滚”是通用 orchestration 问题，不依赖 evaluator。普通任务可以根据现有测试、构建结果、artifact check、worker evidence 或 human decision 判断是否接受新分支；不需要把 hidden score 引入生产 Runtime。
 
 第二个限制是 evaluator 剩余诊断多为 `test_id_only`。这足以证明 candidate 未完成，但不足以精确指导隐藏 contract 修复，导致后期推断成本很高。
 
@@ -285,25 +306,29 @@ expanded strategy final: 55/68
 
 - 默认一个 coherent primary worker，而不是预先拆成多个角色；
 - Runtime 负责长周期 persistence、recovery、policy、evidence 和 completion truth；
-- evaluator failure 优先回流同一 worker session；
+- 当任务确实存在外部验证反馈时，优先回流同一 worker session；
 - 只有真实 durable boundary 才扩展 graph；
-- fresh worker 可以用于独立策略审计，但不能直接覆盖 best candidate。
+- fresh worker 可以用于独立策略探索，但不能直接覆盖 primary 的稳定 milestone。
 
 本 run 不支持以下做法：
 
 - 因为任务复杂就预先创建很多 worker；
-- 认为更多本地测试通过必然代表 hidden task quality 提升；
-- 让新 strategy worker 在唯一共享 candidate 上无保护地继续修改；
-- 只记录最新 workspace，不记录 evaluator-confirmed best revision。
+- 将 benchmark 的 hidden evaluator loop 复制成普通任务的默认工作流；
+- 没有独立验收标准时，创建一个 evaluator 重跑 worker 自己写的测试；
+- 让新 strategy worker 在唯一共享 workspace 上无保护地继续修改；
+- 只记录最新 workspace，不保留已验证的稳定 milestone。
 
-下一步最有价值的改进不是增加 agent 数量，而是：
+面向一般任务，下一步最有价值的改进是：
 
-1. 每轮 evaluator 固化 immutable candidate revision 和 F2P/P2P；
-2. 维护 best-known candidate；
-3. strategy worker 使用独立 worktree；
-4. 新 candidate 通过 delta evaluation 且无 P2P/F2P 回归后才能 promotion；
-5. 回归时自动 rollback，保留新改动作为可选择 patch；
-6. 将 best-revision selection 记录为一等 runtime event。
+1. 为长周期 primary worker 提供可恢复的 workspace milestone，而不是增加执行角色；
+2. structure expansion 使用独立 worktree/branch，避免新策略直接破坏 primary 工作区；
+3. worker receipt 明确记录完成范围、验证命令、artifact evidence、风险和未完成项；
+4. reducer 只按 goal contract 中真实存在的 completion/evidence 要求判断，不凭空要求 external evaluator；
+5. 无预设 oracle 的普通任务优先由 worker 自测，必要时根据风险进入 human review 或已有专项 verifier；
+6. 保留多个策略产物及 provenance，让 Decision Provider 或 human 可以选择 merge、继续或 rollback；
+7. 继续优化 crash recovery、session continuity、capability boundary、liveness 和 observability。
+
+Benchmark harness 自身仍可单独改进：保存每轮固定 revision 和 official score，防止后续探索覆盖 benchmark best result；改善 bounded diagnostic extraction。这些只服务于测试能力测量，不应升级成所有 Runtime job 的默认协议。
 
 ## 如何阅读其余证据
 

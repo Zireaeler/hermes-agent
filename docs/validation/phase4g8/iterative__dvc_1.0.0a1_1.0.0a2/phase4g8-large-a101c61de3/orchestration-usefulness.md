@@ -2,7 +2,7 @@
 
 ## 结论
 
-这次 Large 运行证明 Hermes 的长周期执行、恢复和独立验证机制有实际价值，但没有证明 durable graph expansion 能提高最终任务得分。
+这次 Large 运行证明 Hermes 的长周期执行、恢复和结构升级机制有实际价值；由于 SWE-EVO 预先提供固定 test oracle，本 run 也验证了 benchmark evaluator 接入。但它没有证明 durable graph expansion 能提高最终任务得分。
 
 - Runtime correctness 通过：一致性 `0` violation、`0` warning，无重复 terminal/ledger fact，3 个真实 checkpoint 全部 accepted，compaction fallback 为 `0`。
 - End-to-end capability 未通过：最终 official evaluator 为 FAIL_TO_PASS `55/68`、PASS_TO_PASS `241/242`，未 resolved。
@@ -13,6 +13,12 @@
 因此更准确的判断是：
 
 > Runtime orchestration materially improves continuity, recovery, implementation breadth, and completion honesty. In this run, durable graph expansion did not improve the official oracle because strategy control did not preserve the best known candidate revision.
+
+## 适用边界
+
+这里的 official evaluator 是 benchmark 测量设施，不是 Hermes 普通任务的默认 worker。Small、Medium、Large 都预先拥有完整测试标准，因而 evaluator 可以提供独立且可重复的完成判定。
+
+一般开发任务通常没有 hidden oracle。若 evaluator 只能重跑 worker 自己写的测试，或再做一轮泛化模型审查，它不能独立证明需求理解正确，不值得成为固定 runtime node。生产 Runtime 应默认依赖 coherent primary worker 的完整责任、现有项目验证、artifact evidence 和明确 goal contract；只有已有独立验收器、高风险审查或 human authority boundary 时才增加 verifier。
 
 ## 任务规模
 
@@ -121,15 +127,17 @@ Expanded strategy worker 没有只重复 evaluator test IDs。它重新审计完
 
 这次运行不支持“复杂任务应预先拆给多个 worker”。恰好相反：primary 单 thread 取得了最佳 official 分数，扩图只应在真实 evidence 表明 durable boundary 后发生。
 
-但它也不支持“Runtime 没用，直接开一个 Codex 对话即可”。Primary 的结果依赖：
+但它也不支持“Runtime 没用，直接开一个 Codex 对话即可”。Primary 的长周期运行依赖：
 
-- 固定 revision evaluator；
-- 多轮失败反馈；
 - 12 次同 session resume；
 - worker/daemon 故障恢复；
 - checkpoint compaction；
 - capability 和 network isolation；
+- durable structure request；
+- workspace/evidence persistence；
 - completion invariant。
+
+固定 revision evaluator 和多轮失败反馈是本 benchmark 额外提供的测试条件，不是上述 Runtime 价值成立的前提。
 
 这些都是 Runtime 提供的长周期执行条件。更准确的系统边界是：
 
@@ -146,16 +154,19 @@ Additional durable worker
 
 ## 下一步工程改进
 
-在继续追求更复杂 agent team 之前，应先实现：
+面向一般任务，在继续追求更复杂 agent team 之前，应先实现：
 
-1. 每次 evaluator 后保存 immutable candidate revision、F2P/P2P 和 failure signature；
-2. 维护 best-known candidate，任何新 strategy candidate 只有不回归时才能取代它；
-3. 扩图 worker 基于独立 worktree 修改，完成后做 delta evaluation，再决定 merge 或 rollback；
-4. PASS_TO_PASS 回归优先阻止 candidate promotion；
-5. 将 evaluator progression 和 best-revision decision 作为一等 runtime event；
-6. 对 `test_id_only` 连续稳定失败设为证据不足边界，避免无限 speculative edits。
+1. 一个 coherent primary worker 持续负责 inspection、实现、测试和 debug；
+2. 长任务保存可恢复 workspace milestone、artifact evidence 和 session continuity；
+3. 新 durable strategy node 使用隔离 worktree，不直接覆盖 primary 稳定状态；
+4. node receipt 记录完成范围、验证、风险和 blocker，由 goal contract 决定所需证据；
+5. 没有预设 oracle 时不创建默认 evaluator，按任务风险选择现有测试、专项 checker 或 human review；
+6. Runtime 继续强化 capability、human gate、crash recovery、liveness 和 observability；
+7. Decision Provider 只处理结构性未知，不介入 worker 内部局部循环。
 
-这些改进比增加更多 worker 更直接，因为本次失败不是缺少并行执行者，而是缺少跨 candidate 的策略控制。
+Benchmark harness 可另外保存每轮 fixed revision、F2P/P2P 和 best score，并改进 bounded diagnostics。它用于测量模型与 Runtime 能力，不应成为普通 job 的完成协议。
+
+这些通用改进比增加更多 worker 或普遍部署 evaluator 更直接。本次最有价值的系统信号是长周期 responsibility、恢复和结构边界，而不是 hidden-test feedback loop 本身。
 
 ## 证据边界
 

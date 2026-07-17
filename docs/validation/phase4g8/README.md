@@ -145,5 +145,8 @@ honesty 有实际价值。Primary coherent worker 在 12 次恢复和多轮 eval
 `0/68` 提升到 `58/68`。但 durable graph expansion 没有提高 oracle 峰值：fresh strategy worker
 扩大了 SRS 覆盖和本地测试面，却回退了 evaluator 已确认的行为，最终为 `55/68`。
 
-因此下一步不应继续增加 worker 数量，而应增加 best-revision preservation、delta evaluation、
-regression-aware candidate promotion 和 rollback。完整分析见 orchestration usefulness 报告。
+这里的 evaluator 是 SWE-EVO 预设 oracle，只用于 benchmark 能力测量，不代表普通 Runtime job 应默认
+创建 evaluator。面向一般任务，下一步应优先强化 coherent primary worker、可恢复 workspace milestone、
+隔离的结构升级分支、receipt evidence、capability/human boundary 和 observability。Benchmark-specific 的
+best-score preservation 与 diagnostic extraction 保留在测试 harness，不升级成通用完成协议。完整分析见
+orchestration usefulness 报告。
