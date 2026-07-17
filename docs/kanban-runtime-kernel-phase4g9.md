@@ -1,37 +1,32 @@
 # Hermes Kanban Runtime Kernel Phase 4G9
 
-# Native Orchestra Comparison
+# Native Orchestra 对照实验
 
-## 1. Purpose
+## 1. 目的
 
-Phase 4G8 proved that the Runtime Kernel can preserve execution continuity,
-recover from process failures, and keep completion evidence honest during a
-real long-running SWE-EVO task. It did not prove that durable system-level
-orchestration improves final implementation quality. The best DVC Large
-primary worker reached `58/68` FAIL_TO_PASS, while the later durable strategy
-worker reached only `55 -> 56 -> 55/68`.
+Phase 4G8 已证明 Runtime Kernel 能够在真实长周期 SWE-EVO 任务中保持执行连续性、
+从进程故障中恢复，并维持可信的完成证据。但它尚未证明 durable 系统级编排能够提高
+最终实现质量。DVC Large 的 primary worker 最高达到 `58/68` FAIL_TO_PASS，后续
+durable strategy worker 仅达到 `55 -> 56 -> 55/68`。
 
-Phase 4G9 defines a controlled comparison between:
+Phase 4G9 定义以下受控对照：
 
 ```text
-Arm 1: one native Codex parent with ephemeral internal subagents
+Arm 1：一个 native Codex parent，使用 ephemeral internal subagents
 
-Arm 2: Hermes Runtime Kernel with durable system-level workers
+Arm 2：Hermes Runtime Kernel，使用 durable 系统级 workers
 ```
 
-The comparison asks whether Runtime-level orchestration can match the final
-quality of native parent/subagent orchestration. Runtime may be slower, but it
-must not obtain a worse candidate merely because work crossed durable worker
-boundaries.
+实验要回答的问题是：Runtime 级编排能否达到 native parent/subagent 编排的最终质量。
+Runtime 可以更慢，但不能仅仅因为工作跨越 durable worker 边界就得到更差的 candidate。
 
-This document freezes the comparison protocol and the Arm 1 execution
-contract. It does not design or implement Arm 2.
+本文冻结对照实验协议和 Arm 1 执行契约，不设计或实现 Arm 2。
 
 ---
 
 ## 2. Benchmark
 
-The frozen task is the qualified SWE-EVO DVC evolution instance:
+冻结任务是已经 qualification 的 SWE-EVO DVC 演进实例：
 
 ```text
 instance: iterative__dvc_1.0.0a1_1.0.0a2
@@ -43,98 +38,92 @@ FAIL_TO_PASS: 68
 PASS_TO_PASS: 242
 ```
 
-The locked oracle qualification is:
+冻结的 oracle qualification 结果：
 
 | Revision | FAIL_TO_PASS | PASS_TO_PASS |
 |---|---:|---:|
 | base | 0/68 | 242/242 |
 | gold | 68/68 | 242/242 |
 
-Gold is used only to qualify the evaluator. It is never available to either
-comparison arm.
+Gold 只用于 qualification evaluator，不向任一对照 Arm 暴露。
 
 ---
 
-## 3. Frozen Arm 1 Contract
+## 3. 冻结的 Arm 1 契约
 
-Arm 1 is one standalone native Codex execution:
+Arm 1 是一次 standalone native Codex 执行：
 
 ```text
-fresh base workspace
+clean base workspace
         |
         v
-one native Codex parent
+一个 native Codex parent
         |
-        +-- optional ephemeral internal subagents
+        +-- 可选 ephemeral internal subagents
         |
         v
 terminal candidate revision
         |
         v
-one fixed official evaluator run
+一次固定 official evaluator
 ```
 
-Arm 1 must use:
+Arm 1 必须使用：
 
-- Codex CLI `0.144.4`;
-- model `gpt-5.6-sol`;
-- `model_reasoning_effort = "ultra"`;
-- native MultiAgentV2 enabled;
-- at most four simultaneously active Codex threads including the parent;
-- a fresh isolated `CODEX_HOME`, thread history, and workspace;
-- the configured model provider's WebSocket transport settings;
-- unrestricted workspace execution with non-interactive approval handling;
-- one parent responsible for integration and the terminal result.
+- Codex CLI `0.144.4`；
+- 模型 `gpt-5.6-sol`；
+- `model_reasoning_effort = "ultra"`；
+- 启用 native MultiAgentV2；
+- 同时 active 的 Codex threads 最多 4 个，包括 parent；
+- 全新的隔离 `CODEX_HOME`、thread history 和 workspace；
+- 已配置模型源的 WebSocket transport 参数；
+- unrestricted workspace execution 与非交互式 approval handling；
+- 一个对集成和 terminal result 负责的 parent。
 
-In this Codex build, `ultra` has two relevant semantics:
+在当前 Codex build 中，`ultra` 有两项相关语义：
 
-1. model requests use `max` reasoning effort;
-2. the client selects proactive native multi-agent delegation instructions.
+1. 模型请求使用 `max` reasoning effort；
+2. client 选择主动 native multi-agent delegation 指令。
 
-It is therefore the native orchestra profile for Arm 1, not a model effort
-above `max`. The runner must not replace it with a hand-written approximation.
+因此，`ultra` 是 Arm 1 的 native orchestra profile，不是高于 `max` 的模型推理档位。
+Runner 不得用手写近似 prompt 替代该 profile。
 
-Subagents are ephemeral Codex execution threads. They may inspect, implement,
-test, and communicate with the parent through native collaboration tools. They
-do not become Hermes execution nodes and do not use Hermes Runtime state.
-
----
-
-## 4. Execution Prompt Boundary
-
-The parent receives:
-
-- the complete worker-visible 34-item SRS;
-- the exact base workspace;
-- the trusted worker environment setup needed to run project tests;
-- responsibility for understanding, planning, implementation, integration,
-  testing, debugging, and final verification;
-- explicit permission to use native subagents proactively where that improves
-  speed or quality;
-- the requirement to continue until a terminal candidate or a real blocker.
-
-The prompt must not prescribe a planner/coder/tester topology. Subagent count,
-roles, task allocation, communication, and concurrency are outputs of the
-native orchestra, not harness decisions.
-
-The parent and all subagents are forbidden from reading or receiving:
-
-- the gold patch or upstream target implementation;
-- protected test patch content or protected evaluator files;
-- Phase 4G8 historical candidate patches or worker transcripts;
-- Phase 4G8 evaluator scores or diagnostics;
-- Hermes memory, Decision Session, checkpoint, graph, ledger, or provider
-  guidance;
-- any official evaluator result during execution.
-
-Project-visible tests and tests written by the agents are allowed. The hidden
-oracle is not.
+Subagents 是 ephemeral Codex execution threads。它们可以检查、实现、测试，并通过
+native collaboration tools 与 parent 通信；它们不会成为 Hermes execution nodes，
+也不使用 Hermes Runtime state。
 
 ---
 
-## 5. Isolation and Integrity
+## 4. 执行 Prompt 边界
 
-Arm 1 uses independent roots for:
+Parent 接收：
+
+- worker 可见的完整 34 项 SRS；
+- 精确的 base workspace；
+- 运行项目测试所需的可信 worker environment setup；
+- 对理解、规划、实现、集成、测试、调试和最终验证的完整责任；
+- 在有助于速度或质量时主动使用 native subagents 的明确权限；
+- 持续执行到 terminal candidate 或真实 blocker 的要求。
+
+Prompt 不得预设 planner/coder/tester topology。Subagent 数量、角色、任务分配、通信和
+并发是 native orchestra 的输出，不是 harness 的预设决策。
+
+Parent 与所有 subagents 禁止读取或接收：
+
+- gold patch 或 upstream target implementation；
+- protected test patch 内容或 protected evaluator files；
+- Phase 4G8 历史 candidate patches 或 worker transcripts；
+- Phase 4G8 evaluator 分数或 diagnostics；
+- Hermes memory、Decision Session、checkpoint、graph、ledger 或 provider guidance；
+- 执行期间的任何 official evaluator result。
+
+允许使用项目可见测试和 agents 自己编写的测试，但不允许接触 hidden oracle。
+
+---
+
+## 5. 隔离与完整性
+
+Arm 1 使用相互独立的目录：
 
 ```text
 phase4g9/<run-id>/
@@ -146,30 +135,27 @@ phase4g9/<run-id>/
   reports/
 ```
 
-Required checks before execution:
+执行前必须检查：
 
-- workspace `HEAD` equals the locked base commit and is clean;
-- the workspace has no remote after materialization;
-- `CODEX_HOME` contains no copied sessions, memories, skills, plugins, or
-  unrelated project trust entries;
-- only the selected provider configuration and credential are copied;
-- protected paths are neither readable nor writable by the Codex execution
-  identity;
-- no historical Phase 4G8 run directory is mounted or added to the workspace;
-- source `~/.codex/config.toml` and `auth.json` hashes remain unchanged.
+- workspace `HEAD` 等于冻结 base commit，且工作树 clean；
+- materialization 后 workspace 不含 remote；
+- `CODEX_HOME` 不含复制的 sessions、memories、skills、plugins 或无关项目 trust entries；
+- 只复制选定 provider configuration 和 credential；
+- Codex execution identity 对 protected paths 既不可读也不可写；
+- 不挂载 Phase 4G8 历史 run，也不把它加入 workspace；
+- source `~/.codex/config.toml` 与 `auth.json` 的 hash 保持不变。
 
-The evaluator runs only after the parent has terminated and the candidate
-revision and patch hashes have been frozen. The evaluator operates on that
-fixed candidate and cannot alter the worker workspace.
+Evaluator 只能在 parent 终止且 candidate revision/patch hash 冻结后运行。Evaluator 针对
+固定 candidate 执行，不能修改 worker workspace。
 
 ---
 
-## 6. Evaluator Rule
+## 6. Evaluator 规则
 
-The official evaluator is benchmark measurement only. It is not an Arm 1
-worker, verifier node, or feedback source.
+Official evaluator 只用于 benchmark 测量，不是 Arm 1 worker、verifier node 或 feedback
+source。
 
-The harness must enforce:
+Harness 必须强制：
 
 ```text
 evaluator invocations before terminal candidate = 0
@@ -177,133 +163,116 @@ evaluator invocations after terminal candidate  = 1
 evaluator feedback turns sent to Codex           = 0
 ```
 
-The single evaluator result records:
+唯一一次 evaluator result 记录：
 
-- resolved status;
-- FAIL_TO_PASS passed/total;
-- PASS_TO_PASS passed/total and regression count;
-- candidate patch hash and bytes;
-- fixed target revision;
-- evaluator image and dataset revision;
-- evaluator wall time and infrastructure status.
+- resolved status；
+- FAIL_TO_PASS passed/total；
+- PASS_TO_PASS passed/total 与 regression count；
+- candidate patch hash 与 bytes；
+- fixed target revision；
+- evaluator image 与 dataset revision；
+- evaluator wall time 与 infrastructure status。
 
-No rerun, retry with model changes, best-of-N selection, or post-evaluator fix
-is allowed. Infrastructure failure may invalidate the run, but it does not
-authorize silently scoring a different candidate.
-
----
-
-## 7. Resource Ceiling
-
-Arm 1 is allowed to run long enough to represent a serious native Codex
-attempt, while retaining a finite safety boundary:
-
-- parent wall-time ceiling: 6 hours;
-- maximum active threads: 4 including the parent;
-- maximum one root Codex execution;
-- maximum one official evaluator invocation;
-- no artificial daemon restart, worker kill, lease expiry, or compaction
-  trigger;
-- terminate only the process group owned by this run when the ceiling expires.
-
-Hitting the wall-time ceiling produces a terminal resource-limit candidate,
-not a hidden continuation or a second attempt.
+不允许 rerun、修改模型后重试、best-of-N selection 或 evaluator 后继续修复。基础设施失败
+可以使 run invalid，但不能静默改为评估另一个 candidate。
 
 ---
 
-## 8. Required Evidence
+## 7. 资源上限
 
-The Arm 1 archive must contain:
+Arm 1 必须获得足够长的时间来代表一次认真执行，同时保留有限的安全边界：
 
-- frozen protocol version and runner configuration;
-- source/config integrity hashes with credentials redacted;
-- parent thread ID;
-- child thread IDs, native task names, prompts, statuses, and timing;
-- spawn, message, follow-up, wait, and close events;
-- peak and time-weighted concurrency where observable;
-- parent command/test activity and changed-file summary;
-- terminal parent message and exit status;
-- exact candidate patch and candidate revision/hash;
-- one official evaluator result;
-- wall time;
-- input, cached input, output, and reasoning output tokens;
-- model call/turn count where observable;
-- cache-hit ratio;
-- process cleanup result;
-- a readable execution narrative explaining how the parent allocated work,
-  integrated results, tested the implementation, and where it failed if
-  unresolved.
+- parent wall-time ceiling：6 小时；
+- active threads 最多 4 个，包括 parent；
+- 最多一个 root Codex execution；
+- official evaluator 最多调用一次；
+- 不人工触发 daemon restart、worker kill、lease expiry 或 compaction；
+- 到达上限时，只终止本 run 拥有的 process group。
 
-The archive may retain redacted native Codex JSONL events needed to audit
-orchestration. It must not publish credentials, hidden tests, gold content, or
-private model reasoning.
+触发 wall-time ceiling 时产生 terminal resource-limit candidate，不允许隐藏 continuation
+或第二次尝试。
 
 ---
 
-## 9. Frozen Comparison Gates
+## 8. 必需证据
 
-Arm 1 is the single baseline candidate. Future Arm 2 must use the same task,
-base commit, dataset revision, official image, SRS, model family, and one-shot
-evaluator rule.
+Arm 1 archive 必须包含：
 
-Quality is compared in this order:
+- 冻结 protocol version 和 runner configuration；
+- credential 已脱敏的 source/config integrity hashes；
+- parent thread ID；
+- child thread IDs、native task names、prompts、statuses 和 timing；
+- spawn、message、follow-up、wait 和 close events；
+- 可观察范围内的 peak 与 time-weighted concurrency；
+- parent command/test activity 和 changed-file summary；
+- terminal parent message 与 exit status；
+- 精确 candidate patch 和 candidate revision/hash；
+- 一次 official evaluator result；
+- wall time；
+- input、cached input、output 和 reasoning output tokens；
+- 可观察范围内的 model call/turn count；
+- cache-hit ratio；
+- process cleanup result；
+- 说明 parent 如何分配工作、集成结果、测试实现以及 unresolved 原因的可读执行记录。
 
-1. If Arm 1 is resolved, Arm 2 must also be resolved.
-2. Arm 2 must not introduce more PASS_TO_PASS regressions than Arm 1.
-3. If both are unresolved, Arm 2 FAIL_TO_PASS passed count must be greater
-   than or equal to Arm 1.
-4. No arm may use best-of-N, evaluator-guided retries, gold knowledge, or a
-   historical candidate.
-
-Wall time, token cost, cached input, model calls, concurrency, handoffs, and
-changed files are reported as secondary metrics. Runtime may be slower; the
-primary gate is final task quality non-inferiority.
-
-The comparison does not claim statistical model superiority from one sample.
-It answers a narrower architecture question: on this qualified large task,
-did durable Runtime orchestration preserve or improve the quality achieved by
-native parent/subagent orchestration?
-
----
-
-## 10. Arm 1 Acceptance Criteria
-
-Arm 1 is complete when:
-
-- the frozen config and isolation preflight pass;
-- one standalone native Codex parent starts on the clean base workspace;
-- native subagent behavior is captured without being prescribed by the
-  harness;
-- the execution ends at a terminal candidate or documented resource/blocker
-  boundary;
-- the candidate is frozen before evaluator access;
-- the official evaluator runs exactly once;
-- no evaluator feedback reaches the parent or any subagent;
-- required process, orchestration, token, cache, candidate, and quality
-  evidence is archived;
-- rebuildable image, toolchain, workspace, and transient caches are removed
-  after the report is produced;
-- the protocol, runner, tests, and Arm 1 report are committed and pushed.
-
-Arm 1 completion does not require `68/68`. A non-resolved result is still a
-valid baseline if the execution and measurement protocol remained intact.
+Archive 可以保留审计 orchestra 所需的脱敏 native Codex JSONL events。不得发布 credential、
+hidden tests 或 gold content。原始 worker/model 输出作为执行证据可以保留。
 
 ---
 
-## 11. Deferred Arm 2
+## 9. 冻结的对照门禁
 
-Arm 2 requires separate design work for early structure assessment, durable
-worker write isolation, integration ownership, best-revision preservation,
-and suppression of nested subagent orchestration inside Runtime workers.
+Arm 1 是单一 baseline candidate。未来 Arm 2 必须使用相同 task、base commit、dataset
+revision、official image、SRS、model family 和 one-shot evaluator rule。
 
-Those changes are explicitly outside the Arm 1 goal and must not be inferred
-from or implemented by this document.
+质量按以下顺序比较：
+
+1. 如果 Arm 1 resolved，Arm 2 也必须 resolved；
+2. Arm 2 不得产生比 Arm 1 更多的 PASS_TO_PASS regressions；
+3. 如果两者都 unresolved，Arm 2 的 FAIL_TO_PASS passed count 必须大于或等于 Arm 1；
+4. 任一 Arm 均不得使用 best-of-N、evaluator-guided retries、gold knowledge 或历史 candidate。
+
+Wall time、token cost、cached input、model calls、concurrency、handoffs 和 changed files
+作为次要指标报告。Runtime 可以更慢，主要门禁是最终任务质量不劣于 baseline。
+
+单一样本不能证明模型统计优势。该实验只回答一个更窄的架构问题：在这个已 qualification
+的 large task 上，durable Runtime orchestration 是否保持或提高了 native
+parent/subagent orchestration 的质量。
 
 ---
 
-## 12. Frozen Arm 1 Baseline
+## 10. Arm 1 验收标准
 
-Arm 1 completed on 2026-07-17. The immutable comparison baseline is:
+Arm 1 在满足以下条件时完成：
+
+- 冻结 config 与 isolation preflight 通过；
+- 一个 standalone native Codex parent 在 clean base workspace 启动；
+- 在 harness 未预设 topology 的情况下捕获 native subagent behavior；
+- 执行以 terminal candidate 或有记录的 resource/blocker boundary 结束；
+- evaluator access 前 candidate 已冻结；
+- official evaluator 恰好运行一次；
+- evaluator feedback 未到达 parent 或任一 subagent；
+- 必需的 process、orchestration、token、cache、candidate 和质量证据已归档；
+- report 生成后清理可重建 image、toolchain、workspace 和 transient caches；
+- protocol、runner、tests 和 Arm 1 report 已 commit 并 push。
+
+Arm 1 完成不要求 `68/68`。只要执行与测量协议保持完整，unresolved 结果仍是有效 baseline。
+
+---
+
+## 11. 延后的 Arm 2
+
+Arm 2 需要另行设计 early structure assessment、durable worker write isolation、
+integration ownership、best-revision preservation，以及抑制 Runtime workers 内部的
+nested subagent orchestration。
+
+这些改动明确不属于 Arm 1 Goal，不得从本文推断或直接实现。
+
+---
+
+## 12. 冻结的 Arm 1 Baseline
+
+Arm 1 已于 2026-07-17 完成。不可变对照 baseline 为：
 
 ```text
 resolved: false
@@ -317,30 +286,31 @@ official evaluator invocations: 1
 evaluator feedback turns: 0
 ```
 
-The pre-run frozen protocol is the Section 1-11 document at commit `0059774`,
-with SHA-256 `05578a73404caa1550bceb5a97ba89d3dfc7b3036e5de6939288a2269f792b38`.
-This result section was appended only after the terminal candidate and one-shot
-evaluation were complete.
+运行前冻结的 protocol 是 commit `0059774` 中的 Section 1-11，SHA-256 为：
 
-The exact candidate patch SHA-256 is:
+```text
+05578a73404caa1550bceb5a97ba89d3dfc7b3036e5de6939288a2269f792b38
+```
+
+本结果章节只在 terminal candidate 和 one-shot evaluation 完成后追加。
+
+精确 candidate patch SHA-256：
 
 ```text
 494c5e7bb04a8a33e85de387e7d541f7197eacfc2b57a73b4565641278636931
 ```
 
-The native Codex rollout stores collaboration message bodies as encrypted
-content. The archive therefore records task names, sender/target, timing,
-tool result, and ciphertext hashes rather than pretending plaintext prompts
-were observable. The redacted outer event stream did not expose spawn calls.
-This limitation does not affect child-session identity or concurrency evidence.
+Native Codex rollout 会加密保存 collaboration message bodies。因此 archive 记录 task
+names、sender/target、timing、tool result 和 ciphertext hashes，不伪造不可观察的 plaintext
+prompts。脱敏后的 outer event stream 没有暴露 spawn calls；这不影响 child-session identity
+或 concurrency evidence。
 
-The post-terminal patch collector initially failed on generated non-UTF-8
-pytest artifacts. Recovery removed only top-level `.pytest-*` directories,
-did not resume Codex, and invoked the evaluator exactly once. Exact model-proxy
-request counters were not persisted before that collector failure and remain
-an explicit observability gap.
+Terminal 后 patch collector 最初被生成的非 UTF-8 pytest artifacts 阻断。恢复过程只删除
+workspace 顶层 `.pytest-*` 目录，没有恢复 Codex，并且 evaluator 恰好只调用一次。
+Collector failure 前没有持久化精确 model-proxy request counters；该事实只属于可选运维
+遥测缺口，不影响 worker 行为或 Runtime Kernel 分析。
 
-The archived report and architecture conclusion are under:
+归档报告和架构结论位于：
 
 ```text
 docs/validation/phase4g9/

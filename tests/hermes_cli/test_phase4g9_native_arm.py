@@ -172,10 +172,10 @@ def test_execution_summary_states_one_shot_measurement():
     rendered = arm1.render_execution_summary(report)
 
     assert "FAIL_TO_PASS: `60/68`" in rendered
-    assert "Native implementation/audit subagents: `1`" in rendered
-    assert "The official evaluator ran once" in rendered
+    assert "Native implementation/audit subagents：`1`" in rendered
+    assert "official evaluator 运行一次" in rendered
     assert "unit_runner" in rendered
-    assert "real native-orchestra baseline" in rendered
+    assert "真实的 native orchestra baseline" in rendered
 
 
 def test_rollout_summary_aggregates_parent_and_child_tokens(tmp_path):

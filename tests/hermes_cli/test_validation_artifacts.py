@@ -60,6 +60,9 @@ def test_archive_validation_run_redacts_credentials_and_verifies_manifest(tmp_pa
     assert "sk-test-secret" not in outer
     assert "local-proxy.invalid" in (archived / "codex-home" / "config.toml").read_text()
     assert not (archived / "workspace").exists()
+    catalog = (archived / "ARTIFACTS.md").read_text(encoding="utf-8")
+    assert "# 真实验证 Artifacts" in catalog
+    assert "## 已归档 Entries" in catalog
     assert artifacts.verify_artifact_manifest(archived / "manifest.json")["run_id"] == run.name
 
 

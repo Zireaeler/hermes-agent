@@ -21,9 +21,12 @@ When working on branch `feature-kanban-runtime-kernel`, treat
 `docs/kanban-runtime-kernel-phase4f.md` and
 `docs/kanban-runtime-kernel-phase4g0.md` and
 `docs/kanban-runtime-kernel-phase4g7.md` and
-`docs/kanban-runtime-kernel-phase4g8.md` as binding design constraints, not
-background reading. If implementation details conflict with those documents,
-update the relevant design document first or stop and ask for direction.
+`docs/kanban-runtime-kernel-phase4g8.md` and
+`docs/kanban-runtime-kernel-phase4g9.md` and
+`docs/kanban-runtime-validation-artifact-retention.md` as binding design
+constraints, not background reading. If implementation details conflict with
+those documents, update the relevant design document first or stop and ask for
+direction.
 
 `docs/kanban-runtime-kernel-delegation-policy.md` is also binding. Default to
 one coherent primary execution node for work a capable continuous worker
@@ -34,12 +37,12 @@ parallelism, context/runtime limit, distinct deliverables, or execution-
 discovered gap. Workers may not create durable runtime nodes, though a backend
 may use ephemeral internal subagents within its inherited capability envelope.
 
-Runtime kernel design and roadmap documents must use Chinese as the normative
-narrative language. English is acceptable for stable technical names such as
-function names, class names, schema fields, event_type values, CLI commands,
-API paths, model/provider names, and quoted source identifiers, but explanatory
-paragraphs, section descriptions, implementation plans, acceptance criteria,
-and test descriptions should be written in Chinese.
+Runtime Kernel 的设计、roadmap、phase、真实验证和证据保留文档必须以中文作为规范性
+叙述语言。函数名、类名、schema 字段、`event_type` 值、CLI 命令、API path、
+model/provider 名称和引用的原始标识可以保留英文；解释性段落、章节说明、实施计划、
+验收标准、测试说明、报告结论和 artifact catalog 说明必须使用中文。生成这些 Markdown
+的代码也必须输出中文，避免后续运行重新生成英文文档。Worker、provider 或 evaluator
+的原始输出属于证据，可以原样保留，不得为了满足语言规则而改写原始事实。
 
 Do not continue the old Orchestra phase-manager architecture in this branch.
 Do not reuse `kanban_orchestra.py` as the runtime kernel core, do not introduce

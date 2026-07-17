@@ -1,56 +1,56 @@
-# Phase 4G9 Arm 1: Native Codex Orchestra
+# Phase 4G9 Arm 1：Native Codex Orchestra
 
-## Result
+## 结果
 
-- Official resolved: `False`
+- Official resolved：`False`
 - FAIL_TO_PASS: `7/68`
 - PASS_TO_PASS: `242/242`
-- Wall time: `4667.077s`
-- Parent thread: `019f6e39-5b6a-75e2-8c51-2c856bda9084`
-- Native implementation/audit subagents: `8`
-- Guardian approval sidecars (excluded from worker count): `2`
-- Peak implementation concurrency (parent included): `4`
-- Time-weighted average implementation concurrency: `3.270567`
-- Implementation turns observed: `21`
-- Native implementation context compactions: `6`
-- Candidate patch: `134809 bytes`, `129` changed files
+- Wall time：`4667.077s`
+- Parent thread：`019f6e39-5b6a-75e2-8c51-2c856bda9084`
+- Native implementation/audit subagents：`8`
+- Guardian approval sidecars（不计入 worker 数量）：`2`
+- 实现侧峰值并发（包含 parent）：`4`
+- 时间加权平均实现并发：`3.270567`
+- 可观察 implementation turns：`21`
+- Native implementation context compactions：`6`
+- Candidate patch：`134809 bytes`，`129` 个 changed files
 
-## Frozen Protocol
+## 冻结协议
 
-One standalone Codex parent used `gpt-5.6-sol` with `ultra` client semantics (`max` model reasoning plus proactive native multi-agent delegation). Hermes Runtime, Decision Provider, and evaluator feedback were absent during execution. The official evaluator ran once after the candidate patch was frozen.
+一个 standalone Codex parent 使用 `gpt-5.6-sol` 和 `ultra` client semantics（`max` model reasoning 加主动 native multi-agent delegation）。执行期间没有 Hermes Runtime、Decision Provider 或 evaluator feedback。Candidate patch 冻结后，official evaluator 运行一次。
 
-## Native Allocation
+## Native 任务分配
 
-| Agent | Depth | Duration | Compactions | Responsibility signal |
+| Agent | Depth | Duration | Compactions | 责任范围 |
 | --- | ---: | ---: | ---: | --- |
-| `plots_diff` (Faraday) | 1 | 989.144s | 0 | plots, diff, CLI behavior |
-| `tree_stream` (Copernicus) | 1 | 846.485s | 0 | tree streaming and pulling |
-| `stage_run` (Hooke) | 1 | 1206.997s | 0 | stage, run cache, dry-run |
-| `integration_audit` (Linnaeus) | 1 | 2850.005s | 1 | cross-area integration audit |
-| `unit_runner` (Hubble) | 1 | 551.482s | 0 | broad unit-test validation |
-| `compat_edges` (Parfit) | 1 | 2863.217s | 1 | compatibility and target normalization |
-| `targets_scan` (Helmholtz) | 2 | 295.008s | 1 | nested target API scan |
-| `pyupgrade_audit` (Beauvoir) | 1 | 994.571s | 1 | Python 3.6 migration audit |
+| `plots_diff` (Faraday) | 1 | 989.144s | 0 | plots、diff 与 CLI 行为 |
+| `tree_stream` (Copernicus) | 1 | 846.485s | 0 | tree streaming 与 pulling |
+| `stage_run` (Hooke) | 1 | 1206.997s | 0 | stage、run cache 与 dry-run |
+| `integration_audit` (Linnaeus) | 1 | 2850.005s | 1 | 跨领域集成审计 |
+| `unit_runner` (Hubble) | 1 | 551.482s | 0 | 大范围 unit-test 验证 |
+| `compat_edges` (Parfit) | 1 | 2863.217s | 1 | 兼容性与 target normalization |
+| `targets_scan` (Helmholtz) | 2 | 295.008s | 1 | 嵌套 target API 扫描 |
+| `pyupgrade_audit` (Beauvoir) | 1 | 994.571s | 1 | Python 3.6 migration 审计 |
 
-All native subagents shared the parent workspace. They were ephemeral Codex threads, not durable Hermes nodes or isolated worktrees. One depth-1 agent created the depth-2 `targets_scan` agent.
+所有 native subagents 共享 parent workspace。它们是 ephemeral Codex threads，不是 durable Hermes nodes 或隔离 worktrees。一个 depth-1 agent 创建了 depth-2 `targets_scan` agent。
 
-Observed collaboration calls: `followup_task=6`, `list_agents=25`, `send_message=49`, `spawn_agent=9`, `wait_agent=20`.
-The `9` spawn calls produced `8` sessions; `2` collaboration calls failed, including `2` thread-limit rejections. The parent retried or reused agents after slots opened.
+观察到的 collaboration calls：`followup_task=6`, `list_agents=25`, `send_message=49`, `spawn_agent=9`, `wait_agent=20`。
+共调用 `9` 次 `spawn_agent`，形成 `8` 个 subagent sessions；`2` 次 collaboration call 失败，其中 `2` 次因 thread limit 被拒绝。Slot 可用后，parent 进行了重试或复用。
 
-## Token And Cache Observation
+## Token 与 Cache 观测
 
-- Implementation input tokens: `162562815`
-- Cached input tokens: `156236288`
-- Implementation output tokens: `554232`
-- Reasoning output tokens: `248325`
-- Observed implementation cache ratio: `0.961083`
-- Guardian input/output tokens: `72355` / `267`
+- Implementation input tokens：`162562815`
+- Cached input tokens：`156236288`
+- Implementation output tokens：`554232`
+- Reasoning output tokens：`248325`
+- 可观察 implementation cache ratio：`0.961083`
+- Guardian input/output tokens：`72355` / `267`
 
-These are sums of each rollout's final cumulative token counters. Guardian usage is excluded from the implementation rows and separately identifiable in `run-report.json`; exact model-proxy request counts were not recoverable after the post-terminal collector failure.
+以上数据是各 rollout 最终 cumulative token counters 之和。Implementation 行不包含 guardian usage；后者可在 `run-report.json` 中单独识别。Terminal 后 collector failure 导致精确 model-proxy request count 无法恢复，但该可选遥测不影响 worker 行为分析。
 
-## Parent-Reported Terminal Summary
+## Parent 自报 Terminal Summary
 
-The following is the parent's terminal claim before any official evaluator access. The official `7/68` result above is authoritative for benchmark quality.
+以下内容是 parent 在接触 official evaluator 前的 terminal 自报。Benchmark 质量以上方 official `7/68` 结果为准。
 
 Implemented and integrated the full software evolution scope.
 
@@ -81,12 +81,12 @@ Limitations:
 
 No official evaluator result was available or claimed.
 
-## Measurement Boundary
+## 测量边界
 
-This is a single-run architecture baseline, not a model leaderboard result. Hidden tests, gold content, prior candidates, and evaluator diagnostics were not available to the native orchestra before termination.
+这是单次运行的架构 baseline，不是模型排行榜结果。Native orchestra 终止前无法访问 hidden tests、gold content、历史 candidates 或 evaluator diagnostics。
 
-## Architecture Reading
+## 架构解读
 
-The native parent used its orchestra actively: it filled the four-thread implementation budget, exchanged follow-up messages, reused completed slots, and delegated one nested scan. This is a real native-orchestra baseline rather than a disguised single-agent run.
+Native parent 确实主动使用了 orchestra：占满 4-thread implementation budget、交换 follow-up messages、复用已完成 slots，并委派一次 nested scan。因此这是真实的 native orchestra baseline，不是伪装成多 agent 的单 agent run。
 
-The one-shot hidden-oracle result was still only `7/68` FAIL_TO_PASS with `242/242` PASS_TO_PASS. This does not prove that Hermes orchestration is stronger: the earlier Kernel Large run received repeated official evaluator feedback, while this frozen Arm 1 received none. A fair Arm 2 comparison must use the same one-shot evaluator boundary and quality gate.
+但 one-shot hidden-oracle 结果仍只有 `7/68` FAIL_TO_PASS with `242/242` PASS_TO_PASS。这不能证明 Hermes orchestration 更强：此前 Kernel Large run 获得了多轮 official evaluator feedback，而冻结 Arm 1 没有。公平的 Arm 2 对照必须使用相同 evaluator boundary 和质量门禁。

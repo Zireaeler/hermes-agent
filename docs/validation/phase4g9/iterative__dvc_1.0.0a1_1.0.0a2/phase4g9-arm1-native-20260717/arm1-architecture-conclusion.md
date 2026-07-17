@@ -1,4 +1,4 @@
-# Phase 4G9 Arm 1: Native Orchestra Architecture Conclusion
+# Phase 4G9 Arm 1：Native Orchestra 架构结论
 
 ## 结论
 
@@ -28,14 +28,14 @@ Decision Provider 或运行中 evaluator feedback 的情况下，主动创建并
 
 ```text
 Codex parent / integrator
-├── plots_diff              plots, diff, CLI behavior
-├── tree_stream             tree streaming and pulling
-├── stage_run               stage, run cache, dry-run
-├── integration_audit       cross-area integration audit
-├── unit_runner             broad unit-test validation
-├── compat_edges            compatibility and target normalization
-│   └── targets_scan        nested target API scan
-└── pyupgrade_audit         Python 3.6 migration audit
+├── plots_diff              plots、diff 与 CLI 行为
+├── tree_stream             tree streaming 与 pulling
+├── stage_run               stage、run cache 与 dry-run
+├── integration_audit       跨领域集成审查
+├── unit_runner             广泛 unit-test 验证
+├── compat_edges            兼容性与 target normalization
+│   └── targets_scan        嵌套 target API 扫描
+└── pyupgrade_audit         Python 3.6 migration 审查
 ```
 
 旁路还有 2 个 guardian approval session。它们只审查危险操作，不属于实现

@@ -823,47 +823,47 @@ def render_execution_summary(report: dict[str, Any]) -> str:
     failed_calls = int(rollouts.get("failed_collaboration_call_count") or 0)
     thread_limit_rejections = int(rollouts.get("thread_limit_rejection_count") or 0)
     spawn_note = (
-        f"The `{calls.get('spawn_agent', 0)}` spawn calls produced `{len(subagents)}` sessions; "
-        f"`{failed_calls}` collaboration calls failed, including `{thread_limit_rejections}` "
-        "thread-limit rejections. The parent retried or reused agents after slots opened."
+        f"共调用 `{calls.get('spawn_agent', 0)}` 次 `spawn_agent`，形成 `{len(subagents)}` 个 "
+        f"subagent sessions；`{failed_calls}` 次 collaboration call 失败，其中 "
+        f"`{thread_limit_rejections}` 次因 thread limit 被拒绝。Slot 可用后，parent 进行了重试或复用。"
         if failed_calls else
-        f"The `{calls.get('spawn_agent', 0)}` spawn calls produced `{len(subagents)}` sessions."
+        f"共调用 `{calls.get('spawn_agent', 0)}` 次 `spawn_agent`，形成 `{len(subagents)}` 个 sessions。"
     )
     lines = [
-        "# Phase 4G9 Arm 1: Native Codex Orchestra",
+        "# Phase 4G9 Arm 1：Native Codex Orchestra",
         "",
-        "## Result",
+        "## 结果",
         "",
-        f"- Official resolved: `{bool(evaluator.get('resolved'))}`",
+        f"- Official resolved：`{bool(evaluator.get('resolved'))}`",
         f"- FAIL_TO_PASS: `{fail.get('passed', 0)}/{fail.get('total', 0)}`",
         f"- PASS_TO_PASS: `{p2p.get('passed', 0)}/{p2p.get('total', 0)}`",
-        f"- Wall time: `{report.get('wall_time_seconds')}s`",
-        f"- Parent thread: `{worker.get('parent_thread_id') or 'unavailable'}`",
-        f"- Native implementation/audit subagents: `{len(subagents)}`",
-        f"- Guardian approval sidecars (excluded from worker count): `{len(guardians)}`",
-        f"- Peak implementation concurrency (parent included): "
+        f"- Wall time：`{report.get('wall_time_seconds')}s`",
+        f"- Parent thread：`{worker.get('parent_thread_id') or 'unavailable'}`",
+        f"- Native implementation/audit subagents：`{len(subagents)}`",
+        f"- Guardian approval sidecars（不计入 worker 数量）：`{len(guardians)}`",
+        f"- 实现侧峰值并发（包含 parent）："
         f"`{rollouts.get('peak_implementation_concurrency', 0)}`",
-        f"- Time-weighted average implementation concurrency: "
+        f"- 时间加权平均实现并发："
         f"`{concurrency.get('average_concurrency', 0)}`",
-        f"- Implementation turns observed: `{rollouts.get('implementation_turn_count', 0)}`",
-        f"- Native implementation context compactions: "
+        f"- 可观察 implementation turns：`{rollouts.get('implementation_turn_count', 0)}`",
+        f"- Native implementation context compactions："
         f"`{rollouts.get('implementation_compaction_count', 0)}`",
-        f"- Candidate patch: `{report['candidate']['patch_bytes']} bytes`, "
-        f"`{len(report['candidate']['changed_files'])}` changed files",
+        f"- Candidate patch：`{report['candidate']['patch_bytes']} bytes`，"
+        f"`{len(report['candidate']['changed_files'])}` 个 changed files",
         "",
-        "## Frozen Protocol",
+        "## 冻结协议",
         "",
-        "One standalone Codex parent used `gpt-5.6-sol` with `ultra` client semantics "
-        "(`max` model reasoning plus proactive native multi-agent delegation). Hermes Runtime, "
-        "Decision Provider, and evaluator feedback were absent during execution. The official "
-        "evaluator ran once after the candidate patch was frozen.",
+        "一个 standalone Codex parent 使用 `gpt-5.6-sol` 和 `ultra` client semantics"
+        "（`max` model reasoning 加主动 native multi-agent delegation）。执行期间没有 "
+        "Hermes Runtime、Decision Provider 或 evaluator feedback。Candidate patch 冻结后，"
+        "official evaluator 运行一次。",
         "",
-        "## Native Allocation",
+        "## Native 任务分配",
         "",
     ]
     if subagents:
         lines.extend([
-            "| Agent | Depth | Duration | Compactions | Responsibility signal |",
+            "| Agent | Depth | Duration | Compactions | 责任范围 |",
             "| --- | ---: | ---: | ---: | --- |",
         ])
         for session in subagents:
@@ -876,58 +876,56 @@ def render_execution_summary(report: dict[str, Any]) -> str:
                 f"{_responsibility_label(task_name)} |"
             )
     else:
-        lines.append("The parent created no observable native subagents.")
+        lines.append("Parent 没有创建可观察的 native subagent。")
     lines.extend([
         "",
-        "All native subagents shared the parent workspace. They were ephemeral Codex threads, not "
-        "durable Hermes nodes or isolated worktrees. One depth-1 agent created the depth-2 "
-        "`targets_scan` agent.",
+        "所有 native subagents 共享 parent workspace。它们是 ephemeral Codex threads，"
+        "不是 durable Hermes nodes 或隔离 worktrees。一个 depth-1 agent 创建了 depth-2 "
+        "`targets_scan` agent。",
         "",
-        "Observed collaboration calls: " + ", ".join(
+        "观察到的 collaboration calls：" + ", ".join(
             f"`{name}={count}`" for name, count in sorted(calls.items())
-        ) + ".",
+        ) + "。",
         spawn_note,
         "",
-        "## Token And Cache Observation",
+        "## Token 与 Cache 观测",
         "",
-        f"- Implementation input tokens: `{usage.get('input_tokens', 0)}`",
-        f"- Cached input tokens: `{usage.get('cached_input_tokens', 0)}`",
-        f"- Implementation output tokens: `{usage.get('output_tokens', 0)}`",
-        f"- Reasoning output tokens: `{usage.get('reasoning_output_tokens', 0)}`",
-        f"- Observed implementation cache ratio: "
+        f"- Implementation input tokens：`{usage.get('input_tokens', 0)}`",
+        f"- Cached input tokens：`{usage.get('cached_input_tokens', 0)}`",
+        f"- Implementation output tokens：`{usage.get('output_tokens', 0)}`",
+        f"- Reasoning output tokens：`{usage.get('reasoning_output_tokens', 0)}`",
+        f"- 可观察 implementation cache ratio："
         f"`{rollouts.get('implementation_cache_hit_ratio')}`",
-        f"- Guardian input/output tokens: `{guardian_usage.get('input_tokens', 0)}` / "
+        f"- Guardian input/output tokens：`{guardian_usage.get('input_tokens', 0)}` / "
         f"`{guardian_usage.get('output_tokens', 0)}`",
         "",
-        "These are sums of each rollout's final cumulative token counters. Guardian usage is "
-        "excluded from the implementation rows and separately identifiable in `run-report.json`; exact "
-        "model-proxy request counts were not recoverable after the post-terminal collector failure.",
+        "以上数据是各 rollout 最终 cumulative token counters 之和。Implementation 行不包含 "
+        "guardian usage；后者可在 `run-report.json` 中单独识别。Terminal 后 collector failure "
+        "导致精确 model-proxy request count 无法恢复，但该可选遥测不影响 worker 行为分析。",
         "",
-        "## Parent-Reported Terminal Summary",
+        "## Parent 自报 Terminal Summary",
         "",
-        "The following is the parent's terminal claim before any official evaluator access. The "
-        "official `7/68` result above is authoritative for benchmark quality.",
+        "以下内容是 parent 在接触 official evaluator 前的 terminal 自报。Benchmark 质量以"
+        "上方 official `7/68` 结果为准。",
         "",
-        str(worker.get("terminal_message") or "No terminal parent message was captured."),
+        str(worker.get("terminal_message") or "没有捕获到 parent terminal message。"),
         "",
-        "## Measurement Boundary",
+        "## 测量边界",
         "",
-        "This is a single-run architecture baseline, not a model leaderboard result. Hidden tests, "
-        "gold content, prior candidates, and evaluator diagnostics were not available to the native "
-        "orchestra before termination.",
+        "这是单次运行的架构 baseline，不是模型排行榜结果。Native orchestra 终止前无法访问 "
+        "hidden tests、gold content、历史 candidates 或 evaluator diagnostics。",
         "",
-        "## Architecture Reading",
+        "## 架构解读",
         "",
-        "The native parent used its orchestra actively: it filled the four-thread implementation "
-        "budget, exchanged follow-up messages, reused completed slots, and delegated one nested scan. "
-        "This is a real native-orchestra baseline rather than a disguised single-agent run.",
+        "Native parent 确实主动使用了 orchestra：占满 4-thread implementation budget、交换 "
+        "follow-up messages、复用已完成 slots，并委派一次 nested scan。因此这是真实的 native "
+        "orchestra baseline，不是伪装成多 agent 的单 agent run。",
         "",
-        "The one-shot hidden-oracle result was still only "
+        "但 one-shot hidden-oracle 结果仍只有 "
         f"`{fail.get('passed', 0)}/{fail.get('total', 0)}` FAIL_TO_PASS with "
-        f"`{p2p.get('passed', 0)}/{p2p.get('total', 0)}` PASS_TO_PASS. This does not prove that "
-        "Hermes orchestration is stronger: the earlier Kernel Large run received repeated official "
-        "evaluator feedback, while this frozen Arm 1 received none. A fair Arm 2 comparison must use "
-        "the same one-shot evaluator boundary and quality gate.",
+        f"`{p2p.get('passed', 0)}/{p2p.get('total', 0)}` PASS_TO_PASS。这不能证明 Hermes "
+        "orchestration 更强：此前 Kernel Large run 获得了多轮 official evaluator feedback，"
+        "而冻结 Arm 1 没有。公平的 Arm 2 对照必须使用相同 evaluator boundary 和质量门禁。",
         "",
     ])
     return "\n".join(lines)
@@ -1137,14 +1135,14 @@ def _merge_rollout_identity(event_summary: dict[str, Any], rollout_summary: dict
 
 def _responsibility_label(task_name: str) -> str:
     labels = {
-        "plots_diff": "plots, diff, CLI behavior",
-        "tree_stream": "tree streaming and pulling",
-        "stage_run": "stage, run cache, dry-run",
-        "integration_audit": "cross-area integration audit",
-        "unit_runner": "broad unit-test validation",
-        "compat_edges": "compatibility and target normalization",
-        "targets_scan": "nested target API scan",
-        "pyupgrade_audit": "Python 3.6 migration audit",
+        "plots_diff": "plots、diff 与 CLI 行为",
+        "tree_stream": "tree streaming 与 pulling",
+        "stage_run": "stage、run cache 与 dry-run",
+        "integration_audit": "跨领域集成审计",
+        "unit_runner": "大范围 unit-test 验证",
+        "compat_edges": "兼容性与 target normalization",
+        "targets_scan": "嵌套 target API 扫描",
+        "pyupgrade_audit": "Python 3.6 migration 审计",
     }
     return labels.get(task_name, task_name.replace("_", " "))
 

@@ -313,22 +313,22 @@ def _verify_manifest_payload(root: Path, manifest: dict[str, Any]) -> None:
 
 def _write_catalog(path: Path, manifest: dict[str, Any]) -> None:
     lines = [
-        f"# Validation Artifacts: {manifest['run_id']}",
+        f"# 真实验证 Artifacts：{manifest['run_id']}",
         "",
-        f"- Phase: `{manifest['phase']}`",
-        f"- Instance: `{manifest['instance_id']}`",
-        f"- Source run: `{manifest['source_run_root']}`",
-        f"- Status: `{manifest['status']}`",
-        f"- Files: `{manifest['file_count']}`",
-        f"- Bytes: `{manifest['total_bytes']}`",
-        f"- Redaction: `{manifest['redaction_policy']}`",
+        f"- Phase：`{manifest['phase']}`",
+        f"- Instance：`{manifest['instance_id']}`",
+        f"- Source run：`{manifest['source_run_root']}`",
+        f"- Status：`{manifest['status']}`",
+        f"- Files：`{manifest['file_count']}`",
+        f"- Bytes：`{manifest['total_bytes']}`",
+        f"- Redaction：`{manifest['redaction_policy']}`",
         "",
-        "## Entries",
+        "## 已归档 Entries",
         "",
     ]
     lines.extend(f"- `{name}`" for name in manifest.get("selected_entries") or [])
     if manifest.get("omitted_files"):
-        lines.extend(["", "## Omitted", ""])
+        lines.extend(["", "## 省略文件", ""])
         lines.extend(
             f"- `{item['path']}`: {item['reason']}"
             for item in manifest["omitted_files"]
