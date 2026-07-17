@@ -276,6 +276,11 @@ Arm 2 中允许的主要理由：
 所有 child 从 assessment 时固定的 base revision 创建。不得把 sibling 的未集成改动预先复制进
 child workspace。
 
+当 supervisor 与 worker 使用不同 OS 身份时，worktree 创建、Git 状态读取和 contribution
+freeze 必须使用 orchestration policy 声明的 `workspace_owner`。Worktree 根目录、工作文件及
+共享 `.git/worktrees/<node-key>` metadata 必须属于同一 owner；不得依赖全局
+`safe.directory=*` 绕过 ownership 边界。
+
 Child terminal receipt 后，Runtime 本地冻结：
 
 - binary patch；
@@ -311,6 +316,10 @@ Primary integration context 必须列出每个 contribution，不只给 child su
 - `rejected_contributions`；
 - 每项 decision 的理由；
 - merged candidate revision。
+
+稳定归档必须保留 frozen contribution、hash、receipt、session 和 DB evidence。完整 child
+worktree 只属于可由 base revision 与 contribution 重建的运行缓存，在 verified artifact
+manifest 生成后允许清理，不应作为长期原始证据复制。
 
 ## 9. Session Continuity
 

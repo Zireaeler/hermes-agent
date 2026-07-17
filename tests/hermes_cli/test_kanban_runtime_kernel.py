@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 
@@ -98,6 +99,103 @@ def _git(workspace: Path, *args: str) -> str:
         stderr=subprocess.PIPE,
         check=True,
     ).stdout.strip()
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or os.geteuid() != 0,
+    reason="requires a root supervisor and a distinct POSIX workspace owner",
+)
+def test_isolated_worktree_git_lifecycle_uses_declared_workspace_owner(
+    conn,
+    tmp_path,
+):
+    owner = {"uid": 65534, "gid": 65534}
+    policy = {
+        "workspace_owner": owner,
+        "worktree_root": str(tmp_path / "worktrees"),
+        "contribution_root": str(tmp_path / "contributions"),
+    }
+    for path in (tmp_path.parent.parent, tmp_path.parent, tmp_path):
+        os.chmod(path, 0o711)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "feature.py").write_text("value = 1\n", encoding="utf-8")
+    _git(workspace, "init")
+    _git(workspace, "config", "user.email", "runtime@example.invalid")
+    _git(workspace, "config", "user.name", "Runtime Test")
+    _git(workspace, "add", ".")
+    _git(workspace, "commit", "-m", "base")
+    base_revision = _git(workspace, "rev-parse", "HEAD")
+    policy["base_revision"] = base_revision
+    rk._apply_workspace_owner(workspace, policy)
+
+    job_id = rk.create_runtime_job(
+        conn,
+        _root_task(conn),
+        "exercise owner-isolated worktree lifecycle",
+        workspace_path=str(workspace),
+        goal_items=[{
+            "item_key": "owner-result",
+            "description": "owner-isolated contribution exists",
+            "required": True,
+            "verifier_required": False,
+        }],
+        initialization_mode="fixture",
+        runtime_metadata={"orchestration_policy": policy},
+    )
+    node = _node(conn, job_id, "understand-scope")
+    constraints = json.loads(node["constraints_json"])
+    constraints["contract"] = {
+        **_contract("feature.py"),
+        "workspace_mode": "isolated_worktree",
+    }
+    metadata = json.loads(node["metadata_json"])
+    metadata.update({
+        "non_authoritative_contribution": True,
+        "contribution_to_node_key": "integration-owner",
+    })
+    conn.execute(
+        "UPDATE execution_nodes SET constraints_json = ?, metadata_json = ? WHERE id = ?",
+        (json.dumps(constraints), json.dumps(metadata), node["id"]),
+    )
+
+    task_id = rk.materialize_runtime_node(
+        conn,
+        dict(_node(conn, job_id, "understand-scope")),
+    )
+    task = kb.get_task(conn, task_id)
+    worktree = Path(task.workspace_path)
+    assert worktree != workspace
+    assert worktree.stat().st_uid == owner["uid"]
+    assert worktree.stat().st_gid == owner["gid"]
+    gitdir = Path(
+        (worktree / ".git").read_text(encoding="utf-8").strip().removeprefix("gitdir: ")
+    )
+    assert gitdir.stat().st_uid == owner["uid"]
+    assert gitdir.stat().st_gid == owner["gid"]
+
+    changed = worktree / "feature.py"
+    changed.write_text("value = 2\n", encoding="utf-8")
+    os.chown(changed, owner["uid"], owner["gid"])
+    node = _node(conn, job_id, "understand-scope")
+    _complete_node(
+        conn,
+        node,
+        {
+            "verdict": "succeeded",
+            "summary": "owner-isolated change complete",
+            "claimed_goal_items": ["owner-result"],
+            "changed_files": ["feature.py"],
+            "verification": {"passed": True, "summary": "focused test passed"},
+        },
+    )
+    assert rk.ingest_runtime_node_evidence(conn, node["id"])
+    artifact = conn.execute(
+        "SELECT * FROM node_artifacts WHERE node_id = ?",
+        (node["id"],),
+    ).fetchone()
+    assert artifact is not None
+    assert Path(artifact["path_or_ref"]).read_text(encoding="utf-8")
 
 
 def _complete_node(conn, node, evidence: dict):

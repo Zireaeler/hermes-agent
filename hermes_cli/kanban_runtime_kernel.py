@@ -6888,14 +6888,77 @@ def supervise_runtime_jobs_once(
     }
 
 
-def _run_git_command(workspace: Path, args: list[str]) -> str:
-    completed = subprocess.run(
+def _workspace_owner_ids(policy: dict[str, Any]) -> Optional[tuple[int, int]]:
+    owner = policy.get("workspace_owner")
+    if not isinstance(owner, dict):
+        return None
+    try:
+        uid = int(owner["uid"])
+        gid = int(owner["gid"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if uid < 0 or gid < 0:
+        return None
+    return uid, gid
+
+
+def _git_process_kwargs(
+    owner_policy: Optional[dict[str, Any]],
+) -> dict[str, Any]:
+    if not owner_policy:
+        return {}
+    owner = _workspace_owner_ids(owner_policy)
+    if owner is None or os.name != "posix":
+        return {}
+    uid, gid = owner
+    current_uid = os.geteuid()
+    if current_uid not in {0, uid}:
+        raise RuntimeError(
+            "runtime supervisor cannot execute Git as the declared workspace owner"
+        )
+    if current_uid == uid:
+        return {}
+    env = dict(os.environ)
+    env.update({
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "HOME": "/nonexistent",
+        "XDG_CONFIG_HOME": "/nonexistent",
+    })
+    return {
+        "env": env,
+        "user": uid,
+        "group": gid,
+        "extra_groups": [],
+    }
+
+
+def _run_git_process(
+    workspace: Path,
+    args: list[str],
+    *,
+    owner_policy: Optional[dict[str, Any]] = None,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
         ["git", *args],
         cwd=workspace,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
+        **_git_process_kwargs(owner_policy),
+    )
+
+
+def _run_git_command(
+    workspace: Path,
+    args: list[str],
+    *,
+    owner_policy: Optional[dict[str, Any]] = None,
+) -> str:
+    completed = _run_git_process(
+        workspace,
+        args,
+        owner_policy=owner_policy,
     )
     if completed.returncode != 0:
         detail = completed.stderr.strip() or completed.stdout.strip()
@@ -6909,14 +6972,10 @@ def _safe_workspace_component(value: str) -> str:
 
 
 def _apply_workspace_owner(path: Path, policy: dict[str, Any]) -> None:
-    owner = policy.get("workspace_owner")
-    if not isinstance(owner, dict):
+    owner = _workspace_owner_ids(policy)
+    if owner is None:
         return
-    try:
-        uid = int(owner["uid"])
-        gid = int(owner["gid"])
-    except (KeyError, TypeError, ValueError):
-        return
+    uid, gid = owner
     for root, dirs, files in os.walk(path):
         os.chown(root, uid, gid)
         for name in dirs:
@@ -6950,7 +7009,11 @@ def _prepare_runtime_node_workspace(
     policy = policy if isinstance(policy, dict) else {}
     base_revision = str(policy.get("base_revision") or "").removeprefix("git:")
     if not base_revision:
-        base_revision = _run_git_command(job_workspace, ["rev-parse", "HEAD"]).strip()
+        base_revision = _run_git_command(
+            job_workspace,
+            ["rev-parse", "HEAD"],
+            owner_policy=policy,
+        ).strip()
     worktree_root = Path(
         str(
             policy.get("worktree_root")
@@ -6958,11 +7021,16 @@ def _prepare_runtime_node_workspace(
         )
     ).expanduser().resolve()
     worktree_root.mkdir(parents=True, exist_ok=True)
+    _apply_workspace_owner(worktree_root, policy)
     path = worktree_root / _safe_workspace_component(str(node["node_key"]))
     if path.exists():
         if not (path / ".git").exists():
             raise RuntimeError(f"runtime worktree path already exists: {path}")
-        observed = _run_git_command(path, ["rev-parse", "HEAD"]).strip()
+        observed = _run_git_command(
+            path,
+            ["rev-parse", "HEAD"],
+            owner_policy=policy,
+        ).strip()
         if observed != base_revision:
             raise RuntimeError(
                 f"runtime worktree base mismatch for {node['node_key']}: {observed}"
@@ -6971,6 +7039,7 @@ def _prepare_runtime_node_workspace(
         _run_git_command(
             job_workspace,
             ["worktree", "add", "--detach", str(path), base_revision],
+            owner_policy=policy,
         )
     _apply_workspace_owner(path, policy)
     metadata = _loads(node.get("metadata_json"))
@@ -7536,8 +7605,17 @@ def _apply_declared_write_scope_check(node: dict[str, Any], evidence: dict[str, 
     return result, violations, False
 
 
-def _collect_runtime_workspace_patch(workspace: Path, base_revision: str) -> str:
-    head = _run_git_command(workspace, ["rev-parse", "HEAD"]).strip()
+def _collect_runtime_workspace_patch(
+    workspace: Path,
+    base_revision: str,
+    *,
+    owner_policy: Optional[dict[str, Any]] = None,
+) -> str:
+    head = _run_git_command(
+        workspace,
+        ["rev-parse", "HEAD"],
+        owner_policy=owner_policy,
+    ).strip()
     if head != base_revision:
         raise RuntimeError(
             f"runtime contribution HEAD mismatch: expected {base_revision}, got {head}"
@@ -7545,20 +7623,19 @@ def _collect_runtime_workspace_patch(workspace: Path, base_revision: str) -> str
     tracked = _run_git_command(
         workspace,
         ["diff", "--binary", "--no-ext-diff", base_revision],
+        owner_policy=owner_policy,
     )
     untracked = _run_git_command(
         workspace,
         ["ls-files", "--others", "--exclude-standard", "-z"],
+        owner_policy=owner_policy,
     )
     parts = [tracked] if tracked else []
     for relative in [value for value in untracked.split("\0") if value]:
-        completed = subprocess.run(
-            ["git", "diff", "--binary", "--no-index", "--", "/dev/null", relative],
-            cwd=workspace,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
+        completed = _run_git_process(
+            workspace,
+            ["diff", "--binary", "--no-index", "--", "/dev/null", relative],
+            owner_policy=owner_policy,
         )
         if completed.returncode not in {0, 1}:
             detail = completed.stderr.strip() or completed.stdout.strip()
@@ -7602,11 +7679,15 @@ def _freeze_runtime_node_contribution(
     base_revision = str(workspace_info.get("base_revision") or "")
     if not workspace.is_dir() or not base_revision:
         raise RuntimeError("runtime contribution workspace metadata is incomplete")
-    patch = _collect_runtime_workspace_patch(workspace, base_revision)
-    patch_sha = hashlib.sha256(patch.encode("utf-8")).hexdigest()
     job_metadata = _loads(job.get("metadata_json"))
     policy = job_metadata.get("orchestration_policy")
     policy = policy if isinstance(policy, dict) else {}
+    patch = _collect_runtime_workspace_patch(
+        workspace,
+        base_revision,
+        owner_policy=policy,
+    )
+    patch_sha = hashlib.sha256(patch.encode("utf-8")).hexdigest()
     root = Path(
         str(
             policy.get("contribution_root")

@@ -313,7 +313,6 @@ def test_run_arm2_freezes_real_policy_and_archives_orchestra_evidence(tmp_path, 
         "codex-homes",
         "service",
         "runtime-contributions",
-        "runtime-worktrees",
     }
     assert report["artifact_archive"]["status"] == "verified"
     assert (run_root / "reports" / "arm2-orchestration.json").is_file()

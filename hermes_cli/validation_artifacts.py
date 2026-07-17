@@ -27,6 +27,7 @@ RAW_ENTRY_ALLOWLIST = {
     "evaluator-runs",
     "logs",
     "reports",
+    "runtime-contributions",
     "runner-state.json",
 }
 REBUILDABLE_ENTRY_ALLOWLIST = {
@@ -36,6 +37,7 @@ REBUILDABLE_ENTRY_ALLOWLIST = {
     "toolchain",
     "cache",
     "caches",
+    "runtime-worktrees",
 }
 
 

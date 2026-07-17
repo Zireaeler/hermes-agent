@@ -351,11 +351,8 @@ def run_arm2(
         "codex-homes",
         "service",
     }
-    expected_entries.update(
-        name
-        for name in ("runtime-contributions", "runtime-worktrees")
-        if (actual_root / name).is_dir()
-    )
+    if (actual_root / "runtime-contributions").is_dir():
+        expected_entries.add("runtime-contributions")
     archive = validation_artifacts.archive_validation_run(
         actual_root,
         artifact_root=artifact_root,
