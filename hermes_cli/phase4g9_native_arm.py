@@ -374,8 +374,6 @@ def run_native_arm1(
         )
         argv = network.wrap_argv([
             shutil.which("codex") or "codex",
-            "exec",
-            "--json",
             "--strict-config",
             "--sandbox",
             "danger-full-access",
@@ -383,6 +381,8 @@ def run_native_arm1(
             "on-request",
             "--cd",
             str(paths["workspace"]),
+            "exec",
+            "--json",
             "-",
         ])
         env = os.environ.copy()
@@ -420,6 +420,11 @@ def run_native_arm1(
         model_transport = network.transport_audit()
 
     event_summary = summarize_exec_events(raw_lines)
+    if not event_summary.get("parent_thread_id"):
+        raise RuntimeError(
+            "native Codex did not start a thread; the run is infrastructure-invalid and was not evaluated"
+        )
+    _reclaim_workspace(paths["workspace"])
     rollout_summary = summarize_rollout_sessions(
         paths["codex_home"],
         parent_thread_id=event_summary.get("parent_thread_id"),
@@ -587,6 +592,15 @@ def _changed_files(workspace: Path) -> list[str]:
         check=True,
     )
     return sorted({line[3:] for line in result.stdout.splitlines() if len(line) >= 4})
+
+
+def _reclaim_workspace(workspace: Path) -> None:
+    for root, directories, files in os.walk(workspace):
+        os.chown(root, 0, 0)
+        for name in directories:
+            os.chown(Path(root) / name, 0, 0)
+        for name in files:
+            os.chown(Path(root) / name, 0, 0)
 
 
 def _codex_version() -> str:
