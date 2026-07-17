@@ -868,19 +868,27 @@ def _handle_codex_json_line(
     task_id: str,
     lane: str,
     run_id: Optional[int],
-) -> tuple[bool, str, Optional[str], Optional[str]]:
+) -> tuple[bool, str, Optional[str], Optional[str], Optional[str]]:
     try:
         event = json.loads(line)
     except json.JSONDecodeError:
-        return False, line, None, None
+        return False, line, None, None, None
     if not isinstance(event, dict) or not isinstance(event.get("type"), str):
-        return False, line, None, None
+        return False, line, None, None, None
     payload = _codex_json_event_payload(event, lane=lane, run_id=run_id)
     _record_event(task_id, "worker_codex_event", payload, run_id=run_id)
     text = _codex_json_event_text(event)
     text += _codex_json_event_progress_text(event)
     thread_id = str(event["thread_id"]) if event.get("thread_id") else None
-    return True, text, thread_id, str(event["type"])
+    item = event.get("item")
+    runtime_receipt_source = None
+    if (
+        isinstance(item, dict)
+        and item.get("type") == "agent_message"
+        and _extract_runtime_receipt(str(item.get("text") or "")) is not None
+    ):
+        runtime_receipt_source = str(item["text"])
+    return True, text, thread_id, str(event["type"]), runtime_receipt_source
 
 
 def _heartbeat(
@@ -2014,6 +2022,7 @@ def run_codex_worker(
         resume_identity_mismatch = False
         session_event_recorded = False
         terminal_event_at: Optional[float] = None
+        runtime_receipt_source = ""
         while True:
             try:
                 item = q.get(timeout=0.1)
@@ -2033,12 +2042,15 @@ def run_codex_worker(
                         progress_source,
                         observed_session_id,
                         observed_event_type,
+                        observed_runtime_receipt_source,
                     ) = _handle_codex_json_line(
                         item,
                         task_id=task_id,
                         lane=lane,
                         run_id=run_id,
                     )
+                    if observed_runtime_receipt_source:
+                        runtime_receipt_source = observed_runtime_receipt_source
                 if observed_event_type in {"turn.completed", "turn.failed"}:
                     terminal_event_at = time.monotonic()
                 if observed_session_id and not session_event_recorded:
@@ -2146,6 +2158,9 @@ def run_codex_worker(
         reader.join(timeout=1)
         exit_code = proc.returncode
         output_tail = tail.text()
+        metadata_output = output_tail
+        if runtime_receipt_source and runtime_receipt_source not in output_tail:
+            metadata_output = runtime_receipt_source + "\n" + output_tail
         meta = _metadata(
             lane=lane,
             task_id=task_id,
@@ -2156,7 +2171,7 @@ def run_codex_worker(
             model=model,
             exit_code=exit_code,
             timed_out=timed_out,
-            output_tail=output_tail,
+            output_tail=metadata_output,
             json_events=effective_json_events,
             execution_mode=execution_mode,
             backend_session_id=backend_session_id,

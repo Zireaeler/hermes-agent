@@ -1633,6 +1633,83 @@ def test_codex_json_events_write_task_events_and_feed_progress_metadata(
     assert "ignored_future_field" not in snapshot_events[4]["payload"]["usage"]
 
 
+def test_codex_json_events_preserve_large_runtime_structure_checkpoint(
+    kanban_home,
+    tmp_path,
+    monkeypatch,
+):
+    old_path = os.environ.get("PATH", "")
+    checkpoint = {
+        "schema": "runtime_worker_structure_checkpoint_v1",
+        "kind": "early_structure_assessment",
+        "recommendation": "expand",
+        "summary": "three evidence-backed responsibilities",
+        "inspected_scope": ["src", "tests"],
+        "repository_facts": [{
+            "fact": "large but valid evidence " + ("x" * 12_000),
+            "evidence_refs": ["workspace:path:src"],
+        }],
+        "proposed_nodes": [
+            {
+                "node_key": f"child-{index}",
+                "outcome": f"responsibility {index}",
+                "acceptance_criteria": ["focused tests pass"],
+                "declared_write_scope": [f"src/{index}/**"],
+                "requested_capabilities": ["workspace_write"],
+            }
+            for index in range(2)
+        ],
+        "integration_owner_node_key": "primary",
+        "shared_integration_scope": ["src/__init__.py"],
+        "risks": [],
+        "worker_session_should_resume": True,
+        "changed_files": [],
+    }
+    message = "```json\n" + json.dumps(checkpoint) + "\n```"
+    assert len(message.encode("utf-8")) > cw.CODEX_OUTPUT_TAIL_BYTES
+    body = "\n".join(
+        json.dumps(event)
+        for event in [
+            {"type": "thread.started", "thread_id": "thread-large-checkpoint"},
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "item-checkpoint",
+                    "type": "agent_message",
+                    "text": message,
+                },
+            },
+            {"type": "turn.completed", "usage": {"input_tokens": 1}},
+        ]
+    ) + "\n"
+    fake_bin = _make_fake_codex(tmp_path, body)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + old_path)
+    with kb.connect() as conn:
+        tid, task = _claim_for_codex(conn)
+        run_id = task.current_run_id
+
+    assert run_codex_worker(
+        task_id=tid,
+        lane="codex-runtime",
+        workspace=os.getcwd(),
+        sandbox="workspace-write",
+        approval="never",
+        run_id=run_id,
+        claim_lock=task.claim_lock,
+        heartbeat_interval=0.01,
+        json_events=True,
+    ) == 0
+
+    with kb.connect() as conn:
+        run = kb.latest_run(conn, tid)
+    runtime_receipt = run.metadata["runtime_receipt"]
+    assert runtime_receipt["schema"] == checkpoint["schema"]
+    assert runtime_receipt["recommendation"] == "expand"
+    assert runtime_receipt["repository_facts"] == checkpoint["repository_facts"]
+    assert runtime_receipt["proposed_nodes"] == checkpoint["proposed_nodes"]
+    assert runtime_receipt["changed_files"] == []
+
+
 def test_codex_resume_records_resumed_session_and_receipt(
     kanban_home, tmp_path, monkeypatch,
 ):
