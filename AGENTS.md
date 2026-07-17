@@ -23,6 +23,7 @@ When working on branch `feature-kanban-runtime-kernel`, treat
 `docs/kanban-runtime-kernel-phase4g7.md` and
 `docs/kanban-runtime-kernel-phase4g8.md` and
 `docs/kanban-runtime-kernel-phase4g9.md` and
+`docs/kanban-runtime-kernel-phase4g9-iterative.md` and
 `docs/kanban-runtime-validation-artifact-retention.md` as binding design
 constraints, not background reading. If implementation details conflict with
 those documents, update the relevant design document first or stop and ask for

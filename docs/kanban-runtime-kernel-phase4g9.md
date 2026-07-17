@@ -2,6 +2,10 @@
 
 # Native Orchestra 对照实验
 
+> 本文记录历史 one-shot Arm 1 协议和 preliminary run。它不再作为 native ultra
+> orchestra 的完整 capability baseline。正式 iterative Arm 1 及未来 Arm 2 的公平
+> 对照规则见 [Phase 4G9 Iterative Native Ultra Arm 1](kanban-runtime-kernel-phase4g9-iterative.md)。
+
 ## 1. 目的
 
 Phase 4G8 已证明 Runtime Kernel 能够在真实长周期 SWE-EVO 任务中保持执行连续性、

@@ -19,13 +19,15 @@ import uuid
 from agent.redact import redact_sensitive_text
 from hermes_cli import kanban_runtime_phase4g8 as p4g8
 from hermes_cli import kanban_runtime_phase4g8_run as p4g8_run
+from hermes_cli import kanban_runtime_kernel as rk
 from hermes_cli import phase4g8_swe_evo as swe_evo
 from hermes_cli import validation_artifacts
 
 
-ARM1_REPORT_SCHEMA = "hermes_phase4g9_native_arm1_v1"
+LEGACY_ARM1_REPORT_SCHEMA = "hermes_phase4g9_native_arm1_v1"
+ARM1_REPORT_SCHEMA = "hermes_phase4g9_native_arm1_iterative_v2"
 ARM1_EVENT_SCHEMA = "hermes_phase4g9_native_events_v1"
-ARM1_PROTOCOL_VERSION = "phase4g9-native-arm1-v1"
+ARM1_PROTOCOL_VERSION = "phase4g9-native-arm1-iterative-v2"
 FROZEN_INSTANCE_ID = "iterative__dvc_1.0.0a1_1.0.0a2"
 FROZEN_BASE_COMMIT = "fc42ca721c25bdd24875c999e37fb4f589ecd63c"
 FROZEN_MODEL = "gpt-5.6-sol"
@@ -33,6 +35,8 @@ FROZEN_REASONING_EFFORT = "ultra"
 FROZEN_CONTEXT_WINDOW = 353_400
 FROZEN_AUTO_COMPACT_LIMIT = 230_000
 FROZEN_MAX_THREADS = 4
+DEFAULT_TOTAL_WALL_SECONDS = 86_400
+DEFAULT_FEEDBACK_EXTRACTION_RETRIES = 3
 WORKER_UID = 65534
 WORKER_GID = 65534
 
@@ -177,15 +181,125 @@ Integrity constraints:
 - Do not seek, fetch, infer from, or inspect the target release implementation, gold patch,
   protected tests, evaluator sources, historical benchmark candidates, or prior run transcripts.
 - Do not contact external networks from shell tools.
-- No official evaluator result will be provided during execution.
+- No official evaluator result is available during the initial turn. Later turns receive only
+  source-safe diagnostics from the immediately preceding frozen candidate.
 - Do not weaken the execution isolation or modify files outside this workspace.
 - Your final response must summarize the approach, subagent integration, changed areas, tests run,
-  known limitations, and any blocker. Do not claim official benchmark success.
+  known limitations, and any blocker. Do not claim official benchmark success. After this initial
+  turn, the harness may resume this exact parent thread with official evaluator diagnostics. Treat
+  those diagnostics as the next debugging input, continue to own the same complete outcome, and
+  keep using native subagents when useful.
 
 Software Requirements Specification:
 
 {srs}
 """
+
+
+def build_evaluator_feedback_prompt(
+    evaluator: dict[str, Any],
+    *,
+    candidate_round: int,
+    best_round: int,
+    best_fail_to_pass: int,
+    best_pass_to_pass: int,
+) -> str:
+    """Render complete, source-safe official diagnostics for the same parent thread."""
+
+    fail = evaluator.get("fail_to_pass") or {}
+    passed = evaluator.get("pass_to_pass") or {}
+    failed_test_ids = [
+        str(test_id)
+        for section in (fail, passed)
+        for test_id in section.get("failed_tests") or []
+        if str(test_id).strip()
+    ]
+    diagnostics = rk._safe_evaluator_failure_diagnostics(
+        evaluator.get("failure_diagnostics") or {},
+        allowed_test_ids=set(failed_test_ids),
+        policy={
+            "diagnostic_batch_size": 20,
+            "max_diagnostics_chars_per_case": 4000,
+        },
+    )
+    coverage = evaluator.get("feedback_coverage") or {}
+    if coverage.get("status") != "current_failure_complete":
+        raise ValueError("official evaluator feedback is incomplete and must not reach Codex")
+    if int(diagnostics.get("case_count") or 0) != len(set(failed_test_ids)):
+        raise ValueError("safe evaluator diagnostics do not cover every current failed test")
+    payload = {
+        "candidate_round": int(candidate_round),
+        "resolved": bool(evaluator.get("resolved")),
+        "fail_to_pass": fail,
+        "pass_to_pass": passed,
+        "feedback_coverage": coverage,
+        "failure_diagnostics": diagnostics,
+        "best_known_candidate": {
+            "round": int(best_round),
+            "fail_to_pass_passed": int(best_fail_to_pass),
+            "pass_to_pass_passed": int(best_pass_to_pass),
+        },
+    }
+    return (
+        "The official evaluator ran against the frozen candidate from your previous turn. "
+        "It did not resolve the task. Continue in this exact parent session and keep ownership "
+        "of the complete SRS. Diagnose and fix every current failure, use your existing or new "
+        "native subagents when useful, run project-visible tests, and produce a stronger terminal "
+        "candidate. Do not stop merely because the score is unchanged, and do not claim official "
+        "success; the harness will evaluate the next frozen candidate.\n\n"
+        "Official evaluator feedback (complete for every currently failed test):\n"
+        + json.dumps(payload, ensure_ascii=False, indent=2)
+    )
+
+
+def build_native_codex_argv(
+    *,
+    workspace: Path,
+    resume_session_id: Optional[str] = None,
+) -> list[str]:
+    argv = [
+        shutil.which("codex") or "codex",
+        "--strict-config",
+        "--sandbox",
+        "danger-full-access",
+        "--ask-for-approval",
+        "on-request",
+        "--cd",
+        str(workspace),
+        "exec",
+    ]
+    if resume_session_id:
+        argv.append("resume")
+    argv.append("--json")
+    if resume_session_id:
+        argv.append(str(resume_session_id))
+    argv.append("-")
+    return argv
+
+
+def candidate_quality_key(evaluator: dict[str, Any]) -> tuple[int, int, int]:
+    fail = evaluator.get("fail_to_pass") or {}
+    passed = evaluator.get("pass_to_pass") or {}
+    return (
+        1 if evaluator.get("resolved") is True else 0,
+        -int(passed.get("failed") or 0),
+        int(fail.get("passed") or 0),
+    )
+
+
+def validated_parent_thread_id(
+    current_thread_id: Optional[str],
+    observed_thread_id: Optional[str],
+) -> str:
+    current = str(current_thread_id or "").strip()
+    observed = str(observed_thread_id or "").strip()
+    if not current:
+        if not observed:
+            raise RuntimeError("native Codex did not start a parent thread")
+        return observed
+    if observed and observed != current:
+        raise RuntimeError("native Codex resume created a different root thread")
+    return current
 
 
 def summarize_exec_events(lines: list[str]) -> dict[str, Any]:
@@ -477,6 +591,189 @@ def summarize_rollout_sessions(codex_home: Path, *, parent_thread_id: Optional[s
     }
 
 
+def _run_native_codex_turn(
+    *,
+    network: Any,
+    paths: dict[str, Path],
+    env: dict[str, str],
+    prompt: str,
+    run_id: str,
+    candidate_round: int,
+    timeout_seconds: float,
+    resume_session_id: Optional[str],
+) -> dict[str, Any]:
+    turn_name = f"round-{candidate_round:03d}"
+    live_stdout_path = paths["worker_events"] / "turns" / f"{turn_name}.live.jsonl"
+    live_stderr_path = paths["worker_events"] / "turns" / f"{turn_name}.live.stderr.log"
+    live_stdout_path.parent.mkdir(parents=True, exist_ok=True)
+    argv = network.wrap_argv(build_native_codex_argv(
+        workspace=paths["workspace"],
+        resume_session_id=resume_session_id,
+    ))
+    started = time.monotonic()
+    with (
+        live_stdout_path.open("w", encoding="utf-8") as stdout_handle,
+        live_stderr_path.open("w", encoding="utf-8") as stderr_handle,
+    ):
+        os.chmod(live_stdout_path, 0o600)
+        os.chmod(live_stderr_path, 0o600)
+        process = subprocess.Popen(
+            argv,
+            cwd=paths["workspace"],
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=stdout_handle,
+            stderr=stderr_handle,
+            text=True,
+            start_new_session=True,
+        )
+        _write_json(paths["root"] / "active-turn.json", {
+            "run_id": run_id,
+            "candidate_round": int(candidate_round),
+            "mode": "resume" if resume_session_id else "fresh",
+            "parent_thread_id": resume_session_id,
+            "pid": process.pid,
+            "started_at": int(time.time()),
+            "live_event_file": str(live_stdout_path.relative_to(paths["root"])),
+            "live_stderr_file": str(live_stderr_path.relative_to(paths["root"])),
+        })
+        assert process.stdin is not None
+        process.stdin.write(prompt)
+        process.stdin.close()
+        timed_out = False
+        try:
+            process.wait(timeout=max(1.0, timeout_seconds))
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=30)
+    (paths["root"] / "active-turn.json").unlink(missing_ok=True)
+    stdout = live_stdout_path.read_text(encoding="utf-8", errors="replace")
+    stderr = live_stderr_path.read_text(encoding="utf-8", errors="replace")
+    raw_lines = stdout.splitlines()
+    _write_text(
+        paths["worker_events"] / "turns" / f"{turn_name}.jsonl",
+        _redact_jsonl(raw_lines),
+    )
+    _write_text(
+        paths["worker_events"] / "turns" / f"{turn_name}.stderr.log",
+        redact_sensitive_text(stderr),
+    )
+    live_stdout_path.unlink()
+    live_stderr_path.unlink()
+    summary = summarize_exec_events(raw_lines)
+    return {
+        "candidate_round": int(candidate_round),
+        "mode": "resume" if resume_session_id else "fresh",
+        "requested_session_id": resume_session_id,
+        "observed_session_id": summary.get("parent_thread_id"),
+        "return_code": process.returncode,
+        "timed_out": timed_out,
+        "wall_time_seconds": round(time.monotonic() - started, 3),
+        "event_file": f"worker-events/turns/{turn_name}.jsonl",
+        "stderr_file": f"worker-events/turns/{turn_name}.stderr.log",
+        "event_summary": summary,
+        "raw_lines": raw_lines,
+        "run_id": run_id,
+    }
+
+
+def _freeze_candidate_round(
+    paths: dict[str, Path],
+    *,
+    candidate_round: int,
+    terminal_message: str,
+) -> tuple[dict[str, Any], str]:
+    cleanup = cleanup_worker_test_artifacts(paths["workspace"])
+    candidate_patch = swe_evo.collect_candidate_patch(paths["workspace"], FROZEN_BASE_COMMIT)
+    candidate_sha = hashlib.sha256(candidate_patch.encode("utf-8")).hexdigest()
+    round_name = f"round-{candidate_round:03d}"
+    patch_ref = f"reports/candidates/{round_name}.patch"
+    metadata_ref = f"reports/candidates/{round_name}.json"
+    candidate = {
+        "round": int(candidate_round),
+        "base_commit": FROZEN_BASE_COMMIT,
+        "revision": f"patch-sha256:{candidate_sha}",
+        "patch_sha256": candidate_sha,
+        "patch_bytes": len(candidate_patch.encode("utf-8")),
+        "changed_files": _changed_files(paths["workspace"]),
+        "frozen_at": int(time.time()),
+        "patch_ref": patch_ref,
+        "metadata_ref": metadata_ref,
+        "terminal_message": terminal_message,
+        "test_artifact_cleanup": cleanup,
+    }
+    _write_text(paths["root"] / patch_ref, candidate_patch)
+    _write_json(paths["root"] / metadata_ref, candidate)
+    return candidate, candidate_patch
+
+
+def _run_evaluator_until_feedback_complete(
+    spec: dict[str, Any],
+    paths: dict[str, Path],
+    *,
+    candidate: dict[str, Any],
+    invocation_start: int,
+    max_extraction_retries: int,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    attempts: list[dict[str, Any]] = []
+    retries = 0
+    while True:
+        invocation = invocation_start + len(attempts) + 1
+        evaluator = p4g8._run_evaluator(spec, paths["workspace"])
+        record = {
+            "invocation": invocation,
+            "candidate_round": candidate["round"],
+            "candidate_revision": candidate["revision"],
+            "result": evaluator,
+        }
+        attempts.append(record)
+        _write_json(
+            paths["evaluator_runs"] / f"invocation-{invocation:03d}.json",
+            record,
+        )
+        coverage = evaluator.get("feedback_coverage") or {}
+        if evaluator.get("resolved") is True or coverage.get("status") == "current_failure_complete":
+            return evaluator, attempts
+        retries += 1
+        if retries > max(0, int(max_extraction_retries)):
+            raise RuntimeError(
+                "official evaluator feedback extraction remained incomplete after retries"
+            )
+
+
+def _round_summary(
+    candidate: dict[str, Any],
+    evaluator: dict[str, Any],
+    *,
+    worker_turn: dict[str, Any],
+    evaluator_invocations: list[int],
+    is_best: bool,
+) -> dict[str, Any]:
+    return {
+        "round": candidate["round"],
+        "candidate_revision": candidate["revision"],
+        "candidate_patch_sha256": candidate["patch_sha256"],
+        "candidate_patch_bytes": candidate["patch_bytes"],
+        "changed_file_count": len(candidate["changed_files"]),
+        "worker_mode": worker_turn["mode"],
+        "worker_return_code": worker_turn["return_code"],
+        "worker_timed_out": worker_turn["timed_out"],
+        "worker_wall_time_seconds": worker_turn["wall_time_seconds"],
+        "evaluator_invocations": evaluator_invocations,
+        "resolved": bool(evaluator.get("resolved")),
+        "fail_to_pass": evaluator.get("fail_to_pass"),
+        "pass_to_pass": evaluator.get("pass_to_pass"),
+        "feedback_coverage": evaluator.get("feedback_coverage"),
+        "is_best_after_round": bool(is_best),
+        "candidate_ref": candidate["metadata_ref"],
+    }
+
+
 def run_native_arm1(
     *,
     qualification_spec_path: Path,
@@ -484,9 +781,11 @@ def run_native_arm1(
     source_codex_home: Path,
     execute_real: bool,
     max_wall_seconds: float = 21_600,
+    max_total_wall_seconds: float = DEFAULT_TOTAL_WALL_SECONDS,
+    max_feedback_extraction_retries: int = DEFAULT_FEEDBACK_EXTRACTION_RETRIES,
     artifact_root: Optional[Path] = None,
 ) -> dict[str, Any]:
-    """Run one native Codex parent and evaluate its frozen terminal candidate once."""
+    """Run one native ultra parent iteratively until official resolution or a real boundary."""
 
     if not execute_real:
         raise ValueError("Phase 4G9 Arm 1 requires execute_real=True")
@@ -504,17 +803,28 @@ def run_native_arm1(
     if run_root.exists():
         raise ValueError("Phase 4G9 Arm 1 run root must not already exist")
     paths = _prepare_layout(run_root, spec)
+    paths["evaluator_runs"] = paths["root"] / "evaluator-runs"
+    paths["evaluator_runs"].mkdir()
     prompt = build_parent_prompt(locked_task, toolchain=paths["worker_toolchain"])
-    protocol_path = Path(__file__).resolve().parent.parent / "docs" / "kanban-runtime-kernel-phase4g9.md"
+    protocol_path = (
+        Path(__file__).resolve().parent.parent
+        / "docs"
+        / "kanban-runtime-kernel-phase4g9-iterative.md"
+    )
     started_epoch = int(time.time())
     started = time.monotonic()
-    evaluator_invocations = 0
-    process_timed_out = False
-    return_code: Optional[int] = None
+    evaluator_attempts: list[dict[str, Any]] = []
+    candidate_rounds: list[dict[str, Any]] = []
+    worker_turns: list[dict[str, Any]] = []
+    all_raw_lines: list[str] = []
+    best_candidate: Optional[dict[str, Any]] = None
+    best_candidate_patch = ""
+    best_evaluator: Optional[dict[str, Any]] = None
+    parent_thread_id: Optional[str] = None
+    termination_reason = "infrastructure_invalid"
     model_transport: dict[str, Any] = {}
     config_audit: dict[str, Any] = {}
-    raw_lines: list[str] = []
-    run_id = f"phase4g9-arm1-{uuid.uuid4().hex[:12]}"
+    run_id = f"phase4g9-arm1-iterative-{uuid.uuid4().hex[:12]}"
 
     model_source = p4g8.load_codex_model_source(source_codex_home, model=FROZEN_MODEL)
     with p4g8.Phase4G8NetworkNamespace(run_id, model_source["explicit_base_url"]) as network:
@@ -523,19 +833,6 @@ def run_native_arm1(
             paths["codex_home"],
             proxy_base_url=str(network.proxy_base_url),
         )
-        argv = network.wrap_argv([
-            shutil.which("codex") or "codex",
-            "--strict-config",
-            "--sandbox",
-            "danger-full-access",
-            "--ask-for-approval",
-            "on-request",
-            "--cd",
-            str(paths["workspace"]),
-            "exec",
-            "--json",
-            "-",
-        ])
         env = os.environ.copy()
         env.update({
             "HOME": str(paths["home"]),
@@ -544,63 +841,111 @@ def run_native_arm1(
             "PYTHONPATH": str(paths["workspace"]),
             p4g8.PROCESS_OWNER_ENV: run_id,
         })
-        process = subprocess.Popen(
-            argv,
-            cwd=paths["workspace"],
-            env=env,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True,
-        )
-        try:
-            stdout, stderr = process.communicate(prompt, timeout=max_wall_seconds)
-        except subprocess.TimeoutExpired:
-            process_timed_out = True
-            os.killpg(process.pid, signal.SIGTERM)
-            try:
-                stdout, stderr = process.communicate(timeout=30)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                stdout, stderr = process.communicate(timeout=30)
-        return_code = process.returncode
-        raw_lines = stdout.splitlines()
-        _write_text(paths["worker_events"] / "codex-exec.jsonl", _redact_jsonl(raw_lines))
-        _write_text(paths["worker_events"] / "codex-stderr.log", redact_sensitive_text(stderr))
+        next_prompt = prompt
+        candidate_round = 0
+        while True:
+            remaining = float(max_total_wall_seconds) - (time.monotonic() - started)
+            if remaining <= 0:
+                termination_reason = "total_wall_time_exhausted"
+                break
+            candidate_round += 1
+            worker_turn = _run_native_codex_turn(
+                network=network,
+                paths=paths,
+                env=env,
+                prompt=next_prompt,
+                run_id=run_id,
+                candidate_round=candidate_round,
+                timeout_seconds=min(float(max_wall_seconds), remaining),
+                resume_session_id=parent_thread_id,
+            )
+            parent_thread_id = validated_parent_thread_id(
+                parent_thread_id,
+                worker_turn.get("observed_session_id"),
+            )
+            all_raw_lines.extend(worker_turn.pop("raw_lines"))
+            worker_turns.append(worker_turn)
+            _reclaim_workspace(paths["workspace"])
+            terminal_message = str(
+                (worker_turn.get("event_summary") or {}).get("terminal_message") or ""
+            )
+            candidate, candidate_patch = _freeze_candidate_round(
+                paths,
+                candidate_round=candidate_round,
+                terminal_message=terminal_message,
+            )
+            evaluator, new_attempts = _run_evaluator_until_feedback_complete(
+                spec,
+                paths,
+                candidate=candidate,
+                invocation_start=len(evaluator_attempts),
+                max_extraction_retries=max_feedback_extraction_retries,
+            )
+            evaluator_attempts.extend(new_attempts)
+            is_best = (
+                best_evaluator is None
+                or candidate_quality_key(evaluator) > candidate_quality_key(best_evaluator)
+            )
+            if is_best:
+                best_candidate = candidate
+                best_candidate_patch = candidate_patch
+                best_evaluator = evaluator
+            candidate_rounds.append(_round_summary(
+                candidate,
+                evaluator,
+                worker_turn=worker_turn,
+                evaluator_invocations=[item["invocation"] for item in new_attempts],
+                is_best=is_best,
+            ))
+            _write_json(paths["root"] / "runner-state.json", {
+                "schema": ARM1_REPORT_SCHEMA,
+                "run_id": run_id,
+                "parent_thread_id": parent_thread_id,
+                "candidate_rounds": candidate_rounds,
+                "best_candidate_round": best_candidate["round"] if best_candidate else None,
+                "evaluator_invocation_count": len(evaluator_attempts),
+                "updated_at": int(time.time()),
+            })
+            if evaluator.get("resolved") is True:
+                termination_reason = "official_resolved"
+                break
+            if worker_turn["timed_out"]:
+                termination_reason = "worker_turn_wall_time_exhausted"
+                break
+            if worker_turn["return_code"] not in {0, None}:
+                termination_reason = "worker_process_failed"
+                break
+            if time.monotonic() - started >= float(max_total_wall_seconds):
+                termination_reason = "total_wall_time_exhausted"
+                break
+            assert best_candidate is not None and best_evaluator is not None
+            best_fail = best_evaluator.get("fail_to_pass") or {}
+            best_pass = best_evaluator.get("pass_to_pass") or {}
+            next_prompt = build_evaluator_feedback_prompt(
+                evaluator,
+                candidate_round=candidate_round,
+                best_round=int(best_candidate["round"]),
+                best_fail_to_pass=int(best_fail.get("passed") or 0),
+                best_pass_to_pass=int(best_pass.get("passed") or 0),
+            )
         model_transport = network.transport_audit()
 
-    event_summary = summarize_exec_events(raw_lines)
-    if not event_summary.get("parent_thread_id"):
-        raise RuntimeError(
-            "native Codex did not start a thread; the run is infrastructure-invalid and was not evaluated"
-        )
-    _reclaim_workspace(paths["workspace"])
-    test_artifact_cleanup = cleanup_worker_test_artifacts(paths["workspace"])
+    if best_candidate is None or best_evaluator is None or parent_thread_id is None:
+        raise RuntimeError("iterative Arm 1 ended without an evaluated candidate")
+    _write_text(paths["reports"] / "candidate.patch", best_candidate_patch)
+    _write_json(paths["reports"] / "candidate.json", best_candidate)
+    event_summary = summarize_exec_events(all_raw_lines)
+    _write_text(paths["worker_events"] / "codex-exec.jsonl", _redact_jsonl(all_raw_lines))
     rollout_summary = summarize_rollout_sessions(
         paths["codex_home"],
-        parent_thread_id=event_summary.get("parent_thread_id"),
+        parent_thread_id=parent_thread_id,
     )
     event_summary = _merge_rollout_identity(event_summary, rollout_summary)
-    candidate_patch = swe_evo.collect_candidate_patch(paths["workspace"], FROZEN_BASE_COMMIT)
-    candidate_sha = hashlib.sha256(candidate_patch.encode("utf-8")).hexdigest()
-    _write_text(paths["reports"] / "candidate.patch", candidate_patch)
-    candidate = {
-        "base_commit": FROZEN_BASE_COMMIT,
-        "patch_sha256": candidate_sha,
-        "patch_bytes": len(candidate_patch.encode("utf-8")),
-        "changed_files": _changed_files(paths["workspace"]),
-        "frozen_at": int(time.time()),
-    }
-    _write_json(paths["reports"] / "candidate.json", candidate)
-
-    evaluator_invocations += 1
-    evaluator = p4g8._run_evaluator(spec, paths["workspace"])
-    if evaluator_invocations != 1:
-        raise RuntimeError("Phase 4G9 Arm 1 evaluator invocation invariant failed")
     source_unchanged = p4g8.verify_codex_source_unchanged(
         source_codex_home.expanduser().resolve(), config_audit["source_hashes"]
     )
+    final_workspace_patch = swe_evo.collect_candidate_patch(paths["workspace"], FROZEN_BASE_COMMIT)
+    final_workspace_sha = hashlib.sha256(final_workspace_patch.encode("utf-8")).hexdigest()
     report = {
         "schema": ARM1_REPORT_SCHEMA,
         "protocol_version": ARM1_PROTOCOL_VERSION,
@@ -610,30 +955,57 @@ def run_native_arm1(
         "started_at": started_epoch,
         "finished_at": int(time.time()),
         "wall_time_seconds": round(time.monotonic() - started, 3),
+        "classification": (
+            "resolved" if best_evaluator.get("resolved") is True else "task-failed"
+        ),
+        "termination_reason": termination_reason,
         "worker": {
             "kind": "standalone_native_codex_parent",
             "codex_cli_version": _codex_version(),
-            "return_code": return_code,
-            "timed_out": process_timed_out,
+            "return_code": worker_turns[-1]["return_code"],
+            "timed_out": any(bool(item["timed_out"]) for item in worker_turns),
             "runtime_kernel_used": False,
             "decision_provider_used": False,
-            "evaluator_feedback_turns": 0,
+            "evaluator_feedback_turns": max(0, len(worker_turns) - 1),
+            "same_parent_session_preserved": all(
+                not item.get("observed_session_id")
+                or item.get("observed_session_id") == parent_thread_id
+                for item in worker_turns
+            ),
+            "turns": worker_turns,
             **event_summary,
             "rollouts": rollout_summary,
         },
         "config": config_audit,
         "model_transport": model_transport,
-        "candidate": candidate,
-        "test_artifact_cleanup": test_artifact_cleanup,
-        "evaluator_invocation_count": evaluator_invocations,
-        "evaluator": evaluator,
+        "candidate": best_candidate,
+        "candidate_round_count": len(candidate_rounds),
+        "candidate_rounds": candidate_rounds,
+        "best_candidate_round": best_candidate["round"],
+        "final_workspace_candidate_revision": f"patch-sha256:{final_workspace_sha}",
+        "workspace_matches_best_candidate": final_workspace_sha == best_candidate["patch_sha256"],
+        "evaluator_invocation_count": len(evaluator_attempts),
+        "evaluator_feedback_turn_count": max(0, len(worker_turns) - 1),
+        "evaluator_attempts": [
+            {
+                "invocation": item["invocation"],
+                "candidate_round": item["candidate_round"],
+                "candidate_revision": item["candidate_revision"],
+                "result_ref": f"evaluator-runs/invocation-{item['invocation']:03d}.json",
+            }
+            for item in evaluator_attempts
+        ],
+        "evaluator": best_evaluator,
         "integrity": {
             "protocol_sha256": _sha256_file(protocol_path),
             "source_codex_home_unchanged": source_unchanged,
             "gold_or_protected_tests_exposed_to_worker": False,
             "historical_candidate_exposed_to_worker": False,
             "evaluator_before_terminal_candidate": 0,
-            "evaluator_after_terminal_candidate": evaluator_invocations,
+            "evaluator_after_terminal_candidate": len(evaluator_attempts),
+            "feedback_only_after_frozen_candidate": True,
+            "fixed_evaluator_round_limit": None,
+            "same_parent_session_required": True,
         },
     }
     _write_json(paths["reports"] / "run-report.json", report)
@@ -644,7 +1016,7 @@ def run_native_arm1(
         phase="phase4g9",
         instance_id=FROZEN_INSTANCE_ID,
         redactions=validation_artifacts.model_source_redactions(source_codex_home),
-        expected_entries={"codex-home", "worker-events", "reports"},
+        expected_entries={"codex-home", "worker-events", "evaluator-runs", "reports"},
     )
     return report
 
@@ -715,8 +1087,8 @@ def finalize_existing_terminal_arm1(
     )
     started_at = _parse_timestamp(parent_session.get("started_at"))
     report = {
-        "schema": ARM1_REPORT_SCHEMA,
-        "protocol_version": ARM1_PROTOCOL_VERSION,
+        "schema": LEGACY_ARM1_REPORT_SCHEMA,
+        "protocol_version": "phase4g9-native-arm1-v1",
         "run_id": run_root.name,
         "instance_id": FROZEN_INSTANCE_ID,
         "dataset_revision": spec["dataset_revision"],
@@ -779,7 +1151,7 @@ def refresh_existing_arm1_report(*, run_root: Path) -> dict[str, Any]:
     if not report_path.is_file() or not event_path.is_file() or not codex_home.is_dir():
         raise ValueError("existing Phase 4G9 report layout is incomplete")
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    if report.get("schema") != ARM1_REPORT_SCHEMA or report.get("evaluator_invocation_count") != 1:
+    if report.get("schema") not in {LEGACY_ARM1_REPORT_SCHEMA, ARM1_REPORT_SCHEMA}:
         raise ValueError("existing report is not a completed Phase 4G9 Arm 1 result")
     if _codex_processes_for_workspace(run_root / "workspace"):
         raise RuntimeError("cannot refresh a report while its native Codex process is running")
@@ -808,6 +1180,7 @@ def refresh_existing_arm1_report(*, run_root: Path) -> dict[str, Any]:
 
 
 def render_execution_summary(report: dict[str, Any]) -> str:
+    iterative = report.get("schema") == ARM1_REPORT_SCHEMA
     worker = report["worker"]
     evaluator = report["evaluator"]
     fail = evaluator.get("fail_to_pass") or {}
@@ -830,7 +1203,7 @@ def render_execution_summary(report: dict[str, Any]) -> str:
         f"共调用 `{calls.get('spawn_agent', 0)}` 次 `spawn_agent`，形成 `{len(subagents)}` 个 sessions。"
     )
     lines = [
-        "# Phase 4G9 Arm 1：Native Codex Orchestra",
+        "# Phase 4G9 Arm 1：Native Codex Ultra Orchestra",
         "",
         "## 结果",
         "",
@@ -850,17 +1223,48 @@ def render_execution_summary(report: dict[str, Any]) -> str:
         f"`{rollouts.get('implementation_compaction_count', 0)}`",
         f"- Candidate patch：`{report['candidate']['patch_bytes']} bytes`，"
         f"`{len(report['candidate']['changed_files'])}` 个 changed files",
+        f"- Candidate rounds：`{report.get('candidate_round_count', 1)}`",
+        f"- Evaluator invocations：`{report.get('evaluator_invocation_count', 1)}`",
+        f"- Evaluator feedback turns：`{report.get('evaluator_feedback_turn_count', 0)}`",
+        f"- Best candidate round：`{report.get('best_candidate_round', 1)}`",
+        f"- Termination reason：`{report.get('termination_reason', 'one_shot_complete')}`",
         "",
         "## 冻结协议",
         "",
-        "一个 standalone Codex parent 使用 `gpt-5.6-sol` 和 `ultra` client semantics"
-        "（`max` model reasoning 加主动 native multi-agent delegation）。执行期间没有 "
-        "Hermes Runtime、Decision Provider 或 evaluator feedback。Candidate patch 冻结后，"
-        "official evaluator 运行一次。",
-        "",
-        "## Native 任务分配",
+        (
+            "一个 standalone Codex parent 使用 `gpt-5.6-sol` 和 `ultra` client semantics"
+            "（`max` model reasoning 加主动 native multi-agent delegation）。Hermes Runtime "
+            "和 Decision Provider 不参与执行。每轮 terminal candidate 冻结后运行 official "
+            "evaluator；失败诊断只回流同一个 parent thread，由该 thread 继续协调 native "
+            "subagents，直至 resolved 或真实资源/基础设施边界。"
+            if iterative else
+            "一个 standalone Codex parent 使用 `gpt-5.6-sol` 和 `ultra` client semantics"
+            "（`max` model reasoning 加主动 native multi-agent delegation）。执行期间没有 "
+            "Hermes Runtime、Decision Provider 或 evaluator feedback。Candidate patch 冻结后，"
+            "official evaluator 运行一次。"
+        ),
         "",
     ]
+    rounds = report.get("candidate_rounds") or []
+    if rounds:
+        lines.extend([
+            "## Candidate 与 Evaluator 进展",
+            "",
+            "| Round | Worker mode | F2P | P2P | Best | Evaluator invocations |",
+            "| ---: | --- | ---: | ---: | --- | --- |",
+        ])
+        for item in rounds:
+            item_fail = item.get("fail_to_pass") or {}
+            item_pass = item.get("pass_to_pass") or {}
+            lines.append(
+                f"| {item.get('round')} | `{item.get('worker_mode')}` | "
+                f"{item_fail.get('passed', 0)}/{item_fail.get('total', 0)} | "
+                f"{item_pass.get('passed', 0)}/{item_pass.get('total', 0)} | "
+                f"`{bool(item.get('is_best_after_round'))}` | "
+                f"`{item.get('evaluator_invocations')}` |"
+            )
+        lines.append("")
+    lines.extend(["## Native 任务分配", ""])
     if subagents:
         lines.extend([
             "| Agent | Depth | Duration | Compactions | 责任范围 |",
@@ -880,8 +1284,8 @@ def render_execution_summary(report: dict[str, Any]) -> str:
     lines.extend([
         "",
         "所有 native subagents 共享 parent workspace。它们是 ephemeral Codex threads，"
-        "不是 durable Hermes nodes 或隔离 worktrees。一个 depth-1 agent 创建了 depth-2 "
-        "`targets_scan` agent。",
+        "不是 durable Hermes nodes 或隔离 worktrees。嵌套深度与动态任务分配以本表和"
+        "结构化报告为准。",
         "",
         "观察到的 collaboration calls：" + ", ".join(
             f"`{name}={count}`" for name, count in sorted(calls.items())
@@ -900,20 +1304,31 @@ def render_execution_summary(report: dict[str, Any]) -> str:
         f"`{guardian_usage.get('output_tokens', 0)}`",
         "",
         "以上数据是各 rollout 最终 cumulative token counters 之和。Implementation 行不包含 "
-        "guardian usage；后者可在 `run-report.json` 中单独识别。Terminal 后 collector failure "
-        "导致精确 model-proxy request count 无法恢复，但该可选遥测不影响 worker 行为分析。",
+        "guardian usage；后者可在 `run-report.json` 中单独识别。精确 transport counters 属于"
+        "可选遥测，不影响 worker 行为分析。",
         "",
         "## Parent 自报 Terminal Summary",
         "",
-        "以下内容是 parent 在接触 official evaluator 前的 terminal 自报。Benchmark 质量以"
-        "上方 official `7/68` 结果为准。",
+        (
+            "以下内容是 parent 在最后一个 worker turn 的 terminal 自报。Benchmark 质量以"
+            "上方 best official evaluator 结果为准。"
+            if iterative else
+            "以下内容是 parent 在接触 official evaluator 前的 terminal 自报。Benchmark 质量以"
+            "上方 official evaluator 结果为准。"
+        ),
         "",
         str(worker.get("terminal_message") or "没有捕获到 parent terminal message。"),
         "",
         "## 测量边界",
         "",
-        "这是单次运行的架构 baseline，不是模型排行榜结果。Native orchestra 终止前无法访问 "
-        "hidden tests、gold content、历史 candidates 或 evaluator diagnostics。",
+        (
+            "这是一个 iterative architecture baseline，不是模型排行榜结果。Parent 不接触 "
+            "hidden test source、gold content 或历史 runs，只接收每个已冻结 candidate 的"
+            "source-safe official diagnostics。"
+            if iterative else
+            "这是单次运行的架构 baseline，不是模型排行榜结果。Native orchestra 终止前无法访问 "
+            "hidden tests、gold content、历史 candidates 或 evaluator diagnostics。"
+        ),
         "",
         "## 架构解读",
         "",
@@ -921,11 +1336,13 @@ def render_execution_summary(report: dict[str, Any]) -> str:
         "follow-up messages、复用已完成 slots，并委派一次 nested scan。因此这是真实的 native "
         "orchestra baseline，不是伪装成多 agent 的单 agent run。",
         "",
-        "但 one-shot hidden-oracle 结果仍只有 "
-        f"`{fail.get('passed', 0)}/{fail.get('total', 0)}` FAIL_TO_PASS with "
-        f"`{p2p.get('passed', 0)}/{p2p.get('total', 0)}` PASS_TO_PASS。这不能证明 Hermes "
-        "orchestration 更强：此前 Kernel Large run 获得了多轮 official evaluator feedback，"
-        "而冻结 Arm 1 没有。公平的 Arm 2 对照必须使用相同 evaluator boundary 和质量门禁。",
+        (
+            "本 run 通过同一 parent session 的多轮反馈测量 native ultra orchestra 的完整"
+            "收敛能力。未来 Arm 2 必须使用相同 evaluator feedback completeness、candidate "
+            "lineage 和资源边界，才能比较 Runtime-level orchestra。"
+            if iterative else
+            "该 preliminary one-shot run 不代表 native ultra orchestra 的完整收敛能力。"
+        ),
         "",
     ])
     return "\n".join(lines)
@@ -1247,6 +1664,16 @@ def _parse_args() -> argparse.Namespace:
         default=str(validation_artifacts.default_artifact_root()),
     )
     parser.add_argument("--max-wall-seconds", type=float, default=21_600)
+    parser.add_argument(
+        "--max-total-wall-seconds",
+        type=float,
+        default=DEFAULT_TOTAL_WALL_SECONDS,
+    )
+    parser.add_argument(
+        "--max-feedback-extraction-retries",
+        type=int,
+        default=DEFAULT_FEEDBACK_EXTRACTION_RETRIES,
+    )
     parser.add_argument("--execute-real", action="store_true", required=True)
     parser.add_argument("--finalize-existing-terminal", action="store_true")
     parser.add_argument("--refresh-existing-report", action="store_true")
@@ -1275,6 +1702,8 @@ def main() -> int:
                 source_codex_home=Path(args.source_codex_home),
                 execute_real=bool(args.execute_real),
                 max_wall_seconds=float(args.max_wall_seconds),
+                max_total_wall_seconds=float(args.max_total_wall_seconds),
+                max_feedback_extraction_retries=int(args.max_feedback_extraction_retries),
                 artifact_root=Path(args.artifact_root),
             )
     except Exception as exc:
