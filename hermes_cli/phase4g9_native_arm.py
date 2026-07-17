@@ -93,13 +93,7 @@ def prepare_native_codex_home(
         "",
         "[features]",
         "guardian_approval = true",
-        "",
-        "[features.multi_agent_v2]",
-        "enabled = true",
-        f"max_concurrent_threads_per_session = {FROZEN_MAX_THREADS}",
-        "non_code_mode_only = false",
-        "hide_spawn_agent_metadata = false",
-        "expose_spawn_agent_model_overrides = false",
+        "multi_agent_v2 = true",
         "",
     ])
     target_config = target_home / "config.toml"
@@ -118,13 +112,27 @@ def prepare_native_codex_home(
         os.chown(path, int(worker_uid), int(worker_gid))
 
     parsed = tomllib.loads(target_config.read_text(encoding="utf-8"))
-    native = parsed["features"]["multi_agent_v2"]
     if (
         parsed.get("model_reasoning_effort") != FROZEN_REASONING_EFFORT
-        or native.get("enabled") is not True
-        or native.get("max_concurrent_threads_per_session") != FROZEN_MAX_THREADS
+        or parsed["features"].get("multi_agent_v2") is not True
     ):
         raise RuntimeError("Phase 4G9 native Codex configuration preflight failed")
+    preflight_env = os.environ.copy()
+    preflight_env["CODEX_HOME"] = str(target_home)
+    preflight = subprocess.run(
+        [shutil.which("codex") or "codex", "features", "list"],
+        env=preflight_env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=30,
+    )
+    if preflight.returncode != 0 or not any(
+        line.split()[:1] == ["multi_agent_v2"] and line.split()[-1:] == ["true"]
+        for line in preflight.stdout.splitlines()
+    ):
+        raise RuntimeError("installed Codex rejected the Phase 4G9 native multi-agent config")
     return {
         "protocol_version": ARM1_PROTOCOL_VERSION,
         "source_hashes": source_hashes,
@@ -140,6 +148,7 @@ def prepare_native_codex_home(
         "wire_reasoning_effort": "max",
         "multi_agent_mode": "proactive",
         "max_threads_including_parent": FROZEN_MAX_THREADS,
+        "max_threads_source": "codex-0.144.4-multi-agent-v2-default",
         "provider_transport": transport,
         "copied_session_history": False,
         "copied_memory_or_plugins": False,

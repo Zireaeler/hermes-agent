@@ -45,13 +45,7 @@ def test_native_codex_home_freezes_ultra_multi_agent_and_transport(tmp_path):
     assert config["model_reasoning_effort"] == "ultra"
     assert config["model_context_window"] == 353_400
     assert config["model_auto_compact_token_limit"] == 230_000
-    assert config["features"]["multi_agent_v2"] == {
-        "enabled": True,
-        "max_concurrent_threads_per_session": 4,
-        "non_code_mode_only": False,
-        "hide_spawn_agent_metadata": False,
-        "expose_spawn_agent_model_overrides": False,
-    }
+    assert config["features"]["multi_agent_v2"] is True
     provider = config["model_providers"]["phase4g9_proxy"]
     assert provider["base_url"] == "http://10.203.20.1:41000/v1"
     assert provider["supports_websockets"] is True
@@ -61,6 +55,7 @@ def test_native_codex_home_freezes_ultra_multi_agent_and_transport(tmp_path):
     assert audit["reasoning_effort"] == "ultra"
     assert audit["wire_reasoning_effort"] == "max"
     assert audit["multi_agent_mode"] == "proactive"
+    assert audit["max_threads_including_parent"] == 4
     assert audit["copied_session_history"] is False
     assert "sk-phase4g9-test-secret" not in json.dumps(audit)
 
