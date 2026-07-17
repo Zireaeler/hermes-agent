@@ -890,7 +890,7 @@ def test_incomplete_evaluator_feedback_retains_protected_raw_artifacts(tmp_path)
     }) is True
 
 
-def test_fresh_run_compacts_reported_prior_runs_but_preserves_active_runs(tmp_path):
+def test_fresh_run_compacts_only_rebuildable_state_and_preserves_raw_evidence(tmp_path):
     instance_root = tmp_path / "dask-instance"
     completed = instance_root / "phase4g8-medium-completed"
     active = instance_root / "phase4g8-medium-active"
@@ -902,6 +902,10 @@ def test_fresh_run_compacts_reported_prior_runs_but_preserves_active_runs(tmp_pa
     (completed / "hermes-home" / "kanban.db").write_bytes(b"db")
     (completed / "codex-homes").mkdir()
     (completed / "codex-homes" / "state.sqlite").write_bytes(b"session")
+    (completed / "service").mkdir()
+    (completed / "service" / "kanban.db").write_bytes(b"runtime-db")
+    (completed / "worker-events").mkdir()
+    (completed / "worker-events" / "codex-exec.jsonl").write_text("{}\n", encoding="utf-8")
     (reports / "run-report.json").write_text(
         json.dumps({
             "schema": p4g8_run.REAL_CASE_REPORT_SCHEMA,
@@ -918,15 +922,20 @@ def test_fresh_run_compacts_reported_prior_runs_but_preserves_active_runs(tmp_pa
     second = p4g8_run._compact_completed_phase4g8_runs(instance_root)
 
     assert len(first) == 1
-    assert first[0]["status"] == "compacted_after_report_persisted"
+    assert first[0]["status"] == "compacted_rebuildable_state_only"
     assert first[0]["bytes_removed"] >= 4096
     assert not (completed / "workspace").exists()
-    assert not (completed / "hermes-home").exists()
-    assert not (completed / "codex-homes").exists()
+    assert (completed / "hermes-home" / "kanban.db").is_file()
+    assert (completed / "codex-homes" / "state.sqlite").is_file()
+    assert (completed / "service" / "kanban.db").is_file()
+    assert (completed / "worker-events" / "codex-exec.jsonl").is_file()
     assert (reports / "run-report.json").is_file()
     assert (reports / "capability-trace.md").is_file()
     retention = json.loads((reports / "retention.json").read_text(encoding="utf-8"))
-    assert retention["preserved_entries"] == ["reports"]
+    assert retention["preserved_entries"] == [
+        "codex-homes", "hermes-home", "reports", "service", "worker-events"
+    ]
+    assert retention["raw_evidence_retained"] is True
     assert (active / "workspace" / "keep.bin").is_file()
     assert second == []
 
@@ -966,7 +975,7 @@ def test_candidate_patch_evidence_survives_completed_run_compaction(tmp_path):
 
     patch = (reports / "candidate.patch").read_bytes()
     persisted = json.loads((reports / "candidate-evidence.json").read_text(encoding="utf-8"))
-    assert compacted[0]["status"] == "compacted_after_report_persisted"
+    assert compacted[0]["status"] == "compacted_rebuildable_state_only"
     assert not workspace.exists()
     assert b"tracked.txt" in patch
     assert b"new.txt" in patch

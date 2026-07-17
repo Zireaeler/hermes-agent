@@ -640,7 +640,7 @@ def run_phase4g8_real_case(
 
 
 def _compact_completed_phase4g8_runs(instance_root: Path) -> list[dict[str, Any]]:
-    """Keep reports while removing bulky state from prior completed real runs."""
+    """Remove only rebuildable state while retaining raw execution evidence."""
 
     if not instance_root.is_dir():
         return []
@@ -667,8 +667,9 @@ def _compact_completed_phase4g8_runs(instance_root: Path) -> list[dict[str, Any]
 
         removed: list[str] = []
         bytes_removed = 0
+        rebuildable_entries = {"workspace", "home", "codex-home-seed"}
         for child in sorted(run_root.iterdir()):
-            if child.name == "reports":
+            if child.name not in rebuildable_entries:
                 continue
             bytes_removed += _path_tree_size(child)
             try:
@@ -685,13 +686,16 @@ def _compact_completed_phase4g8_runs(instance_root: Path) -> list[dict[str, Any]
                 break
             removed.append(child.name)
         else:
+            preserved = sorted(child.name for child in run_root.iterdir())
             retention = {
                 "schema": "hermes_phase4g8_run_retention_v1",
                 "run_id": run_root.name,
-                "status": "compacted_after_report_persisted",
+                "status": "compacted_rebuildable_state_only",
                 "bytes_removed": bytes_removed,
                 "removed_entries": removed,
-                "preserved_entries": ["reports"],
+                "preserved_entries": preserved,
+                "raw_evidence_retained": True,
+                "deletion_policy": "workspace_home_seed_allowlist",
                 "compacted_at": int(time.time()),
             }
             _write_json(retention_path, retention)
