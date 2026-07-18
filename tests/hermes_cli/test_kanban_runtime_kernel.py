@@ -4541,12 +4541,15 @@ def test_primary_integration_preserves_modified_lineage_across_remediation_attem
             "modified_contributions": classifications,
             "accepted_contributions": [],
             "rejected_contributions": [],
-            "changed_files": ["src/0.py"],
+            # Worker receipts report the cumulative candidate diff, not only
+            # files touched during the current materialization.
+            "changed_files": ["src/0.py", "src/1.py", "src/2.py"],
         },
     )
 
     assert violations == []
     assert remediated["contribution_lineage_refs"] == {
+        "artifact-lineage-0": f"event:{prior_event_id}",
         "artifact-lineage-1": f"event:{prior_event_id}",
         "artifact-lineage-2": f"event:{prior_event_id}",
     }

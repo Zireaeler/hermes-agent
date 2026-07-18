@@ -7868,11 +7868,11 @@ def _verify_integrated_contributions(
                     violations.append(f"accepted_contribution_changed:{artifact_id}:{relative}")
         for artifact_id in modified & set(artifacts):
             artifact_files = set(artifacts[artifact_id].get("changed_files") or [])
-            if artifact_files & changed_files:
-                continue
             prior_event_id = prior_modified_lineage.get(artifact_id)
             if prior_event_id is not None:
                 lineage_refs[artifact_id] = f"event:{prior_event_id}"
+            elif artifact_files & changed_files:
+                continue
             else:
                 violations.append(f"modified_contribution_not_observed:{artifact_id}")
     try:
