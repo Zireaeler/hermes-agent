@@ -2675,6 +2675,22 @@ def test_phase4g8_model_profile_uses_effective_shared_context_window():
     assert policy["max_active_segment_tokens"] is None
 
 
+def test_network_namespace_hash_uses_distinct_full_subnet_slots():
+    """Run IDs that collided in the old 8-bit allocator no longer overlap."""
+    first = p4g8.Phase4G8NetworkNamespace(
+        "phase4g10-clean-large-a872a7e478",
+        "https://model.example/v1",
+    )
+    second = p4g8.Phase4G8NetworkNamespace(
+        "phase4g10-clean-large-069067de42",
+        "https://model.example/v1",
+    )
+
+    assert first.cidr != second.cidr
+    assert first.host_ip != second.host_ip
+    assert first.network_slot != second.network_slot
+
+
 @pytest.mark.skipif(
     os.name == "nt" or os.geteuid() != 0 or not all(shutil.which(command) for command in ("ip", "nft", "setpriv", "curl")),
     reason="network namespace integration requires POSIX root and ip/nft/setpriv/curl",

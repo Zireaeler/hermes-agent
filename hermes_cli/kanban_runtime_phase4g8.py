@@ -335,24 +335,56 @@ def _relay_bidirectional(
 class Phase4G8NetworkNamespace:
     """A no-default-route worker netns with one allowlisted model proxy."""
 
+    _NETWORK_SLOT_COUNT = 256 * 64
+
     def __init__(self, run_id: str, upstream_base_url: str, *, timeout_seconds: float = 300.0) -> None:
         self.run_id = str(run_id or "").strip()
         if not self.run_id:
             raise ValueError("run_id is required")
         suffix = hashlib.sha256(self.run_id.encode("utf-8")).hexdigest()[:8]
-        octet = int(suffix[:2], 16) % 200 + 20
         self.namespace = f"h4g8-{suffix}"
         self.host_interface = f"h4h{suffix[:7]}"[:15]
         self.namespace_interface = f"h4n{suffix[:7]}"[:15]
-        self.host_ip = f"10.203.{octet}.1"
-        self.namespace_ip = f"10.203.{octet}.2"
-        self.cidr = f"10.203.{octet}.0/30"
+        self.network_slot = int(suffix[:4], 16) % self._NETWORK_SLOT_COUNT
+        self.host_ip = ""
+        self.namespace_ip = ""
+        self.cidr = ""
+        self._set_network_slot(self.network_slot)
         self.upstream_base_url = upstream_base_url.rstrip("/")
         self.timeout_seconds = float(timeout_seconds)
         self.proxy: Optional[_ModelProxyServer] = None
         self.proxy_thread: Optional[threading.Thread] = None
         self.proxy_base_url: Optional[str] = None
         self._created = False
+
+    def _set_network_slot(self, slot: int) -> None:
+        third_octet, fourth_slot = divmod(int(slot), 64)
+        fourth_octet = fourth_slot * 4
+        self.network_slot = int(slot)
+        self.host_ip = f"10.203.{third_octet}.{fourth_octet + 1}"
+        self.namespace_ip = f"10.203.{third_octet}.{fourth_octet + 2}"
+        self.cidr = f"10.203.{third_octet}.{fourth_octet}/30"
+
+    def _select_available_network_slot(self) -> None:
+        initial_slot = self.network_slot
+        for offset in range(self._NETWORK_SLOT_COUNT):
+            slot = (initial_slot + offset) % self._NETWORK_SLOT_COUNT
+            self._set_network_slot(slot)
+            existing = subprocess.run(
+                ["ip", "route", "show", "exact", self.cidr],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            if existing.returncode != 0:
+                raise RuntimeError(
+                    "failed to inspect Phase 4G8 network routes: "
+                    + existing.stderr.strip()
+                )
+            if not existing.stdout.strip():
+                return
+        raise RuntimeError("no free Phase 4G8 model-transport subnet is available")
 
     def start(self) -> "Phase4G8NetworkNamespace":
         if os.name == "nt" or os.geteuid() != 0:
@@ -361,6 +393,7 @@ class Phase4G8NetworkNamespace:
             if shutil.which(command) is None:
                 raise RuntimeError(f"Phase 4G8 network namespace requires {command}")
         try:
+            self._select_available_network_slot()
             _run(["ip", "netns", "add", self.namespace], timeout=30)
             self._created = True
             _run(
@@ -397,6 +430,22 @@ class Phase4G8NetworkNamespace:
                     "ip", "daddr", self.host_ip, "tcp", "dport", str(proxy_port), "accept",
                 ],
                 timeout=30,
+            )
+            _run(
+                [
+                    "ip",
+                    "netns",
+                    "exec",
+                    self.namespace,
+                    sys.executable,
+                    "-c",
+                    (
+                        "import socket; "
+                        f"s=socket.create_connection(({self.host_ip!r}, {proxy_port}), 5); "
+                        "s.close()"
+                    ),
+                ],
+                timeout=10,
             )
         except Exception:
             self.close()
