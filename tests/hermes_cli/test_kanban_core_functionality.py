@@ -2692,6 +2692,34 @@ def test_build_worker_context_caps_huge_summary(kanban_home):
         conn.close()
 
 
+def test_build_worker_context_preserves_large_runtime_contract_footer(kanban_home):
+    """Runtime integration bodies retain the kernel control footer past 8 KB."""
+    conn = kb.connect()
+    try:
+        body = (
+            "# Runtime node\n\nObjective: integrate frozen contributions\n\n"
+            + "Frozen dependency contribution evidence.\n" * 400
+            + "\nRuntime footer: "
+            + '{"runtime_job_id":"rjob_test","execution_node_id":"rnode_test"}'
+        )
+        assert len(body) > kb._CTX_MAX_BODY_BYTES
+        tid = kb.create_task(
+            conn,
+            title="runtime integration",
+            body=body,
+            assignee="worker",
+            tenant="runtime:rjob_test",
+        )
+
+        ctx = kb.build_worker_context(conn, tid)
+
+        assert "Objective: integrate frozen contributions" in ctx
+        assert "Runtime footer:" in ctx
+        assert '"runtime_job_id":"rjob_test"' in ctx
+    finally:
+        conn.close()
+
+
 def test_default_spawn_auto_loads_kanban_worker_skill(kanban_home, monkeypatch):
     """The dispatcher's _default_spawn must include --skills kanban-worker
     in its argv so every worker loads the skill automatically, even if

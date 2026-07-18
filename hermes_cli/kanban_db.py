@@ -176,6 +176,7 @@ _CTX_MAX_PRIOR_ATTEMPTS = 10      # most recent N prior runs shown in full
 _CTX_MAX_COMMENTS       = 30      # most recent N comments shown in full
 _CTX_MAX_FIELD_BYTES    = 4 * 1024   # 4 KB per summary/error/metadata/result
 _CTX_MAX_BODY_BYTES     = 8 * 1024   # 8 KB per task.body (opening post)
+_CTX_MAX_RUNTIME_BODY_BYTES = 64 * 1024  # trusted kernel-rendered node contract
 _CTX_MAX_COMMENT_BYTES  = 2 * 1024   # 2 KB per comment
 
 
@@ -10773,13 +10774,26 @@ def build_worker_context(conn: sqlite3.Connection, task_id: str) -> str:
     if not task:
         raise ValueError(f"unknown task {task_id}")
 
-    def _cap(s: Optional[str], limit: int = _CTX_MAX_FIELD_BYTES) -> str:
+    def _cap(
+        s: Optional[str],
+        limit: int = _CTX_MAX_FIELD_BYTES,
+        *,
+        preserve_tail: bool = False,
+    ) -> str:
         """Truncate a string to `limit` chars with a visible ellipsis."""
         if not s:
             return ""
         s = s.strip()
         if len(s) <= limit:
             return s
+        if preserve_tail:
+            head_limit = limit // 2
+            tail_limit = limit - head_limit
+            return (
+                s[:head_limit]
+                + f"\n… [truncated, {len(s) - limit} chars omitted] …\n"
+                + s[-tail_limit:]
+            )
         return s[:limit] + f"… [truncated, {len(s) - limit} chars omitted]"
 
     lines: list[str] = []
@@ -10805,7 +10819,13 @@ def build_worker_context(conn: sqlite3.Connection, task_id: str) -> str:
 
     if task.body and task.body.strip():
         lines.append("## Body")
-        lines.append(_cap(task.body, _CTX_MAX_BODY_BYTES))
+        is_runtime_task = str(task.tenant or "").startswith("runtime:")
+        body_limit = (
+            _CTX_MAX_RUNTIME_BODY_BYTES if is_runtime_task else _CTX_MAX_BODY_BYTES
+        )
+        lines.append(
+            _cap(task.body, body_limit, preserve_tail=is_runtime_task)
+        )
         lines.append("")
 
     all_prior = [r for r in list_runs(conn, task_id) if r.ended_at is not None]

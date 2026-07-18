@@ -1965,11 +1965,13 @@ def test_codex_resume_records_resumed_session_and_receipt(
     with kb.connect() as conn:
         tid, task = _claim_for_codex(conn)
         conn.execute(
-            "UPDATE tasks SET body = ? WHERE id = ?",
+            "UPDATE tasks SET body = ?, tenant = ? WHERE id = ?",
             (
                 "Frozen dependency contributions:\n"
                 '[{"artifact_id":"art_resume_context","patch_ref":"/tmp/resume.patch"}]\n'
-                "Runtime footer: {}",
+                + ("large integration evidence\n" * 3000)
+                + "Runtime footer: {}",
+                "runtime:rjob-resume",
                 tid,
             ),
         )
