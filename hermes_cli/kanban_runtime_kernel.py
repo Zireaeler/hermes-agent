@@ -7498,6 +7498,21 @@ def _worker_context(
         and prior_structure_checkpoint is None
         and int(initial_execution_nodes["count"] or 0) == 1
     ):
+        assessment_replay = orchestration_policy.get("assessment_replay")
+        replay_boundary = ""
+        if isinstance(assessment_replay, dict):
+            replay_boundary = (
+                "Frozen replay topology: this validation job replays a durable decomposition "
+                "that was previously qualified on the same locked instance. Revalidate the "
+                "candidate responsibility families and primary-owned shared scope below against "
+                "the current repository. Shared integration files owned by the primary are not "
+                "child write-scope overlap. This replay requires recommendation=expand when the "
+                "frozen boundaries remain valid. If current repository evidence genuinely "
+                "invalidates every safe 2-3 child partition, return continue_single_node with "
+                "that evidence; the replay will fail explicitly rather than force an unsafe "
+                "split. Frozen replay policy: "
+                f"{_json(assessment_replay)}\n\n"
+            )
         structure_assessment_boundary = (
             "Early structure assessment mode: this first attempt is a bounded, read-only "
             "repository and goal assessment. Inspect the code layout, tests, dependency "
@@ -7518,6 +7533,7 @@ def _worker_context(
             "long_running_process, network_access, secret_access, external_cost, "
             "destructive_action, workspace_escape, db_read, or db_migration. For "
             "continue_single_node, proposed_nodes must be empty.\n\n"
+            f"{replay_boundary}"
         )
     receipt_recovery_instruction = ""
     resume_from_materialization_id = (continuity or {}).get(

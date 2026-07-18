@@ -321,6 +321,21 @@ def run_clean_replay(
             "require_contribution_attribution": True,
             "minimum_integrated_contributions": 2,
             "max_child_nodes": 3,
+            "assessment_replay": {
+                "schema": "runtime_early_structure_replay_v1",
+                "required_recommendation": "expand",
+                "validated_responsibility_families": [
+                    "plots, diff, metrics/params reporting, templates, and completions",
+                    "stage lifecycle, pipeline serialization, and run-cache behavior",
+                    "tree/remote streaming, import/update, transfer, and compatibility",
+                ],
+                "primary_owned_shared_scope": [
+                    "central CLI and Repo bindings",
+                    "release version metadata",
+                    "cross-family compatibility cleanup",
+                    "final integration and broad validation",
+                ],
+            },
         },
         fault_profile="small",
         run_id_prefix="phase4g10-clean",

@@ -3899,6 +3899,12 @@ def test_early_structure_checkpoint_pauses_without_ledger_and_resumes_same_sessi
             "orchestration_policy": {
                 "mode": "early_structure_assessment",
                 "required": True,
+                "assessment_replay": {
+                    "schema": "runtime_early_structure_replay_v1",
+                    "required_recommendation": "expand",
+                    "validated_responsibility_families": ["alpha", "beta", "gamma"],
+                    "primary_owned_shared_scope": ["integration"],
+                },
             },
         },
     )
@@ -3906,6 +3912,12 @@ def test_early_structure_checkpoint_pauses_without_ledger_and_resumes_same_sessi
         "understand-scope"
     ]
     node = _node(conn, job_id, "understand-scope")
+    task_body = conn.execute(
+        "SELECT body FROM tasks WHERE id = ?",
+        (node["latest_task_id"],),
+    ).fetchone()[0]
+    assert "Frozen replay topology" in task_body
+    assert '"required_recommendation": "expand"' in task_body
     materialization = conn.execute(
         "SELECT * FROM node_materializations WHERE node_id = ?",
         (node["id"],),

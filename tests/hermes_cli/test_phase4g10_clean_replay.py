@@ -213,6 +213,10 @@ def test_run_clean_replay_freezes_policy_and_cleans_only_after_archive(
     run = calls["run"]
     assert run["run_id_prefix"] == "phase4g10-clean"
     assert run["workspace_ownership_canary"] is True
+    replay = run["orchestration_policy"]["assessment_replay"]
+    assert replay["required_recommendation"] == "expand"
+    assert len(replay["validated_responsibility_families"]) == 3
+    assert "final integration and broad validation" in replay["primary_owned_shared_scope"]
     assert run["evaluated_stop_policy"] == {
         "schema": p4g8_run.EVALUATED_STOP_POLICY_SCHEMA,
         "min_completed_evaluator_attempts": 3,

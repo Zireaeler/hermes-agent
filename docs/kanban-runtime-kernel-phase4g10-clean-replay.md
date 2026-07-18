@@ -15,6 +15,12 @@ reporting 问题。
 Phase 4G10.1 不重复比较模型能力，也不追求再次达到 `63/68`。它只验证当前 Runtime 实现能否从
 干净状态完成一次有界、无运行中热修的 durable orchestra。
 
+该阶段是冻结路径重放，不是重新决定 DVC Large 是否值得拆分。Phase 4G10 已经在同一锁定实例上
+资格化三个责任簇：plots/reporting、stage/pipeline/run-cache、tree/remote/compatibility。Clean Replay
+必须把这些簇和 primary-owned shared scope 作为透明的 assessment replay policy 交给 worker重新验证。
+共享 CLI/Repo 入口、版本元数据和最终集成由 primary 持有，不能被误算为 child write-scope overlap。
+若当前证据真正否定所有安全拆分，运行应明确失败，不得静默退化为单 worker 后仍声称 Clean Replay。
+
 ## 2. 目标
 
 Clean Replay 必须从以下状态启动：
