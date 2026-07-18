@@ -1,0 +1,1032 @@
+diff --git a/dvc/command/repro.py b/dvc/command/repro.py
+index 2578934..ca1a883 100644
+--- a/dvc/command/repro.py
++++ b/dvc/command/repro.py
+@@ -11,6 +11,13 @@ logger = logging.getLogger(__name__)
+ 
+ 
+ class CmdRepro(CmdBase):
++    @property
++    def default_targets(self):
++        from dvc.dvcfile import PIPELINE_FILE
++
++        logger.debug("assuming default target '%s'.", PIPELINE_FILE)
++        return [PIPELINE_FILE]
++
+     def run(self):
+         saved_dir = os.path.realpath(os.curdir)
+         if self.args.cwd:
+@@ -33,7 +40,7 @@ class CmdRepro(CmdBase):
+                     interactive=self.args.interactive,
+                     pipeline=self.args.pipeline,
+                     all_pipelines=self.args.all_pipelines,
+-                    ignore_build_cache=self.args.ignore_build_cache,
++                    ignore_run_cache=self.args.ignore_run_cache,
+                     no_commit=self.args.no_commit,
+                     downstream=self.args.downstream,
+                     recursive=self.args.recursive,
+@@ -136,7 +143,7 @@ def add_parser(subparsers, parent_parser):
+         help="Reproduce all stages in the specified directory.",
+     )
+     repro_parser.add_argument(
+-        "--ignore-build-cache",
++        "--ignore-run-cache",
+         action="store_true",
+         default=False,
+         help="Reproduce all descendants of a changed stage even if their "
+diff --git a/dvc/command/run.py b/dvc/command/run.py
+index ef0f656..ae842ed 100644
+--- a/dvc/command/run.py
++++ b/dvc/command/run.py
+@@ -42,7 +42,7 @@ class CmdRun(CmdBase):
+                 wdir=self.args.wdir,
+                 no_exec=self.args.no_exec,
+                 overwrite=self.args.overwrite_dvcfile,
+-                ignore_build_cache=self.args.ignore_build_cache,
++                ignore_run_cache=self.args.ignore_run_cache,
+                 no_commit=self.args.no_commit,
+                 outs_persist=self.args.outs_persist,
+                 outs_persist_no_cache=self.args.outs_persist_no_cache,
+@@ -165,7 +165,7 @@ def add_parser(subparsers, parent_parser):
+         help="Overwrite existing DVC-file without asking for confirmation.",
+     )
+     run_parser.add_argument(
+-        "--ignore-build-cache",
++        "--ignore-run-cache",
+         action="store_true",
+         default=False,
+         help="Run this stage even if it has been already ran with the same "
+diff --git a/dvc/repo/checkout.py b/dvc/repo/checkout.py
+index ea5f7cd..84692df 100644
+--- a/dvc/repo/checkout.py
++++ b/dvc/repo/checkout.py
+@@ -53,6 +53,9 @@ def _checkout(
+         "modified": [],
+         "failed": [],
+     }
++    if isinstance(targets, str):
++        targets = [targets]
++
+     if not targets:
+         targets = [None]
+         unused = _get_unused_links(self)
+diff --git a/dvc/repo/commit.py b/dvc/repo/commit.py
+index 74c98c5..735acdc 100644
+--- a/dvc/repo/commit.py
++++ b/dvc/repo/commit.py
+@@ -7,7 +7,6 @@ from . import locked
+ def commit(self, target, with_deps=False, recursive=False, force=False):
+     stages = self.collect(target, with_deps=with_deps, recursive=recursive)
+     for stage in stages:
+-        stage.check_can_commit(force=force)
+-        stage.commit()
++        stage.commit(force=force)
+ 
+         Dvcfile(self, stage.path).dump(stage)
+diff --git a/dvc/repo/reproduce.py b/dvc/repo/reproduce.py
+index 8fa2fc9..49d804e 100644
+--- a/dvc/repo/reproduce.py
++++ b/dvc/repo/reproduce.py
+@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
+ 
+ 
+ def _reproduce_stage(stage, **kwargs):
+-    if stage.locked:
++    if stage.locked and not stage.is_import:
+         logger.warning(
+             "{} is locked. Its dependencies are"
+             " not going to be reproduced.".format(stage)
+@@ -167,7 +167,7 @@ def _reproduce_stages(
+         try:
+             ret = _reproduce_stage(stage, **kwargs)
+ 
+-            if len(ret) != 0 and kwargs.get("ignore_build_cache", False):
++            if len(ret) != 0 and kwargs.get("ignore_run_cache", False):
+                 # NOTE: we are walking our pipeline from the top to the
+                 # bottom. If one stage is changed, it will be reproduced,
+                 # which tells us that we should force reproducing all of
+diff --git a/dvc/repo/run.py b/dvc/repo/run.py
+index 43b17f5..26d11c6 100644
+--- a/dvc/repo/run.py
++++ b/dvc/repo/run.py
+@@ -3,6 +3,7 @@ import os
+ from funcy import concat, first
+ 
+ from dvc.exceptions import InvalidArgumentError
++from dvc.stage import is_valid_name
+ from dvc.stage.exceptions import DuplicateStageName, InvalidStageName
+ 
+ from ..exceptions import OutputDuplicationError
+@@ -10,10 +11,6 @@ from . import locked
+ from .scm_context import scm_context
+ 
+ 
+-def is_valid_name(name: str):
+-    return not {"\\", "/", "@", ":"} & set(name)
+-
+-
+ def _get_file_path(kwargs):
+     from dvc.dvcfile import DVC_FILE_SUFFIX, DVC_FILE
+ 
+@@ -44,6 +41,7 @@ def run(self, fname=None, no_exec=False, single_stage=False, **kwargs):
+     stage_cls = PipelineStage
+     path = PIPELINE_FILE
+     stage_name = kwargs.get("name")
++    ignore_run_cache = kwargs.get("ignore_run_cache", False)
+ 
+     if stage_name and single_stage:
+         raise InvalidArgumentError(
+@@ -83,7 +81,7 @@ def run(self, fname=None, no_exec=False, single_stage=False, **kwargs):
+     else:
+         stage.run(
+             no_commit=kwargs.get("no_commit", False),
+-            ignore_build_cache=kwargs.get("ignore_build_cache", False),
++            ignore_run_cache=ignore_run_cache,
+         )
+ 
+     dvcfile.dump(stage, update_pipeline=True)
+diff --git a/dvc/stage/__init__.py b/dvc/stage/__init__.py
+index a1101f0..2770110 100644
+--- a/dvc/stage/__init__.py
++++ b/dvc/stage/__init__.py
+@@ -4,6 +4,7 @@ import pathlib
+ import signal
+ import subprocess
+ import threading
++from collections.abc import Mapping
+ from itertools import chain, product
+ 
+ from funcy import project
+@@ -31,6 +32,10 @@ from .params import OutputParams
+ logger = logging.getLogger(__name__)
+ 
+ 
++def is_valid_name(name):
++    return bool(name) and all(char.isalnum() or char in "-_" for char in name)
++
++
+ def loads_from(cls, repo, path, wdir, data):
+     kw = {
+         "repo": repo,
+@@ -67,13 +72,13 @@ def create_stage(cls, repo, path, **kwargs):
+ 
+     if stage and stage.dvcfile.exists():
+         has_persist_outs = any(out.persist for out in stage.outs)
+-        ignore_build_cache = (
+-            kwargs.get("ignore_build_cache", False) or has_persist_outs
++        ignore_run_cache = (
++            kwargs.get("ignore_run_cache", False) or has_persist_outs
+         )
+         if has_persist_outs:
+-            logger.warning("Build cache is ignored when persisting outputs.")
++            logger.warning("Run cache is ignored when persisting outputs.")
+ 
+-        if not ignore_build_cache and stage.can_be_skipped:
++        if not ignore_run_cache and stage.can_be_skipped:
+             logger.info("Stage is cached, skipping.")
+             return None
+ 
+@@ -252,7 +257,7 @@ class Stage(params.StageParams):
+     @rwlocked(read=["deps", "outs"])
+     def changed(self):
+         if self._changed():
+-            logger.warning("{} changed.".format(self))
++            logger.debug("{} changed.".format(self))
+             return True
+ 
+         logger.debug("{} didn't change.".format(self))
+@@ -261,15 +266,19 @@ class Stage(params.StageParams):
+     def _changed(self):
+         # Short-circuit order: stage md5 is fast, deps are expected to change
+         return (
+-            self.stage_changed(warn=True)
++            self.stage_changed()
+             or self._changed_deps()
+             or self._changed_outs()
+         )
+ 
+     @rwlocked(write=["outs"])
+-    def remove_outs(self, ignore_remove=False, force=False):
++    def remove_outs(
++        self, ignore_remove=False, force=False, cached_only=False
++    ):
+         """Used mainly for `dvc remove --outs` and :func:`Stage.reproduce`."""
+         for out in self.outs:
++            if cached_only and not out.use_cache:
++                continue
+             if out.persist and not force:
+                 out.unprotect()
+             else:
+@@ -415,13 +424,29 @@ class Stage(params.StageParams):
+ 
+         self.outs = []
+         for key in (p.value for p in OutputParams):
+-            self.outs += output.loads_from(
+-                self,
+-                kwargs.get(key, []),
+-                use_cache="no_cache" not in key,
+-                persist="persist" in key,
+-                metric="metrics" in key,
+-            )
++            defaults = {
++                "use_cache": "no_cache" not in key,
++                "persist": "persist" in key,
++                "metric": "metrics" in key,
++            }
++            for value in kwargs.get(key, []):
++                options = {}
++                path = value
++                if isinstance(value, Mapping):
++                    if len(value) != 1:
++                        raise ValueError(
++                            "output definition must contain exactly one path"
++                        )
++                    path, options = next(iter(value.items()))
++                    options = options or {}
++
++                self.outs += output.loads_from(
++                    self,
++                    [path],
++                    use_cache=options.get("cache", defaults["use_cache"]),
++                    persist=options.get("persist", defaults["persist"]),
++                    metric=options.get("metric", defaults["metric"]),
++                )
+ 
+     def _fill_stage_dependencies(self, **kwargs):
+         assert not self.deps
+@@ -509,7 +534,7 @@ class Stage(params.StageParams):
+             if entry.checksum and entry.changed_checksum()
+         ]
+ 
+-    def check_can_commit(self, force):
++    def _prompt_to_commit(self, force):
+         changed_deps = self._changed_entries(self.deps)
+         changed_outs = self._changed_entries(self.outs)
+ 
+@@ -529,8 +554,9 @@ class Stage(params.StageParams):
+                 )
+             self.save()
+ 
+-    @rwlocked(write=["outs"])
+-    def commit(self):
++    @rwlocked(read=["deps"], write=["outs"])
++    def commit(self, force=False):
++        self._prompt_to_commit(force)
+         for out in self.outs:
+             out.commit()
+ 
+@@ -621,11 +647,12 @@ class Stage(params.StageParams):
+ 
+     @rwlocked(read=["deps"], write=["outs"])
+     def run(
+-        self, dry=False, no_commit=False, force=False, ignore_build_cache=False
++        self,
++        dry=False,
++        no_commit=False,
++        force=False,
++        ignore_run_cache=False,
+     ):
+-        if (self.cmd or self.is_import) and not self.locked and not dry:
+-            self.remove_outs(ignore_remove=False, force=False)
+-
+         if self.locked:
+             logger.info(
+                 "Verifying outputs in locked {stage}".format(stage=self)
+@@ -640,6 +667,7 @@ class Stage(params.StageParams):
+                 )
+             )
+             if not dry:
++                self.remove_outs(ignore_remove=False, force=False)
+                 if (
+                     not force
+                     and not self.stage_changed(warn=True)
+@@ -655,32 +683,45 @@ class Stage(params.StageParams):
+                 self.check_missing_outputs()
+ 
+         else:
+-            if not dry:
++            if dry:
++                logger.info("Running command:\n\t{}".format(self.cmd))
++            else:
+                 stage_cache = self.repo.stage_cache
+                 stage_cached = (
+                     not force
+                     and not self.is_callback
+                     and not self.always_changed
++                    and not self.stage_changed()
++                    and not any(out.persist for out in self.outs)
+                     and self._already_cached()
+                 )
+-                use_build_cache = False
++                use_run_cache = False
+                 if not stage_cached:
+                     self._save_deps()
+-                    use_build_cache = (
++                    use_run_cache = (
+                         not force
+-                        and not ignore_build_cache
++                        and not ignore_run_cache
+                         and stage_cache.is_cached(self)
+                     )
+ 
+-                if use_build_cache:
+-                    # restore stage from build cache
++                if use_run_cache:
++                    # Restore stage information from the run cache. Uncached
++                    # outputs remain in the workspace and are validated by
++                    # StageCache before a cache entry is selected.
+                     self.repo.stage_cache.restore(self)
+                     stage_cached = self._outs_cached()
+ 
+                 if stage_cached:
+                     logger.info("Stage is cached, skipping.")
++                    self.remove_outs(
++                        ignore_remove=False,
++                        force=False,
++                        cached_only=True,
++                    )
+                     self.checkout()
+                 else:
++                    if self.cmd:
++                        self.remove_outs(ignore_remove=False, force=False)
+                     logger.info("Running command:\n\t{}".format(self.cmd))
+                     self._run()
+ 
+@@ -829,6 +870,10 @@ class PipelineStage(Stage):
+     def stage_status(self):
+         return ["changed command"] if self.cmd_changed else []
+ 
++    def save(self):
++        super().save()
++        self.cmd_changed = False
++
+     def stage_changed(self, warn=False):
+         if self.cmd_changed and warn:
+             logger.warning("'cmd' of {} has changed.".format(self))
+diff --git a/dvc/stage/cache.py b/dvc/stage/cache.py
+index af6528f..4c83fc6 100644
+--- a/dvc/stage/cache.py
++++ b/dvc/stage/cache.py
+@@ -1,8 +1,8 @@
+ import logging
+ import os
++from copy import deepcopy
+ 
+ import yaml
+-from funcy import first
+ from voluptuous import Invalid
+ 
+ from dvc.schema import COMPILED_LOCK_FILE_STAGE_SCHEMA
+@@ -52,7 +52,9 @@ class StageCache:
+ 
+         try:
+             with open(path, "r") as fobj:
+-                return COMPILED_LOCK_FILE_STAGE_SCHEMA(yaml.safe_load(fobj))
++                cache = yaml.safe_load(fobj)
++            self._validate(cache)
++            return cache
+         except FileNotFoundError:
+             return None
+         except (yaml.error.YAMLError, Invalid):
+@@ -60,6 +62,18 @@ class StageCache:
+             os.unlink(path)
+             return None
+ 
++    @staticmethod
++    def _validate(cache):
++        # Run-cache entries retain whether outputs use DVC's object cache.
++        # The shared lockfile schema does not need this internal marker.
++        lock_data = deepcopy(cache)
++        if isinstance(lock_data, dict):
++            outs = lock_data.get("outs", [])
++            for out in outs if isinstance(outs, list) else []:
++                if isinstance(out, dict):
++                    out.pop("cache", None)
++        COMPILED_LOCK_FILE_STAGE_SCHEMA(lock_data)
++
+     def _load(self, stage):
+         key = _get_stage_hash(stage)
+         if not key:
+@@ -71,24 +85,48 @@ class StageCache:
+ 
+         for value in os.listdir(cache_dir):
+             cache = self._load_cache(key, value)
+-            if cache:
++            if cache and self._outputs_available(stage, cache):
+                 return cache
+ 
+         return None
+ 
++    @staticmethod
++    def _outputs_available(stage, cache):
++        """Check that every result can be restored or is still present."""
++        cached_outs = {
++            out["path"]: out for out in cache.get("outs", [])
++        }
++        for out in stage.outs:
++            cached = cached_outs.get(out.def_path, {})
++            checksum = cached.get(out.checksum_type)
++            if not checksum:
++                return False
++
++            if out.use_cache:
++                if out.cache.changed_cache(checksum):
++                    return False
++            elif not out.exists or out.get_checksum() != checksum:
++                return False
++
++        return True
++
+     def save(self, stage):
+         cache_key = _get_stage_hash(stage)
+         if not cache_key:
+             return
+ 
+         cache = to_single_stage_lockfile(stage)
++        uncached = {out.def_path for out in stage.outs if not out.use_cache}
++        for out in cache.get("outs", []):
++            if out["path"] in uncached:
++                out["cache"] = False
+         cache_value = _get_cache_hash(cache)
+ 
+         if self._load_cache(cache_key, cache_value):
+             return
+ 
+         # sanity check
+-        COMPILED_LOCK_FILE_STAGE_SCHEMA(cache)
++        self._validate(cache)
+ 
+         path = self._get_cache_path(cache_key, cache_value)
+         dpath = os.path.dirname(path)
+@@ -104,6 +142,60 @@ class StageCache:
+             return
+         StageLoader.fill_from_lock(stage, cache)
+ 
++    def _entries(self):
++        if not os.path.isdir(self.cache_dir):
++            return
++
++        for prefix in os.listdir(self.cache_dir):
++            prefix_dir = os.path.join(self.cache_dir, prefix)
++            if not os.path.isdir(prefix_dir):
++                continue
++            for key in os.listdir(prefix_dir):
++                key_dir = os.path.join(prefix_dir, key)
++                if not os.path.isdir(key_dir):
++                    continue
++                for value in os.listdir(key_dir):
++                    cache = self._load_cache(key, value)
++                    if cache:
++                        yield cache
++
++    def get_used_cache(self):
++        """Collect object-cache entries referenced by saved command runs."""
++        from dvc.cache import NamedCache
++
++        cache = NamedCache()
++        local = self.repo.cache.local
++        for entry in self._entries():
++            for out in entry.get("outs", []):
++                if not out.get("cache", True):
++                    continue
++                checksum = out.get(local.PARAM_CHECKSUM)
++                if not checksum:
++                    continue
++
++                name = out["path"]
++                cache.add("local", checksum, name)
++                if not local.is_dir_checksum(checksum):
++                    continue
++
++                cache_info = local.checksum_to_path_info(checksum)
++                if not local.exists(cache_info):
++                    # Pulling run-cache metadata may happen before its object
++                    # cache. Keep the directory checksum in the collection;
++                    # children can be collected once the .dir file is local.
++                    continue
++
++                children = NamedCache()
++                for child in local.get_dir_cache(checksum):
++                    children.add(
++                        "local",
++                        child[local.PARAM_CHECKSUM],
++                        os.path.join(name, child[local.PARAM_RELPATH]),
++                    )
++                cache.add_child_cache(checksum, children)
++
++        return cache
++
+     @staticmethod
+     def _transfer(func, from_remote, to_remote):
+         runs = from_remote.path_info / "runs"
+@@ -113,9 +205,9 @@ class StageCache:
+         for src in from_remote.walk_files(runs):
+             rel = src.relative_to(from_remote.path_info)
+             dst = to_remote.path_info / rel
+-            key = dst.parent
+-            # check if any build cache already exists for this key
+-            if to_remote.exists(key) and first(to_remote.walk_files(key)):
++            # A run-cache key may have multiple results. Only skip an entry
++            # when that exact result has already been transferred.
++            if to_remote.exists(dst):
+                 continue
+             func(src, dst)
+ 
+diff --git a/dvc/stage/exceptions.py b/dvc/stage/exceptions.py
+index 19d07ae..396dc67 100644
+--- a/dvc/stage/exceptions.py
++++ b/dvc/stage/exceptions.py
+@@ -112,8 +112,8 @@ class DuplicateStageName(DvcException):
+ 
+ 
+ class InvalidStageName(DvcException):
+-    def __init__(self,):
++    def __init__(self):
+         super().__init__(
+-            "Stage name cannot contain invalid characters: "
+-            "'\\', '/', '@' and ':'."
++            "Stage name can only contain alphanumeric characters, "
++            "hyphens, and underscores."
+         )
+diff --git a/dvc/stage/loader.py b/dvc/stage/loader.py
+index 05fa630..2641a65 100644
+--- a/dvc/stage/loader.py
++++ b/dvc/stage/loader.py
+@@ -1,6 +1,7 @@
+ import logging
+ import os
+-from collections import Mapping, defaultdict
++from collections import defaultdict
++from collections.abc import Mapping
+ from contextlib import contextmanager
+ from copy import deepcopy
+ from itertools import chain
+@@ -10,7 +11,7 @@ from funcy import first
+ from dvc import dependency, output
+ 
+ from ..dependency import ParamsDependency
+-from .exceptions import StageNameUnspecified, StageNotFound
++from .exceptions import InvalidStageName, StageNameUnspecified, StageNotFound
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -127,7 +128,10 @@ class StageLoader(Mapping):
+ 
+     @classmethod
+     def load_stage(cls, dvcfile, name, stage_data, lock_data):
+-        from . import PipelineStage, Stage, loads_from
++        from . import PipelineStage, Stage, is_valid_name, loads_from
++
++        if not is_valid_name(name):
++            raise InvalidStageName
+ 
+         path, wdir = resolve_paths(
+             dvcfile.path, stage_data.get(Stage.PARAM_WDIR)
+diff --git a/tests/func/test_checkout.py b/tests/func/test_checkout.py
+index 24d9b06..d921a65 100644
+--- a/tests/func/test_checkout.py
++++ b/tests/func/test_checkout.py
+@@ -543,6 +543,14 @@ def test_partial_checkout(tmp_dir, dvc, target):
+ empty_checkout = {"added": [], "deleted": [], "modified": []}
+ 
+ 
++def test_checkout_accepts_string_target(tmp_dir, dvc):
++    tmp_dir.dvc_gen("foo", "foo")
++    os.unlink("foo")
++
++    assert dvc.checkout("foo.dvc") == {**empty_checkout, "added": ["foo"]}
++    assert (tmp_dir / "foo").read_text() == "foo"
++
++
+ def test_stats_on_empty_checkout(tmp_dir, dvc, scm):
+     assert dvc.checkout() == empty_checkout
+     tmp_dir.dvc_gen(
+diff --git a/tests/func/test_repro.py b/tests/func/test_repro.py
+index 10652b1..26924e4 100644
+--- a/tests/func/test_repro.py
++++ b/tests/func/test_repro.py
+@@ -1,5 +1,6 @@
+ import filecmp
+ import getpass
++import logging
+ import os
+ import posixpath
+ import re
+@@ -94,14 +95,14 @@ class TestReproCyclicGraph(SingleStageRun, TestDvc):
+             deps=[self.FOO],
+             outs=["bar.txt"],
+             cmd="echo bar > bar.txt",
+-            name="copybarbar.txt",
++            name="copybarbar-txt",
+         )
+ 
+         self._run(
+             deps=["bar.txt"],
+             outs=["baz.txt"],
+             cmd="echo baz > baz.txt",
+-            name="copybazbaz.txt",
++            name="copybazbaz-txt",
+         )
+ 
+         stage_dump = {
+@@ -368,6 +369,20 @@ class TestReproDry(TestReproChangedData):
+         self.assertFalse(filecmp.cmp(self.file1, self.BAR, shallow=False))
+ 
+ 
++def test_repro_dry_logs_command(tmp_dir, dvc, run_copy, caplog):
++    tmp_dir.gen("dep", "first")
++    stage = run_copy("dep", "out", single_stage=True)
++    tmp_dir.gen("dep", "second")
++
++    caplog.clear()
++    with caplog.at_level(logging.INFO, logger="dvc"):
++        assert dvc.reproduce(stage.path, dry=True) == [stage]
++
++    assert "Running command:" in caplog.text
++    assert stage.cmd in caplog.text
++    assert (tmp_dir / "out").read_text() == "first"
++
++
+ class TestReproUpToDate(TestRepro):
+     def test(self):
+         ret = main(["repro", self._get_stage_target(self.stage)])
+@@ -480,7 +495,7 @@ class TestReproIgnoreBuildCache(TestDvc):
+         with open(code2, "a") as fobj:
+             fobj.write("\n\n")
+ 
+-        stages = self.dvc.reproduce(file3_stage.path, ignore_build_cache=True)
++        stages = self.dvc.reproduce(file3_stage.path, ignore_run_cache=True)
+         self.assertEqual(len(stages), 2)
+         self.assertEqual(stages[0].path, file2_stage.path)
+         self.assertEqual(stages[1].path, file3_stage.path)
+@@ -657,7 +672,7 @@ class TestReproMetricsAddUnchanged(TestDvc):
+ class TestReproPhony(TestReproChangedData):
+     def test(self):
+         stage = self._run(
+-            cmd="cat " + self.file1, deps=[self.file1], name="no_cmd?"
++            cmd="cat " + self.file1, deps=[self.file1], name="no_cmd"
+         )
+ 
+         self.swap_foo_with_bar()
+diff --git a/tests/func/test_run_multistage.py b/tests/func/test_run_multistage.py
+index a84a386..710be19 100644
+--- a/tests/func/test_run_multistage.py
++++ b/tests/func/test_run_multistage.py
+@@ -160,10 +160,27 @@ def test_run_dump_on_multistage(tmp_dir, dvc):
+     }
+ 
+ 
+-def test_run_with_invalid_stage_name(tmp_dir, dvc, run_copy):
++@pytest.mark.parametrize(
++    "name",
++    ["email@https://dvc.org", "with space", "with.period", "with$punct"],
++)
++def test_run_with_invalid_stage_name(tmp_dir, dvc, run_copy, name):
+     tmp_dir.dvc_gen("foo", "foo")
+     with pytest.raises(InvalidStageName):
+-        run_copy("foo", "bar", name="email@https://dvc.org")
++        run_copy("foo", "bar", name=name)
++
++
++def test_load_with_invalid_stage_name(tmp_dir, dvc):
++    from dvc.dvcfile import Dvcfile, PIPELINE_FILE
++    from dvc.utils.stage import dump_stage_file
++
++    dump_stage_file(
++        PIPELINE_FILE,
++        {"stages": {"invalid.name": {"cmd": "echo invalid"}}},
++    )
++
++    with pytest.raises(InvalidStageName):
++        list(Dvcfile(dvc, PIPELINE_FILE).stages.values())
+ 
+ 
+ def test_run_already_exists(tmp_dir, dvc, run_copy):
+diff --git a/tests/func/test_run_single_stage.py b/tests/func/test_run_single_stage.py
+index 88a7479..15c24f7 100644
+--- a/tests/func/test_run_single_stage.py
++++ b/tests/func/test_run_single_stage.py
+@@ -343,7 +343,7 @@ class TestRunUnprotectOutsCopy(TestDvc):
+             [
+                 "run",
+                 "--overwrite-dvcfile",
+-                "--ignore-build-cache",
++                "--ignore-run-cache",
+                 "--single-stage",
+                 "-d",
+                 self.CODE,
+@@ -401,7 +401,7 @@ class TestRunUnprotectOutsSymlink(TestDvc):
+             [
+                 "run",
+                 "--overwrite-dvcfile",
+-                "--ignore-build-cache",
++                "--ignore-run-cache",
+                 "--single-stage",
+                 "-d",
+                 self.CODE,
+@@ -460,7 +460,7 @@ class TestRunUnprotectOutsHardlink(TestDvc):
+             [
+                 "run",
+                 "--overwrite-dvcfile",
+-                "--ignore-build-cache",
++                "--ignore-run-cache",
+                 "--single-stage",
+                 "-d",
+                 self.CODE,
+@@ -545,7 +545,7 @@ class TestCmdRunOverwrite(TestDvc):
+                 "-d",
+                 self.CODE,
+                 "--overwrite-dvcfile",
+-                "--ignore-build-cache",
++                "--ignore-run-cache",
+                 "--single-stage",
+                 "-o",
+                 "out",
+@@ -664,7 +664,7 @@ def test_rerun_deterministic_ignore_cache(tmp_dir, run_copy):
+ 
+     assert run_copy("foo", "out", single_stage=True) is not None
+     assert (
+-        run_copy("foo", "out", ignore_build_cache=True, single_stage=True)
++        run_copy("foo", "out", ignore_run_cache=True, single_stage=True)
+         is not None
+     )
+ 
+@@ -932,8 +932,8 @@ class TestShouldNotCheckoutUponCorruptedLocalHardlinkCache(TestDvc):
+ 
+ 
+ class TestPersistentOutput(TestDvc):
+-    def test_ignore_build_cache(self):
+-        warning = "Build cache is ignored when persisting outputs."
++    def test_ignore_run_cache(self):
++        warning = "Run cache is ignored when persisting outputs."
+ 
+         with open("immutable", "w") as fobj:
+             fobj.write("1")
+@@ -957,7 +957,7 @@ class TestPersistentOutput(TestDvc):
+             assert warning in self._caplog.text
+ 
+         # Even if the "immutable" dependency didn't change
+-        # it should run the command again, as it is "ignoring build cache"
++        # it should run the command again, as it is "ignoring run cache"
+         with open("greetings", "r") as fobj:
+             assert "hello\nhello\n" == fobj.read()
+ 
+diff --git a/tests/unit/command/test_repro.py b/tests/unit/command/test_repro.py
+index 1e20a04..14ededf 100644
+--- a/tests/unit/command/test_repro.py
++++ b/tests/unit/command/test_repro.py
+@@ -1,3 +1,5 @@
++import logging
++
+ from dvc.cli import parse_args
+ from dvc.command.repro import CmdRepro
+ from dvc.dvcfile import PIPELINE_FILE
+@@ -7,7 +9,7 @@ default_arguments = {
+     "downstream": False,
+     "dry": False,
+     "force": False,
+-    "ignore_build_cache": False,
++    "ignore_run_cache": False,
+     "interactive": False,
+     "no_commit": False,
+     "pipeline": False,
+@@ -16,11 +18,14 @@ default_arguments = {
+ }
+ 
+ 
+-def test_default_arguments(dvc, mocker):
++def test_default_arguments(dvc, mocker, caplog):
+     cmd = CmdRepro(parse_args(["repro"]))
+     mocker.patch.object(cmd.repo, "reproduce")
+-    cmd.run()
++    with caplog.at_level(logging.DEBUG, logger="dvc"):
++        cmd.run()
+     cmd.repo.reproduce.assert_called_with(PIPELINE_FILE, **default_arguments)
++    assert "assuming default target 'dvc.yaml'" in caplog.text
++    assert not [record for record in caplog.records if record.levelno >= 30]
+ 
+ 
+ def test_downstream(dvc, mocker):
+diff --git a/tests/unit/command/test_run.py b/tests/unit/command/test_run.py
+index e595b1d..57c3536 100644
+--- a/tests/unit/command/test_run.py
++++ b/tests/unit/command/test_run.py
+@@ -24,7 +24,7 @@ def test_run(mocker, dvc):
+             "wdir",
+             "--no-exec",
+             "--overwrite-dvcfile",
+-            "--ignore-build-cache",
++            "--ignore-run-cache",
+             "--no-commit",
+             "--outs-persist",
+             "outs-persist",
+@@ -58,7 +58,7 @@ def test_run(mocker, dvc):
+         wdir="wdir",
+         no_exec=True,
+         overwrite=True,
+-        ignore_build_cache=True,
++        ignore_run_cache=True,
+         no_commit=True,
+         always_changed=True,
+         cmd="command",
+@@ -85,7 +85,7 @@ def test_run_args_from_cli(mocker, dvc):
+         wdir=None,
+         no_exec=False,
+         overwrite=False,
+-        ignore_build_cache=False,
++        ignore_run_cache=False,
+         no_commit=False,
+         always_changed=False,
+         cmd="echo foo",
+@@ -112,7 +112,7 @@ def test_run_args_with_spaces(mocker, dvc):
+         wdir=None,
+         no_exec=False,
+         overwrite=False,
+-        ignore_build_cache=False,
++        ignore_run_cache=False,
+         no_commit=False,
+         always_changed=False,
+         cmd='echo "foo bar"',
+diff --git a/tests/unit/repo/test_reproduce.py b/tests/unit/repo/test_reproduce.py
+index 1050e76..1cea5a9 100644
+--- a/tests/unit/repo/test_reproduce.py
++++ b/tests/unit/repo/test_reproduce.py
+@@ -1,6 +1,15 @@
+ import mock
+ 
+-from dvc.repo.reproduce import _get_active_graph
++from dvc.repo.reproduce import _get_active_graph, _reproduce_stage
++
++
++def test_locked_import_does_not_log_warning(caplog, mocker):
++    stage = mocker.Mock(locked=True, is_import=True)
++    stage.reproduce.return_value = None
++
++    _reproduce_stage(stage)
++
++    assert "is locked" not in caplog.text
+ 
+ 
+ def test_get_active_graph(tmp_dir, dvc):
+diff --git a/tests/unit/test_stage.py b/tests/unit/test_stage.py
+index dcfb771..a3a677e 100644
+--- a/tests/unit/test_stage.py
++++ b/tests/unit/test_stage.py
+@@ -1,3 +1,4 @@
++import logging
+ import os
+ import signal
+ import subprocess
+@@ -8,7 +9,9 @@ import mock
+ import pytest
+ 
+ from dvc.dependency.repo import RepoDependency
++from dvc.path_info import PathInfo
+ from dvc.stage import Stage
++from dvc.stage.cache import StageCache
+ from dvc.stage.exceptions import StageUpdateError
+ 
+ TEST_STAGE_DICT = {
+@@ -96,12 +99,15 @@ def test_stage_run_ignore_sigint(dvc, mocker):
+     assert signal.getsignal(signal.SIGINT) == signal.default_int_handler
+ 
+ 
+-def test_always_changed(dvc):
++def test_always_changed(dvc, caplog):
+     stage = Stage(dvc, "path", always_changed=True)
+     stage.save()
+-    with dvc.lock:
+-        assert stage.changed()
+-        assert stage.status()["path"] == ["always changed"]
++    caplog.clear()
++    with caplog.at_level(logging.WARNING, logger="dvc.stage"):
++        with dvc.lock:
++            assert stage.changed()
++            assert stage.status()["path"] == ["always changed"]
++    assert not caplog.records
+ 
+ 
+ def test_stage_cache(tmp_dir, dvc, run_copy, mocker):
+@@ -138,3 +144,121 @@ def test_stage_cache(tmp_dir, dvc, run_copy, mocker):
+ 
+     assert (tmp_dir / "out").exists()
+     assert (tmp_dir / "out").read_text() == "dep"
++
++
++def test_run_cache_with_uncached_output(tmp_dir, dvc):
++    tmp_dir.gen(
++        {
++            "dep": "dep",
++            "copy-and-count.py": (
++                "import pathlib, shutil, sys\n"
++                "counter = pathlib.Path(sys.argv[3])\n"
++                "count = int(counter.read_text()) + 1 "
++                "if counter.exists() else 1\n"
++                "counter.write_text(str(count))\n"
++                "shutil.copyfile(sys.argv[1], sys.argv[2])\n"
++            ),
++        }
++    )
++    kwargs = {
++        "cmd": "python copy-and-count.py dep out counter",
++        "deps": ["dep", "copy-and-count.py"],
++        "outs_no_cache": ["out"],
++        "single_stage": True,
++    }
++
++    stage = dvc.run(**kwargs)
++    assert (tmp_dir / "counter").read_text() == "1"
++
++    os.unlink(stage.path)
++    dvc.run(**kwargs)
++
++    # The matching uncached output is already in the workspace, so the run
++    # cache can be used without executing the command again.
++    assert (tmp_dir / "counter").read_text() == "1"
++
++    os.unlink(stage.path)
++    os.unlink("out")
++    dvc.run(**kwargs)
++
++    # An uncached output cannot be restored; a missing one requires a rerun.
++    assert (tmp_dir / "counter").read_text() == "2"
++
++
++def test_fill_stage_outputs_with_inline_options(tmp_dir, dvc):
++    from dvc.stage import create_stage
++
++    stage = create_stage(
++        Stage,
++        dvc,
++        str(tmp_dir / "options.dvc"),
++        outs=[
++            "cached",
++            {"uncached": {"cache": False}},
++            {"persistent": {"persist": True}},
++        ],
++        metrics=[{"metric": {"cache": False}}],
++    )
++
++    outs = {out.def_path: out for out in stage.outs}
++    assert outs["cached"].use_cache
++    assert not outs["uncached"].use_cache
++    assert outs["persistent"].persist
++    assert outs["metric"].metric
++    assert not outs["metric"].use_cache
++
++
++def test_run_cache_collects_only_cached_output_checksums(tmp_dir, dvc):
++    tmp_dir.gen(
++        {
++            "dep": "dep",
++            "other": "other",
++            "copy.py": (
++                "import shutil, sys\n"
++                "shutil.copyfile(sys.argv[1], sys.argv[2])\n"
++            ),
++        }
++    )
++    cached = dvc.run(
++        cmd="python copy.py dep cached",
++        deps=["dep", "copy.py"],
++        outs=["cached"],
++        name="cached",
++    )
++    uncached = dvc.run(
++        cmd="python copy.py other uncached",
++        deps=["other", "copy.py"],
++        outs_no_cache=["uncached"],
++        name="uncached",
++    )
++
++    used = dvc.stage_cache.get_used_cache()
++    checksums = set(used.scheme_keys("local"))
++
++    assert cached.outs[0].checksum in checksums
++    assert uncached.outs[0].checksum not in checksums
++
++    uncached_entries = [
++        entry
++        for entry in dvc.stage_cache._entries()
++        if entry["outs"][0]["path"] == "uncached"
++    ]
++    assert uncached_entries[0]["outs"][0]["cache"] is False
++
++
++def test_run_cache_transfer_checks_each_result(mocker):
++    source = mocker.Mock(path_info=PathInfo("/source"))
++    destination = mocker.Mock(path_info=PathInfo("/destination"))
++    first = source.path_info / "runs" / "aa" / "key" / "first"
++    second = source.path_info / "runs" / "aa" / "key" / "second"
++    source.exists.return_value = True
++    source.walk_files.return_value = [first, second]
++    destination.exists.side_effect = lambda path: path.name == "first"
++    transfer = mocker.Mock()
++
++    StageCache._transfer(transfer, source, destination)
++
++    transfer.assert_called_once_with(
++        second,
++        destination.path_info / "runs" / "aa" / "key" / "second",
++    )
+

@@ -1,0 +1,985 @@
+diff --git a/dvc/command/remote.py b/dvc/command/remote.py
+index 615ba53..9943f3c 100644
+--- a/dvc/command/remote.py
++++ b/dvc/command/remote.py
+@@ -66,7 +66,11 @@ class CmdRemoteModify(CmdRemote):
+     def run(self):
+         with self.config.edit(self.args.level) as conf:
+             self._check_exists(conf)
+-            conf["remote"][self.args.name][self.args.option] = self.args.value
++            remote = conf["remote"][self.args.name]
++            if self.args.unset:
++                remote.pop(self.args.option, None)
++            else:
++                remote[self.args.option] = self.args.value
+         return 0
+ 
+ 
+@@ -85,6 +89,7 @@ class CmdRemoteDefault(CmdRemote):
+                 if self.args.unset:
+                     conf["core"].pop("remote", None)
+                 else:
++                    self._check_exists(self.config)
+                     conf["core"]["remote"] = self.args.name
+         return 0
+ 
+diff --git a/dvc/command/update.py b/dvc/command/update.py
+index c3ef60e..341f3b9 100644
+--- a/dvc/command/update.py
++++ b/dvc/command/update.py
+@@ -12,7 +12,9 @@ class CmdUpdate(CmdBase):
+         ret = 0
+         for target in self.args.targets:
+             try:
+-                self.repo.update(target, self.args.rev)
++                self.repo.update(
++                    target, self.args.rev, recursive=self.args.recursive
++                )
+             except DvcException:
+                 logger.exception("failed to update '{}'.".format(target))
+                 ret = 1
+@@ -37,4 +39,11 @@ def add_parser(subparsers, parent_parser):
+         help="Git revision (e.g. SHA, branch, tag)",
+         metavar="<commit>",
+     )
++    update_parser.add_argument(
++        "-R",
++        "--recursive",
++        action="store_true",
++        default=False,
++        help="Recursively update DVC-files under directory targets.",
++    )
+     update_parser.set_defaults(func=CmdUpdate)
+diff --git a/dvc/config.py b/dvc/config.py
+index ff968a6..d8c80ba 100644
+--- a/dvc/config.py
++++ b/dvc/config.py
+@@ -151,6 +151,7 @@ SCHEMA = {
+                     Optional("listobjects", default=False): Bool,
+                     Optional("use_ssl", default=True): Bool,
+                     "sse": str,
++                    "sse_kms_key_id": str,
+                     "acl": str,
+                     "grant_read": str,
+                     "grant_read_acp": str,
+diff --git a/dvc/data_cloud.py b/dvc/data_cloud.py
+index 0fceabb..118aaec 100644
+--- a/dvc/data_cloud.py
++++ b/dvc/data_cloud.py
+@@ -1,7 +1,9 @@
+ """Manages dvc remotes that user can use with push/pull/status commands."""
+ 
+ import logging
++import os
+ 
++from dvc.cache import NamedCache
+ from dvc.config import NoRemoteError
+ from dvc.remote import Remote
+ 
+@@ -47,6 +49,43 @@ class DataCloud(object):
+     def _init_remote(self, name):
+         return Remote(self.repo, name=name)
+ 
++    def _collect_run_cache(self):
++        cache = NamedCache()
++        runs = self.repo.stage_cache.cache_dir
++        if not os.path.isdir(runs):
++            return cache
++
++        local = self.repo.cache.local
++        for root, _, files in os.walk(runs):
++            key = os.path.basename(root)
++            for value in files:
++                entry = self.repo.stage_cache._load_cache(key, value)
++                if not entry:
++                    continue
++
++                for out in entry.get("outs", []):
++                    checksum = out.get(local.PARAM_CHECKSUM)
++                    if not checksum:
++                        continue
++
++                    name = out[local.PARAM_PATH]
++                    item = NamedCache.make("local", checksum, name)
++                    checksum_info = local.checksum_to_path_info(checksum)
++                    if local.is_dir_checksum(checksum) and local.exists(
++                        checksum_info
++                    ):
++                        children = NamedCache()
++                        for child in local.get_dir_cache(checksum):
++                            children.add(
++                                "local",
++                                child[local.PARAM_CHECKSUM],
++                                os.path.join(name, child[local.PARAM_RELPATH]),
++                            )
++                        item.add_child_cache(checksum, children)
++                    cache.update(item)
++
++        return cache
++
+     def push(
+         self,
+         cache,
+@@ -68,6 +107,7 @@ class DataCloud(object):
+         remote = self.get_remote(remote, "push")
+ 
+         if run_cache:
++            cache.update(self._collect_run_cache())
+             self.repo.stage_cache.push(remote)
+ 
+         return self.repo.cache.local.push(
+@@ -96,11 +136,24 @@ class DataCloud(object):
+ 
+         if run_cache:
+             self.repo.stage_cache.pull(remote)
++            cache.update(self._collect_run_cache())
+ 
+         downloaded_items_num = self.repo.cache.local.pull(
+             cache, jobs=jobs, remote=remote, show_checksums=show_checksums
+         )
+ 
++        # Directory run-cache entries need their .dir file locally before the
++        # referenced child checksums can be collected.
++        if run_cache:
++            run_cache_items = self._collect_run_cache()
++            cache.update(run_cache_items)
++            downloaded_items_num += self.repo.cache.local.pull(
++                run_cache_items,
++                jobs=jobs,
++                remote=remote,
++                show_checksums=show_checksums,
++            )
++
+         if not remote.verify:
+             self._save_pulled_checksums(cache)
+ 
+diff --git a/dvc/remote/s3.py b/dvc/remote/s3.py
+index 0ebb409..8d92642 100644
+--- a/dvc/remote/s3.py
++++ b/dvc/remote/s3.py
+@@ -46,6 +46,10 @@ class S3Remote(BaseRemote):
+         if self.sse:
+             self.extra_args["ServerSideEncryption"] = self.sse
+ 
++        self.sse_kms_key_id = config.get("sse_kms_key_id")
++        if self.sse_kms_key_id:
++            self.extra_args["SSEKMSKeyId"] = self.sse_kms_key_id
++
+         self.acl = config.get("acl")
+         if self.acl:
+             self.extra_args["ACL"] = self.acl
+diff --git a/dvc/repo/imp_url.py b/dvc/repo/imp_url.py
+index 73420eb..893245c 100644
+--- a/dvc/repo/imp_url.py
++++ b/dvc/repo/imp_url.py
+@@ -18,7 +18,11 @@ def imp_url(self, url, out=None, fname=None, erepo=None, locked=True):
+     path, wdir, out = resolve_paths(self, out)
+ 
+     # NOTE: when user is importing something from within his own repository
+-    if os.path.exists(url) and path_isin(os.path.abspath(url), self.root_dir):
++    if (
++        erepo is None
++        and os.path.exists(url)
++        and path_isin(os.path.abspath(url), self.root_dir)
++    ):
+         url = relpath(url, wdir)
+ 
+     stage = create_stage(
+diff --git a/dvc/repo/tree.py b/dvc/repo/tree.py
+index ce8990b..38687ec 100644
+--- a/dvc/repo/tree.py
++++ b/dvc/repo/tree.py
+@@ -3,7 +3,7 @@ import os
+ 
+ from dvc.exceptions import OutputNotFoundError
+ from dvc.path_info import PathInfo
+-from dvc.scm.tree import BaseTree, WorkingTree
++from dvc.scm.tree import BaseTree
+ 
+ 
+ class DvcTree(BaseTree):
+@@ -22,7 +22,10 @@ class DvcTree(BaseTree):
+ 
+         return outs
+ 
+-    def open(self, path, mode="r", encoding="utf-8"):
++    def open(self, path, mode="r", encoding="utf-8", remote=None):
++        if "b" in mode:
++            encoding = None
++
+         try:
+             outs = self._find_outs(path, strict=False)
+         except OutputNotFoundError as exc:
+@@ -31,18 +34,9 @@ class DvcTree(BaseTree):
+         if len(outs) != 1 or outs[0].is_dir_checksum:
+             raise IOError(errno.EISDIR)
+ 
+-        out = outs[0]
+-        # temporary hack to make cache use WorkingTree and not GitTree, because
+-        # cache dir doesn't exist in the latter.
+-        saved_tree = self.repo.tree
+-        self.repo.tree = WorkingTree(self.repo.root_dir)
+-        try:
+-            if out.changed_cache():
+-                raise FileNotFoundError
+-        finally:
+-            self.repo.tree = saved_tree
+-
+-        return open(out.cache_path, mode=mode, encoding=encoding)
++        return self.repo._open_cached(
++            outs[0], remote=remote, mode=mode, encoding=encoding
++        )
+ 
+     def exists(self, path):
+         try:
+@@ -129,13 +123,15 @@ class RepoTree(BaseTree):
+         self.repo = repo
+         self.dvctree = DvcTree(repo)
+ 
+-    def open(self, *args, **kwargs):
++    def open(self, path, mode="r", encoding="utf-8", remote=None):
+         try:
+-            return self.dvctree.open(*args, **kwargs)
++            return self.dvctree.open(
++                path, mode=mode, encoding=encoding, remote=remote
++            )
+         except FileNotFoundError:
+             pass
+ 
+-        return self.repo.tree.open(*args, **kwargs)
++        return self.repo.tree.open(path, mode=mode, encoding=encoding)
+ 
+     def exists(self, path):
+         return self.repo.tree.exists(path) or self.dvctree.exists(path)
+diff --git a/dvc/repo/update.py b/dvc/repo/update.py
+index 5ade233..f5df5bf 100644
+--- a/dvc/repo/update.py
++++ b/dvc/repo/update.py
+@@ -2,13 +2,16 @@ from . import locked
+ 
+ 
+ @locked
+-def update(self, target, rev=None):
++def update(self, target, rev=None, recursive=False):
+     from ..dvcfile import Dvcfile
+ 
+-    dvcfile = Dvcfile(self, target)
+-    stage = dvcfile.stage
+-    stage.update(rev)
++    if recursive:
++        stages = self.collect(target, recursive=True)
++    else:
++        stages = [Dvcfile(self, target).stage]
+ 
+-    dvcfile.dump(stage)
++    for stage in stages:
++        stage.update(rev)
++        Dvcfile(self, stage.path).dump(stage)
+ 
+-    return stage
++    return stages if recursive else stages[0]
+diff --git a/dvc/scm/git/tree.py b/dvc/scm/git/tree.py
+index b1cff91..1a8a399 100644
+--- a/dvc/scm/git/tree.py
++++ b/dvc/scm/git/tree.py
+@@ -72,6 +72,17 @@ class GitTree(BaseTree):
+         # according to git-fast-import(1) file mode could be 644 or 755
+         return obj.mode & GIT_MODE_FILE == GIT_MODE_FILE
+ 
++    def stat(self, path):
++        obj = self.git_object_by_path(path)
++        if obj is None:
++            raise OSError(errno.ENOENT, "No such file", path)
++
++        mtime = self.git.commit(self.rev).committed_date
++        size = getattr(obj, "size", 0)
++        return os.stat_result(
++            (obj.mode, 0, 0, 0, 0, 0, size, mtime, mtime, mtime)
++        )
++
+     @staticmethod
+     def _is_tree_and_contains(obj, path):
+         if obj.mode != GIT_MODE_DIR:
+diff --git a/dvc/scm/tree.py b/dvc/scm/tree.py
+index 21e7bb1..baa5d86 100644
+--- a/dvc/scm/tree.py
++++ b/dvc/scm/tree.py
+@@ -23,6 +23,9 @@ class BaseTree(object):
+     def isfile(self, path):
+         """Test whether a path is a regular file"""
+ 
++    def stat(self, path):
++        """Return stat information for a path."""
++
+     def walk(self, top, topdown=True):
+         """Directory tree generator.
+ 
+@@ -31,6 +34,11 @@ class BaseTree(object):
+         - it could raise exceptions, there is no onerror argument
+         """
+ 
++    def walk_files(self, top):
++        for root, _, files in self.walk(top):
++            for fname in files:
++                yield os.path.join(root, fname)
++
+ 
+ class WorkingTree(BaseTree):
+     """Proxies the repo file access methods to working tree files"""
+@@ -44,6 +52,8 @@ class WorkingTree(BaseTree):
+ 
+     def open(self, path, mode="r", encoding="utf-8"):
+         """Open file and return a stream."""
++        if "b" in mode:
++            encoding = None
+         return open(path, mode=mode, encoding=encoding)
+ 
+     def exists(self, path):
+@@ -58,6 +68,9 @@ class WorkingTree(BaseTree):
+         """Test whether a path is a regular file"""
+         return os.path.isfile(path)
+ 
++    def stat(self, path):
++        return os.stat(path)
++
+     def walk(self, top, topdown=True):
+         """Directory tree generator.
+ 
+diff --git a/dvc/utils/__init__.py b/dvc/utils/__init__.py
+index 5776eae..30ebafb 100644
+--- a/dvc/utils/__init__.py
++++ b/dvc/utils/__init__.py
+@@ -29,25 +29,85 @@ def dos2unix(data):
+     return data.replace(b"\r\n", b"\n")
+ 
+ 
+-def file_md5(fname):
++def _is_text_block(block):
++    from dvc.istextfile import TEXT_CHARS
++
++    if not block:
++        return True
++    if b"\x00" in block:
++        return False
++
++    nontext = block.translate(None, TEXT_CHARS)
++    return float(len(nontext)) / len(block) <= 0.30
++
++
++def _fobj_size(fobj):
++    try:
++        pos = fobj.tell()
++        fobj.seek(0, os.SEEK_END)
++        size = fobj.tell()
++        fobj.seek(pos)
++        return size
++    except (AttributeError, IOError, OSError, ValueError):
++        return None
++
++
++def file_md5(fname, tree=None):
+     """ get the (md5 hexdigest, md5 digest) of a file """
+     from dvc.progress import Tqdm
+-    from dvc.istextfile import istextfile
+-
+-    fname = fspath_py35(fname)
+-
+-    if os.path.exists(fname):
+-        hash_md5 = hashlib.md5()
+-        binary = not istextfile(fname)
+-        size = os.path.getsize(fname)
+-        no_progress_bar = True
+-        if size >= LARGE_FILE_SIZE:
+-            no_progress_bar = False
+-            msg = (
+-                "Computing md5 for a large file '{}'. This is only done once."
+-            )
+-            logger.info(msg.format(relpath(fname)))
+-        name = relpath(fname)
++
++    is_fobj = hasattr(fname, "read")
++    manager = None
++    if is_fobj:
++        fobj = fname
++        name = getattr(fobj, "name", "")
++    else:
++        fname = fspath_py35(fname)
++        if tree is None:
++            exists = os.path.exists(fname)
++        else:
++            exists = tree.exists(fname)
++        if not exists:
++            return (None, None)
++
++        opened = (tree.open if tree else open)(fname, "rb")
++        if hasattr(opened, "read"):
++            fobj = opened
++        else:
++            manager = opened
++            fobj = manager.__enter__()
++        name = fname
++
++    size = _fobj_size(fobj)
++    no_progress_bar = size is None or size < LARGE_FILE_SIZE
++    name = (
++        relpath(name)
++        if name and isinstance(name, (str, os.PathLike))
++        else ""
++    )
++    if not no_progress_bar:
++        msg = "Computing md5 for a large file '{}'. This is only done once."
++        logger.info(msg.format(name))
++
++    hash_md5 = hashlib.md5()
++    try:
++        try:
++            start = fobj.tell()
++        except (AttributeError, IOError, OSError, ValueError):
++            start = None
++
++        first = fobj.read(512)
++        first_bytes = first.encode() if isinstance(first, str) else first
++        binary = not _is_text_block(first_bytes)
++
++        if start is not None:
++            try:
++                fobj.seek(start)
++                data = fobj.read(LOCAL_CHUNK_SIZE)
++            except (AttributeError, IOError, OSError, ValueError):
++                data = first
++        else:
++            data = first
+ 
+         with Tqdm(
+             desc=name,
+@@ -56,23 +116,19 @@ def file_md5(fname):
+             bytes=True,
+             leave=False,
+         ) as pbar:
+-            with open(fname, "rb") as fobj:
+-                while True:
+-                    data = fobj.read(LOCAL_CHUNK_SIZE)
+-                    if not data:
+-                        break
+-
+-                    if binary:
+-                        chunk = data
+-                    else:
+-                        chunk = dos2unix(data)
+-
+-                    hash_md5.update(chunk)
+-                    pbar.update(len(data))
+-
+-        return (hash_md5.hexdigest(), hash_md5.digest())
+-
+-    return (None, None)
++            while data:
++                data_bytes = data.encode() if isinstance(data, str) else data
++                chunk = data_bytes if binary else dos2unix(data_bytes)
++                hash_md5.update(chunk)
++                pbar.update(len(data_bytes))
++                data = fobj.read(LOCAL_CHUNK_SIZE)
++    finally:
++        if manager is not None:
++            manager.__exit__(None, None, None)
++        elif not is_fobj:
++            fobj.close()
++
++    return (hash_md5.hexdigest(), hash_md5.digest())
+ 
+ 
+ def bytes_hash(byts, typ):
+diff --git a/dvc/utils/fs.py b/dvc/utils/fs.py
+index 1bbea9d..74723cb 100644
+--- a/dvc/utils/fs.py
++++ b/dvc/utils/fs.py
+@@ -9,7 +9,6 @@ import nanotime
+ from shortuuid import uuid
+ 
+ from dvc.exceptions import DvcException
+-from dvc.scm.tree import is_working_tree
+ from dvc.system import System
+ from dvc.utils import dict_md5, fspath, fspath_py35
+ 
+@@ -33,14 +32,14 @@ def get_inode(path):
+ 
+ def get_mtime_and_size(path, tree):
+ 
+-    if os.path.isdir(fspath_py35(path)):
+-        assert is_working_tree(tree)
++    stat_tree = getattr(tree, "tree", tree)
+ 
++    if tree.isdir(fspath_py35(path)):
+         size = 0
+         files_mtimes = {}
+         for file_path in tree.walk_files(path):
+             try:
+-                stats = os.stat(file_path)
++                stats = stat_tree.stat(file_path)
+             except OSError as exc:
+                 # NOTE: broken symlink case.
+                 if exc.errno != errno.ENOENT:
+@@ -53,7 +52,7 @@ def get_mtime_and_size(path, tree):
+         # max(mtime(f) for f in non_ignored_files)
+         mtime = dict_md5(files_mtimes)
+     else:
+-        base_stat = os.stat(fspath_py35(path))
++        base_stat = stat_tree.stat(fspath_py35(path))
+         size = base_stat.st_size
+         mtime = base_stat.st_mtime
+         mtime = int(nanotime.timestamp(mtime))
+diff --git a/tests/func/test_data_cloud.py b/tests/func/test_data_cloud.py
+index e17633b..d8e35ff 100644
+--- a/tests/func/test_data_cloud.py
++++ b/tests/func/test_data_cloud.py
+@@ -6,6 +6,7 @@ import uuid
+ from unittest import SkipTest
+ 
+ import pytest
++from flaky.flaky_decorator import flaky
+ 
+ from dvc.cache import NamedCache
+ from dvc.compat import fspath, fspath_py35
+@@ -718,6 +719,7 @@ def test_verify_checksums(tmp_dir, scm, dvc, mocker, tmp_path_factory):
+ 
+ 
+ @pytest.mark.parametrize("erepo", ["git_dir", "erepo_dir"])
++@flaky(max_runs=3, min_passes=1)
+ def test_pull_git_imports(request, tmp_dir, dvc, scm, erepo):
+     erepo = request.getfixturevalue(erepo)
+     with erepo.chdir():
+@@ -854,6 +856,74 @@ def test_pipeline_file_target_ops(tmp_dir, dvc, local_remote, run_copy):
+         dvc.pull(["dvc.yaml:StageThatDoesNotExist"])
+ 
+ 
++def test_push_pull_collects_run_cache(tmp_dir, dvc, local_remote, run_copy):
++    tmp_dir.gen("foo", "first")
++    stage = run_copy("foo", "bar", name="copy-foo-bar")
++    first_checksum = stage.outs[0].checksum
++
++    tmp_dir.gen("foo", "second")
++    dvc.reproduce(stage.addressing)
++    stage = stage.reload()
++    second_checksum = stage.outs[0].checksum
++    assert first_checksum != second_checksum
++
++    dvc.push(run_cache=True)
++    remote = dvc.cloud.get_remote()
++    for checksum in [first_checksum, second_checksum]:
++        assert remote.exists(remote.checksum_to_path_info(checksum))
++
++    remove(dvc.cache.local.cache_dir)
++    dvc.fetch(run_cache=True)
++    for checksum in [first_checksum, second_checksum]:
++        assert dvc.cache.local.exists(
++            dvc.cache.local.checksum_to_path_info(checksum)
++        )
++
++
++def test_push_pull_collects_directory_run_cache(tmp_dir, dvc, local_remote):
++    tmp_dir.gen(
++        {
++            "src": {"data": "first"},
++            "copydir.py": (
++                "import shutil, sys\n"
++                "shutil.copytree(sys.argv[1], sys.argv[2])\n"
++            ),
++        }
++    )
++    stage = dvc.run(
++        cmd="python copydir.py src out",
++        deps=["copydir.py", "src"],
++        outs=["out"],
++        name="copy-directory",
++    )
++    first_checksum = stage.outs[0].checksum
++
++    (tmp_dir / "src" / "data").write_text("second")
++    dvc.reproduce(stage.addressing)
++    stage = stage.reload()
++    second_checksum = stage.outs[0].checksum
++    assert first_checksum != second_checksum
++
++    dvc.push(run_cache=True)
++    remote = dvc.cloud.get_remote()
++    for checksum in [first_checksum, second_checksum]:
++        assert remote.exists(remote.checksum_to_path_info(checksum))
++        for entry in dvc.cache.local.get_dir_cache(checksum):
++            child = remote.checksum_to_path_info(entry[remote.PARAM_CHECKSUM])
++            assert remote.exists(child)
++
++    remove(dvc.cache.local.cache_dir)
++    dvc.fetch(run_cache=True)
++    for checksum in [first_checksum, second_checksum]:
++        checksum_info = dvc.cache.local.checksum_to_path_info(checksum)
++        assert dvc.cache.local.exists(checksum_info)
++        for entry in dvc.cache.local.get_dir_cache(checksum):
++            child = dvc.cache.local.checksum_to_path_info(
++                entry[dvc.cache.local.PARAM_CHECKSUM]
++            )
++            assert dvc.cache.local.exists(child)
++
++
+ @pytest.mark.parametrize(
+     "fs, msg",
+     [
+diff --git a/tests/func/test_import.py b/tests/func/test_import.py
+index 3eddc11..bef74c4 100644
+--- a/tests/func/test_import.py
++++ b/tests/func/test_import.py
+@@ -30,6 +30,18 @@ def test_import(tmp_dir, scm, dvc, erepo_dir):
+     }
+ 
+ 
++def test_import_does_not_rewrite_external_path(tmp_dir, dvc, erepo_dir):
++    tmp_dir.gen({"foo": "local content", "subdir": {}})
++    erepo_dir.scm_gen("foo", "external content", commit="add foo")
++
++    stage = dvc.imp(
++        fspath(erepo_dir), "foo", out=os.path.join("subdir", "imported")
++    )
++
++    assert (tmp_dir / "subdir" / "imported").read_text() == "external content"
++    assert stage.deps[0].def_path == "foo"
++
++
+ @pytest.mark.parametrize("src_is_dvc", [True, False])
+ def test_import_git_file(tmp_dir, scm, dvc, git_dir, src_is_dvc):
+     if src_is_dvc:
+diff --git a/tests/func/test_remote.py b/tests/func/test_remote.py
+index 269feb8..1fff940 100644
+--- a/tests/func/test_remote.py
++++ b/tests/func/test_remote.py
+@@ -123,12 +123,18 @@ class TestRemoteDefault(TestDvc):
+ 
+ 
+ def test_show_default(dvc, capsys):
++    assert main(["remote", "add", "foo", "s3://bucket/path"]) == 0
+     assert main(["remote", "default", "foo"]) == 0
+     assert main(["remote", "default"]) == 0
+     out, _ = capsys.readouterr()
+     assert out == "foo\n"
+ 
+ 
++def test_default_requires_existing_remote(dvc):
++    assert main(["remote", "default", "missing"]) != 0
++    assert Config(dvc.dvc_dir)["core"].get("remote") is None
++
++
+ class TestRemoteShouldHandleUppercaseRemoteName(TestDvc):
+     upper_case_remote_name = "UPPERCASEREMOTE"
+ 
+@@ -233,6 +239,15 @@ def test_modify_missing_remote(tmp_dir, dvc):
+     assert main(["remote", "modify", "myremote", "user", "xxx"]) == 251
+ 
+ 
++def test_remote_modify_unset(dvc):
++    assert main(["remote", "add", "storage", "s3://bucket/path"]) == 0
++    assert main(["remote", "modify", "storage", "profile", "test"]) == 0
++    assert main(["remote", "modify", "storage", "profile", "--unset"]) == 0
++
++    config = configobj.ConfigObj(dvc.config.files["repo"])
++    assert "profile" not in config['remote "storage"']
++
++
+ def test_external_dir_resource_on_no_cache(tmp_dir, dvc, tmp_path_factory):
+     # https://github.com/iterative/dvc/issues/2647, is some situations
+     # (external dir dependency) cache is required to calculate dir md5
+diff --git a/tests/func/test_tree.py b/tests/func/test_tree.py
+index 1874898..840eb48 100644
+--- a/tests/func/test_tree.py
++++ b/tests/func/test_tree.py
+@@ -1,11 +1,14 @@
+ # encoding: utf-8
+ 
++import os
+ from os.path import join
+ 
+ from dvc.ignore import CleanTree
+ from dvc.scm import SCM
+ from dvc.scm.git import GitTree
+ from dvc.scm.tree import WorkingTree
++from dvc.utils import file_md5
++from dvc.utils.fs import get_mtime_and_size
+ from tests.basic_env import TestDir, TestGit, TestGitSubmodule
+ 
+ 
+@@ -74,6 +77,18 @@ class GitTreeTests(object):
+         self.assertFalse(self.tree.isfile(self.DATA_DIR))
+         self.assertFalse(self.tree.isfile("not-existing-file"))
+ 
++    def test_file_utils(self):
++        self.scm.add([self.FOO])
++        self.scm.commit("add")
++
++        with self.tree.open(self.FOO, "rb") as fobj:
++            self.assertEqual(file_md5(fobj), file_md5(self.FOO))
++
++        self.assertEqual(
++            get_mtime_and_size(self.FOO, self.tree)[1],
++            str(os.path.getsize(self.FOO)),
++        )
++
+ 
+ class TestGitTree(TestGit, GitTreeTests):
+     def setUp(self):
+diff --git a/tests/func/test_update.py b/tests/func/test_update.py
+index 2da66f3..297ab10 100644
+--- a/tests/func/test_update.py
++++ b/tests/func/test_update.py
+@@ -166,3 +166,27 @@ def test_update_rev(tmp_dir, dvc, scm, git_dir):
+     }
+     with open(fspath_py35(tmp_dir / "foo")) as f:
+         assert "foobar foo" == f.read()
++
++
++def test_update_recursive(tmp_dir, dvc, erepo_dir):
++    with erepo_dir.chdir():
++        erepo_dir.scm_gen(
++            {"one": "one", "two": "two"}, commit="add imported files"
++        )
++
++    imports = tmp_dir / "imports"
++    imports.mkdir()
++    dvc.imp(fspath(erepo_dir), "one", out=fspath(imports / "one"))
++    dvc.imp(fspath(erepo_dir), "two", out=fspath(imports / "two"))
++
++    with erepo_dir.chdir():
++        erepo_dir.scm_gen(
++            {"one": "updated one", "two": "updated two"},
++            commit="update imported files",
++        )
++
++    stages = dvc.update(fspath(imports), recursive=True)
++
++    assert len(stages) == 2
++    assert (imports / "one").read_text() == "updated one"
++    assert (imports / "two").read_text() == "updated two"
+diff --git a/tests/remotes.py b/tests/remotes.py
+index 3dd3eac..ac67648 100644
+--- a/tests/remotes.py
++++ b/tests/remotes.py
+@@ -5,6 +5,7 @@ import uuid
+ from contextlib import contextmanager
+ from subprocess import CalledProcessError, Popen, check_output
+ 
++import pytest
+ from moto.s3 import mock_s3
+ 
+ from dvc.remote import GDriveRemote
+@@ -36,6 +37,20 @@ os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = TEST_GCP_CREDS_FILE
+ always_test = staticmethod(lambda: True)
+ 
+ 
++@pytest.fixture(name="remote_setup")
++def remote_setup_fixture(dvc):
++    @contextmanager
++    def setup(remote_cls):
++        if not remote_cls.should_test():
++            pytest.skip(
++                "{} remote is not configured".format(remote_cls.__name__)
++            )
++        with remote_cls.remote(dvc) as remote:
++            yield remote
++
++    return setup
++
++
+ class Local:
+     should_test = always_test
+ 
+diff --git a/tests/unit/command/test_update.py b/tests/unit/command/test_update.py
+index ff8e779..3ef7214 100644
+--- a/tests/unit/command/test_update.py
++++ b/tests/unit/command/test_update.py
+@@ -5,9 +5,14 @@ from dvc.command.update import CmdUpdate
+ 
+ 
+ @pytest.mark.parametrize(
+-    "command,rev", [(["update"], None), (["update", "--rev", "REV"], "REV")]
++    "command,rev,recursive",
++    [
++        (["update"], None, False),
++        (["update", "--rev", "REV"], "REV", False),
++        (["update", "--recursive"], None, True),
++    ],
+ )
+-def test_update(dvc, mocker, command, rev):
++def test_update(dvc, mocker, command, rev, recursive):
+     targets = ["target1", "target2", "target3"]
+     cli_args = parse_args(command + targets)
+     assert cli_args.func == CmdUpdate
+@@ -16,5 +21,7 @@ def test_update(dvc, mocker, command, rev):
+ 
+     assert cmd.run() == 0
+ 
+-    calls = [mocker.call(target, rev) for target in targets]
++    calls = [
++        mocker.call(target, rev, recursive=recursive) for target in targets
++    ]
+     m.assert_has_calls(calls)
+diff --git a/tests/unit/remote/test_remote_dir.py b/tests/unit/remote/test_remote_dir.py
+index 22b4918..f524c0e 100644
+--- a/tests/unit/remote/test_remote_dir.py
++++ b/tests/unit/remote/test_remote_dir.py
+@@ -7,6 +7,7 @@ from dvc.path_info import PathInfo
+ from dvc.remote.s3 import S3Remote
+ from dvc.utils.fs import walk_files
+ from tests.remotes import GCP, S3Mocked
++from tests.remotes import remote_setup_fixture  # noqa: F401
+ 
+ remotes = [GCP, S3Mocked]
+ 
+@@ -27,10 +28,8 @@ FILE_WITH_CONTENTS = {
+ 
+ 
+ @pytest.fixture
+-def remote(request, dvc):
+-    if not request.param.should_test():
+-        raise pytest.skip()
+-    with request.param.remote(dvc) as remote:
++def remote(request, remote_setup):
++    with remote_setup(request.param) as remote:
+         request.param.put_objects(remote, FILE_WITH_CONTENTS)
+         yield remote
+ 
+diff --git a/tests/unit/remote/test_s3.py b/tests/unit/remote/test_s3.py
+index c32091e..0add8eb 100644
+--- a/tests/unit/remote/test_s3.py
++++ b/tests/unit/remote/test_s3.py
+@@ -25,6 +25,19 @@ def test_init(dvc):
+     assert remote.path_info == url
+ 
+ 
++def test_sse_kms_key_id(dvc):
++    key_id = "arn:aws:kms:us-east-1:123456789012:key/example"
++    config = {
++        "url": url,
++        "sse": "aws:kms",
++        "sse_kms_key_id": key_id,
++    }
++    remote = S3Remote(dvc, config)
++
++    assert remote.extra_args["ServerSideEncryption"] == "aws:kms"
++    assert remote.extra_args["SSEKMSKeyId"] == key_id
++
++
+ def test_grants(dvc):
+     config = {
+         "url": url,
+diff --git a/tests/unit/repo/test_tree.py b/tests/unit/repo/test_tree.py
+index f99b8f5..550c776 100644
+--- a/tests/unit/repo/test_tree.py
++++ b/tests/unit/repo/test_tree.py
+@@ -2,7 +2,10 @@ import os
+ import shutil
+ 
+ from dvc.compat import fspath_py35
+-from dvc.repo.tree import DvcTree
++from dvc.remote.base import RemoteActionNotImplemented
++from dvc.remote.local import LocalRemote
++from dvc.repo.tree import DvcTree, RepoTree
++from dvc.utils.fs import remove
+ 
+ 
+ def test_exists(tmp_dir, dvc):
+@@ -24,6 +27,74 @@ def test_open(tmp_dir, dvc):
+         assert fobj.read() == "foo"
+ 
+ 
++def test_open_streams_from_remote(tmp_dir, dvc, local_remote):
++    tmp_dir.gen("foo", "foo")
++    (stage,) = dvc.add("foo")
++    dvc.push()
++
++    cache_path = stage.outs[0].cache_path
++    remove(cache_path)
++    (tmp_dir / "foo").unlink()
++
++    with DvcTree(dvc).open("foo", "r") as fobj:
++        assert fobj.read() == "foo"
++
++    assert not os.path.exists(cache_path)
++
++
++def test_open_streams_binary_from_remote(tmp_dir, dvc, local_remote):
++    tmp_dir.gen("foo", "foo")
++    (stage,) = dvc.add("foo")
++    dvc.push()
++
++    remove(stage.outs[0].cache_path)
++    (tmp_dir / "foo").unlink()
++
++    with DvcTree(dvc).open("foo", "rb") as fobj:
++        assert fobj.read() == b"foo"
++
++
++def test_open_pulls_when_remote_cannot_stream(
++    tmp_dir, dvc, local_remote, mocker
++):
++    tmp_dir.gen("foo", "foo")
++    (stage,) = dvc.add("foo")
++    dvc.push()
++
++    cache_path = stage.outs[0].cache_path
++    remove(cache_path)
++    (tmp_dir / "foo").unlink()
++
++    error = RemoteActionNotImplemented("open", "local")
++    mocker.patch.object(LocalRemote, "open", side_effect=error)
++
++    with DvcTree(dvc).open("foo", "r") as fobj:
++        assert fobj.read() == "foo"
++
++    assert os.path.exists(cache_path)
++
++
++def test_repo_tree_open_streams_from_remote(tmp_dir, dvc, local_remote):
++    tmp_dir.gen("foo", "foo")
++    (stage,) = dvc.add("foo")
++    dvc.push()
++
++    remove(stage.outs[0].cache_path)
++    (tmp_dir / "foo").unlink()
++
++    with RepoTree(dvc).open("foo", "rb") as fobj:
++        assert fobj.read() == b"foo"
++
++
++def test_repo_tree_does_not_pass_remote_to_scm(tmp_dir, scm, dvc):
++    tmp_dir.gen("foo", "foo")
++    scm.add(["foo"])
++    scm.commit("add foo")
++
++    with RepoTree(dvc).open("foo", remote="unused") as fobj:
++        assert fobj.read() == "foo"
++
++
+ def test_open_in_history(tmp_dir, scm, dvc):
+     tmp_dir.gen("foo", "foo")
+     dvc.add("foo")
+diff --git a/tests/unit/test_config.py b/tests/unit/test_config.py
+index e5d970c..ba9a1ad 100644
+--- a/tests/unit/test_config.py
++++ b/tests/unit/test_config.py
+@@ -16,3 +16,19 @@ from dvc.config import Config
+ )
+ def test_to_relpath(path, expected):
+     assert Config._to_relpath(os.path.join(".", "config"), path) == expected
++
++
++def test_s3_sse_kms_key_id():
++    key_id = "arn:aws:kms:us-east-1:123456789012:key/example"
++    config = {
++        "remote": {
++            "storage": {
++                "url": "s3://bucket/path",
++                "sse": "aws:kms",
++                "sse_kms_key_id": key_id,
++            }
++        }
++    }
++
++    validated = Config.validate(config)
++    assert validated["remote"]["storage"]["sse_kms_key_id"] == key_id
+

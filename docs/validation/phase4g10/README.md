@@ -3,6 +3,31 @@
 Phase 4G10 用同一个 SWE-EVO DVC Large 任务验证：Hermes Runtime Kernel 能否在 primary 完成真实
 仓库审查后，创建少量隔离 durable workers，并将其贡献重新交给原 primary thread 集成。
 
+## Phase 4G10.1 Clean Replay
+
+Run：`phase4g10-clean-large-ccf9c3e173`
+
+Phase 4G10.1 已使用提交 `f617ca1`、全新 DB/workspace 和同一冻结 DVC Large 实例完成 Clean Runtime
+Replay。四轴结果为：
+
+| 结论轴 | 结果 |
+| --- | --- |
+| Runtime correctness | `passed` |
+| Clean replay invariants | `passed` |
+| Effective orchestration | `passed` |
+| Task capability | `task-failed`，最终 F2P `54/68`、P2P `241/242` |
+
+该 run 真实完成 `1 primary -> 3 parallel durable children -> 3 frozen contributions -> original primary
+integration -> 3 evaluator rounds / 2 same-session remediations`。历史 repair、receipt recovery、strategy node、
+重复 ledger/terminal fact 和 consistency 异常均为零。它不以 resolved 或再次达到 `63/68` 为门槛。
+
+- [Clean Replay 中文执行总结](iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/execution-summary.md)
+- [Clean Replay 完整过程](iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/capability-trace.md)
+- [Clean Replay machine assertions](iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/clean-replay.json)
+- [Clean Replay Artifact 目录](iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/artifact-catalog.md)
+
+以下 Phase 4G10 Arm 2 是 Clean Replay 之前的历史对照运行。
+
 ## 正式结论
 
 Run：`phase4g10-arm2-large-059ea4b541`

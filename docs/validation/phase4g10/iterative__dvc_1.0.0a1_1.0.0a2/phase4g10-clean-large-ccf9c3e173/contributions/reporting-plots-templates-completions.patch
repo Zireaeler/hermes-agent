@@ -1,0 +1,816 @@
+diff --git a/dvc/command/metrics.py b/dvc/command/metrics.py
+index 1944012..7d27121 100644
+--- a/dvc/command/metrics.py
++++ b/dvc/command/metrics.py
+@@ -87,7 +87,7 @@ class CmdMetricsRemove(CmdBase):
+         return 0
+ 
+ 
+-def _show_diff(diff):
++def _show_diff(diff, markdown=False):
+     from collections import OrderedDict
+ 
+     from dvc.utils.diff import table
+@@ -105,7 +105,9 @@ def _show_diff(diff):
+                 ]
+             )
+ 
+-    return table(["Path", "Metric", "Value", "Change"], rows)
++    return table(
++        ["Path", "Metric", "Value", "Change"], rows, markdown=markdown
++    )
+ 
+ 
+ class CmdMetricsDiff(CmdBase):
+@@ -124,7 +126,7 @@ class CmdMetricsDiff(CmdBase):
+ 
+                 logger.info(json.dumps(diff))
+             else:
+-                table = _show_diff(diff)
++                table = _show_diff(diff, markdown=self.args.show_md)
+                 if table:
+                     logger.info(table)
+ 
+@@ -263,6 +265,12 @@ def add_parser(subparsers, parent_parser):
+         default=False,
+         help="Show output in JSON format.",
+     )
++    metrics_diff_parser.add_argument(
++        "--show-md",
++        action="store_true",
++        default=False,
++        help="Show tabulated output in the Markdown format.",
++    )
+     metrics_diff_parser.set_defaults(func=CmdMetricsDiff)
+ 
+     METRICS_REMOVE_HELP = "Remove metric mark on a DVC-tracked file."
+diff --git a/dvc/command/params.py b/dvc/command/params.py
+index 881b2cf..40545f3 100644
+--- a/dvc/command/params.py
++++ b/dvc/command/params.py
+@@ -8,7 +8,7 @@ from dvc.exceptions import DvcException
+ logger = logging.getLogger(__name__)
+ 
+ 
+-def _show_diff(diff):
++def _show_diff(diff, markdown=False):
+     from dvc.utils.diff import table
+ 
+     rows = []
+@@ -17,7 +17,7 @@ def _show_diff(diff):
+         for param, change in sorted_pdiff.items():
+             rows.append([fname, param, change["old"], change["new"]])
+ 
+-    return table(["Path", "Param", "Old", "New"], rows)
++    return table(["Path", "Param", "Old", "New"], rows, markdown=markdown)
+ 
+ 
+ class CmdParamsDiff(CmdBase):
+@@ -34,7 +34,7 @@ class CmdParamsDiff(CmdBase):
+ 
+                 logger.info(json.dumps(diff))
+             else:
+-                table = _show_diff(diff)
++                table = _show_diff(diff, markdown=self.args.show_md)
+                 if table:
+                     logger.info(table)
+ 
+@@ -94,4 +94,10 @@ def add_parser(subparsers, parent_parser):
+         default=False,
+         help="Show output in JSON format.",
+     )
++    params_diff_parser.add_argument(
++        "--show-md",
++        action="store_true",
++        default=False,
++        help="Show tabulated output in the Markdown format.",
++    )
+     params_diff_parser.set_defaults(func=CmdParamsDiff)
+diff --git a/dvc/command/plot.py b/dvc/command/plot.py
+index f52dd63..9742253 100644
+--- a/dvc/command/plot.py
++++ b/dvc/command/plot.py
+@@ -9,7 +9,7 @@ from dvc.repo.plot.data import WORKSPACE_REVISION_NAME
+ logger = logging.getLogger(__name__)
+ 
+ 
+-class CmdPLot(CmdBase):
++class CmdPlots(CmdBase):
+     def _revisions(self):
+         raise NotImplementedError
+ 
+@@ -79,12 +79,12 @@ class CmdPLot(CmdBase):
+         return 0
+ 
+ 
+-class CmdPlotShow(CmdPLot):
++class CmdPlotsShow(CmdPlots):
+     def _revisions(self):
+         return None
+ 
+ 
+-class CmdPlotDiff(CmdPLot):
++class CmdPlotsDiff(CmdPlots):
+     def _revisions(self):
+         revisions = self.args.revisions or []
+         if len(revisions) <= 1:
+@@ -95,30 +95,27 @@ class CmdPlotDiff(CmdPLot):
+ 
+ 
+ def add_parser(subparsers, parent_parser):
+-    PLOT_HELP = (
+-        "Generating plots for metrics stored in structured files "
+-        "(JSON, CSV, TSV)."
+-    )
++    PLOTS_HELP = "Commands to visualize and compare plot data."
+ 
+-    plot_parser = subparsers.add_parser(
+-        "plot",
++    plots_parser = subparsers.add_parser(
++        "plots",
+         parents=[parent_parser],
+-        description=append_doc_link(PLOT_HELP, "plot"),
+-        help=PLOT_HELP,
++        description=append_doc_link(PLOTS_HELP, "plots"),
++        help=PLOTS_HELP,
+         formatter_class=argparse.RawDescriptionHelpFormatter,
+     )
+-    plot_subparsers = plot_parser.add_subparsers(
++    plots_subparsers = plots_parser.add_subparsers(
+         dest="cmd",
+-        help="Use `dvc plot CMD --help` to display command-specific help.",
++        help="Use `dvc plots CMD --help` to display command-specific help.",
+     )
+ 
+-    fix_subparsers(plot_subparsers)
++    fix_subparsers(plots_subparsers)
+ 
+-    SHOW_HELP = "Generate a plot image file from a metrics file."
+-    plot_show_parser = plot_subparsers.add_parser(
++    SHOW_HELP = "Generate plots from data files."
++    plot_show_parser = plots_subparsers.add_parser(
+         "show",
+         parents=[parent_parser],
+-        description=append_doc_link(SHOW_HELP, "plot/show"),
++        description=append_doc_link(SHOW_HELP, "plots/show"),
+         help=SHOW_HELP,
+         formatter_class=argparse.RawDescriptionHelpFormatter,
+     )
+@@ -154,7 +151,7 @@ def add_parser(subparsers, parent_parser):
+         "--no-csv-header",
+         action="store_true",
+         default=False,
+-        help="Required when CSV or TSV datafile does not have a header.",
++        help="Required when CSV or TSV data file does not have a header.",
+     )
+     plot_show_parser.add_argument(
+         "--no-html",
+@@ -166,18 +163,18 @@ def add_parser(subparsers, parent_parser):
+     plot_show_parser.add_argument("--xlab", default=None, help="X axis title.")
+     plot_show_parser.add_argument("--ylab", default=None, help="Y axis title.")
+     plot_show_parser.add_argument(
+-        "datafile", nargs="?", default=None, help="Metrics file to visualize.",
++        "datafile", nargs="?", default=None, help="Data file to visualize.",
+     )
+-    plot_show_parser.set_defaults(func=CmdPlotShow)
++    plot_show_parser.set_defaults(func=CmdPlotsShow)
+ 
+     PLOT_DIFF_HELP = (
+-        "Plot metrics differences between commits in the DVC "
+-        "repository, or between the last commit and the workspace."
++        "Show changes in plots between commits in the DVC repository, "
++        "or between a commit and the workspace."
+     )
+-    plot_diff_parser = plot_subparsers.add_parser(
++    plot_diff_parser = plots_subparsers.add_parser(
+         "diff",
+         parents=[parent_parser],
+-        description=append_doc_link(PLOT_DIFF_HELP, "plot/diff"),
++        description=append_doc_link(PLOT_DIFF_HELP, "plots/diff"),
+         help=PLOT_DIFF_HELP,
+         formatter_class=argparse.RawDescriptionHelpFormatter,
+     )
+@@ -193,7 +190,7 @@ def add_parser(subparsers, parent_parser):
+         "--datafile",
+         nargs="?",
+         default=None,
+-        help="Metrics file to visualize.",
++        help="Data file to visualize.",
+     )
+     plot_diff_parser.add_argument(
+         "-f", "--file", default=None, help="Name of the generated file."
+@@ -220,7 +217,7 @@ def add_parser(subparsers, parent_parser):
+         "--no-csv-header",
+         action="store_true",
+         default=False,
+-        help="Provided CSV ot TSV datafile does not have a header.",
++        help="Provided CSV or TSV data file does not have a header.",
+     )
+     plot_diff_parser.add_argument(
+         "--no-html",
+@@ -237,4 +234,4 @@ def add_parser(subparsers, parent_parser):
+         default=None,
+         help="Git revisions to plot from",
+     )
+-    plot_diff_parser.set_defaults(func=CmdPlotDiff)
++    plot_diff_parser.set_defaults(func=CmdPlotsDiff)
+diff --git a/dvc/repo/diff.py b/dvc/repo/diff.py
+index bdc886c..f2f49e0 100644
+--- a/dvc/repo/diff.py
++++ b/dvc/repo/diff.py
+@@ -53,12 +53,20 @@ def diff(self, a_rev="HEAD", b_rev=None):
+         }
+ 
+     working_tree = self.tree
+-    a_tree = self.scm.get_tree(a_rev)
++    # An unborn repository has no ``HEAD`` tree. Treat it as an empty tree so
++    # that the default diff still reports workspace outputs as added. Explicit
++    # unknown revisions must continue to raise the regular SCM error.
++    a_tree = None
++    if a_rev != "HEAD" or self.scm.has_rev(a_rev):
++        a_tree = self.scm.get_tree(a_rev)
+     b_tree = self.scm.get_tree(b_rev) if b_rev else working_tree
+ 
+     try:
+-        self.tree = a_tree
+-        old = _paths_checksums()
++        if a_tree is None:
++            old = {}
++        else:
++            self.tree = a_tree
++            old = _paths_checksums()
+ 
+         self.tree = b_tree
+         new = _paths_checksums()
+diff --git a/dvc/repo/plot/__init__.py b/dvc/repo/plot/__init__.py
+index 1d7f544..839c2b6 100644
+--- a/dvc/repo/plot/__init__.py
++++ b/dvc/repo/plot/__init__.py
+@@ -7,10 +7,12 @@ from dvc.exceptions import DvcException
+ from dvc.repo import locked
+ from dvc.repo.plot.data import PlotData
+ from dvc.repo.plot.template import NoDataForTemplateError, Template
++from dvc.utils import relpath
+ 
+ logger = logging.getLogger(__name__)
+ 
+-PAGE_HTML = """<html>
++PAGE_HTML = """<!DOCTYPE html>
++<html>
+ <head>
+     <title>DVC Plot</title>
+     <script src="https://cdn.jsdelivr.net/npm/vega@5.10.0"></script>
+@@ -41,7 +43,18 @@ class TooManyDataSourcesError(DvcException):
+ 
+ class NoDataOrTemplateProvided(DvcException):
+     def __init__(self):
+-        super().__init__("Datafile or template is not specified.")
++        super().__init__("Data file or template is not specified.")
++
++
++def _collect_plots(repo):
++    """Collect local outputs marked as plots in the current repo tree."""
++    plots = {
++        relpath(out.path_info, repo.root_dir)
++        for stage in repo.stages
++        for out in stage.outs
++        if out.scheme == "local" and getattr(out, "plot", False)
++    }
++    return sorted(plots)
+ 
+ 
+ def _evaluate_templatepath(repo, template=None):
+@@ -129,20 +142,33 @@ def plot(
+ 
+         revisions = [WORKSPACE_REVISION_NAME]
+ 
+-    if not datafile and not template:
+-        raise NoDataOrTemplateProvided()
++    if datafile or template:
++        datafiles = [datafile]
++    else:
++        datafiles = _collect_plots(repo)
++        if not datafiles:
++            raise NoDataOrTemplateProvided()
+ 
+     template_path = _evaluate_templatepath(repo, template)
+ 
+-    plot_content = fill_template(
+-        repo, datafile, template_path, revisions, **kwargs
+-    )
++    plot_contents = [
++        fill_template(repo, path, template_path, revisions, **kwargs)
++        for path in datafiles
++    ]
+ 
+     if embed:
+-        div = DIV_HTML.format(id="plot", vega_json=plot_content)
+-        plot_content = PAGE_HTML.format(divs=div)
++        divs = []
++        for index, content in enumerate(plot_contents):
++            plot_id = "plot" if len(plot_contents) == 1 else "plot{}".format(
++                index
++            )
++            divs.append(DIV_HTML.format(id=plot_id, vega_json=content))
++        return PAGE_HTML.format(divs="\n".join(divs))
++
++    if len(plot_contents) == 1:
++        return plot_contents[0]
+ 
+-    return plot_content
++    return "[\n{}\n]".format(",\n".join(plot_contents))
+ 
+ 
+ def _parse_template(template_path, priority_datafile):
+diff --git a/dvc/repo/plot/template.py b/dvc/repo/plot/template.py
+index cc59014..9d01516 100644
+--- a/dvc/repo/plot/template.py
++++ b/dvc/repo/plot/template.py
+@@ -59,6 +59,7 @@ class Template:
+                 indent=self.INDENT,
+                 separators=self.SEPARATORS,
+             )
++            fobj.write("\n")
+ 
+     @staticmethod
+     def get_data_anchor(template_content):
+@@ -191,6 +192,7 @@ class DefaultLinearTemplate(Template):
+                 "field": Template.Y_ANCHOR,
+                 "type": "quantitative",
+                 "title": Template.Y_TITLE_ANCHOR,
++                "scale": {"zero": False},
+             },
+             "color": {"field": "rev", "type": "nominal"},
+         },
+@@ -240,6 +242,7 @@ class DefaultScatterTemplate(Template):
+                 "field": Template.Y_ANCHOR,
+                 "type": "quantitative",
+                 "title": Template.Y_TITLE_ANCHOR,
++                "scale": {"zero": False},
+             },
+             "color": {"field": "rev", "type": "nominal"},
+         },
+diff --git a/dvc/utils/diff.py b/dvc/utils/diff.py
+index 9b57f62..657535c 100644
+--- a/dvc/utils/diff.py
++++ b/dvc/utils/diff.py
+@@ -85,7 +85,7 @@ def diff(old, new, with_unchanged=False):
+     return dict(res)
+ 
+ 
+-def table(header, rows):
++def table(header, rows, markdown=False):
+     from texttable import Texttable
+ 
+     if not rows:
+@@ -96,9 +96,16 @@ def table(header, rows):
+     # disable automatic formatting
+     t.set_cols_dtype(["t"] * len(header))
+ 
+-    # remove borders to make it easier for users to copy stuff
+-    t.set_chars([""] * len(header))
+-    t.set_deco(0)
++    if markdown:
++        # A header separator and vertical delimiters are enough to form a
++        # Markdown table. Avoid an outer border so the first line is the
++        # actual table header.
++        t.set_chars(["-", "|", "|", "-"])
++        t.set_deco(Texttable.HEADER | Texttable.VLINES)
++    else:
++        # Remove borders to make it easier for users to copy values.
++        t.set_chars([""] * 4)
++        t.set_deco(0)
+ 
+     t.add_rows([header] + rows)
+ 
+diff --git a/scripts/completion/dvc.bash b/scripts/completion/dvc.bash
+index 78f966a..c71f235 100644
+--- a/scripts/completion/dvc.bash
++++ b/scripts/completion/dvc.bash
+@@ -5,8 +5,8 @@
+ #   - https://stackoverflow.com/questions/12933362
+ 
+ _dvc_commands='add cache checkout commit config destroy diff fetch get-url get gc \
+-  import-url import init install lock list metrics move pipeline plot pull push \
+-  remote remove repro root run status unlock unprotect update version'
++  import-url import init install lock list metrics move params pipeline plots \
++  pull push remote remove repro root run status unlock unprotect update version'
+ 
+ _dvc_options='-h --help -V --version'
+ _dvc_global_options='-h --help -q --quiet -v --verbose'
+@@ -38,7 +38,7 @@ _dvc_lock_COMPGEN=_dvc_compgen_DVCFiles
+ _dvc_metrics='add diff modify remove show'
+ _dvc_metrics_add='-t --type -x --xpath'
+ _dvc_metrics_add_COMPGEN=_dvc_compgen_files
+-_dvc_metrics_diff='--targets -t --type -x --xpath -R --show-json'
++_dvc_metrics_diff='--targets -R --recursive --all --show-json --show-md'
+ _dvc_metrics_modify='-t --type -x --xpath'
+ _dvc_metrics_modify_COMPGEN=_dvc_compgen_files
+ _dvc_metrics_remove=''
+@@ -47,13 +47,15 @@ _dvc_metrics_show='-t --type -x --xpath -a --all-branches -T --all-tags -R --rec
+ _dvc_metrics_show_COMPGEN=_dvc_compgen_files
+ _dvc_move=''
+ _dvc_move_COMPGEN=_dvc_compgen_files
++_dvc_params='diff'
++_dvc_params_diff='--all --show-json --show-md'
+ _dvc_pipeline='list show'
+ _dvc_pipeline_list=''
+ _dvc_pipeline_show='-c --commands -o --outs --ascii --dot --tree -l --locked'
+ _dvc_pipeline_show_COMPGEN=_dvc_compgen_DVCFiles
+-_dvc_plot='show diff'
+-_dvc_plot_show='-t --template -f --file -s --select -x -y --stdout --no-csv-header --no-html --title --xlab --ylab'
+-_dvc_plot_diff='-t --template -d --datafile -f --file -s --select -x -y --stdout --no-csv-header --no-html --title --xlab --ylab'
++_dvc_plots='show diff'
++_dvc_plots_show='-t --template -f --file -s --select -x -y --stdout --no-csv-header --no-html --title --xlab --ylab'
++_dvc_plots_diff='-t --template -d --datafile -f --file -s --select -x -y --stdout --no-csv-header --no-html --title --xlab --ylab'
+ _dvc_pull='-j --jobs -r --remote -a --all-branches -T --all-tags -f --force -d --with-deps -R --recursive'
+ _dvc_pull_COMPGEN=_dvc_compgen_DVCFiles
+ _dvc_push='-j --jobs -r --remote -a --all-branches -T --all-tags -d --with-deps -R --recursive'
+diff --git a/scripts/completion/dvc.zsh b/scripts/completion/dvc.zsh
+index 8e6fbfb..4f62900 100644
+--- a/scripts/completion/dvc.zsh
++++ b/scripts/completion/dvc.zsh
+@@ -31,10 +31,11 @@ _dvc_commands() {
+     "lock:Lock DVC-file."
+     "metrics:Commands to add, manage, collect and display metrics."
+     "move:Rename or move a DVC controlled data file or a directory."
++    "params:Commands to display params."
+     "pipeline:Manage pipelines."
++    "plots:Commands to visualize and compare plot data."
+     "pull:Pull data files from a DVC remote storage."
+     "push:Push data files to a DVC remote storage."
+-    "plot:Generate plot for metrics structured as JSON, CSV or TSV."
+     "remote:Manage remote storage configuration."
+     "remove:Remove outputs of DVC-file."
+     "repro:Check for changes and reproduce DVC-file and dependencies."
+@@ -177,11 +178,33 @@ _dvc_metrics=(
+   "1:Sub command:(add show diff modify remove)"
+ )
+ 
++_dvc_metrics_diff=(
++  "--targets[Metric files or directories to show diff for.]:Metric files or directories:_files"
++  {-R,--recursive}"[Recursively process metric files under directory targets.]"
++  "--all[Show unchanged metrics as well.]"
++  "--show-json[Show output in JSON format.]"
++  "--show-md[Show tabulated output in the Markdown format.]"
++  "1:Old Git commit to compare (defaults to HEAD):"
++  "2:New Git commit to compare (defaults to the current workspace):"
++)
++
+ _dvc_move=(
+   "1:Source:_files"
+   "2:Destination:"
+ )
+ 
++_dvc_params=(
++  "1:Sub command:(diff)"
++)
++
++_dvc_params_diff=(
++  "--all[Show unchanged params as well.]"
++  "--show-json[Show output in JSON format.]"
++  "--show-md[Show tabulated output in the Markdown format.]"
++  "1:Old Git commit to compare (defaults to HEAD):"
++  "2:New Git commit to compare (defaults to the current workspace):"
++)
++
+ _dvc_pipeline=(
+   "1:Sub command:(show list)"
+ )
+@@ -207,10 +230,41 @@ _dvc_push=(
+   "*:Stages:_files -g '(*.dvc|Dvcfile)'"
+ )
+ 
+-_dvc_plot=(
++_dvc_plots=(
+   "1:Sub command:(show diff)"
+ )
+ 
++_dvc_plots_show=(
++  {-t,--template}"[File to be injected with data.]:Template:_files"
++  {-f,--file}"[Name of the generated file.]:File:_files"
++  {-s,--select}"[Choose fields or JSONPath to include in the plot.]:Fields or JSONPath:"
++  "-x[Field name for x axis.]:Field:"
++  "-y[Field name for y axis.]:Field:"
++  "--stdout[Print plot specification to stdout.]"
++  "--no-csv-header[CSV or TSV data file does not have a header.]"
++  "--no-html[Do not wrap Vega plot JSON with HTML.]"
++  "--title[Plot title.]:Title:"
++  "--xlab[X axis title.]:Title:"
++  "--ylab[Y axis title.]:Title:"
++  "1:Data file to visualize:_files"
++)
++
++_dvc_plots_diff=(
++  {-t,--template}"[File to be injected with data.]:Template:_files"
++  {-d,--datafile}"[Data file to visualize.]:Data file:_files"
++  {-f,--file}"[Name of the generated file.]:File:_files"
++  {-s,--select}"[Choose fields or JSONPath to include in the plot.]:Fields or JSONPath:"
++  "-x[Field name for x axis.]:Field:"
++  "-y[Field name for y axis.]:Field:"
++  "--stdout[Print plot specification to stdout.]"
++  "--no-csv-header[CSV or TSV data file does not have a header.]"
++  "--no-html[Do not wrap Vega plot JSON with HTML.]"
++  "--title[Plot title.]:Title:"
++  "--xlab[X axis title.]:Title:"
++  "--ylab[Y axis title.]:Title:"
++  "*:Git revisions to plot from:"
++)
++
+ _dvc_remote=(
+   "1:Sub command:(add default remove modify list)"
+ )
+@@ -310,12 +364,26 @@ case $words[1] in
+   install) _arguments $_dvc_global_options $_dvc_install ;;
+   lock) _arguments $_dvc_global_options $_dvc_lock ;;
+   list) _arguments $_dvc_global_options $_dvc_list ;;
+-  metrics) _arguments $_dvc_global_options $_dvc_metrics ;;
++  metrics)
++    case $words[2] in
++      diff) _arguments $_dvc_global_options $_dvc_metrics_diff ;;
++      *) _arguments $_dvc_global_options $_dvc_metrics ;;
++    esac ;;
+   move) _arguments $_dvc_global_options $_dvc_move ;;
++  params)
++    case $words[2] in
++      diff) _arguments $_dvc_global_options $_dvc_params_diff ;;
++      *) _arguments $_dvc_global_options $_dvc_params ;;
++    esac ;;
+   pipeline) _arguments $_dvc_global_options $_dvc_pipeline ;;
+   pull) _arguments $_dvc_global_options $_dvc_pull ;;
+   push) _arguments $_dvc_global_options $_dvc_push ;;
+-  plot) _arguments $_dvc_global_options $_dvc_plot ;;
++  plots)
++    case $words[2] in
++      show) _arguments $_dvc_global_options $_dvc_plots_show ;;
++      diff) _arguments $_dvc_global_options $_dvc_plots_diff ;;
++      *) _arguments $_dvc_global_options $_dvc_plots ;;
++    esac ;;
+   remote) _arguments $_dvc_global_options $_dvc_remote ;;
+   remove) _arguments $_dvc_global_options $_dvc_remove ;;
+   repro) _arguments $_dvc_global_options $_dvc_repro ;;
+diff --git a/tests/func/test_diff.py b/tests/func/test_diff.py
+index 66579c2..7ec3772 100644
+--- a/tests/func/test_diff.py
++++ b/tests/func/test_diff.py
+@@ -214,3 +214,17 @@ def test_diff_dirty(tmp_dir, scm, dvc):
+ def test_no_changes(tmp_dir, scm, dvc):
+     tmp_dir.dvc_gen("file", "first", commit="add a file")
+     assert dvc.diff() == {}
++
++
++def test_no_commits(tmp_dir, scm):
++    from dvc.repo import Repo
++
++    tmp_dir.dvc = Repo.init()
++    tmp_dir.gen("file", "text")
++    tmp_dir.dvc.add("file")
++
++    assert tmp_dir.dvc.diff() == {
++        "added": [{"path": "file", "hash": digest("text")}],
++        "deleted": [],
++        "modified": [],
++    }
+diff --git a/tests/func/test_init.py b/tests/func/test_init.py
+index 211dfba..946d181 100644
+--- a/tests/func/test_init.py
++++ b/tests/func/test_init.py
+@@ -102,3 +102,13 @@ def test_subdir_init_no_option(tmp_dir, scm, monkeypatch, caplog):
+         "`--subdir` if initializing inside a subdirectory of a parent SCM "
+         "repository.".format(fspath(tmp_dir / "subdir"))
+     ) in caplog.text
++
++
++def test_plot_templates_end_with_newline(tmp_dir, scm):
++    tmp_dir.dvc = DvcRepo.init()
++
++    templates_dir = tmp_dir / DvcRepo.DVC_DIR / "plot"
++    templates = list(templates_dir.glob("*.json"))
++
++    assert templates
++    assert all(template.read_bytes().endswith(b"\n") for template in templates)
+diff --git a/tests/func/test_plot.py b/tests/func/test_plot.py
+index cd1acc6..63c5abb 100644
+--- a/tests/func/test_plot.py
++++ b/tests/func/test_plot.py
+@@ -160,6 +160,37 @@ def test_plot_json_single_val(tmp_dir, scm, dvc):
+     assert plot_json["encoding"]["y"]["field"] == "val"
+ 
+ 
++def test_plot_marked_output_without_explicit_datafile(tmp_dir, scm, dvc):
++    metric = [{"val": 2}, {"val": 3}]
++    _write_json(tmp_dir, metric, "metric.json")
++    _run_with_metric(tmp_dir, "metric.json")
++    dvc.stages[0].outs[0].plot = True
++
++    plot_json = json.loads(dvc.plot())
++
++    assert plot_json["data"]["values"] == [
++        {"val": 2, PlotData.INDEX_FIELD: 0, "rev": "workspace"},
++        {"val": 3, PlotData.INDEX_FIELD: 1, "rev": "workspace"},
++    ]
++
++
++def test_multiple_plot_markers(tmp_dir, scm, dvc):
++    _write_json(tmp_dir, [{"val": 1}], "first.json")
++    _write_json(tmp_dir, [{"val": 2}], "second.json")
++    dvc.run(
++        metrics_no_cache=["first.json", "second.json"], single_stage=True
++    )
++    for out in dvc.stages[0].outs:
++        out.plot = True
++
++    plot_specs = json.loads(dvc.plot())
++
++    assert [spec["data"]["values"][0]["val"] for spec in plot_specs] == [
++        1,
++        2,
++    ]
++
++
+ def test_plot_json_multiple_val(tmp_dir, scm, dvc):
+     metric = [
+         {"first_val": 100, "val": 2},
+@@ -475,6 +506,7 @@ def test_plot_embed(tmp_dir, scm, dvc):
+ 
+     plot_string = dvc.plot("metric.json", embed=True, y_field="val")
+ 
++    assert plot_string.startswith("<!DOCTYPE html>\n")
+     page_content = BeautifulSoup(plot_string)
+     data_dump = json.dumps(
+         [
+diff --git a/tests/unit/command/test_metrics.py b/tests/unit/command/test_metrics.py
+index 9b1c5a2..e8964e0 100644
+--- a/tests/unit/command/test_metrics.py
++++ b/tests/unit/command/test_metrics.py
+@@ -43,6 +43,18 @@ def test_metrics_show_json_diff():
+     )
+ 
+ 
++def test_metrics_show_markdown_diff():
++    assert parse_args(["metrics", "diff", "--show-md"]).show_md
++    assert _show_diff(
++        {"metrics.json": {"a.b.c": {"old": 1, "new": 2, "diff": 3}}},
++        markdown=True,
++    ) == (
++        "    Path     | Metric | Value | Change\n"
++        "-------------|--------|-------|-------\n"
++        "metrics.json | a.b.c  | 2     | 3     "
++    )
++
++
+ def test_metrics_show_raw_diff():
+     assert _show_diff({"metrics": {"": {"old": "1", "new": "2"}}}) == (
+         " Path     Metric   Value         Change      \n"
+diff --git a/tests/unit/command/test_params.py b/tests/unit/command/test_params.py
+index bb0b6f1..06be621 100644
+--- a/tests/unit/command/test_params.py
++++ b/tests/unit/command/test_params.py
+@@ -26,6 +26,17 @@ def test_params_diff_changed():
+     )
+ 
+ 
++def test_params_diff_markdown():
++    assert parse_args(["params", "diff", "--show-md"]).show_md
++    assert _show_diff(
++        {"params.yaml": {"a.b.c": {"old": 1, "new": 2}}}, markdown=True
++    ) == (
++        "   Path     | Param | Old | New\n"
++        "------------|-------|-----|----\n"
++        "params.yaml | a.b.c | 1   | 2  "
++    )
++
++
+ def test_params_diff_list():
+     assert _show_diff(
+         {"params.yaml": {"a.b.c": {"old": 1, "new": [2, 3]}}}
+diff --git a/tests/unit/command/test_plot.py b/tests/unit/command/test_plot.py
+index 1a4d3fb..4803d04 100644
+--- a/tests/unit/command/test_plot.py
++++ b/tests/unit/command/test_plot.py
+@@ -1,13 +1,37 @@
+ import pytest
+ 
+ from dvc.cli import parse_args
+-from dvc.command.plot import CmdPlotDiff, CmdPlotShow
++from dvc.command.plot import CmdPlotsDiff, CmdPlotsShow
++from dvc.exceptions import DvcParserError
++
++
++@pytest.mark.parametrize(
++    "args,expected",
++    [
++        (["plots", "--help"], "Commands to visualize and compare plot data."),
++        (["plots", "show", "--help"], "Generate plots from data files."),
++        (
++            ["plots", "diff", "--help"],
++            "Show changes in plots between commits",
++        ),
++    ],
++)
++def test_help(args, expected, capsys):
++    with pytest.raises(SystemExit):
++        parse_args(args)
++
++    assert expected in capsys.readouterr().out
++
++
++def test_singular_plot_command_is_not_supported():
++    with pytest.raises(DvcParserError):
++        parse_args(["plot"])
+ 
+ 
+ def test_metrics_diff(mocker):
+     cli_args = parse_args(
+         [
+-            "plot",
++            "plots",
+             "diff",
+             "--file",
+             "result.extension",
+@@ -34,7 +58,7 @@ def test_metrics_diff(mocker):
+             "tag2",
+         ]
+     )
+-    assert cli_args.func == CmdPlotDiff
++    assert cli_args.func == CmdPlotsDiff
+ 
+     cmd = cli_args.func(cli_args)
+ 
+@@ -63,7 +87,7 @@ def test_metrics_diff(mocker):
+ def test_metrics_show(mocker):
+     cli_args = parse_args(
+         [
+-            "plot",
++            "plots",
+             "show",
+             "-f",
+             "result.extension",
+@@ -77,7 +101,7 @@ def test_metrics_show(mocker):
+             "datafile",
+         ]
+     )
+-    assert cli_args.func == CmdPlotShow
++    assert cli_args.func == CmdPlotsShow
+ 
+     cmd = cli_args.func(cli_args)
+ 
+@@ -115,7 +139,7 @@ def test_metrics_show(mocker):
+ def test_revisions(mocker, arg_revisions, is_dirty, expected_revisions):
+     args = mocker.MagicMock()
+ 
+-    cmd = CmdPlotDiff(args)
++    cmd = CmdPlotsDiff(args)
+     mocker.patch.object(args, "revisions", arg_revisions)
+     mocker.patch.object(cmd.repo.scm, "is_dirty", return_value=is_dirty)
+ 
+diff --git a/tests/unit/test_plot.py b/tests/unit/test_plot.py
+index 016f63d..1fb267a 100644
+--- a/tests/unit/test_plot.py
++++ b/tests/unit/test_plot.py
+@@ -2,7 +2,13 @@ from collections import OrderedDict
+ 
+ import pytest
+ 
++from dvc.path_info import PathInfo
++from dvc.repo.plot import _collect_plots
+ from dvc.repo.plot.data import _apply_path, _find_data, _lists
++from dvc.repo.plot.template import (
++    DefaultLinearTemplate,
++    DefaultScatterTemplate,
++)
+ 
+ 
+ @pytest.mark.parametrize(
+@@ -46,3 +52,30 @@ def test_finding_data(fields):
+     result = _find_data(data, fields=fields)
+ 
+     assert result == [{"x": 2, "y": 3}, {"x": 1, "y": 5}]
++
++
++@pytest.mark.parametrize(
++    "template", [DefaultLinearTemplate, DefaultScatterTemplate]
++)
++def test_quantitative_y_axis_does_not_start_at_zero(template):
++    assert template.DEFAULT_CONTENT["encoding"]["y"]["scale"] == {
++        "zero": False
++    }
++
++
++def test_collect_plot_markers(mocker, tmp_path):
++    repo = mocker.Mock(root_dir=str(tmp_path))
++    marked = mocker.Mock(
++        scheme="local",
++        plot=True,
++        path_info=PathInfo(tmp_path / "plot.json"),
++    )
++    regular = mocker.Mock(
++        scheme="local",
++        plot=False,
++        path_info=PathInfo(tmp_path / "data.json"),
++    )
++    remote = mocker.Mock(scheme="s3", plot=True)
++    repo.stages = [mocker.Mock(outs=[regular, remote, marked])]
++
++    assert _collect_plots(repo) == ["plot.json"]
+

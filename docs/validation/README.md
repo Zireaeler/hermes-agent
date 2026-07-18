@@ -31,6 +31,15 @@ iterative run 已使用 verified stable archive 保留原始 evidence。
 ## Phase 4G10
 
 - [Phase 4G10 验证索引](phase4g10/README.md)
+- Clean Replay：`phase4g10-clean-large-ccf9c3e173`；
+- 四轴结论：`runtime-correct / clean-replay-passed / orchestration-effective / task-failed`；
+- 干净结构：1 primary + 3 durable children + 3 frozen contributions；
+- 3 次 evaluator、2 次同 primary session remediation，最终 F2P `54/68`、P2P `241/242`；
+- 历史 repair、receipt recovery、重复 ledger/terminal fact 和 consistency 异常均为零；
+- 280 个原始 evidence 文件已进入 verified stable archive。
+
+Phase 4G10 Arm 2 历史对照：
+
 - Runtime Arm 2：`phase4g10-arm2-large-059ea4b541`；
 - 三轴结论：`runtime-correct / orchestration-effective / task-failed`；
 - 真实结构：1 primary + 3 durable implementation children；

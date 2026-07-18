@@ -1,0 +1,38 @@
+{
+  "schema": "hermes_runtime_ownership_canary_v1",
+  "worktree_root": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-worktrees",
+  "sibling": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-worktrees/ownership-canary",
+  "sentinel": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-worktrees/ownership-canary/sentinel.txt",
+  "target": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/reports/ownership-canary-target.txt",
+  "link": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-worktrees/ownership-canary/target-link",
+  "expected_worker_owner": {
+    "uid": 606824269,
+    "gid": 82560884
+  },
+  "initial_sentinel_owner": {
+    "uid": 0,
+    "gid": 0
+  },
+  "initial_target_owner": {
+    "uid": 0,
+    "gid": 0
+  },
+  "sentinel_sha256": "6a06cc3081f91b08af4e0a5ea5ba385e7a4e5b76acb42288c752c7a276d3981d",
+  "target_sha256": "ef6df610944ce2d1d3f1b4521339dbf50bea25fdbd9166bfe21058dbd02c5760",
+  "checks": {
+    "worktree_root_owner_applied": true,
+    "sibling_owner_preserved": true,
+    "sibling_content_preserved": true,
+    "symlink_target_owner_preserved": true,
+    "symlink_target_content_preserved": true,
+    "symlink_still_external": true,
+    "two_child_worktrees_created": true
+  },
+  "child_worktrees": [
+    "reporting-plots-templates-completions",
+    "stage-pipeline-run-cache",
+    "tree-remote-import-transfer"
+  ],
+  "passed": true,
+  "audited_at": 1784406452
+}

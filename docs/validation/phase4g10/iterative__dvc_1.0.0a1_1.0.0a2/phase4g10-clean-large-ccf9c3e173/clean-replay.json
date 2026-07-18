@@ -1,0 +1,3330 @@
+{
+  "artifact_archive": {
+    "artifact_path": "/root/hermes-validation-artifacts/phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173",
+    "created_at": 1784406454,
+    "file_count": 280,
+    "files": [
+      {
+        "bytes": 19,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/.execution-node",
+        "redaction_count": 0,
+        "sha256": "29b7337b409b62024962c122ab095f8e196c64abbe41971c66045ed3c30fdcf0",
+        "source_sha256": "29b7337b409b62024962c122ab095f8e196c64abbe41971c66045ed3c30fdcf0"
+      },
+      {
+        "bytes": 0,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/.tmp/plugins.sync.lock",
+        "redaction_count": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "bytes": 1753,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/config.toml",
+        "redaction_count": 0,
+        "sha256": "c35786a6c135ec02dfcb96d907b198b90c3f538c99bab1e43863d43b7b217f89",
+        "source_sha256": "c35786a6c135ec02dfcb96d907b198b90c3f538c99bab1e43863d43b7b217f89"
+      },
+      {
+        "bytes": 24576,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/goals_1.sqlite",
+        "redaction_count": 0,
+        "sha256": "ab0c6183f49109cb2cc1e3ee0e154b01ed1611777ac56d8ef53ccd8231a0254c",
+        "source_sha256": "ab0c6183f49109cb2cc1e3ee0e154b01ed1611777ac56d8ef53ccd8231a0254c"
+      },
+      {
+        "bytes": 4934,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/hermes-schemas/runtime-worker-receipt-v1.schema.json",
+        "redaction_count": 0,
+        "sha256": "d169dc22c9e3b5216fecfdb969f16b513ccf6deb0a2df44c17b9d38b2f0a453a",
+        "source_sha256": "d169dc22c9e3b5216fecfdb969f16b513ccf6deb0a2df44c17b9d38b2f0a453a"
+      },
+      {
+        "bytes": 36,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/installation_id",
+        "redaction_count": 0,
+        "sha256": "e3a28895a5adace8cdc190a87ecd8d5ba7f9505ad2ec3835e27bba972cc41d8c",
+        "source_sha256": "e3a28895a5adace8cdc190a87ecd8d5ba7f9505ad2ec3835e27bba972cc41d8c"
+      },
+      {
+        "bytes": 49152,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/logs_2.sqlite",
+        "redaction_count": 0,
+        "sha256": "c8da27725ac1b0b1313aa4160794b4cdd108a4a54f921a70bbd27d0b6e34d067",
+        "source_sha256": "c8da27725ac1b0b1313aa4160794b4cdd108a4a54f921a70bbd27d0b6e34d067"
+      },
+      {
+        "bytes": 40960,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/memories_1.sqlite",
+        "redaction_count": 0,
+        "sha256": "fc9c4f3c846757c3f77d67bc2881fa7dee58b57c20338f80a584b7ef2730e2cf",
+        "source_sha256": "fc9c4f3c846757c3f77d67bc2881fa7dee58b57c20338f80a584b7ef2730e2cf"
+      },
+      {
+        "bytes": 1978,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/rules/default.rules",
+        "redaction_count": 0,
+        "sha256": "e820f16dd344baf014365ffda3dcceeec9a651485e433f7369520162cbddcb54",
+        "source_sha256": "e820f16dd344baf014365ffda3dcceeec9a651485e433f7369520162cbddcb54"
+      },
+      {
+        "bytes": 1419493,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/sessions/2026/07/19/rollout-2026-07-19T01-24-41-019f7642-42bd-7350-ae41-7d425d5a07f9.jsonl",
+        "redaction_count": 0,
+        "sha256": "fc6b9df3b8b3cccfdf911fe9741b6a37d97a69485cdf79523884f4db71436a8c",
+        "source_sha256": "fc6b9df3b8b3cccfdf911fe9741b6a37d97a69485cdf79523884f4db71436a8c"
+      },
+      {
+        "bytes": 17,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/.codex-system-skills.marker",
+        "redaction_count": 0,
+        "sha256": "35ff7b0c7ad7575ce96dd7c2989c4b44f9b685539fb8e30ade01d36788d6f5da",
+        "source_sha256": "35ff7b0c7ad7575ce96dd7c2989c4b44f9b685539fb8e30ade01d36788d6f5da"
+      },
+      {
+        "bytes": 10776,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/imagegen/LICENSE.txt",
+        "redaction_count": 0,
+        "sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9",
+        "source_sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9"
+      },
+      {
+        "bytes": 24003,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/imagegen/SKILL.md",
+        "redaction_count": 0,
+        "sha256": "59981d23519222bcecf1be48bb37730bbc50539ceb0e35ad09fcef98a3df19d3",
+        "source_sha256": "59981d23519222bcecf1be48bb37730bbc50539ceb0e35ad09fcef98a3df19d3"
+      },
+      {
+        "bytes": 275,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/imagegen/agents/openai.yaml",
+        "redaction_count": 0,
+        "sha256": "9ca574af14580dc7a2a3dc37a1796d17f93cb8850be66501f0799ef8603e9dc0",
+        "source_sha256": "9ca574af14580dc7a2a3dc37a1796d17f93cb8850be66501f0799ef8603e9dc0"
+      },
+      {
+        "bytes": 2889,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/imagegen/assets/imagegen-small.svg",
+        "redaction_count": 0,
+        "sha256": "cff5f34f57ff60b3ee92eaedd17b15e96dd4b9e776df3e78936c9e00d42be294",
+        "source_sha256": "cff5f34f57ff60b3ee92eaedd17b15e96dd4b9e776df3e78936c9e00d42be294"
+      },
+      {
+        "bytes": 1711,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/imagegen/assets/imagegen.png",
+        "redaction_count": 0,
+        "sha256": "95952f644064eb9e890f98d8db07216347186526e4c41ad66d3420629eb86e20",
+        "source_sha256": "95952f644064eb9e890f98d8db07216347186526e4c41ad66d3420629eb86e20"
+      },
+      {
+        "bytes": 10188,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/imagegen/references/cli.md",
+        "redaction_count": 0,
+        "sha256": "38d92cdbec5f3430439a3868ced0a3c5694e0e84a75e46d6e7f7a00aca6e673b",
+        "source_sha256": "38d92cdbec5f3430439a3868ced0a3c5694e0e84a75e46d6e7f7a00aca6e673b"
+      },
+      {
+        "bytes": 1779,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/imagegen/references/codex-network.md",
+        "redaction_count": 0,
+        "sha256": "c88298ca4481f6116a16fa7987434fc977f8b311c1bbc0c3d862ffd0c5981148",
+        "source_sha256": "c88298ca4481f6116a16fa7987434fc977f8b311c1bbc0c3d862ffd0c5981148"
+      },
+      {
+        "bytes": 6079,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/imagegen/references/image-api.md",
+        "redaction_count": 0,
+        "sha256": "ca5424dfcad5a4c87b4401d1cffb70bfcc18c7ca2c281d12045f822e59fa4093",
+        "source_sha256": "ca5424dfcad5a4c87b4401d1cffb70bfcc18c7ca2c281d12045f822e59fa4093"
+      },
+      {
+        "bytes": 9896,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/imagegen/references/prompting.md",
+        "redaction_count": 0,
+        "sha256": "a88c459a0306051535d1b68eb899925f08a175cbbcd07d72a9d0c43f330cb81f",
+        "source_sha256": "a88c459a0306051535d1b68eb899925f08a175cbbcd07d72a9d0c43f330cb81f"
+      },
+      {
+        "bytes": 19239,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/imagegen/references/sample-prompts.md",
+        "redaction_count": 0,
+        "sha256": "43307821f1db18e06be50189a078f3e1ccc3ee6b5523934614e22e64d27597ab",
+        "source_sha256": "43307821f1db18e06be50189a078f3e1ccc3ee6b5523934614e22e64d27597ab"
+      },
+      {
+        "bytes": 34271,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/imagegen/scripts/image_gen.py",
+        "redaction_count": 0,
+        "sha256": "35e8f9fa47deca111e46c63c4ac2008e09198ef664c0926a9dfdcd6745aa37ed",
+        "source_sha256": "35e8f9fa47deca111e46c63c4ac2008e09198ef664c0926a9dfdcd6745aa37ed"
+      },
+      {
+        "bytes": 13836,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/imagegen/scripts/remove_chroma_key.py",
+        "redaction_count": 0,
+        "sha256": "3f7b9b14ad5c90f37618bc1c16a039a2076abca12ddc41b3ae470e2b1cad6c0e",
+        "source_sha256": "3f7b9b14ad5c90f37618bc1c16a039a2076abca12ddc41b3ae470e2b1cad6c0e"
+      },
+      {
+        "bytes": 10776,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/openai-docs/LICENSE.txt",
+        "redaction_count": 0,
+        "sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9",
+        "source_sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9"
+      },
+      {
+        "bytes": 18747,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/openai-docs/SKILL.md",
+        "redaction_count": 0,
+        "sha256": "669a42ccf3323fe0ceda6e466730bcb05dddf1e0c220d6523ea504909fc49165",
+        "source_sha256": "669a42ccf3323fe0ceda6e466730bcb05dddf1e0c220d6523ea504909fc49165"
+      },
+      {
+        "bytes": 598,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/openai-docs/agents/openai.yaml",
+        "redaction_count": 0,
+        "sha256": "004c73f6e01409cfd7db699e815f5fed4ced3b63dd2cc25874f6791eae7fd4bc",
+        "source_sha256": "004c73f6e01409cfd7db699e815f5fed4ced3b63dd2cc25874f6791eae7fd4bc"
+      },
+      {
+        "bytes": 1091,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/openai-docs/assets/openai-small.svg",
+        "redaction_count": 0,
+        "sha256": "45be1f0757eb18889eefb1e7db79668ef46a275dc4e0e78e8df5ebd7f6cdeadc",
+        "source_sha256": "45be1f0757eb18889eefb1e7db79668ef46a275dc4e0e78e8df5ebd7f6cdeadc"
+      },
+      {
+        "bytes": 1429,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/openai-docs/assets/openai.png",
+        "redaction_count": 0,
+        "sha256": "156cc84d7332bfe95b310350bd470b690d22aa33d65340cc6c2e06022946194c",
+        "source_sha256": "156cc84d7332bfe95b310350bd470b690d22aa33d65340cc6c2e06022946194c"
+      },
+      {
+        "bytes": 2028,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/openai-docs/references/latest-model.md",
+        "redaction_count": 0,
+        "sha256": "b53eabc8f3204aabe793eccb729fce21eb26709fccb9be85d3a674b0fefb7c6e",
+        "source_sha256": "b53eabc8f3204aabe793eccb729fce21eb26709fccb9be85d3a674b0fefb7c6e"
+      },
+      {
+        "bytes": 14338,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/openai-docs/references/prompting-guide.md",
+        "redaction_count": 0,
+        "sha256": "ecdf49b4a824a87367c7a6ec3c0218e2c5783dff951b30a101c3b6a95152aafa",
+        "source_sha256": "ecdf49b4a824a87367c7a6ec3c0218e2c5783dff951b30a101c3b6a95152aafa"
+      },
+      {
+        "bytes": 11308,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/openai-docs/references/upgrade-guide.md",
+        "redaction_count": 0,
+        "sha256": "563784eb13ad1b44c3a592f940aa7ac2086ebeb97df3f4a09ba038b2f1564d39",
+        "source_sha256": "563784eb13ad1b44c3a592f940aa7ac2086ebeb97df3f4a09ba038b2f1564d39"
+      },
+      {
+        "bytes": 16085,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/openai-docs/scripts/fetch-codex-manual.mjs",
+        "redaction_count": 0,
+        "sha256": "f53eb6d2f286e9efcc397e8bee93a938e37296c90953e4e06e94899ef1b6c363",
+        "source_sha256": "f53eb6d2f286e9efcc397e8bee93a938e37296c90953e4e06e94899ef1b6c363"
+      },
+      {
+        "bytes": 3463,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/openai-docs/scripts/resolve-latest-model-info.js",
+        "redaction_count": 0,
+        "sha256": "3fc420a12ab1a344ac49b852138f599d01e3ac561ec86426ba161f42a03d3e52",
+        "source_sha256": "3fc420a12ab1a344ac49b852138f599d01e3ac561ec86426ba161f42a03d3e52"
+      },
+      {
+        "bytes": 11040,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/plugin-creator/SKILL.md",
+        "redaction_count": 0,
+        "sha256": "8fd56316b2c49cbdc657a5d197967a233018e1fada65b00a5dd030dce6499a6e",
+        "source_sha256": "8fd56316b2c49cbdc657a5d197967a233018e1fada65b00a5dd030dce6499a6e"
+      },
+      {
+        "bytes": 339,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/plugin-creator/agents/openai.yaml",
+        "redaction_count": 0,
+        "sha256": "fecaf35d692bd3d33d1a065648258d12e393afa9055d78adf6e57b42f4142f6d",
+        "source_sha256": "fecaf35d692bd3d33d1a065648258d12e393afa9055d78adf6e57b42f4142f6d"
+      },
+      {
+        "bytes": 1319,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/plugin-creator/assets/plugin-creator-small.svg",
+        "redaction_count": 0,
+        "sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb",
+        "source_sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb"
+      },
+      {
+        "bytes": 1563,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/plugin-creator/assets/plugin-creator.png",
+        "redaction_count": 0,
+        "sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162",
+        "source_sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162"
+      },
+      {
+        "bytes": 5874,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/plugin-creator/references/installing-and-updating.md",
+        "redaction_count": 0,
+        "sha256": "b030517fe05b12dda71babe2890656d7c6db6a0111797e1d20d208804427276d",
+        "source_sha256": "b030517fe05b12dda71babe2890656d7c6db6a0111797e1d20d208804427276d"
+      },
+      {
+        "bytes": 9179,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/plugin-creator/references/plugin-json-spec.md",
+        "redaction_count": 0,
+        "sha256": "eeb640130f69636affaa299d4170d5a7ae6a0ff978296ddf75c409ce6dd87b91",
+        "source_sha256": "eeb640130f69636affaa299d4170d5a7ae6a0ff978296ddf75c409ce6dd87b91"
+      },
+      {
+        "bytes": 11185,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/plugin-creator/scripts/create_basic_plugin.py",
+        "redaction_count": 0,
+        "sha256": "b5aa34f7f9dcec4bb007a66d65cff0c5c77a67042ae6c4de57d8ab7f4ef737d2",
+        "source_sha256": "b5aa34f7f9dcec4bb007a66d65cff0c5c77a67042ae6c4de57d8ab7f4ef737d2"
+      },
+      {
+        "bytes": 1497,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/plugin-creator/scripts/read_marketplace_name.py",
+        "redaction_count": 0,
+        "sha256": "7659216759152f83087020b4d2971b4ad3cc13851e2614efc30fc2317ad59d96",
+        "source_sha256": "7659216759152f83087020b4d2971b4ad3cc13851e2614efc30fc2317ad59d96"
+      },
+      {
+        "bytes": 2686,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py",
+        "redaction_count": 0,
+        "sha256": "4fe3c5a49212f6e30a2306e245c460e01aaf5e36bc8ad3dd2852c199257eff89",
+        "source_sha256": "4fe3c5a49212f6e30a2306e245c460e01aaf5e36bc8ad3dd2852c199257eff89"
+      },
+      {
+        "bytes": 21180,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/plugin-creator/scripts/validate_plugin.py",
+        "redaction_count": 0,
+        "sha256": "ebda00d55d7518b127f675f062fb5c6e7a1ffdc0a99df1a55ac594400d7d3228",
+        "source_sha256": "ebda00d55d7518b127f675f062fb5c6e7a1ffdc0a99df1a55ac594400d7d3228"
+      },
+      {
+        "bytes": 22047,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/skill-creator/SKILL.md",
+        "redaction_count": 0,
+        "sha256": "da44c88f6b3845a8fa8c60792ec9a722110a55a9793c279757b48fefb11f819c",
+        "source_sha256": "da44c88f6b3845a8fa8c60792ec9a722110a55a9793c279757b48fefb11f819c"
+      },
+      {
+        "bytes": 183,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/skill-creator/agents/openai.yaml",
+        "redaction_count": 0,
+        "sha256": "d07d21b93fcf3d4dc8d9a3399c05fc226a49a333a96d3e1c68b451b8dd9eade6",
+        "source_sha256": "d07d21b93fcf3d4dc8d9a3399c05fc226a49a333a96d3e1c68b451b8dd9eade6"
+      },
+      {
+        "bytes": 1319,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/skill-creator/assets/skill-creator-small.svg",
+        "redaction_count": 0,
+        "sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb",
+        "source_sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb"
+      },
+      {
+        "bytes": 1563,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/skill-creator/assets/skill-creator.png",
+        "redaction_count": 0,
+        "sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162",
+        "source_sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162"
+      },
+      {
+        "bytes": 11358,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/skill-creator/license.txt",
+        "redaction_count": 0,
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "source_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      },
+      {
+        "bytes": 2356,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/skill-creator/references/openai_yaml.md",
+        "redaction_count": 0,
+        "sha256": "ffac39318e408108141d40f820968e59f70434a891694f9bf1d25be8237b150c",
+        "source_sha256": "ffac39318e408108141d40f820968e59f70434a891694f9bf1d25be8237b150c"
+      },
+      {
+        "bytes": 6619,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/skill-creator/scripts/generate_openai_yaml.py",
+        "redaction_count": 0,
+        "sha256": "ddaf9abdfb3e762ed3c82571e9c607ce964188f49f2146281beb2cb8a553a93d",
+        "source_sha256": "ddaf9abdfb3e762ed3c82571e9c607ce964188f49f2146281beb2cb8a553a93d"
+      },
+      {
+        "bytes": 14602,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/skill-creator/scripts/init_skill.py",
+        "redaction_count": 0,
+        "sha256": "f40cb8fafc34e2d5dbbb8b6b04297af128b70844b67bc9445ef69790e0cdb49e",
+        "source_sha256": "f40cb8fafc34e2d5dbbb8b6b04297af128b70844b67bc9445ef69790e0cdb49e"
+      },
+      {
+        "bytes": 3293,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/skill-creator/scripts/quick_validate.py",
+        "redaction_count": 0,
+        "sha256": "6cc9dc3199c935916cf6f73fcbbbb0e3bb1b58c8f5109fefa499978908164f51",
+        "source_sha256": "6cc9dc3199c935916cf6f73fcbbbb0e3bb1b58c8f5109fefa499978908164f51"
+      },
+      {
+        "bytes": 11358,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/skill-installer/LICENSE.txt",
+        "redaction_count": 0,
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "source_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      },
+      {
+        "bytes": 3367,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/skill-installer/SKILL.md",
+        "redaction_count": 0,
+        "sha256": "d68b77e5bbb34dedab89d134da52855f140fc4b4299b80104f534e3b9e98f8ee",
+        "source_sha256": "d68b77e5bbb34dedab89d134da52855f140fc4b4299b80104f534e3b9e98f8ee"
+      },
+      {
+        "bytes": 221,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/skill-installer/agents/openai.yaml",
+        "redaction_count": 0,
+        "sha256": "5ce223d8b1070b82c42298538f1b8d376f788eb9e7a42a987e8c094070d73f0e",
+        "source_sha256": "5ce223d8b1070b82c42298538f1b8d376f788eb9e7a42a987e8c094070d73f0e"
+      },
+      {
+        "bytes": 923,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/skill-installer/assets/skill-installer-small.svg",
+        "redaction_count": 0,
+        "sha256": "3928703ff00dc1a681e7a22401843b7edcbd4b2051651ce4c43b75f7e140504e",
+        "source_sha256": "3928703ff00dc1a681e7a22401843b7edcbd4b2051651ce4c43b75f7e140504e"
+      },
+      {
+        "bytes": 1086,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/skill-installer/assets/skill-installer.png",
+        "redaction_count": 0,
+        "sha256": "d0a230b1a79b71b858b7c215a0fbb0768d6459c14ea4ef80c61592629bf0e605",
+        "source_sha256": "d0a230b1a79b71b858b7c215a0fbb0768d6459c14ea4ef80c61592629bf0e605"
+      },
+      {
+        "bytes": 659,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/skill-installer/scripts/github_utils.py",
+        "redaction_count": 0,
+        "sha256": "61c1bbe2ae217433b4b6f9f09f21aca4df52c12598068343ade719f706e4859b",
+        "source_sha256": "61c1bbe2ae217433b4b6f9f09f21aca4df52c12598068343ade719f706e4859b"
+      },
+      {
+        "bytes": 10096,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/skill-installer/scripts/install-skill-from-github.py",
+        "redaction_count": 0,
+        "sha256": "0fbbd36e8ea294442c0bd48d6f610a2e8656216bfef5c322f1dcf448ef2f09f1",
+        "source_sha256": "0fbbd36e8ea294442c0bd48d6f610a2e8656216bfef5c322f1dcf448ef2f09f1"
+      },
+      {
+        "bytes": 2967,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/skills/.system/skill-installer/scripts/list-skills.py",
+        "redaction_count": 0,
+        "sha256": "e4e1f78ca3d045827f2a05cfd99fae57cc7c1a1bfeba8704029108834debff35",
+        "source_sha256": "e4e1f78ca3d045827f2a05cfd99fae57cc7c1a1bfeba8704029108834debff35"
+      },
+      {
+        "bytes": 233472,
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/state_5.sqlite",
+        "redaction_count": 0,
+        "sha256": "975475b2dbcec610b64ad0d5bfecaa9d659c18e8cf120d6c588cd7879f81d060",
+        "source_sha256": "975475b2dbcec610b64ad0d5bfecaa9d659c18e8cf120d6c588cd7879f81d060"
+      },
+      {
+        "bytes": 19,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/.execution-node",
+        "redaction_count": 0,
+        "sha256": "39889c85117b829e27c2245ea500417cbb1783028cae1782d89e2bc1d6472789",
+        "source_sha256": "39889c85117b829e27c2245ea500417cbb1783028cae1782d89e2bc1d6472789"
+      },
+      {
+        "bytes": 0,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/.tmp/plugins.sync.lock",
+        "redaction_count": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "bytes": 1753,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/config.toml",
+        "redaction_count": 0,
+        "sha256": "c35786a6c135ec02dfcb96d907b198b90c3f538c99bab1e43863d43b7b217f89",
+        "source_sha256": "c35786a6c135ec02dfcb96d907b198b90c3f538c99bab1e43863d43b7b217f89"
+      },
+      {
+        "bytes": 24576,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/goals_1.sqlite",
+        "redaction_count": 0,
+        "sha256": "14275fe7d539495e96487b863f0793aaf5cc5e61f2c8c4b3ce5e07439ee158b7",
+        "source_sha256": "14275fe7d539495e96487b863f0793aaf5cc5e61f2c8c4b3ce5e07439ee158b7"
+      },
+      {
+        "bytes": 2701,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/hermes-schemas/runtime-structure-checkpoint-v1.schema.json",
+        "redaction_count": 0,
+        "sha256": "7b172b26659e713025fbe5ec3606cb67110df3f743769008f4bddcf33e62c73a",
+        "source_sha256": "7b172b26659e713025fbe5ec3606cb67110df3f743769008f4bddcf33e62c73a"
+      },
+      {
+        "bytes": 4934,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/hermes-schemas/runtime-worker-receipt-v1.schema.json",
+        "redaction_count": 0,
+        "sha256": "d169dc22c9e3b5216fecfdb969f16b513ccf6deb0a2df44c17b9d38b2f0a453a",
+        "source_sha256": "d169dc22c9e3b5216fecfdb969f16b513ccf6deb0a2df44c17b9d38b2f0a453a"
+      },
+      {
+        "bytes": 36,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/installation_id",
+        "redaction_count": 0,
+        "sha256": "ff27ec69e0897284d8e86a6e0726c88ebbbe3fafeb4eab4e3c5bc237300e9da5",
+        "source_sha256": "ff27ec69e0897284d8e86a6e0726c88ebbbe3fafeb4eab4e3c5bc237300e9da5"
+      },
+      {
+        "bytes": 49152,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/logs_2.sqlite",
+        "redaction_count": 0,
+        "sha256": "a82680acf00f979208b34802cead4dbab86ad4ed9550386d4907389b4f4e1ee8",
+        "source_sha256": "a82680acf00f979208b34802cead4dbab86ad4ed9550386d4907389b4f4e1ee8"
+      },
+      {
+        "bytes": 40960,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/memories_1.sqlite",
+        "redaction_count": 0,
+        "sha256": "c4fba729653474e97bdeba2a54fd273e074f1dfaa8e57fe75294486316061ee3",
+        "source_sha256": "c4fba729653474e97bdeba2a54fd273e074f1dfaa8e57fe75294486316061ee3"
+      },
+      {
+        "bytes": 1978,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/rules/default.rules",
+        "redaction_count": 0,
+        "sha256": "e820f16dd344baf014365ffda3dcceeec9a651485e433f7369520162cbddcb54",
+        "source_sha256": "e820f16dd344baf014365ffda3dcceeec9a651485e433f7369520162cbddcb54"
+      },
+      {
+        "bytes": 4719052,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/sessions/2026/07/19/rollout-2026-07-19T01-17-25-019f763b-99b0-7943-8a47-bbf36a9d0607.jsonl",
+        "redaction_count": 0,
+        "sha256": "b28a8cab14247f8ee4a1070dd0ef3e3b97ac47132130699a160d73e90d31891c",
+        "source_sha256": "b28a8cab14247f8ee4a1070dd0ef3e3b97ac47132130699a160d73e90d31891c"
+      },
+      {
+        "bytes": 17,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/.codex-system-skills.marker",
+        "redaction_count": 0,
+        "sha256": "35ff7b0c7ad7575ce96dd7c2989c4b44f9b685539fb8e30ade01d36788d6f5da",
+        "source_sha256": "35ff7b0c7ad7575ce96dd7c2989c4b44f9b685539fb8e30ade01d36788d6f5da"
+      },
+      {
+        "bytes": 10776,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/imagegen/LICENSE.txt",
+        "redaction_count": 0,
+        "sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9",
+        "source_sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9"
+      },
+      {
+        "bytes": 24003,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/imagegen/SKILL.md",
+        "redaction_count": 0,
+        "sha256": "59981d23519222bcecf1be48bb37730bbc50539ceb0e35ad09fcef98a3df19d3",
+        "source_sha256": "59981d23519222bcecf1be48bb37730bbc50539ceb0e35ad09fcef98a3df19d3"
+      },
+      {
+        "bytes": 275,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/imagegen/agents/openai.yaml",
+        "redaction_count": 0,
+        "sha256": "9ca574af14580dc7a2a3dc37a1796d17f93cb8850be66501f0799ef8603e9dc0",
+        "source_sha256": "9ca574af14580dc7a2a3dc37a1796d17f93cb8850be66501f0799ef8603e9dc0"
+      },
+      {
+        "bytes": 2889,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/imagegen/assets/imagegen-small.svg",
+        "redaction_count": 0,
+        "sha256": "cff5f34f57ff60b3ee92eaedd17b15e96dd4b9e776df3e78936c9e00d42be294",
+        "source_sha256": "cff5f34f57ff60b3ee92eaedd17b15e96dd4b9e776df3e78936c9e00d42be294"
+      },
+      {
+        "bytes": 1711,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/imagegen/assets/imagegen.png",
+        "redaction_count": 0,
+        "sha256": "95952f644064eb9e890f98d8db07216347186526e4c41ad66d3420629eb86e20",
+        "source_sha256": "95952f644064eb9e890f98d8db07216347186526e4c41ad66d3420629eb86e20"
+      },
+      {
+        "bytes": 10188,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/imagegen/references/cli.md",
+        "redaction_count": 0,
+        "sha256": "38d92cdbec5f3430439a3868ced0a3c5694e0e84a75e46d6e7f7a00aca6e673b",
+        "source_sha256": "38d92cdbec5f3430439a3868ced0a3c5694e0e84a75e46d6e7f7a00aca6e673b"
+      },
+      {
+        "bytes": 1779,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/imagegen/references/codex-network.md",
+        "redaction_count": 0,
+        "sha256": "c88298ca4481f6116a16fa7987434fc977f8b311c1bbc0c3d862ffd0c5981148",
+        "source_sha256": "c88298ca4481f6116a16fa7987434fc977f8b311c1bbc0c3d862ffd0c5981148"
+      },
+      {
+        "bytes": 6079,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/imagegen/references/image-api.md",
+        "redaction_count": 0,
+        "sha256": "ca5424dfcad5a4c87b4401d1cffb70bfcc18c7ca2c281d12045f822e59fa4093",
+        "source_sha256": "ca5424dfcad5a4c87b4401d1cffb70bfcc18c7ca2c281d12045f822e59fa4093"
+      },
+      {
+        "bytes": 9896,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/imagegen/references/prompting.md",
+        "redaction_count": 0,
+        "sha256": "a88c459a0306051535d1b68eb899925f08a175cbbcd07d72a9d0c43f330cb81f",
+        "source_sha256": "a88c459a0306051535d1b68eb899925f08a175cbbcd07d72a9d0c43f330cb81f"
+      },
+      {
+        "bytes": 19239,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/imagegen/references/sample-prompts.md",
+        "redaction_count": 0,
+        "sha256": "43307821f1db18e06be50189a078f3e1ccc3ee6b5523934614e22e64d27597ab",
+        "source_sha256": "43307821f1db18e06be50189a078f3e1ccc3ee6b5523934614e22e64d27597ab"
+      },
+      {
+        "bytes": 34271,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/imagegen/scripts/image_gen.py",
+        "redaction_count": 0,
+        "sha256": "35e8f9fa47deca111e46c63c4ac2008e09198ef664c0926a9dfdcd6745aa37ed",
+        "source_sha256": "35e8f9fa47deca111e46c63c4ac2008e09198ef664c0926a9dfdcd6745aa37ed"
+      },
+      {
+        "bytes": 13836,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/imagegen/scripts/remove_chroma_key.py",
+        "redaction_count": 0,
+        "sha256": "3f7b9b14ad5c90f37618bc1c16a039a2076abca12ddc41b3ae470e2b1cad6c0e",
+        "source_sha256": "3f7b9b14ad5c90f37618bc1c16a039a2076abca12ddc41b3ae470e2b1cad6c0e"
+      },
+      {
+        "bytes": 10776,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/openai-docs/LICENSE.txt",
+        "redaction_count": 0,
+        "sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9",
+        "source_sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9"
+      },
+      {
+        "bytes": 18747,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/openai-docs/SKILL.md",
+        "redaction_count": 0,
+        "sha256": "669a42ccf3323fe0ceda6e466730bcb05dddf1e0c220d6523ea504909fc49165",
+        "source_sha256": "669a42ccf3323fe0ceda6e466730bcb05dddf1e0c220d6523ea504909fc49165"
+      },
+      {
+        "bytes": 598,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/openai-docs/agents/openai.yaml",
+        "redaction_count": 0,
+        "sha256": "004c73f6e01409cfd7db699e815f5fed4ced3b63dd2cc25874f6791eae7fd4bc",
+        "source_sha256": "004c73f6e01409cfd7db699e815f5fed4ced3b63dd2cc25874f6791eae7fd4bc"
+      },
+      {
+        "bytes": 1091,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/openai-docs/assets/openai-small.svg",
+        "redaction_count": 0,
+        "sha256": "45be1f0757eb18889eefb1e7db79668ef46a275dc4e0e78e8df5ebd7f6cdeadc",
+        "source_sha256": "45be1f0757eb18889eefb1e7db79668ef46a275dc4e0e78e8df5ebd7f6cdeadc"
+      },
+      {
+        "bytes": 1429,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/openai-docs/assets/openai.png",
+        "redaction_count": 0,
+        "sha256": "156cc84d7332bfe95b310350bd470b690d22aa33d65340cc6c2e06022946194c",
+        "source_sha256": "156cc84d7332bfe95b310350bd470b690d22aa33d65340cc6c2e06022946194c"
+      },
+      {
+        "bytes": 2028,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/openai-docs/references/latest-model.md",
+        "redaction_count": 0,
+        "sha256": "b53eabc8f3204aabe793eccb729fce21eb26709fccb9be85d3a674b0fefb7c6e",
+        "source_sha256": "b53eabc8f3204aabe793eccb729fce21eb26709fccb9be85d3a674b0fefb7c6e"
+      },
+      {
+        "bytes": 14338,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/openai-docs/references/prompting-guide.md",
+        "redaction_count": 0,
+        "sha256": "ecdf49b4a824a87367c7a6ec3c0218e2c5783dff951b30a101c3b6a95152aafa",
+        "source_sha256": "ecdf49b4a824a87367c7a6ec3c0218e2c5783dff951b30a101c3b6a95152aafa"
+      },
+      {
+        "bytes": 11308,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/openai-docs/references/upgrade-guide.md",
+        "redaction_count": 0,
+        "sha256": "563784eb13ad1b44c3a592f940aa7ac2086ebeb97df3f4a09ba038b2f1564d39",
+        "source_sha256": "563784eb13ad1b44c3a592f940aa7ac2086ebeb97df3f4a09ba038b2f1564d39"
+      },
+      {
+        "bytes": 16085,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/openai-docs/scripts/fetch-codex-manual.mjs",
+        "redaction_count": 0,
+        "sha256": "f53eb6d2f286e9efcc397e8bee93a938e37296c90953e4e06e94899ef1b6c363",
+        "source_sha256": "f53eb6d2f286e9efcc397e8bee93a938e37296c90953e4e06e94899ef1b6c363"
+      },
+      {
+        "bytes": 3463,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/openai-docs/scripts/resolve-latest-model-info.js",
+        "redaction_count": 0,
+        "sha256": "3fc420a12ab1a344ac49b852138f599d01e3ac561ec86426ba161f42a03d3e52",
+        "source_sha256": "3fc420a12ab1a344ac49b852138f599d01e3ac561ec86426ba161f42a03d3e52"
+      },
+      {
+        "bytes": 11040,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/plugin-creator/SKILL.md",
+        "redaction_count": 0,
+        "sha256": "8fd56316b2c49cbdc657a5d197967a233018e1fada65b00a5dd030dce6499a6e",
+        "source_sha256": "8fd56316b2c49cbdc657a5d197967a233018e1fada65b00a5dd030dce6499a6e"
+      },
+      {
+        "bytes": 339,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/plugin-creator/agents/openai.yaml",
+        "redaction_count": 0,
+        "sha256": "fecaf35d692bd3d33d1a065648258d12e393afa9055d78adf6e57b42f4142f6d",
+        "source_sha256": "fecaf35d692bd3d33d1a065648258d12e393afa9055d78adf6e57b42f4142f6d"
+      },
+      {
+        "bytes": 1319,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/plugin-creator/assets/plugin-creator-small.svg",
+        "redaction_count": 0,
+        "sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb",
+        "source_sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb"
+      },
+      {
+        "bytes": 1563,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/plugin-creator/assets/plugin-creator.png",
+        "redaction_count": 0,
+        "sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162",
+        "source_sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162"
+      },
+      {
+        "bytes": 5874,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/plugin-creator/references/installing-and-updating.md",
+        "redaction_count": 0,
+        "sha256": "b030517fe05b12dda71babe2890656d7c6db6a0111797e1d20d208804427276d",
+        "source_sha256": "b030517fe05b12dda71babe2890656d7c6db6a0111797e1d20d208804427276d"
+      },
+      {
+        "bytes": 9179,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/plugin-creator/references/plugin-json-spec.md",
+        "redaction_count": 0,
+        "sha256": "eeb640130f69636affaa299d4170d5a7ae6a0ff978296ddf75c409ce6dd87b91",
+        "source_sha256": "eeb640130f69636affaa299d4170d5a7ae6a0ff978296ddf75c409ce6dd87b91"
+      },
+      {
+        "bytes": 11185,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/plugin-creator/scripts/create_basic_plugin.py",
+        "redaction_count": 0,
+        "sha256": "b5aa34f7f9dcec4bb007a66d65cff0c5c77a67042ae6c4de57d8ab7f4ef737d2",
+        "source_sha256": "b5aa34f7f9dcec4bb007a66d65cff0c5c77a67042ae6c4de57d8ab7f4ef737d2"
+      },
+      {
+        "bytes": 1497,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/plugin-creator/scripts/read_marketplace_name.py",
+        "redaction_count": 0,
+        "sha256": "7659216759152f83087020b4d2971b4ad3cc13851e2614efc30fc2317ad59d96",
+        "source_sha256": "7659216759152f83087020b4d2971b4ad3cc13851e2614efc30fc2317ad59d96"
+      },
+      {
+        "bytes": 2686,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py",
+        "redaction_count": 0,
+        "sha256": "4fe3c5a49212f6e30a2306e245c460e01aaf5e36bc8ad3dd2852c199257eff89",
+        "source_sha256": "4fe3c5a49212f6e30a2306e245c460e01aaf5e36bc8ad3dd2852c199257eff89"
+      },
+      {
+        "bytes": 21180,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/plugin-creator/scripts/validate_plugin.py",
+        "redaction_count": 0,
+        "sha256": "ebda00d55d7518b127f675f062fb5c6e7a1ffdc0a99df1a55ac594400d7d3228",
+        "source_sha256": "ebda00d55d7518b127f675f062fb5c6e7a1ffdc0a99df1a55ac594400d7d3228"
+      },
+      {
+        "bytes": 22047,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/skill-creator/SKILL.md",
+        "redaction_count": 0,
+        "sha256": "da44c88f6b3845a8fa8c60792ec9a722110a55a9793c279757b48fefb11f819c",
+        "source_sha256": "da44c88f6b3845a8fa8c60792ec9a722110a55a9793c279757b48fefb11f819c"
+      },
+      {
+        "bytes": 183,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/skill-creator/agents/openai.yaml",
+        "redaction_count": 0,
+        "sha256": "d07d21b93fcf3d4dc8d9a3399c05fc226a49a333a96d3e1c68b451b8dd9eade6",
+        "source_sha256": "d07d21b93fcf3d4dc8d9a3399c05fc226a49a333a96d3e1c68b451b8dd9eade6"
+      },
+      {
+        "bytes": 1319,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/skill-creator/assets/skill-creator-small.svg",
+        "redaction_count": 0,
+        "sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb",
+        "source_sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb"
+      },
+      {
+        "bytes": 1563,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/skill-creator/assets/skill-creator.png",
+        "redaction_count": 0,
+        "sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162",
+        "source_sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162"
+      },
+      {
+        "bytes": 11358,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/skill-creator/license.txt",
+        "redaction_count": 0,
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "source_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      },
+      {
+        "bytes": 2356,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/skill-creator/references/openai_yaml.md",
+        "redaction_count": 0,
+        "sha256": "ffac39318e408108141d40f820968e59f70434a891694f9bf1d25be8237b150c",
+        "source_sha256": "ffac39318e408108141d40f820968e59f70434a891694f9bf1d25be8237b150c"
+      },
+      {
+        "bytes": 6619,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/skill-creator/scripts/generate_openai_yaml.py",
+        "redaction_count": 0,
+        "sha256": "ddaf9abdfb3e762ed3c82571e9c607ce964188f49f2146281beb2cb8a553a93d",
+        "source_sha256": "ddaf9abdfb3e762ed3c82571e9c607ce964188f49f2146281beb2cb8a553a93d"
+      },
+      {
+        "bytes": 14602,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/skill-creator/scripts/init_skill.py",
+        "redaction_count": 0,
+        "sha256": "f40cb8fafc34e2d5dbbb8b6b04297af128b70844b67bc9445ef69790e0cdb49e",
+        "source_sha256": "f40cb8fafc34e2d5dbbb8b6b04297af128b70844b67bc9445ef69790e0cdb49e"
+      },
+      {
+        "bytes": 3293,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/skill-creator/scripts/quick_validate.py",
+        "redaction_count": 0,
+        "sha256": "6cc9dc3199c935916cf6f73fcbbbb0e3bb1b58c8f5109fefa499978908164f51",
+        "source_sha256": "6cc9dc3199c935916cf6f73fcbbbb0e3bb1b58c8f5109fefa499978908164f51"
+      },
+      {
+        "bytes": 11358,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/skill-installer/LICENSE.txt",
+        "redaction_count": 0,
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "source_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      },
+      {
+        "bytes": 3367,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/skill-installer/SKILL.md",
+        "redaction_count": 0,
+        "sha256": "d68b77e5bbb34dedab89d134da52855f140fc4b4299b80104f534e3b9e98f8ee",
+        "source_sha256": "d68b77e5bbb34dedab89d134da52855f140fc4b4299b80104f534e3b9e98f8ee"
+      },
+      {
+        "bytes": 221,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/skill-installer/agents/openai.yaml",
+        "redaction_count": 0,
+        "sha256": "5ce223d8b1070b82c42298538f1b8d376f788eb9e7a42a987e8c094070d73f0e",
+        "source_sha256": "5ce223d8b1070b82c42298538f1b8d376f788eb9e7a42a987e8c094070d73f0e"
+      },
+      {
+        "bytes": 923,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/skill-installer/assets/skill-installer-small.svg",
+        "redaction_count": 0,
+        "sha256": "3928703ff00dc1a681e7a22401843b7edcbd4b2051651ce4c43b75f7e140504e",
+        "source_sha256": "3928703ff00dc1a681e7a22401843b7edcbd4b2051651ce4c43b75f7e140504e"
+      },
+      {
+        "bytes": 1086,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/skill-installer/assets/skill-installer.png",
+        "redaction_count": 0,
+        "sha256": "d0a230b1a79b71b858b7c215a0fbb0768d6459c14ea4ef80c61592629bf0e605",
+        "source_sha256": "d0a230b1a79b71b858b7c215a0fbb0768d6459c14ea4ef80c61592629bf0e605"
+      },
+      {
+        "bytes": 659,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/skill-installer/scripts/github_utils.py",
+        "redaction_count": 0,
+        "sha256": "61c1bbe2ae217433b4b6f9f09f21aca4df52c12598068343ade719f706e4859b",
+        "source_sha256": "61c1bbe2ae217433b4b6f9f09f21aca4df52c12598068343ade719f706e4859b"
+      },
+      {
+        "bytes": 10096,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/skill-installer/scripts/install-skill-from-github.py",
+        "redaction_count": 0,
+        "sha256": "0fbbd36e8ea294442c0bd48d6f610a2e8656216bfef5c322f1dcf448ef2f09f1",
+        "source_sha256": "0fbbd36e8ea294442c0bd48d6f610a2e8656216bfef5c322f1dcf448ef2f09f1"
+      },
+      {
+        "bytes": 2967,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/skills/.system/skill-installer/scripts/list-skills.py",
+        "redaction_count": 0,
+        "sha256": "e4e1f78ca3d045827f2a05cfd99fae57cc7c1a1bfeba8704029108834debff35",
+        "source_sha256": "e4e1f78ca3d045827f2a05cfd99fae57cc7c1a1bfeba8704029108834debff35"
+      },
+      {
+        "bytes": 233472,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/state_5.sqlite",
+        "redaction_count": 0,
+        "sha256": "a31b6b058ed0f81dcd38d91be00baf58f9186aafa70e3399556334d5223b5652",
+        "source_sha256": "a31b6b058ed0f81dcd38d91be00baf58f9186aafa70e3399556334d5223b5652"
+      },
+      {
+        "bytes": 32768,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/state_5.sqlite-shm",
+        "redaction_count": 0,
+        "sha256": "39783480e02c5f19a8c49092bceb3e2ed7703b4d0f355592048194ee82a844b8",
+        "source_sha256": "39783480e02c5f19a8c49092bceb3e2ed7703b4d0f355592048194ee82a844b8"
+      },
+      {
+        "bytes": 4157112,
+        "path": "codex-homes/node-973c040f546e9966f1de41db/state_5.sqlite-wal",
+        "redaction_count": 0,
+        "sha256": "10c7df6a78e696ee43dd26195863bdc609fa836d77c388ce918eb90ae89b7f9f",
+        "source_sha256": "10c7df6a78e696ee43dd26195863bdc609fa836d77c388ce918eb90ae89b7f9f"
+      },
+      {
+        "bytes": 19,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/.execution-node",
+        "redaction_count": 0,
+        "sha256": "107a1bfc7726fa21a89a8f8747c0824d9b08d9afef172a5720088fb6a7dd9b29",
+        "source_sha256": "107a1bfc7726fa21a89a8f8747c0824d9b08d9afef172a5720088fb6a7dd9b29"
+      },
+      {
+        "bytes": 0,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/.tmp/plugins.sync.lock",
+        "redaction_count": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "bytes": 1753,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/config.toml",
+        "redaction_count": 0,
+        "sha256": "c35786a6c135ec02dfcb96d907b198b90c3f538c99bab1e43863d43b7b217f89",
+        "source_sha256": "c35786a6c135ec02dfcb96d907b198b90c3f538c99bab1e43863d43b7b217f89"
+      },
+      {
+        "bytes": 24576,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/goals_1.sqlite",
+        "redaction_count": 0,
+        "sha256": "88c3eea265fae72c6a1c805d0685b0b9411ded2a3a92b0330401f1695495ebcd",
+        "source_sha256": "88c3eea265fae72c6a1c805d0685b0b9411ded2a3a92b0330401f1695495ebcd"
+      },
+      {
+        "bytes": 4934,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/hermes-schemas/runtime-worker-receipt-v1.schema.json",
+        "redaction_count": 0,
+        "sha256": "d169dc22c9e3b5216fecfdb969f16b513ccf6deb0a2df44c17b9d38b2f0a453a",
+        "source_sha256": "d169dc22c9e3b5216fecfdb969f16b513ccf6deb0a2df44c17b9d38b2f0a453a"
+      },
+      {
+        "bytes": 36,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/installation_id",
+        "redaction_count": 0,
+        "sha256": "8cf525e87cab3608f5921a749f21b41b5fdf83fdcc3bf8618a692e5530636daf",
+        "source_sha256": "8cf525e87cab3608f5921a749f21b41b5fdf83fdcc3bf8618a692e5530636daf"
+      },
+      {
+        "bytes": 49152,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/logs_2.sqlite",
+        "redaction_count": 0,
+        "sha256": "b2fa81c0beb921a6d4602997298beb372532fb8d7c204fa71479d394f6be9ff6",
+        "source_sha256": "b2fa81c0beb921a6d4602997298beb372532fb8d7c204fa71479d394f6be9ff6"
+      },
+      {
+        "bytes": 40960,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/memories_1.sqlite",
+        "redaction_count": 0,
+        "sha256": "6aa1a34da0510e9ef9a4258aa9f611a7b33f781be466a2db676a40e4daecc2cf",
+        "source_sha256": "6aa1a34da0510e9ef9a4258aa9f611a7b33f781be466a2db676a40e4daecc2cf"
+      },
+      {
+        "bytes": 1978,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/rules/default.rules",
+        "redaction_count": 0,
+        "sha256": "e820f16dd344baf014365ffda3dcceeec9a651485e433f7369520162cbddcb54",
+        "source_sha256": "e820f16dd344baf014365ffda3dcceeec9a651485e433f7369520162cbddcb54"
+      },
+      {
+        "bytes": 920190,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/sessions/2026/07/19/rollout-2026-07-19T01-24-41-019f7642-42da-74c2-9bed-e93d441490da.jsonl",
+        "redaction_count": 0,
+        "sha256": "5349644ba79ddeaea75f296bb883a59c7e055d58b6baee065631816377de0d88",
+        "source_sha256": "5349644ba79ddeaea75f296bb883a59c7e055d58b6baee065631816377de0d88"
+      },
+      {
+        "bytes": 17,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/.codex-system-skills.marker",
+        "redaction_count": 0,
+        "sha256": "35ff7b0c7ad7575ce96dd7c2989c4b44f9b685539fb8e30ade01d36788d6f5da",
+        "source_sha256": "35ff7b0c7ad7575ce96dd7c2989c4b44f9b685539fb8e30ade01d36788d6f5da"
+      },
+      {
+        "bytes": 10776,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/imagegen/LICENSE.txt",
+        "redaction_count": 0,
+        "sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9",
+        "source_sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9"
+      },
+      {
+        "bytes": 24003,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/imagegen/SKILL.md",
+        "redaction_count": 0,
+        "sha256": "59981d23519222bcecf1be48bb37730bbc50539ceb0e35ad09fcef98a3df19d3",
+        "source_sha256": "59981d23519222bcecf1be48bb37730bbc50539ceb0e35ad09fcef98a3df19d3"
+      },
+      {
+        "bytes": 275,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/imagegen/agents/openai.yaml",
+        "redaction_count": 0,
+        "sha256": "9ca574af14580dc7a2a3dc37a1796d17f93cb8850be66501f0799ef8603e9dc0",
+        "source_sha256": "9ca574af14580dc7a2a3dc37a1796d17f93cb8850be66501f0799ef8603e9dc0"
+      },
+      {
+        "bytes": 2889,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/imagegen/assets/imagegen-small.svg",
+        "redaction_count": 0,
+        "sha256": "cff5f34f57ff60b3ee92eaedd17b15e96dd4b9e776df3e78936c9e00d42be294",
+        "source_sha256": "cff5f34f57ff60b3ee92eaedd17b15e96dd4b9e776df3e78936c9e00d42be294"
+      },
+      {
+        "bytes": 1711,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/imagegen/assets/imagegen.png",
+        "redaction_count": 0,
+        "sha256": "95952f644064eb9e890f98d8db07216347186526e4c41ad66d3420629eb86e20",
+        "source_sha256": "95952f644064eb9e890f98d8db07216347186526e4c41ad66d3420629eb86e20"
+      },
+      {
+        "bytes": 10188,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/imagegen/references/cli.md",
+        "redaction_count": 0,
+        "sha256": "38d92cdbec5f3430439a3868ced0a3c5694e0e84a75e46d6e7f7a00aca6e673b",
+        "source_sha256": "38d92cdbec5f3430439a3868ced0a3c5694e0e84a75e46d6e7f7a00aca6e673b"
+      },
+      {
+        "bytes": 1779,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/imagegen/references/codex-network.md",
+        "redaction_count": 0,
+        "sha256": "c88298ca4481f6116a16fa7987434fc977f8b311c1bbc0c3d862ffd0c5981148",
+        "source_sha256": "c88298ca4481f6116a16fa7987434fc977f8b311c1bbc0c3d862ffd0c5981148"
+      },
+      {
+        "bytes": 6079,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/imagegen/references/image-api.md",
+        "redaction_count": 0,
+        "sha256": "ca5424dfcad5a4c87b4401d1cffb70bfcc18c7ca2c281d12045f822e59fa4093",
+        "source_sha256": "ca5424dfcad5a4c87b4401d1cffb70bfcc18c7ca2c281d12045f822e59fa4093"
+      },
+      {
+        "bytes": 9896,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/imagegen/references/prompting.md",
+        "redaction_count": 0,
+        "sha256": "a88c459a0306051535d1b68eb899925f08a175cbbcd07d72a9d0c43f330cb81f",
+        "source_sha256": "a88c459a0306051535d1b68eb899925f08a175cbbcd07d72a9d0c43f330cb81f"
+      },
+      {
+        "bytes": 19239,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/imagegen/references/sample-prompts.md",
+        "redaction_count": 0,
+        "sha256": "43307821f1db18e06be50189a078f3e1ccc3ee6b5523934614e22e64d27597ab",
+        "source_sha256": "43307821f1db18e06be50189a078f3e1ccc3ee6b5523934614e22e64d27597ab"
+      },
+      {
+        "bytes": 34271,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/imagegen/scripts/image_gen.py",
+        "redaction_count": 0,
+        "sha256": "35e8f9fa47deca111e46c63c4ac2008e09198ef664c0926a9dfdcd6745aa37ed",
+        "source_sha256": "35e8f9fa47deca111e46c63c4ac2008e09198ef664c0926a9dfdcd6745aa37ed"
+      },
+      {
+        "bytes": 13836,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/imagegen/scripts/remove_chroma_key.py",
+        "redaction_count": 0,
+        "sha256": "3f7b9b14ad5c90f37618bc1c16a039a2076abca12ddc41b3ae470e2b1cad6c0e",
+        "source_sha256": "3f7b9b14ad5c90f37618bc1c16a039a2076abca12ddc41b3ae470e2b1cad6c0e"
+      },
+      {
+        "bytes": 10776,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/openai-docs/LICENSE.txt",
+        "redaction_count": 0,
+        "sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9",
+        "source_sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9"
+      },
+      {
+        "bytes": 18747,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/openai-docs/SKILL.md",
+        "redaction_count": 0,
+        "sha256": "669a42ccf3323fe0ceda6e466730bcb05dddf1e0c220d6523ea504909fc49165",
+        "source_sha256": "669a42ccf3323fe0ceda6e466730bcb05dddf1e0c220d6523ea504909fc49165"
+      },
+      {
+        "bytes": 598,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/openai-docs/agents/openai.yaml",
+        "redaction_count": 0,
+        "sha256": "004c73f6e01409cfd7db699e815f5fed4ced3b63dd2cc25874f6791eae7fd4bc",
+        "source_sha256": "004c73f6e01409cfd7db699e815f5fed4ced3b63dd2cc25874f6791eae7fd4bc"
+      },
+      {
+        "bytes": 1091,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/openai-docs/assets/openai-small.svg",
+        "redaction_count": 0,
+        "sha256": "45be1f0757eb18889eefb1e7db79668ef46a275dc4e0e78e8df5ebd7f6cdeadc",
+        "source_sha256": "45be1f0757eb18889eefb1e7db79668ef46a275dc4e0e78e8df5ebd7f6cdeadc"
+      },
+      {
+        "bytes": 1429,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/openai-docs/assets/openai.png",
+        "redaction_count": 0,
+        "sha256": "156cc84d7332bfe95b310350bd470b690d22aa33d65340cc6c2e06022946194c",
+        "source_sha256": "156cc84d7332bfe95b310350bd470b690d22aa33d65340cc6c2e06022946194c"
+      },
+      {
+        "bytes": 2028,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/openai-docs/references/latest-model.md",
+        "redaction_count": 0,
+        "sha256": "b53eabc8f3204aabe793eccb729fce21eb26709fccb9be85d3a674b0fefb7c6e",
+        "source_sha256": "b53eabc8f3204aabe793eccb729fce21eb26709fccb9be85d3a674b0fefb7c6e"
+      },
+      {
+        "bytes": 14338,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/openai-docs/references/prompting-guide.md",
+        "redaction_count": 0,
+        "sha256": "ecdf49b4a824a87367c7a6ec3c0218e2c5783dff951b30a101c3b6a95152aafa",
+        "source_sha256": "ecdf49b4a824a87367c7a6ec3c0218e2c5783dff951b30a101c3b6a95152aafa"
+      },
+      {
+        "bytes": 11308,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/openai-docs/references/upgrade-guide.md",
+        "redaction_count": 0,
+        "sha256": "563784eb13ad1b44c3a592f940aa7ac2086ebeb97df3f4a09ba038b2f1564d39",
+        "source_sha256": "563784eb13ad1b44c3a592f940aa7ac2086ebeb97df3f4a09ba038b2f1564d39"
+      },
+      {
+        "bytes": 16085,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/openai-docs/scripts/fetch-codex-manual.mjs",
+        "redaction_count": 0,
+        "sha256": "f53eb6d2f286e9efcc397e8bee93a938e37296c90953e4e06e94899ef1b6c363",
+        "source_sha256": "f53eb6d2f286e9efcc397e8bee93a938e37296c90953e4e06e94899ef1b6c363"
+      },
+      {
+        "bytes": 3463,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/openai-docs/scripts/resolve-latest-model-info.js",
+        "redaction_count": 0,
+        "sha256": "3fc420a12ab1a344ac49b852138f599d01e3ac561ec86426ba161f42a03d3e52",
+        "source_sha256": "3fc420a12ab1a344ac49b852138f599d01e3ac561ec86426ba161f42a03d3e52"
+      },
+      {
+        "bytes": 11040,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/plugin-creator/SKILL.md",
+        "redaction_count": 0,
+        "sha256": "8fd56316b2c49cbdc657a5d197967a233018e1fada65b00a5dd030dce6499a6e",
+        "source_sha256": "8fd56316b2c49cbdc657a5d197967a233018e1fada65b00a5dd030dce6499a6e"
+      },
+      {
+        "bytes": 339,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/plugin-creator/agents/openai.yaml",
+        "redaction_count": 0,
+        "sha256": "fecaf35d692bd3d33d1a065648258d12e393afa9055d78adf6e57b42f4142f6d",
+        "source_sha256": "fecaf35d692bd3d33d1a065648258d12e393afa9055d78adf6e57b42f4142f6d"
+      },
+      {
+        "bytes": 1319,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/plugin-creator/assets/plugin-creator-small.svg",
+        "redaction_count": 0,
+        "sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb",
+        "source_sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb"
+      },
+      {
+        "bytes": 1563,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/plugin-creator/assets/plugin-creator.png",
+        "redaction_count": 0,
+        "sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162",
+        "source_sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162"
+      },
+      {
+        "bytes": 5874,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/plugin-creator/references/installing-and-updating.md",
+        "redaction_count": 0,
+        "sha256": "b030517fe05b12dda71babe2890656d7c6db6a0111797e1d20d208804427276d",
+        "source_sha256": "b030517fe05b12dda71babe2890656d7c6db6a0111797e1d20d208804427276d"
+      },
+      {
+        "bytes": 9179,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/plugin-creator/references/plugin-json-spec.md",
+        "redaction_count": 0,
+        "sha256": "eeb640130f69636affaa299d4170d5a7ae6a0ff978296ddf75c409ce6dd87b91",
+        "source_sha256": "eeb640130f69636affaa299d4170d5a7ae6a0ff978296ddf75c409ce6dd87b91"
+      },
+      {
+        "bytes": 11185,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/plugin-creator/scripts/create_basic_plugin.py",
+        "redaction_count": 0,
+        "sha256": "b5aa34f7f9dcec4bb007a66d65cff0c5c77a67042ae6c4de57d8ab7f4ef737d2",
+        "source_sha256": "b5aa34f7f9dcec4bb007a66d65cff0c5c77a67042ae6c4de57d8ab7f4ef737d2"
+      },
+      {
+        "bytes": 1497,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/plugin-creator/scripts/read_marketplace_name.py",
+        "redaction_count": 0,
+        "sha256": "7659216759152f83087020b4d2971b4ad3cc13851e2614efc30fc2317ad59d96",
+        "source_sha256": "7659216759152f83087020b4d2971b4ad3cc13851e2614efc30fc2317ad59d96"
+      },
+      {
+        "bytes": 2686,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py",
+        "redaction_count": 0,
+        "sha256": "4fe3c5a49212f6e30a2306e245c460e01aaf5e36bc8ad3dd2852c199257eff89",
+        "source_sha256": "4fe3c5a49212f6e30a2306e245c460e01aaf5e36bc8ad3dd2852c199257eff89"
+      },
+      {
+        "bytes": 21180,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/plugin-creator/scripts/validate_plugin.py",
+        "redaction_count": 0,
+        "sha256": "ebda00d55d7518b127f675f062fb5c6e7a1ffdc0a99df1a55ac594400d7d3228",
+        "source_sha256": "ebda00d55d7518b127f675f062fb5c6e7a1ffdc0a99df1a55ac594400d7d3228"
+      },
+      {
+        "bytes": 22047,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/skill-creator/SKILL.md",
+        "redaction_count": 0,
+        "sha256": "da44c88f6b3845a8fa8c60792ec9a722110a55a9793c279757b48fefb11f819c",
+        "source_sha256": "da44c88f6b3845a8fa8c60792ec9a722110a55a9793c279757b48fefb11f819c"
+      },
+      {
+        "bytes": 183,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/skill-creator/agents/openai.yaml",
+        "redaction_count": 0,
+        "sha256": "d07d21b93fcf3d4dc8d9a3399c05fc226a49a333a96d3e1c68b451b8dd9eade6",
+        "source_sha256": "d07d21b93fcf3d4dc8d9a3399c05fc226a49a333a96d3e1c68b451b8dd9eade6"
+      },
+      {
+        "bytes": 1319,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/skill-creator/assets/skill-creator-small.svg",
+        "redaction_count": 0,
+        "sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb",
+        "source_sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb"
+      },
+      {
+        "bytes": 1563,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/skill-creator/assets/skill-creator.png",
+        "redaction_count": 0,
+        "sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162",
+        "source_sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162"
+      },
+      {
+        "bytes": 11358,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/skill-creator/license.txt",
+        "redaction_count": 0,
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "source_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      },
+      {
+        "bytes": 2356,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/skill-creator/references/openai_yaml.md",
+        "redaction_count": 0,
+        "sha256": "ffac39318e408108141d40f820968e59f70434a891694f9bf1d25be8237b150c",
+        "source_sha256": "ffac39318e408108141d40f820968e59f70434a891694f9bf1d25be8237b150c"
+      },
+      {
+        "bytes": 6619,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/skill-creator/scripts/generate_openai_yaml.py",
+        "redaction_count": 0,
+        "sha256": "ddaf9abdfb3e762ed3c82571e9c607ce964188f49f2146281beb2cb8a553a93d",
+        "source_sha256": "ddaf9abdfb3e762ed3c82571e9c607ce964188f49f2146281beb2cb8a553a93d"
+      },
+      {
+        "bytes": 14602,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/skill-creator/scripts/init_skill.py",
+        "redaction_count": 0,
+        "sha256": "f40cb8fafc34e2d5dbbb8b6b04297af128b70844b67bc9445ef69790e0cdb49e",
+        "source_sha256": "f40cb8fafc34e2d5dbbb8b6b04297af128b70844b67bc9445ef69790e0cdb49e"
+      },
+      {
+        "bytes": 3293,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/skill-creator/scripts/quick_validate.py",
+        "redaction_count": 0,
+        "sha256": "6cc9dc3199c935916cf6f73fcbbbb0e3bb1b58c8f5109fefa499978908164f51",
+        "source_sha256": "6cc9dc3199c935916cf6f73fcbbbb0e3bb1b58c8f5109fefa499978908164f51"
+      },
+      {
+        "bytes": 11358,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/skill-installer/LICENSE.txt",
+        "redaction_count": 0,
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "source_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      },
+      {
+        "bytes": 3367,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/skill-installer/SKILL.md",
+        "redaction_count": 0,
+        "sha256": "d68b77e5bbb34dedab89d134da52855f140fc4b4299b80104f534e3b9e98f8ee",
+        "source_sha256": "d68b77e5bbb34dedab89d134da52855f140fc4b4299b80104f534e3b9e98f8ee"
+      },
+      {
+        "bytes": 221,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/skill-installer/agents/openai.yaml",
+        "redaction_count": 0,
+        "sha256": "5ce223d8b1070b82c42298538f1b8d376f788eb9e7a42a987e8c094070d73f0e",
+        "source_sha256": "5ce223d8b1070b82c42298538f1b8d376f788eb9e7a42a987e8c094070d73f0e"
+      },
+      {
+        "bytes": 923,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/skill-installer/assets/skill-installer-small.svg",
+        "redaction_count": 0,
+        "sha256": "3928703ff00dc1a681e7a22401843b7edcbd4b2051651ce4c43b75f7e140504e",
+        "source_sha256": "3928703ff00dc1a681e7a22401843b7edcbd4b2051651ce4c43b75f7e140504e"
+      },
+      {
+        "bytes": 1086,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/skill-installer/assets/skill-installer.png",
+        "redaction_count": 0,
+        "sha256": "d0a230b1a79b71b858b7c215a0fbb0768d6459c14ea4ef80c61592629bf0e605",
+        "source_sha256": "d0a230b1a79b71b858b7c215a0fbb0768d6459c14ea4ef80c61592629bf0e605"
+      },
+      {
+        "bytes": 659,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/skill-installer/scripts/github_utils.py",
+        "redaction_count": 0,
+        "sha256": "61c1bbe2ae217433b4b6f9f09f21aca4df52c12598068343ade719f706e4859b",
+        "source_sha256": "61c1bbe2ae217433b4b6f9f09f21aca4df52c12598068343ade719f706e4859b"
+      },
+      {
+        "bytes": 10096,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/skill-installer/scripts/install-skill-from-github.py",
+        "redaction_count": 0,
+        "sha256": "0fbbd36e8ea294442c0bd48d6f610a2e8656216bfef5c322f1dcf448ef2f09f1",
+        "source_sha256": "0fbbd36e8ea294442c0bd48d6f610a2e8656216bfef5c322f1dcf448ef2f09f1"
+      },
+      {
+        "bytes": 2967,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/skills/.system/skill-installer/scripts/list-skills.py",
+        "redaction_count": 0,
+        "sha256": "e4e1f78ca3d045827f2a05cfd99fae57cc7c1a1bfeba8704029108834debff35",
+        "source_sha256": "e4e1f78ca3d045827f2a05cfd99fae57cc7c1a1bfeba8704029108834debff35"
+      },
+      {
+        "bytes": 233472,
+        "path": "codex-homes/node-ac51b43591b100f231e049da/state_5.sqlite",
+        "redaction_count": 0,
+        "sha256": "ee2e13bae8d63be9f2a384070248893ed9d0a24a0c87810e4f8706cec25d447d",
+        "source_sha256": "ee2e13bae8d63be9f2a384070248893ed9d0a24a0c87810e4f8706cec25d447d"
+      },
+      {
+        "bytes": 19,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/.execution-node",
+        "redaction_count": 0,
+        "sha256": "0ba1a5da31e27db1f1dc04dd9ac1fa62b2f011684ba889ae918037edfb693f66",
+        "source_sha256": "0ba1a5da31e27db1f1dc04dd9ac1fa62b2f011684ba889ae918037edfb693f66"
+      },
+      {
+        "bytes": 0,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/.tmp/plugins.sync.lock",
+        "redaction_count": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "bytes": 1753,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/config.toml",
+        "redaction_count": 0,
+        "sha256": "c35786a6c135ec02dfcb96d907b198b90c3f538c99bab1e43863d43b7b217f89",
+        "source_sha256": "c35786a6c135ec02dfcb96d907b198b90c3f538c99bab1e43863d43b7b217f89"
+      },
+      {
+        "bytes": 24576,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/goals_1.sqlite",
+        "redaction_count": 0,
+        "sha256": "44e5917a3dbb02d964939cc18e3672b3fb4342be62418b4456339e1133cb7c8c",
+        "source_sha256": "44e5917a3dbb02d964939cc18e3672b3fb4342be62418b4456339e1133cb7c8c"
+      },
+      {
+        "bytes": 4934,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/hermes-schemas/runtime-worker-receipt-v1.schema.json",
+        "redaction_count": 0,
+        "sha256": "d169dc22c9e3b5216fecfdb969f16b513ccf6deb0a2df44c17b9d38b2f0a453a",
+        "source_sha256": "d169dc22c9e3b5216fecfdb969f16b513ccf6deb0a2df44c17b9d38b2f0a453a"
+      },
+      {
+        "bytes": 36,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/installation_id",
+        "redaction_count": 0,
+        "sha256": "9290aa3463fd612843fc62d4ab2a7575ccd3354b2ab989ba7e026cf85644ed59",
+        "source_sha256": "9290aa3463fd612843fc62d4ab2a7575ccd3354b2ab989ba7e026cf85644ed59"
+      },
+      {
+        "bytes": 49152,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/logs_2.sqlite",
+        "redaction_count": 0,
+        "sha256": "c67f51e5e1bdf33acf67f703541bf40ae9f8ce05a2781fce2650e22e838b87a5",
+        "source_sha256": "c67f51e5e1bdf33acf67f703541bf40ae9f8ce05a2781fce2650e22e838b87a5"
+      },
+      {
+        "bytes": 40960,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/memories_1.sqlite",
+        "redaction_count": 0,
+        "sha256": "9c8d45deee5a2f57f023d9efa3563a29603f207e6c72435d9502e9c8d4cee89f",
+        "source_sha256": "9c8d45deee5a2f57f023d9efa3563a29603f207e6c72435d9502e9c8d4cee89f"
+      },
+      {
+        "bytes": 1978,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/rules/default.rules",
+        "redaction_count": 0,
+        "sha256": "e820f16dd344baf014365ffda3dcceeec9a651485e433f7369520162cbddcb54",
+        "source_sha256": "e820f16dd344baf014365ffda3dcceeec9a651485e433f7369520162cbddcb54"
+      },
+      {
+        "bytes": 1984992,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/sessions/2026/07/19/rollout-2026-07-19T01-24-41-019f7642-4316-7603-af8e-94336a5234a5.jsonl",
+        "redaction_count": 0,
+        "sha256": "87ad5b2131cca54dd487975ac4eaf4d722fa131fef40c095a92d3166921526ff",
+        "source_sha256": "87ad5b2131cca54dd487975ac4eaf4d722fa131fef40c095a92d3166921526ff"
+      },
+      {
+        "bytes": 17,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/.codex-system-skills.marker",
+        "redaction_count": 0,
+        "sha256": "35ff7b0c7ad7575ce96dd7c2989c4b44f9b685539fb8e30ade01d36788d6f5da",
+        "source_sha256": "35ff7b0c7ad7575ce96dd7c2989c4b44f9b685539fb8e30ade01d36788d6f5da"
+      },
+      {
+        "bytes": 10776,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/imagegen/LICENSE.txt",
+        "redaction_count": 0,
+        "sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9",
+        "source_sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9"
+      },
+      {
+        "bytes": 24003,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/imagegen/SKILL.md",
+        "redaction_count": 0,
+        "sha256": "59981d23519222bcecf1be48bb37730bbc50539ceb0e35ad09fcef98a3df19d3",
+        "source_sha256": "59981d23519222bcecf1be48bb37730bbc50539ceb0e35ad09fcef98a3df19d3"
+      },
+      {
+        "bytes": 275,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/imagegen/agents/openai.yaml",
+        "redaction_count": 0,
+        "sha256": "9ca574af14580dc7a2a3dc37a1796d17f93cb8850be66501f0799ef8603e9dc0",
+        "source_sha256": "9ca574af14580dc7a2a3dc37a1796d17f93cb8850be66501f0799ef8603e9dc0"
+      },
+      {
+        "bytes": 2889,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/imagegen/assets/imagegen-small.svg",
+        "redaction_count": 0,
+        "sha256": "cff5f34f57ff60b3ee92eaedd17b15e96dd4b9e776df3e78936c9e00d42be294",
+        "source_sha256": "cff5f34f57ff60b3ee92eaedd17b15e96dd4b9e776df3e78936c9e00d42be294"
+      },
+      {
+        "bytes": 1711,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/imagegen/assets/imagegen.png",
+        "redaction_count": 0,
+        "sha256": "95952f644064eb9e890f98d8db07216347186526e4c41ad66d3420629eb86e20",
+        "source_sha256": "95952f644064eb9e890f98d8db07216347186526e4c41ad66d3420629eb86e20"
+      },
+      {
+        "bytes": 10188,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/imagegen/references/cli.md",
+        "redaction_count": 0,
+        "sha256": "38d92cdbec5f3430439a3868ced0a3c5694e0e84a75e46d6e7f7a00aca6e673b",
+        "source_sha256": "38d92cdbec5f3430439a3868ced0a3c5694e0e84a75e46d6e7f7a00aca6e673b"
+      },
+      {
+        "bytes": 1779,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/imagegen/references/codex-network.md",
+        "redaction_count": 0,
+        "sha256": "c88298ca4481f6116a16fa7987434fc977f8b311c1bbc0c3d862ffd0c5981148",
+        "source_sha256": "c88298ca4481f6116a16fa7987434fc977f8b311c1bbc0c3d862ffd0c5981148"
+      },
+      {
+        "bytes": 6079,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/imagegen/references/image-api.md",
+        "redaction_count": 0,
+        "sha256": "ca5424dfcad5a4c87b4401d1cffb70bfcc18c7ca2c281d12045f822e59fa4093",
+        "source_sha256": "ca5424dfcad5a4c87b4401d1cffb70bfcc18c7ca2c281d12045f822e59fa4093"
+      },
+      {
+        "bytes": 9896,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/imagegen/references/prompting.md",
+        "redaction_count": 0,
+        "sha256": "a88c459a0306051535d1b68eb899925f08a175cbbcd07d72a9d0c43f330cb81f",
+        "source_sha256": "a88c459a0306051535d1b68eb899925f08a175cbbcd07d72a9d0c43f330cb81f"
+      },
+      {
+        "bytes": 19239,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/imagegen/references/sample-prompts.md",
+        "redaction_count": 0,
+        "sha256": "43307821f1db18e06be50189a078f3e1ccc3ee6b5523934614e22e64d27597ab",
+        "source_sha256": "43307821f1db18e06be50189a078f3e1ccc3ee6b5523934614e22e64d27597ab"
+      },
+      {
+        "bytes": 34271,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/imagegen/scripts/image_gen.py",
+        "redaction_count": 0,
+        "sha256": "35e8f9fa47deca111e46c63c4ac2008e09198ef664c0926a9dfdcd6745aa37ed",
+        "source_sha256": "35e8f9fa47deca111e46c63c4ac2008e09198ef664c0926a9dfdcd6745aa37ed"
+      },
+      {
+        "bytes": 13836,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/imagegen/scripts/remove_chroma_key.py",
+        "redaction_count": 0,
+        "sha256": "3f7b9b14ad5c90f37618bc1c16a039a2076abca12ddc41b3ae470e2b1cad6c0e",
+        "source_sha256": "3f7b9b14ad5c90f37618bc1c16a039a2076abca12ddc41b3ae470e2b1cad6c0e"
+      },
+      {
+        "bytes": 10776,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/openai-docs/LICENSE.txt",
+        "redaction_count": 0,
+        "sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9",
+        "source_sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9"
+      },
+      {
+        "bytes": 18747,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/openai-docs/SKILL.md",
+        "redaction_count": 0,
+        "sha256": "669a42ccf3323fe0ceda6e466730bcb05dddf1e0c220d6523ea504909fc49165",
+        "source_sha256": "669a42ccf3323fe0ceda6e466730bcb05dddf1e0c220d6523ea504909fc49165"
+      },
+      {
+        "bytes": 598,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/openai-docs/agents/openai.yaml",
+        "redaction_count": 0,
+        "sha256": "004c73f6e01409cfd7db699e815f5fed4ced3b63dd2cc25874f6791eae7fd4bc",
+        "source_sha256": "004c73f6e01409cfd7db699e815f5fed4ced3b63dd2cc25874f6791eae7fd4bc"
+      },
+      {
+        "bytes": 1091,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/openai-docs/assets/openai-small.svg",
+        "redaction_count": 0,
+        "sha256": "45be1f0757eb18889eefb1e7db79668ef46a275dc4e0e78e8df5ebd7f6cdeadc",
+        "source_sha256": "45be1f0757eb18889eefb1e7db79668ef46a275dc4e0e78e8df5ebd7f6cdeadc"
+      },
+      {
+        "bytes": 1429,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/openai-docs/assets/openai.png",
+        "redaction_count": 0,
+        "sha256": "156cc84d7332bfe95b310350bd470b690d22aa33d65340cc6c2e06022946194c",
+        "source_sha256": "156cc84d7332bfe95b310350bd470b690d22aa33d65340cc6c2e06022946194c"
+      },
+      {
+        "bytes": 2028,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/openai-docs/references/latest-model.md",
+        "redaction_count": 0,
+        "sha256": "b53eabc8f3204aabe793eccb729fce21eb26709fccb9be85d3a674b0fefb7c6e",
+        "source_sha256": "b53eabc8f3204aabe793eccb729fce21eb26709fccb9be85d3a674b0fefb7c6e"
+      },
+      {
+        "bytes": 14338,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/openai-docs/references/prompting-guide.md",
+        "redaction_count": 0,
+        "sha256": "ecdf49b4a824a87367c7a6ec3c0218e2c5783dff951b30a101c3b6a95152aafa",
+        "source_sha256": "ecdf49b4a824a87367c7a6ec3c0218e2c5783dff951b30a101c3b6a95152aafa"
+      },
+      {
+        "bytes": 11308,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/openai-docs/references/upgrade-guide.md",
+        "redaction_count": 0,
+        "sha256": "563784eb13ad1b44c3a592f940aa7ac2086ebeb97df3f4a09ba038b2f1564d39",
+        "source_sha256": "563784eb13ad1b44c3a592f940aa7ac2086ebeb97df3f4a09ba038b2f1564d39"
+      },
+      {
+        "bytes": 16085,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/openai-docs/scripts/fetch-codex-manual.mjs",
+        "redaction_count": 0,
+        "sha256": "f53eb6d2f286e9efcc397e8bee93a938e37296c90953e4e06e94899ef1b6c363",
+        "source_sha256": "f53eb6d2f286e9efcc397e8bee93a938e37296c90953e4e06e94899ef1b6c363"
+      },
+      {
+        "bytes": 3463,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/openai-docs/scripts/resolve-latest-model-info.js",
+        "redaction_count": 0,
+        "sha256": "3fc420a12ab1a344ac49b852138f599d01e3ac561ec86426ba161f42a03d3e52",
+        "source_sha256": "3fc420a12ab1a344ac49b852138f599d01e3ac561ec86426ba161f42a03d3e52"
+      },
+      {
+        "bytes": 11040,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/plugin-creator/SKILL.md",
+        "redaction_count": 0,
+        "sha256": "8fd56316b2c49cbdc657a5d197967a233018e1fada65b00a5dd030dce6499a6e",
+        "source_sha256": "8fd56316b2c49cbdc657a5d197967a233018e1fada65b00a5dd030dce6499a6e"
+      },
+      {
+        "bytes": 339,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/plugin-creator/agents/openai.yaml",
+        "redaction_count": 0,
+        "sha256": "fecaf35d692bd3d33d1a065648258d12e393afa9055d78adf6e57b42f4142f6d",
+        "source_sha256": "fecaf35d692bd3d33d1a065648258d12e393afa9055d78adf6e57b42f4142f6d"
+      },
+      {
+        "bytes": 1319,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/plugin-creator/assets/plugin-creator-small.svg",
+        "redaction_count": 0,
+        "sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb",
+        "source_sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb"
+      },
+      {
+        "bytes": 1563,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/plugin-creator/assets/plugin-creator.png",
+        "redaction_count": 0,
+        "sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162",
+        "source_sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162"
+      },
+      {
+        "bytes": 5874,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/plugin-creator/references/installing-and-updating.md",
+        "redaction_count": 0,
+        "sha256": "b030517fe05b12dda71babe2890656d7c6db6a0111797e1d20d208804427276d",
+        "source_sha256": "b030517fe05b12dda71babe2890656d7c6db6a0111797e1d20d208804427276d"
+      },
+      {
+        "bytes": 9179,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/plugin-creator/references/plugin-json-spec.md",
+        "redaction_count": 0,
+        "sha256": "eeb640130f69636affaa299d4170d5a7ae6a0ff978296ddf75c409ce6dd87b91",
+        "source_sha256": "eeb640130f69636affaa299d4170d5a7ae6a0ff978296ddf75c409ce6dd87b91"
+      },
+      {
+        "bytes": 11185,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/plugin-creator/scripts/create_basic_plugin.py",
+        "redaction_count": 0,
+        "sha256": "b5aa34f7f9dcec4bb007a66d65cff0c5c77a67042ae6c4de57d8ab7f4ef737d2",
+        "source_sha256": "b5aa34f7f9dcec4bb007a66d65cff0c5c77a67042ae6c4de57d8ab7f4ef737d2"
+      },
+      {
+        "bytes": 1497,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/plugin-creator/scripts/read_marketplace_name.py",
+        "redaction_count": 0,
+        "sha256": "7659216759152f83087020b4d2971b4ad3cc13851e2614efc30fc2317ad59d96",
+        "source_sha256": "7659216759152f83087020b4d2971b4ad3cc13851e2614efc30fc2317ad59d96"
+      },
+      {
+        "bytes": 2686,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py",
+        "redaction_count": 0,
+        "sha256": "4fe3c5a49212f6e30a2306e245c460e01aaf5e36bc8ad3dd2852c199257eff89",
+        "source_sha256": "4fe3c5a49212f6e30a2306e245c460e01aaf5e36bc8ad3dd2852c199257eff89"
+      },
+      {
+        "bytes": 21180,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/plugin-creator/scripts/validate_plugin.py",
+        "redaction_count": 0,
+        "sha256": "ebda00d55d7518b127f675f062fb5c6e7a1ffdc0a99df1a55ac594400d7d3228",
+        "source_sha256": "ebda00d55d7518b127f675f062fb5c6e7a1ffdc0a99df1a55ac594400d7d3228"
+      },
+      {
+        "bytes": 22047,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/skill-creator/SKILL.md",
+        "redaction_count": 0,
+        "sha256": "da44c88f6b3845a8fa8c60792ec9a722110a55a9793c279757b48fefb11f819c",
+        "source_sha256": "da44c88f6b3845a8fa8c60792ec9a722110a55a9793c279757b48fefb11f819c"
+      },
+      {
+        "bytes": 183,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/skill-creator/agents/openai.yaml",
+        "redaction_count": 0,
+        "sha256": "d07d21b93fcf3d4dc8d9a3399c05fc226a49a333a96d3e1c68b451b8dd9eade6",
+        "source_sha256": "d07d21b93fcf3d4dc8d9a3399c05fc226a49a333a96d3e1c68b451b8dd9eade6"
+      },
+      {
+        "bytes": 1319,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/skill-creator/assets/skill-creator-small.svg",
+        "redaction_count": 0,
+        "sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb",
+        "source_sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb"
+      },
+      {
+        "bytes": 1563,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/skill-creator/assets/skill-creator.png",
+        "redaction_count": 0,
+        "sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162",
+        "source_sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162"
+      },
+      {
+        "bytes": 11358,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/skill-creator/license.txt",
+        "redaction_count": 0,
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "source_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      },
+      {
+        "bytes": 2356,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/skill-creator/references/openai_yaml.md",
+        "redaction_count": 0,
+        "sha256": "ffac39318e408108141d40f820968e59f70434a891694f9bf1d25be8237b150c",
+        "source_sha256": "ffac39318e408108141d40f820968e59f70434a891694f9bf1d25be8237b150c"
+      },
+      {
+        "bytes": 6619,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/skill-creator/scripts/generate_openai_yaml.py",
+        "redaction_count": 0,
+        "sha256": "ddaf9abdfb3e762ed3c82571e9c607ce964188f49f2146281beb2cb8a553a93d",
+        "source_sha256": "ddaf9abdfb3e762ed3c82571e9c607ce964188f49f2146281beb2cb8a553a93d"
+      },
+      {
+        "bytes": 14602,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/skill-creator/scripts/init_skill.py",
+        "redaction_count": 0,
+        "sha256": "f40cb8fafc34e2d5dbbb8b6b04297af128b70844b67bc9445ef69790e0cdb49e",
+        "source_sha256": "f40cb8fafc34e2d5dbbb8b6b04297af128b70844b67bc9445ef69790e0cdb49e"
+      },
+      {
+        "bytes": 3293,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/skill-creator/scripts/quick_validate.py",
+        "redaction_count": 0,
+        "sha256": "6cc9dc3199c935916cf6f73fcbbbb0e3bb1b58c8f5109fefa499978908164f51",
+        "source_sha256": "6cc9dc3199c935916cf6f73fcbbbb0e3bb1b58c8f5109fefa499978908164f51"
+      },
+      {
+        "bytes": 11358,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/skill-installer/LICENSE.txt",
+        "redaction_count": 0,
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "source_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      },
+      {
+        "bytes": 3367,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/skill-installer/SKILL.md",
+        "redaction_count": 0,
+        "sha256": "d68b77e5bbb34dedab89d134da52855f140fc4b4299b80104f534e3b9e98f8ee",
+        "source_sha256": "d68b77e5bbb34dedab89d134da52855f140fc4b4299b80104f534e3b9e98f8ee"
+      },
+      {
+        "bytes": 221,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/skill-installer/agents/openai.yaml",
+        "redaction_count": 0,
+        "sha256": "5ce223d8b1070b82c42298538f1b8d376f788eb9e7a42a987e8c094070d73f0e",
+        "source_sha256": "5ce223d8b1070b82c42298538f1b8d376f788eb9e7a42a987e8c094070d73f0e"
+      },
+      {
+        "bytes": 923,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/skill-installer/assets/skill-installer-small.svg",
+        "redaction_count": 0,
+        "sha256": "3928703ff00dc1a681e7a22401843b7edcbd4b2051651ce4c43b75f7e140504e",
+        "source_sha256": "3928703ff00dc1a681e7a22401843b7edcbd4b2051651ce4c43b75f7e140504e"
+      },
+      {
+        "bytes": 1086,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/skill-installer/assets/skill-installer.png",
+        "redaction_count": 0,
+        "sha256": "d0a230b1a79b71b858b7c215a0fbb0768d6459c14ea4ef80c61592629bf0e605",
+        "source_sha256": "d0a230b1a79b71b858b7c215a0fbb0768d6459c14ea4ef80c61592629bf0e605"
+      },
+      {
+        "bytes": 659,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/skill-installer/scripts/github_utils.py",
+        "redaction_count": 0,
+        "sha256": "61c1bbe2ae217433b4b6f9f09f21aca4df52c12598068343ade719f706e4859b",
+        "source_sha256": "61c1bbe2ae217433b4b6f9f09f21aca4df52c12598068343ade719f706e4859b"
+      },
+      {
+        "bytes": 10096,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/skill-installer/scripts/install-skill-from-github.py",
+        "redaction_count": 0,
+        "sha256": "0fbbd36e8ea294442c0bd48d6f610a2e8656216bfef5c322f1dcf448ef2f09f1",
+        "source_sha256": "0fbbd36e8ea294442c0bd48d6f610a2e8656216bfef5c322f1dcf448ef2f09f1"
+      },
+      {
+        "bytes": 2967,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/skills/.system/skill-installer/scripts/list-skills.py",
+        "redaction_count": 0,
+        "sha256": "e4e1f78ca3d045827f2a05cfd99fae57cc7c1a1bfeba8704029108834debff35",
+        "source_sha256": "e4e1f78ca3d045827f2a05cfd99fae57cc7c1a1bfeba8704029108834debff35"
+      },
+      {
+        "bytes": 233472,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/state_5.sqlite",
+        "redaction_count": 0,
+        "sha256": "ac9bf8bce5e664e884a530a75618493d54008c9e2d9ca8fe2884a72a55f4d85f",
+        "source_sha256": "ac9bf8bce5e664e884a530a75618493d54008c9e2d9ca8fe2884a72a55f4d85f"
+      },
+      {
+        "bytes": 32768,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/state_5.sqlite-shm",
+        "redaction_count": 0,
+        "sha256": "ee6b2b1fee72bcbcb250214e5f2ab571d45f49a7809975b2be5f00cd33729c1e",
+        "source_sha256": "ee6b2b1fee72bcbcb250214e5f2ab571d45f49a7809975b2be5f00cd33729c1e"
+      },
+      {
+        "bytes": 4161232,
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/state_5.sqlite-wal",
+        "redaction_count": 0,
+        "sha256": "c8c186cb48dafee35b4abca73362855a3c4f6162e99861784072322facb6b555",
+        "source_sha256": "c8c186cb48dafee35b4abca73362855a3c4f6162e99861784072322facb6b555"
+      },
+      {
+        "bytes": 513,
+        "path": "hermes-home/SOUL.md",
+        "redaction_count": 0,
+        "sha256": "2765a846e1bb371d78d3b93b403dfb0f8d1ba1a9895edb5f608367abfe81194d",
+        "source_sha256": "2765a846e1bb371d78d3b93b403dfb0f8d1ba1a9895edb5f608367abfe81194d"
+      },
+      {
+        "bytes": 336797,
+        "path": "hermes-home/kanban/kanban/logs/t_012e1ca2.log",
+        "redaction_count": 0,
+        "sha256": "6226215ee6c8f88bc3e338554984a17e5a30466b3d9715f62be852e7e6b6c513",
+        "source_sha256": "6226215ee6c8f88bc3e338554984a17e5a30466b3d9715f62be852e7e6b6c513"
+      },
+      {
+        "bytes": 278237,
+        "path": "hermes-home/kanban/kanban/logs/t_157a0a8b.log",
+        "redaction_count": 0,
+        "sha256": "fad8bd7fbaca06e5cd7d3aaa3dcb7646063a537661f3629fd6b011ec8d1880bc",
+        "source_sha256": "fad8bd7fbaca06e5cd7d3aaa3dcb7646063a537661f3629fd6b011ec8d1880bc"
+      },
+      {
+        "bytes": 45,
+        "path": "hermes-home/kanban/kanban/logs/t_174c609d.log",
+        "redaction_count": 0,
+        "sha256": "9e805429865dc5a59b7b2be38c1ab05d048f920da5527b348bcfbbe529045cf0",
+        "source_sha256": "9e805429865dc5a59b7b2be38c1ab05d048f920da5527b348bcfbbe529045cf0"
+      },
+      {
+        "bytes": 45,
+        "path": "hermes-home/kanban/kanban/logs/t_3343312d.log",
+        "redaction_count": 0,
+        "sha256": "9e805429865dc5a59b7b2be38c1ab05d048f920da5527b348bcfbbe529045cf0",
+        "source_sha256": "9e805429865dc5a59b7b2be38c1ab05d048f920da5527b348bcfbbe529045cf0"
+      },
+      {
+        "bytes": 1343491,
+        "path": "hermes-home/kanban/kanban/logs/t_3a18827c.log",
+        "redaction_count": 0,
+        "sha256": "36891ba0f4cfb2abd36619c945b8eaae34a0a2a376cf68a360176e502787fba0",
+        "source_sha256": "36891ba0f4cfb2abd36619c945b8eaae34a0a2a376cf68a360176e502787fba0"
+      },
+      {
+        "bytes": 45,
+        "path": "hermes-home/kanban/kanban/logs/t_3f632817.log",
+        "redaction_count": 0,
+        "sha256": "9e805429865dc5a59b7b2be38c1ab05d048f920da5527b348bcfbbe529045cf0",
+        "source_sha256": "9e805429865dc5a59b7b2be38c1ab05d048f920da5527b348bcfbbe529045cf0"
+      },
+      {
+        "bytes": 744782,
+        "path": "hermes-home/kanban/kanban/logs/t_9246dcb2.log",
+        "redaction_count": 0,
+        "sha256": "fa40602e1b0e96040a83a1eadd8dace92053d644a1f90164e358cb64354aced0",
+        "source_sha256": "fa40602e1b0e96040a83a1eadd8dace92053d644a1f90164e358cb64354aced0"
+      },
+      {
+        "bytes": 1240135,
+        "path": "hermes-home/kanban/kanban/logs/t_a0346a6c.log",
+        "redaction_count": 0,
+        "sha256": "9f3daa9a8ed02152ee11b18b5497b64450aa5ca0dd67fa61fcb452d756328722",
+        "source_sha256": "9f3daa9a8ed02152ee11b18b5497b64450aa5ca0dd67fa61fcb452d756328722"
+      },
+      {
+        "bytes": 1158416,
+        "path": "hermes-home/kanban/kanban/logs/t_c1265d0f.log",
+        "redaction_count": 0,
+        "sha256": "e6d03b286809d6b4bb642e1a4ebea5c9aa2c729269f5ac9cd85392881bfba8e9",
+        "source_sha256": "e6d03b286809d6b4bb642e1a4ebea5c9aa2c729269f5ac9cd85392881bfba8e9"
+      },
+      {
+        "bytes": 697283,
+        "path": "hermes-home/kanban/kanban/logs/t_e14c25e2.log",
+        "redaction_count": 0,
+        "sha256": "332ef79e7cc53a1df335113a042d1554bc54a48342d7f63fe693a88032b5c701",
+        "source_sha256": "332ef79e7cc53a1df335113a042d1554bc54a48342d7f63fe693a88032b5c701"
+      },
+      {
+        "bytes": 12738560,
+        "path": "hermes-home/kanban.db",
+        "redaction_count": 0,
+        "sha256": "1ed20d866542a422e443934eab39de380890e3bbbc23b8139d7a3bc72340ca08",
+        "source_sha256": "1ed20d866542a422e443934eab39de380890e3bbbc23b8139d7a3bc72340ca08"
+      },
+      {
+        "bytes": 67380,
+        "path": "reports/arm2-orchestration.json",
+        "redaction_count": 0,
+        "sha256": "74129800e4b5108861dd9a21af6717775d3711ab462cb326188ccddd657bbc5a",
+        "source_sha256": "74129800e4b5108861dd9a21af6717775d3711ab462cb326188ccddd657bbc5a"
+      },
+      {
+        "bytes": 2935,
+        "path": "reports/candidate-evidence.json",
+        "redaction_count": 0,
+        "sha256": "a6038549942adba16f2994d2785b5c818a7789a0219eb6c029dbb498ef2aa334",
+        "source_sha256": "a6038549942adba16f2994d2785b5c818a7789a0219eb6c029dbb498ef2aa334"
+      },
+      {
+        "bytes": 148254,
+        "path": "reports/candidate.patch",
+        "redaction_count": 0,
+        "sha256": "ff1a8775d6e817fc74443771337e07330b7d99159a955d1e04c3a3fba007422a",
+        "source_sha256": "ff1a8775d6e817fc74443771337e07330b7d99159a955d1e04c3a3fba007422a"
+      },
+      {
+        "bytes": 656539,
+        "path": "reports/capability-trace.json",
+        "redaction_count": 0,
+        "sha256": "de5c02b57b767cf611ab83757cb56fdfb9747fc1f530c22ce31a2694b4cdff3c",
+        "source_sha256": "de5c02b57b767cf611ab83757cb56fdfb9747fc1f530c22ce31a2694b4cdff3c"
+      },
+      {
+        "bytes": 34355,
+        "path": "reports/capability-trace.md",
+        "redaction_count": 0,
+        "sha256": "cdffcee98645f7dd3e14174318062cb495526177e821847084b489b93acd0e83",
+        "source_sha256": "cdffcee98645f7dd3e14174318062cb495526177e821847084b489b93acd0e83"
+      },
+      {
+        "bytes": 342,
+        "path": "reports/clean-replay-source-state.json",
+        "redaction_count": 0,
+        "sha256": "e9facb81ea37d77c005980b08a2caf5d844f8fce2b8030fcd1e6a98568865144",
+        "source_sha256": "e9facb81ea37d77c005980b08a2caf5d844f8fce2b8030fcd1e6a98568865144"
+      },
+      {
+        "bytes": 1657,
+        "path": "reports/clean-replay-summary.md",
+        "redaction_count": 0,
+        "sha256": "f741cd24592f828089aec5d9be5804cfd0dca6feb419d0fbd56054dbc520e243",
+        "source_sha256": "f741cd24592f828089aec5d9be5804cfd0dca6feb419d0fbd56054dbc520e243"
+      },
+      {
+        "bytes": 75873,
+        "path": "reports/clean-replay.json",
+        "redaction_count": 0,
+        "sha256": "8a92f994446b8f73460a413c16fe5a2c654b23dca9c1c22867d8401ee0d608c2",
+        "source_sha256": "8a92f994446b8f73460a413c16fe5a2c654b23dca9c1c22867d8401ee0d608c2"
+      },
+      {
+        "bytes": 22,
+        "path": "reports/ownership-canary-target.txt",
+        "redaction_count": 0,
+        "sha256": "ef6df610944ce2d1d3f1b4521339dbf50bea25fdbd9166bfe21058dbd02c5760",
+        "source_sha256": "ef6df610944ce2d1d3f1b4521339dbf50bea25fdbd9166bfe21058dbd02c5760"
+      },
+      {
+        "bytes": 1676,
+        "path": "reports/ownership-canary.json",
+        "redaction_count": 0,
+        "sha256": "4a391fb3edc656f82e7372251fde5410b45e658738c99dc284c73a8c284d28ed",
+        "source_sha256": "4a391fb3edc656f82e7372251fde5410b45e658738c99dc284c73a8c284d28ed"
+      },
+      {
+        "bytes": 220870,
+        "path": "reports/run-report.json",
+        "redaction_count": 0,
+        "sha256": "47e1ac5627fea8fe1a4f792b7f30ca49a28bc2a05913751ac66f3dbca3f47941",
+        "source_sha256": "47e1ac5627fea8fe1a4f792b7f30ca49a28bc2a05913751ac66f3dbca3f47941"
+      },
+      {
+        "bytes": 583,
+        "path": "reports/runner-state.json",
+        "redaction_count": 0,
+        "sha256": "3baffe6d3c8afd8e06745b9a38f323ae7d1c707860619cecac1cbb2a6dc7a048",
+        "source_sha256": "3baffe6d3c8afd8e06745b9a38f323ae7d1c707860619cecac1cbb2a6dc7a048"
+      },
+      {
+        "bytes": 2863,
+        "path": "runtime-contributions/reporting-plots-templates-completions/attempt-1.json",
+        "redaction_count": 0,
+        "sha256": "d7ea8b2ae868a740a99ffaea52c58e093290204284b29e1e849854cc188102ed",
+        "source_sha256": "d7ea8b2ae868a740a99ffaea52c58e093290204284b29e1e849854cc188102ed"
+      },
+      {
+        "bytes": 28516,
+        "path": "runtime-contributions/reporting-plots-templates-completions/attempt-1.patch",
+        "redaction_count": 0,
+        "sha256": "72b5ee1e596294e4650813c2e6e9457c26c6aa627d2fe89430dd5f034ed2440d",
+        "source_sha256": "72b5ee1e596294e4650813c2e6e9457c26c6aa627d2fe89430dd5f034ed2440d"
+      },
+      {
+        "bytes": 3062,
+        "path": "runtime-contributions/stage-pipeline-run-cache/attempt-1.json",
+        "redaction_count": 0,
+        "sha256": "da5c7f5f0761abc42fe32fec3296063ba159345dc1fd25be53af628113069a99",
+        "source_sha256": "da5c7f5f0761abc42fe32fec3296063ba159345dc1fd25be53af628113069a99"
+      },
+      {
+        "bytes": 36160,
+        "path": "runtime-contributions/stage-pipeline-run-cache/attempt-1.patch",
+        "redaction_count": 0,
+        "sha256": "1a252f08dda040cfa25e22a45a3fba8291bb6f6a4d5d17243180e9281b269339",
+        "source_sha256": "1a252f08dda040cfa25e22a45a3fba8291bb6f6a4d5d17243180e9281b269339"
+      },
+      {
+        "bytes": 3597,
+        "path": "runtime-contributions/tree-remote-import-transfer/attempt-1.json",
+        "redaction_count": 0,
+        "sha256": "7cfc9c8eb0feecb3a64249bc132a0a4f2c59538d2be05e956f37e3f1fbd2eab1",
+        "source_sha256": "7cfc9c8eb0feecb3a64249bc132a0a4f2c59538d2be05e956f37e3f1fbd2eab1"
+      },
+      {
+        "bytes": 31955,
+        "path": "runtime-contributions/tree-remote-import-transfer/attempt-1.patch",
+        "redaction_count": 0,
+        "sha256": "9be342fdde2e7d2eeec311fff3ad590cbb21d9806d55be8ab1a5b4641e3e1b4b",
+        "source_sha256": "9be342fdde2e7d2eeec311fff3ad590cbb21d9806d55be8ab1a5b4641e3e1b4b"
+      },
+      {
+        "bytes": 592,
+        "path": "service/supervisor-state.json",
+        "redaction_count": 0,
+        "sha256": "4c600c774c20982b6d0fed04d445b2fb4be3875f0a35a160c751840e45e9bd7f",
+        "source_sha256": "4c600c774c20982b6d0fed04d445b2fb4be3875f0a35a160c751840e45e9bd7f"
+      }
+    ],
+    "instance_id": "iterative__dvc_1.0.0a1_1.0.0a2",
+    "missing_expected_entries": [],
+    "omitted_files": [
+      {
+        "path": "codex-homes/node-2d2cf8791f4185dd55e9c55c/auth.json",
+        "reason": "model_source_api_key"
+      },
+      {
+        "path": "codex-homes/node-973c040f546e9966f1de41db/auth.json",
+        "reason": "model_source_api_key"
+      },
+      {
+        "path": "codex-homes/node-ac51b43591b100f231e049da/auth.json",
+        "reason": "model_source_api_key"
+      },
+      {
+        "path": "codex-homes/node-ca454777f71652f548d16ad4/auth.json",
+        "reason": "model_source_api_key"
+      }
+    ],
+    "phase": "phase4g10-clean-replay",
+    "redaction_policy": "model_source_key_and_base_url_only",
+    "run_id": "phase4g10-clean-large-ccf9c3e173",
+    "schema": "hermes_validation_artifact_manifest_v1",
+    "selected_entries": [
+      "codex-homes",
+      "hermes-home",
+      "reports",
+      "runtime-contributions",
+      "service"
+    ],
+    "source_run_root": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173",
+    "status": "verified",
+    "total_bytes": 40212212
+  },
+  "assertions": {
+    "effective_orchestration_passed": true,
+    "evaluated_coverage_stop_or_resolved": true,
+    "feedback_consumed_by_same_primary_or_resolved": true,
+    "fresh_run_origin": true,
+    "fresh_runtime_source_revision": true,
+    "latest_candidate_is_evaluated": true,
+    "no_duplicate_ledger_facts": true,
+    "no_duplicate_terminal_facts": true,
+    "no_historical_repair_events": true,
+    "no_receipt_recovery_events": true,
+    "no_speculative_strategy_nodes": true,
+    "ownership_canary_passed": true,
+    "primary_attribution_lineage_resumed": true,
+    "runtime_correctness_passed": true,
+    "supervisor_restart_has_db_lineage": true,
+    "three_evaluated_candidates_or_resolved": true,
+    "two_feedback_cycles_consumed_or_resolved": true
+  },
+  "classification": {
+    "clean_replay": "passed",
+    "effective_orchestration": "passed",
+    "runtime_correctness": "passed",
+    "task_capability": "task-failed"
+  },
+  "evaluated_validation_stop": {
+    "candidate_patch_sha256": "ff1a8775d6e817fc74443771337e07330b7d99159a955d1e04c3a3fba007422a",
+    "completed_evaluator_attempts": 3,
+    "consumed_evaluator_feedback": 2,
+    "consumed_evaluator_run_ids": [
+      6,
+      8
+    ],
+    "fail_to_pass": {
+      "failed": 14,
+      "failed_tests": [
+        "tests/func/plots/test_plots.py::test_plot_no_data",
+        "tests/func/plots/test_plots.py::test_plot_wrong_metric_type",
+        "tests/func/plots/test_plots.py::test_should_raise_on_no_template",
+        "tests/func/plots/test_plots.py::test_should_raise_on_no_template_and_datafile",
+        "tests/func/plots/test_plots.py::test_throw_on_no_metric_at_all",
+        "tests/unit/command/test_diff.py::test_default",
+        "tests/unit/command/test_diff.py::test_no_changes",
+        "tests/unit/command/test_diff.py::test_show_hash",
+        "tests/unit/command/test_diff.py::test_show_json",
+        "tests/unit/command/test_diff.py::test_show_json_and_hash",
+        "tests/unit/command/test_plots.py::test_metrics_diff",
+        "tests/unit/command/test_plots.py::test_metrics_show",
+        "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions0-False-expected_revisions0]",
+        "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions1-True-expected_revisions1]"
+      ],
+      "failed_tests_truncated": 0,
+      "passed": 54,
+      "total": 68
+    },
+    "feedback_consumer_node_id": "rnode_61c062c83290",
+    "latest_evaluator_node_id": "rnode_1d6e437e5102",
+    "latest_evaluator_run_id": 10,
+    "pass_to_pass": {
+      "failed": 1,
+      "failed_tests": [
+        "tests/unit/stage/test_stage.py::TestPathConversion::test"
+      ],
+      "failed_tests_truncated": 0,
+      "passed": 241,
+      "total": 242
+    },
+    "reason": "Clean Replay 已完成两次 evaluator feedback remediation，并保留第三个固定已评估 candidate。",
+    "requested_at": 1784406452,
+    "schema": "hermes_evaluated_validation_stop_v1",
+    "target_revision": "git:fc42ca721c25bdd24875c999e37fb4f589ecd63c:worktree:99035a2559adcf48af9b430a506dfbf3bda68566917bf5445813cb2deb0dad74"
+  },
+  "event_counts": {
+    "attribution_lineage": 2,
+    "evaluator_failure_feedback_consumed": 2,
+    "feedback_consumer_node_ids": [
+      "rnode_61c062c83290"
+    ],
+    "historical_repairs": {
+      "phase4g8_contribution_attribution_branch_repaired": 0,
+      "phase4g8_receipt_recovery_branch_repaired": 0,
+      "phase4g8_receipt_recovery_requeued": 0,
+      "phase4g8_resume_timeout_repaired": 0,
+      "phase4g8_structure_request_branch_repaired": 0,
+      "runtime_receipt_adapted": 0
+    },
+    "receipt_recovery": {
+      "receipt_invalid": 0,
+      "receipt_missing": 0,
+      "receipt_recovery_requested": 0
+    },
+    "strategy_nodes": 0,
+    "supervisor_owner_count": 2,
+    "supervisor_started": 2
+  },
+  "generated_at": 1784406453,
+  "instance_id": "iterative__dvc_1.0.0a1_1.0.0a2",
+  "job_id": "rjob_d477b634c34e",
+  "local_cleanup": {
+    "bytes_removed": 10773219,
+    "manifest_path": "/root/hermes-validation-artifacts/phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/manifest.json",
+    "removed_entries": [
+      "codex-home-seed",
+      "home",
+      "runtime-worktrees",
+      "workspace"
+    ],
+    "status": "cleaned_after_verified_archive"
+  },
+  "orchestration": {
+    "children": [
+      {
+        "contract": {
+          "acceptance_criteria": [
+            "Implement the plots and plot-marker behavior, plural command naming within scope, HTML doctype, requested output strings, non-zeroed y-axis behavior, and init-template newline requirements.",
+            "Implement no-commit diff handling, tabulated Markdown output for diff, metrics, and params, and corresponding shell-completion updates.",
+            "Add or update legitimate focused regression tests and pass the locally runnable reporting, plotting, init, and completion test subsets.",
+            "Provide requirement-traceable changed-file and test evidence, and escalate edits needed in primary-owned CLI bindings, Repo bindings, schema, or serialization files instead of writing outside scope."
+          ],
+          "declared_write_scope": [
+            "dvc/command/plot.py",
+            "dvc/command/diff.py",
+            "dvc/command/metrics.py",
+            "dvc/command/params.py",
+            "dvc/command/init.py",
+            "dvc/repo/plot/**",
+            "dvc/repo/diff.py",
+            "dvc/repo/metrics/**",
+            "dvc/repo/params/**",
+            "dvc/repo/init.py",
+            "dvc/utils/diff.py",
+            "scripts/completion/**",
+            "tests/func/test_plot.py",
+            "tests/func/test_diff.py",
+            "tests/func/test_init.py",
+            "tests/func/metrics/**",
+            "tests/func/params/**",
+            "tests/unit/test_plot.py",
+            "tests/unit/command/test_plot.py",
+            "tests/unit/command/test_diff.py",
+            "tests/unit/command/test_metrics.py",
+            "tests/unit/command/test_params.py"
+          ],
+          "outcome": "Complete the plots, diff, metrics/params reporting, templates, and shell-completion responsibility family with focused regression coverage.",
+          "prohibited_actions": [
+            "modify_or_bypass_fixed_official_evaluator",
+            "weaken_or_delete_tests_to_conceal_failures",
+            "write_outside_declared_scope",
+            "production_deployment"
+          ],
+          "success_evidence": [
+            "changed_files",
+            "verification",
+            "worker_summary"
+          ],
+          "workspace_mode": "isolated_worktree"
+        },
+        "node_id": "rnode_09804d0d041b",
+        "node_key": "reporting-plots-templates-completions",
+        "session_ids": [
+          "019f7642-42da-74c2-9bed-e93d441490da"
+        ],
+        "state": "succeeded",
+        "workspace_path": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-worktrees/reporting-plots-templates-completions"
+      },
+      {
+        "contract": {
+          "acceptance_criteria": [
+            "Implement stage commit and dry-run fixes, locked-import logging behavior, warning suppression, checkout and run simplification, and removal of check_can_commit where required.",
+            "Implement pipeline output behavior within scope, stage-name validation, string-target handling, and build-cache-to-run-cache behavior including uncached outputs.",
+            "Add or update legitimate focused stage, run, repro, commit, checkout, and pipeline regression tests and pass the locally runnable relevant subsets.",
+            "Provide requirement-traceable changed-file and test evidence, and coordinate transfer-facing run-cache collection and shared schema or serialization edits with the primary integration owner instead of writing outside scope."
+          ],
+          "declared_write_scope": [
+            "dvc/stage/**",
+            "dvc/repo/run.py",
+            "dvc/repo/reproduce.py",
+            "dvc/repo/commit.py",
+            "dvc/repo/checkout.py",
+            "dvc/command/run.py",
+            "dvc/command/repro.py",
+            "dvc/command/commit.py",
+            "dvc/command/checkout.py",
+            "dvc/command/pipeline.py",
+            "dvc/utils/stage.py",
+            "tests/func/test_stage.py",
+            "tests/func/test_pipeline.py",
+            "tests/func/test_repro.py",
+            "tests/func/test_repro_multistage.py",
+            "tests/func/test_run_multistage.py",
+            "tests/func/test_run_single_stage.py",
+            "tests/func/test_commit.py",
+            "tests/func/test_checkout.py",
+            "tests/unit/test_stage.py",
+            "tests/unit/repo/test_reproduce.py",
+            "tests/unit/command/test_run.py",
+            "tests/unit/command/test_repro.py",
+            "tests/unit/command/test_commit.py",
+            "tests/unit/command/test_checkout.py"
+          ],
+          "outcome": "Complete the stage lifecycle, pipeline behavior, checkout/run refactor, and run-cache responsibility family with focused regression coverage.",
+          "prohibited_actions": [
+            "modify_or_bypass_fixed_official_evaluator",
+            "weaken_or_delete_tests_to_conceal_failures",
+            "write_outside_declared_scope",
+            "production_deployment"
+          ],
+          "success_evidence": [
+            "changed_files",
+            "verification",
+            "worker_summary"
+          ],
+          "workspace_mode": "isolated_worktree"
+        },
+        "node_id": "rnode_4cb1da5a345a",
+        "node_key": "stage-pipeline-run-cache",
+        "session_ids": [
+          "019f7642-42bd-7350-ae41-7d425d5a07f9"
+        ],
+        "state": "succeeded",
+        "workspace_path": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-worktrees/stage-pipeline-run-cache"
+      },
+      {
+        "contract": {
+          "acceptance_criteria": [
+            "Support GitTree-backed file objects in utilities and streaming and pulling behavior through DvcTree and RepoTree open paths.",
+            "Implement S3 SSE-KMS configuration, remote-default validation, import safeguards, recursive update, transfer and run-cache collection, and Python compatibility fixes within scope.",
+            "Apply the requested remote-test fixture and flaky-test changes without weakening assertions, add focused regressions for tree, import, update, and transfer behavior, and pass locally runnable tree, SCM, remote, import/update, data-cloud, and utility test subsets.",
+            "Provide requirement-traceable changed-file and test evidence, distinguish unavailable service-dependent validation from local failures, and escalate shared integration edits rather than writing outside scope."
+          ],
+          "declared_write_scope": [
+            "dvc/repo/tree.py",
+            "dvc/scm/tree.py",
+            "dvc/scm/git/tree.py",
+            "dvc/remote/**",
+            "dvc/data_cloud.py",
+            "dvc/config.py",
+            "dvc/external_repo.py",
+            "dvc/dependency/repo.py",
+            "dvc/repo/fetch.py",
+            "dvc/repo/pull.py",
+            "dvc/repo/push.py",
+            "dvc/repo/imp.py",
+            "dvc/repo/imp_url.py",
+            "dvc/repo/update.py",
+            "dvc/command/data_sync.py",
+            "dvc/command/remote.py",
+            "dvc/command/imp.py",
+            "dvc/command/imp_url.py",
+            "dvc/command/update.py",
+            "dvc/utils/__init__.py",
+            "dvc/utils/collections.py",
+            "dvc/utils/fs.py",
+            "dvc/utils/http.py",
+            "tests/remotes.py",
+            "tests/func/remote/**",
+            "tests/func/test_tree.py",
+            "tests/func/test_data_cloud.py",
+            "tests/func/test_remote.py",
+            "tests/func/test_s3.py",
+            "tests/func/test_import.py",
+            "tests/func/test_import_url.py",
+            "tests/func/test_update.py",
+            "tests/func/test_external_repo.py",
+            "tests/func/test_utils.py",
+            "tests/unit/remote/**",
+            "tests/unit/repo/test_tree.py",
+            "tests/unit/scm/**",
+            "tests/unit/utils/**",
+            "tests/unit/command/test_data_sync.py",
+            "tests/unit/command/test_imp.py",
+            "tests/unit/command/test_imp_url.py",
+            "tests/unit/command/test_update.py",
+            "tests/unit/test_config.py"
+          ],
+          "outcome": "Complete the tree/remote streaming, import/update, transfer, remote configuration, and compatibility responsibility family with focused regression coverage.",
+          "prohibited_actions": [
+            "modify_or_bypass_fixed_official_evaluator",
+            "weaken_or_delete_tests_to_conceal_failures",
+            "write_outside_declared_scope",
+            "production_deployment"
+          ],
+          "success_evidence": [
+            "changed_files",
+            "verification",
+            "worker_summary"
+          ],
+          "workspace_mode": "isolated_worktree"
+        },
+        "node_id": "rnode_22adf51621f1",
+        "node_key": "tree-remote-import-transfer",
+        "session_ids": [
+          "019f7642-4316-7603-af8e-94336a5234a5"
+        ],
+        "state": "succeeded",
+        "workspace_path": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-worktrees/tree-remote-import-transfer"
+      }
+    ],
+    "classification": {
+      "effective_orchestration": "passed",
+      "runtime_correctness": "passed",
+      "task_capability": "task-failed"
+    },
+    "contributions": [
+      {
+        "artifact_id": "art_8f781a780621",
+        "base_revision": "fc42ca721c25bdd24875c999e37fb4f589ecd63c",
+        "changed_files": [
+          "dvc/command/metrics.py",
+          "dvc/command/params.py",
+          "dvc/command/plot.py",
+          "dvc/repo/diff.py",
+          "dvc/repo/plot/__init__.py",
+          "dvc/repo/plot/template.py",
+          "dvc/utils/diff.py",
+          "scripts/completion/dvc.bash",
+          "scripts/completion/dvc.zsh",
+          "tests/func/test_diff.py",
+          "tests/func/test_init.py",
+          "tests/func/test_plot.py",
+          "tests/unit/command/test_metrics.py",
+          "tests/unit/command/test_params.py",
+          "tests/unit/command/test_plot.py",
+          "tests/unit/test_plot.py"
+        ],
+        "file_sha256": {
+          "dvc/command/metrics.py": "cfd197139167424ad8b71389ee7275a5edfc7c65e85b6c7ecaa8815fb0be8f4d",
+          "dvc/command/params.py": "d39644b832528ae35600377fb3b7159b40395a1c42244102ab0cad6a99f7f9b9",
+          "dvc/command/plot.py": "02097e2d1f7d6178dacabe24c1f3a4b68b1f2c4cee1e7063c79a8e6049f63f30",
+          "dvc/repo/diff.py": "8486dcbe276aeea8c26d8816fe839ff69004bf4b0567b0a5e311833a3bf633ac",
+          "dvc/repo/plot/__init__.py": "0484c444395569f4a376bec3b535cb7d6dce44c3a324c692fa823597bb96950b",
+          "dvc/repo/plot/template.py": "39afb77f59790572fa6dcdc7bb066e3366e9ef349a6193ec046b4fefed32002e",
+          "dvc/utils/diff.py": "b3949adba3a0b53e75568eeb417168cd0f3b2cbc7e7f6e5ec4d539fa1c626b5a",
+          "scripts/completion/dvc.bash": "96889bc03ef15d30de85e8d808be2e995c785c25812df71aa234d4aebcf6b493",
+          "scripts/completion/dvc.zsh": "fd9afeeedbd9cc3978b38b9bf777f3d8ffbf49f3fd0ead5866c3c3ff9f7edec2",
+          "tests/func/test_diff.py": "a11da4f7d653dd0ad5695bdca7088006291674d357d5c5a657642fea04dd40db",
+          "tests/func/test_init.py": "4e5f0b375294012e3ad10c592b841ae65269dbff8f6df722c1866b9e7e2c36e5",
+          "tests/func/test_plot.py": "8430730decdaa752174704aa5d72ff7517415c1501c8a68571dc19467104fec1",
+          "tests/unit/command/test_metrics.py": "67ea06c8c8cb46546b4effdedee9da6faa13ace9d23140d0cba851742f77a84f",
+          "tests/unit/command/test_params.py": "573ba0867891875a84f805d7fc1519d57f6a78aaa0eb947370886838eafd9489",
+          "tests/unit/command/test_plot.py": "08b0fc336a2ce931ff463253eea1912c98fc9f5ae913847dafc12d5998c4a946",
+          "tests/unit/test_plot.py": "43532d5021c7ab9786c79c3c7fac6310034aacced976ee9896cb1e0dc83c2ca1"
+        },
+        "integration_owner_node_key": "implement-srs-for-official-evaluator",
+        "materialization_attempt": 1,
+        "materialization_id": "mat_f87e9fd9cda0",
+        "node_key": "reporting-plots-templates-completions",
+        "patch_bytes": 28516,
+        "patch_ref": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-contributions/reporting-plots-templates-completions/attempt-1.patch",
+        "patch_sha256": "72b5ee1e596294e4650813c2e6e9457c26c6aa627d2fe89430dd5f034ed2440d",
+        "schema": "runtime_node_contribution_v1",
+        "scope_status": "verified",
+        "workspace_path": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-worktrees/reporting-plots-templates-completions"
+      },
+      {
+        "artifact_id": "art_1bf771269486",
+        "base_revision": "fc42ca721c25bdd24875c999e37fb4f589ecd63c",
+        "changed_files": [
+          "dvc/command/repro.py",
+          "dvc/command/run.py",
+          "dvc/repo/checkout.py",
+          "dvc/repo/commit.py",
+          "dvc/repo/reproduce.py",
+          "dvc/repo/run.py",
+          "dvc/stage/__init__.py",
+          "dvc/stage/cache.py",
+          "dvc/stage/exceptions.py",
+          "dvc/stage/loader.py",
+          "tests/func/test_checkout.py",
+          "tests/func/test_repro.py",
+          "tests/func/test_run_multistage.py",
+          "tests/func/test_run_single_stage.py",
+          "tests/unit/command/test_repro.py",
+          "tests/unit/command/test_run.py",
+          "tests/unit/repo/test_reproduce.py",
+          "tests/unit/test_stage.py"
+        ],
+        "file_sha256": {
+          "dvc/command/repro.py": "c22df288c941d464c9e539bda31999b05a0733b771fa48ec4c1fe75b3555eb3e",
+          "dvc/command/run.py": "ccbcf87902efe60909caf2e759f3131556d11a7cab6f07c3274945b49498cbef",
+          "dvc/repo/checkout.py": "89112dd1e1873853d66c4b58c60a19392df111d8e01c411632c7082a2957322c",
+          "dvc/repo/commit.py": "a9b4d2a78770979a8318975bc6236b09656d7774b536e8670e86ad5cbaed7e56",
+          "dvc/repo/reproduce.py": "e7588ba8b9de1094cbeddfc043e6150490404d1f2a956ae53f270fc0ccba4953",
+          "dvc/repo/run.py": "cb40bb478b734617f8bf3a208443c1ec54c98aad6a4e25cbb2bf3491926f7631",
+          "dvc/stage/__init__.py": "80732eebe9abe1ad67d56bb8316b9a6861f6154d30a44a2cc29a83097a0d965a",
+          "dvc/stage/cache.py": "04c31bcffdbbc274ac93e1123d1cf25d34ca9dce9f290f5d9c1eb685faa83a19",
+          "dvc/stage/exceptions.py": "3eeb68a04a25b89117b55238b32a3747bd1f018600148b083607cef370bb3a8e",
+          "dvc/stage/loader.py": "5c58f9d9034ea1447ed2cc7e2d397fef6556598c9f53b7d8cbde3c2a9c6460d9",
+          "tests/func/test_checkout.py": "589cb0cfb3bd5fdbbd0209462f9064fdee1879ea2900a79a692555bf9b34167b",
+          "tests/func/test_repro.py": "1ecbfb0e2688a654292574654f00c34ae34ef92a977eae7d39ece715a90bab42",
+          "tests/func/test_run_multistage.py": "b5d072499a660d6c7facd886629e1eb6db730cd362374bce717642ff288b749a",
+          "tests/func/test_run_single_stage.py": "e3dd8a74cb1fe0244ac01d952f6d57ebe6b0be1ee58eaccc0aa27b6d68631141",
+          "tests/unit/command/test_repro.py": "43b6b7a8cca5dd0e94e1697e0efffb5e1f752764d04bac262b3c7795e2160a94",
+          "tests/unit/command/test_run.py": "6a65ed03e0f96be68749917518c149ac67fccc325514e96f60928b85f5e5a0f0",
+          "tests/unit/repo/test_reproduce.py": "f51dd1cbb8db136031f76df97416aa7f2fee28aba36b552c3e0db63682f4f145",
+          "tests/unit/test_stage.py": "3bb059e5707116908dc291712cb782ab3bd506dee65fdf1cefa40e55cb64f8c0"
+        },
+        "integration_owner_node_key": "implement-srs-for-official-evaluator",
+        "materialization_attempt": 1,
+        "materialization_id": "mat_9de7d32d3f96",
+        "node_key": "stage-pipeline-run-cache",
+        "patch_bytes": 36160,
+        "patch_ref": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-contributions/stage-pipeline-run-cache/attempt-1.patch",
+        "patch_sha256": "1a252f08dda040cfa25e22a45a3fba8291bb6f6a4d5d17243180e9281b269339",
+        "schema": "runtime_node_contribution_v1",
+        "scope_status": "verified",
+        "workspace_path": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-worktrees/stage-pipeline-run-cache"
+      },
+      {
+        "artifact_id": "art_532192cbd646",
+        "base_revision": "fc42ca721c25bdd24875c999e37fb4f589ecd63c",
+        "changed_files": [
+          "dvc/command/remote.py",
+          "dvc/command/update.py",
+          "dvc/config.py",
+          "dvc/data_cloud.py",
+          "dvc/remote/s3.py",
+          "dvc/repo/imp_url.py",
+          "dvc/repo/tree.py",
+          "dvc/repo/update.py",
+          "dvc/scm/git/tree.py",
+          "dvc/scm/tree.py",
+          "dvc/utils/__init__.py",
+          "dvc/utils/fs.py",
+          "tests/func/test_data_cloud.py",
+          "tests/func/test_import.py",
+          "tests/func/test_remote.py",
+          "tests/func/test_tree.py",
+          "tests/func/test_update.py",
+          "tests/remotes.py",
+          "tests/unit/command/test_update.py",
+          "tests/unit/remote/test_remote_dir.py",
+          "tests/unit/remote/test_s3.py",
+          "tests/unit/repo/test_tree.py",
+          "tests/unit/test_config.py"
+        ],
+        "file_sha256": {
+          "dvc/command/remote.py": "2feee19483fcdbc597f374ca65f066b0f14aaa6f2c66030985b05da99f181b93",
+          "dvc/command/update.py": "8da242e870643ecd59e35abccf89abb099e8403b5ca091a64356eca26c095a70",
+          "dvc/config.py": "8e32c6dd9ab6f298fcd2e8af029b3d34a525fe8684cc7772a6950c74ba510f44",
+          "dvc/data_cloud.py": "e5f4ed57e16ddee7b71f094fc01148c1d267f38c7331ba5850df1aea4c417d7c",
+          "dvc/remote/s3.py": "5a6dd0c8d570b280f96afbb6800892824068a31a8f9ba5ea017af876f3180fcc",
+          "dvc/repo/imp_url.py": "a7796dea46945cd076f546b06768a4a8c25720739ab6bc4253767fcb391e3749",
+          "dvc/repo/tree.py": "c3e197f5ae53042f397bade85eb5038c80e95b35befc7506a36a3a7d1db5b268",
+          "dvc/repo/update.py": "576826e02835eedc86abf6dd048f2e59bf595595b68224bdc6bd43ae3facf050",
+          "dvc/scm/git/tree.py": "468863ee2da6b3e8df5866c97492955e013de9588ef2e259180d21398759d828",
+          "dvc/scm/tree.py": "27e0eacd4ee4bc67b8538ac6f14499007f63dbf26202bbee6e24840388755daf",
+          "dvc/utils/__init__.py": "97cb6da228629b7e83308681e3e0abeeff81ed7073760f6d0c6074205ca6d746",
+          "dvc/utils/fs.py": "6323785d901a6b610fe6544b55c73606327cdde268eafbc841f96396157e8560",
+          "tests/func/test_data_cloud.py": "d9545422db832a96273aaa1b73df97c83172e2d81610381a48fe49c58e28c36e",
+          "tests/func/test_import.py": "fc851b3b8229a90acfab65176c79573b7c13f02f1a1bf4ea18efdf6d7c835ca5",
+          "tests/func/test_remote.py": "8a67a72f17d48fb0022cd4989842569940b9d47ca2c3f0865ee934c5866df53a",
+          "tests/func/test_tree.py": "afe85873cb8b1f0c79e8b9a594b4570623150abe8ab278cc546ffce0e2bf8765",
+          "tests/func/test_update.py": "acd388a4b90e6f1982b61736ecf5c7b0dc4636ab64692c466a43b3017baef452",
+          "tests/remotes.py": "7cc41b7da9df81bab198f6bda76d6116e09037e416bd5f577e127d61f421bb20",
+          "tests/unit/command/test_update.py": "4a13dc80e5034dc8035da22624e373dc70f0b270d71607b69d270283724b5baa",
+          "tests/unit/remote/test_remote_dir.py": "da67649e28d20ffd95b882867ef8614ef18c8d16e280fa4db91d6ffc69ad7cd9",
+          "tests/unit/remote/test_s3.py": "c0c09516e29503d3486fba9c81708d9a9d553e9cdff0212d488a360d42565e10",
+          "tests/unit/repo/test_tree.py": "ba030c5c43d964efbeb64df0863891838ca21da222125e5768787cc572ee249f",
+          "tests/unit/test_config.py": "1f29494b53a8a7d88d533528f07b04687c4c0476e935e626671730c37ed7eb63"
+        },
+        "integration_owner_node_key": "implement-srs-for-official-evaluator",
+        "materialization_attempt": 1,
+        "materialization_id": "mat_d29a4582d112",
+        "node_key": "tree-remote-import-transfer",
+        "patch_bytes": 31955,
+        "patch_ref": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-contributions/tree-remote-import-transfer/attempt-1.patch",
+        "patch_sha256": "9be342fdde2e7d2eeec311fff3ad590cbb21d9806d55be8ab1a5b4641e3e1b4b",
+        "schema": "runtime_node_contribution_v1",
+        "scope_status": "verified",
+        "workspace_path": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-worktrees/tree-remote-import-transfer"
+      }
+    ],
+    "evaluator_progression": [
+      {
+        "fail_to_pass": {
+          "failed": 61,
+          "failed_tests": [
+            "tests/func/metrics/test_diff.py::test_no_commits",
+            "tests/func/params/test_diff.py::test_no_commits",
+            "tests/func/plots/test_plots.py::test_plot_no_data",
+            "tests/func/plots/test_plots.py::test_plot_wrong_metric_type",
+            "tests/func/plots/test_plots.py::test_should_raise_on_no_template",
+            "tests/func/plots/test_plots.py::test_should_raise_on_no_template_and_datafile",
+            "tests/func/plots/test_plots.py::test_throw_on_no_metric_at_all",
+            "tests/func/test_diff.py::test_no_commits",
+            "tests/unit/command/test_diff.py::test_default",
+            "tests/unit/command/test_diff.py::test_no_changes",
+            "tests/unit/command/test_diff.py::test_show_hash",
+            "tests/unit/command/test_diff.py::test_show_json",
+            "tests/unit/command/test_diff.py::test_show_json_and_hash",
+            "tests/unit/command/test_plots.py::test_metrics_diff",
+            "tests/unit/command/test_plots.py::test_metrics_show",
+            "tests/unit/command/test_plots.py::test_plots_show_json",
+            "tests/unit/command/test_repro.py::test_default_arguments",
+            "tests/unit/command/test_repro.py::test_downstream",
+            "tests/unit/command/test_run.py::test_run",
+            "tests/unit/command/test_run.py::test_run_args_from_cli",
+            "tests/unit/command/test_run.py::test_run_args_with_spaces",
+            "tests/unit/command/test_update.py::test_update",
+            "tests/unit/repo/plots/test_data.py::test_finding_data[fields0]",
+            "tests/unit/repo/plots/test_data.py::test_finding_data[fields1]",
+            "tests/unit/repo/plots/test_data.py::test_finding_lists[dictionary0-expected_result0]",
+            "tests/unit/repo/plots/test_data.py::test_finding_lists[dictionary1-expected_result1]",
+            "tests/unit/repo/plots/test_data.py::test_finding_lists[dictionary2-expected_result2]",
+            "tests/unit/repo/plots/test_data.py::test_parse_json[$.some.path-expected_result1]",
+            "tests/unit/repo/plots/test_data.py::test_parse_json[$.some.path[*].a-expected_result0]",
+            "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions0-False-expected_revisions0]",
+            "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions1-True-expected_revisions1]",
+            "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions2-False-expected_revisions2]",
+            "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions3-True-expected_revisions3]",
+            "tests/unit/scm/test_git.py::test_no_commits",
+            "tests/unit/stage/test_run.py::test_run_stage_dry",
+            "tests/unit/stage/test_stage.py::test_meta_ignored",
+            "tests/unit/stage/test_stage.py::test_stage_checksum",
+            "tests/unit/stage/test_stage.py::test_wdir_default_ignored",
+            "tests/unit/stage/test_stage.py::test_wdir_non_default_is_not_ignored",
+            "tests/unit/utils/test_fs.py::TestContainsLink::test_path_object_and_str_are_valid_arg_types",
+            "tests/unit/utils/test_fs.py::TestContainsLink::test_should_raise_exception_on_base_path_not_in_path",
+            "tests/unit/utils/test_fs.py::TestContainsLink::test_should_return_false_on_no_more_dirs_below_path",
+            "tests/unit/utils/test_fs.py::TestContainsLink::test_should_return_false_on_path_eq_to_base_path",
+            "tests/unit/utils/test_fs.py::TestContainsLink::test_should_return_false_when_base_path_is_symlink",
+            "tests/unit/utils/test_fs.py::TestContainsLink::test_should_return_true_on_symlink_in_path",
+            "tests/unit/utils/test_fs.py::TestMtimeAndSize::test",
+            "tests/unit/utils/test_fs.py::test_copy_fobj_to_file",
+            "tests/unit/utils/test_fs.py::test_copyfile[dir]",
+            "tests/unit/utils/test_fs.py::test_copyfile[file]",
+            "tests/unit/utils/test_fs.py::test_get_inode",
+            "tests/unit/utils/test_fs.py::test_makedirs",
+            "tests/unit/utils/test_fs.py::test_move",
+            "tests/unit/utils/test_fs.py::test_path_isin_accepts_pathinfo",
+            "tests/unit/utils/test_fs.py::test_path_isin_on_common_substring_path",
+            "tests/unit/utils/test_fs.py::test_path_isin_on_same_path",
+            "tests/unit/utils/test_fs.py::test_path_isin_positive",
+            "tests/unit/utils/test_fs.py::test_path_isin_with_absolute_path",
+            "tests/unit/utils/test_fs.py::test_path_object_and_str_are_valid_types_get_mtime_and_size",
+            "tests/unit/utils/test_fs.py::test_remove",
+            "tests/unit/utils/test_fs.py::test_should_call_recursive_on_no_condition_matched",
+            "tests/unit/utils/test_fs.py::test_walk_files"
+          ],
+          "failed_tests_truncated": 0,
+          "passed": 7,
+          "total": 68
+        },
+        "node_key": "verify-official-evaluator-resolved-6b2f6451",
+        "pass_to_pass": {
+          "failed": 0,
+          "failed_tests": [],
+          "failed_tests_truncated": 0,
+          "passed": 242,
+          "total": 242
+        },
+        "resolved": false,
+        "round": 1,
+        "run_id": 6,
+        "wall_time_seconds": 248
+      },
+      {
+        "fail_to_pass": {
+          "failed": 15,
+          "failed_tests": [
+            "tests/func/plots/test_plots.py::test_plot_no_data",
+            "tests/func/plots/test_plots.py::test_plot_wrong_metric_type",
+            "tests/func/plots/test_plots.py::test_should_raise_on_no_template",
+            "tests/func/plots/test_plots.py::test_should_raise_on_no_template_and_datafile",
+            "tests/func/plots/test_plots.py::test_throw_on_no_metric_at_all",
+            "tests/unit/command/test_diff.py::test_default",
+            "tests/unit/command/test_diff.py::test_no_changes",
+            "tests/unit/command/test_diff.py::test_show_hash",
+            "tests/unit/command/test_diff.py::test_show_json",
+            "tests/unit/command/test_diff.py::test_show_json_and_hash",
+            "tests/unit/command/test_plots.py::test_metrics_diff",
+            "tests/unit/command/test_plots.py::test_metrics_show",
+            "tests/unit/command/test_plots.py::test_plots_show_json",
+            "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions0-False-expected_revisions0]",
+            "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions1-True-expected_revisions1]"
+          ],
+          "failed_tests_truncated": 0,
+          "passed": 53,
+          "total": 68
+        },
+        "node_key": "verify-official-evaluator-resolved-2809b433",
+        "pass_to_pass": {
+          "failed": 1,
+          "failed_tests": [
+            "tests/unit/stage/test_stage.py::TestPathConversion::test"
+          ],
+          "failed_tests_truncated": 0,
+          "passed": 241,
+          "total": 242
+        },
+        "resolved": false,
+        "round": 2,
+        "run_id": 8,
+        "wall_time_seconds": 313
+      },
+      {
+        "fail_to_pass": {
+          "failed": 14,
+          "failed_tests": [
+            "tests/func/plots/test_plots.py::test_plot_no_data",
+            "tests/func/plots/test_plots.py::test_plot_wrong_metric_type",
+            "tests/func/plots/test_plots.py::test_should_raise_on_no_template",
+            "tests/func/plots/test_plots.py::test_should_raise_on_no_template_and_datafile",
+            "tests/func/plots/test_plots.py::test_throw_on_no_metric_at_all",
+            "tests/unit/command/test_diff.py::test_default",
+            "tests/unit/command/test_diff.py::test_no_changes",
+            "tests/unit/command/test_diff.py::test_show_hash",
+            "tests/unit/command/test_diff.py::test_show_json",
+            "tests/unit/command/test_diff.py::test_show_json_and_hash",
+            "tests/unit/command/test_plots.py::test_metrics_diff",
+            "tests/unit/command/test_plots.py::test_metrics_show",
+            "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions0-False-expected_revisions0]",
+            "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions1-True-expected_revisions1]"
+          ],
+          "failed_tests_truncated": 0,
+          "passed": 54,
+          "total": 68
+        },
+        "node_key": "verify-official-evaluator-resolved-333468f6",
+        "pass_to_pass": {
+          "failed": 1,
+          "failed_tests": [
+            "tests/unit/stage/test_stage.py::TestPathConversion::test"
+          ],
+          "failed_tests_truncated": 0,
+          "passed": 241,
+          "total": 242
+        },
+        "resolved": false,
+        "round": 3,
+        "run_id": 10,
+        "wall_time_seconds": 312
+      }
+    ],
+    "execution_metrics": {
+      "accepted_checkpoint_count": 1,
+      "child_parallel_savings_upper_bound_seconds": 3781,
+      "child_parallel_wall_seconds": 2484,
+      "child_serial_wall_seconds": 6265,
+      "decision_round_count": 2,
+      "durable_child_count": 3,
+      "evaluator_round_count": 3,
+      "execution_node_count": 7,
+      "finished_at": 1784406452,
+      "graph_patch_count": 2,
+      "implementation_node_count": 4,
+      "materialization_count": 10,
+      "started_at": 1784395011,
+      "strategy_node_count": 0,
+      "verification_node_count": 3,
+      "wall_time_seconds": 11441
+    },
+    "generated_at": 1784406453,
+    "instance_id": "iterative__dvc_1.0.0a1_1.0.0a2",
+    "integration_attribution": {
+      "accepted_contributions": [],
+      "contribution_lineage_refs": {
+        "art_1bf771269486": "event:21694",
+        "art_532192cbd646": "event:21694",
+        "art_8f781a780621": "event:21694"
+      },
+      "modified_contributions": [
+        "art_8f781a780621",
+        "art_1bf771269486",
+        "art_532192cbd646"
+      ],
+      "node_key": "implement-srs-for-official-evaluator",
+      "rejected_contributions": [],
+      "runtime_materialization_attempt": 4,
+      "runtime_materialization_id": "mat_ee06333468f6"
+    },
+    "job_id": "rjob_d477b634c34e",
+    "orchestration_assertions": {
+      "accepted_early_structure_checkpoint": true,
+      "candidate_has_contribution_lineage": true,
+      "child_scopes_declared": true,
+      "initial_graph_single_primary": true,
+      "isolated_child_workspaces_and_sessions": true,
+      "official_evaluator_fixed_revision": true,
+      "primary_same_session_resumed": true,
+      "two_contributions_integrated": true,
+      "two_nonempty_frozen_contributions": true,
+      "two_or_three_durable_children": true
+    },
+    "primary": {
+      "checkpoint_event_id": 1040,
+      "node_id": "rnode_61c062c83290",
+      "node_key": "implement-srs-for-official-evaluator",
+      "resume_count": 4,
+      "session_ids": [
+        "019f763b-99b0-7943-8a47-bbf36a9d0607"
+      ]
+    },
+    "quality": {
+      "fail_to_pass": {
+        "failed": 14,
+        "failed_tests": [
+          "tests/func/plots/test_plots.py::test_plot_no_data",
+          "tests/func/plots/test_plots.py::test_plot_wrong_metric_type",
+          "tests/func/plots/test_plots.py::test_should_raise_on_no_template",
+          "tests/func/plots/test_plots.py::test_should_raise_on_no_template_and_datafile",
+          "tests/func/plots/test_plots.py::test_throw_on_no_metric_at_all",
+          "tests/unit/command/test_diff.py::test_default",
+          "tests/unit/command/test_diff.py::test_no_changes",
+          "tests/unit/command/test_diff.py::test_show_hash",
+          "tests/unit/command/test_diff.py::test_show_json",
+          "tests/unit/command/test_diff.py::test_show_json_and_hash",
+          "tests/unit/command/test_plots.py::test_metrics_diff",
+          "tests/unit/command/test_plots.py::test_metrics_show",
+          "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions0-False-expected_revisions0]",
+          "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions1-True-expected_revisions1]"
+        ],
+        "failed_tests_truncated": 0,
+        "passed": 54,
+        "total": 68
+      },
+      "official_resolved": false,
+      "pass_to_pass": {
+        "failed": 1,
+        "failed_tests": [
+          "tests/unit/stage/test_stage.py::TestPathConversion::test"
+        ],
+        "failed_tests_truncated": 0,
+        "passed": 241,
+        "total": 242
+      },
+      "reference_only": {
+        "hard_quality_gate": null,
+        "phase4g9_native_ultra_best_fail_to_pass": "63/68"
+      }
+    },
+    "run_id": "phase4g10-clean-large-ccf9c3e173",
+    "run_timeline": [
+      {
+        "ended_at": 1784395345,
+        "id": 1,
+        "node_id": "rnode_61c062c83290",
+        "node_key": "implement-srs-for-official-evaluator",
+        "node_type": "implementation",
+        "started_at": 1784395044,
+        "status": "blocked",
+        "task_id": "t_012e1ca2",
+        "wall_time_seconds": 301
+      },
+      {
+        "ended_at": 1784396907,
+        "id": 2,
+        "node_id": "rnode_09804d0d041b",
+        "node_key": "reporting-plots-templates-completions",
+        "node_type": "implementation",
+        "started_at": 1784395481,
+        "status": "blocked",
+        "task_id": "t_9246dcb2",
+        "wall_time_seconds": 1426
+      },
+      {
+        "ended_at": 1784397836,
+        "id": 3,
+        "node_id": "rnode_4cb1da5a345a",
+        "node_key": "stage-pipeline-run-cache",
+        "node_type": "implementation",
+        "started_at": 1784395481,
+        "status": "blocked",
+        "task_id": "t_e14c25e2",
+        "wall_time_seconds": 2355
+      },
+      {
+        "ended_at": 1784397965,
+        "id": 4,
+        "node_id": "rnode_22adf51621f1",
+        "node_key": "tree-remote-import-transfer",
+        "node_type": "implementation",
+        "started_at": 1784395481,
+        "status": "blocked",
+        "task_id": "t_3a18827c",
+        "wall_time_seconds": 2484
+      },
+      {
+        "ended_at": 1784400198,
+        "id": 5,
+        "node_id": "rnode_61c062c83290",
+        "node_key": "implement-srs-for-official-evaluator",
+        "node_type": "implementation",
+        "started_at": 1784397966,
+        "status": "blocked",
+        "task_id": "t_a0346a6c",
+        "wall_time_seconds": 2232
+      },
+      {
+        "ended_at": 1784400447,
+        "id": 6,
+        "node_id": "rnode_523975eaaaa6",
+        "node_key": "verify-official-evaluator-resolved-6b2f6451",
+        "node_type": "verification",
+        "started_at": 1784400199,
+        "status": "done",
+        "task_id": "t_3f632817",
+        "wall_time_seconds": 248
+      },
+      {
+        "ended_at": 1784402722,
+        "id": 7,
+        "node_id": "rnode_61c062c83290",
+        "node_key": "implement-srs-for-official-evaluator",
+        "node_type": "implementation",
+        "started_at": 1784400448,
+        "status": "blocked",
+        "task_id": "t_c1265d0f",
+        "wall_time_seconds": 2274
+      },
+      {
+        "ended_at": 1784403036,
+        "id": 8,
+        "node_id": "rnode_db60a2b2aa56",
+        "node_key": "verify-official-evaluator-resolved-2809b433",
+        "node_type": "verification",
+        "started_at": 1784402723,
+        "status": "done",
+        "task_id": "t_174c609d",
+        "wall_time_seconds": 313
+      },
+      {
+        "ended_at": 1784406138,
+        "id": 9,
+        "node_id": "rnode_61c062c83290",
+        "node_key": "implement-srs-for-official-evaluator",
+        "node_type": "implementation",
+        "started_at": 1784403037,
+        "status": "blocked",
+        "task_id": "t_157a0a8b",
+        "wall_time_seconds": 3101
+      },
+      {
+        "ended_at": 1784406451,
+        "id": 10,
+        "node_id": "rnode_1d6e437e5102",
+        "node_key": "verify-official-evaluator-resolved-333468f6",
+        "node_type": "verification",
+        "started_at": 1784406139,
+        "status": "done",
+        "task_id": "t_3343312d",
+        "wall_time_seconds": 312
+      }
+    ],
+    "runtime_validation": {
+      "checkpoint_chain": {
+        "active_segment_id": "dseg_edb6db487b24",
+        "checked_checkpoint_count": 1,
+        "checks": [
+          {
+            "checkpoint_id": "dchk_afc9788c2e01",
+            "errors": []
+          }
+        ],
+        "errors": [],
+        "latest_checkpoint_id": "dchk_afc9788c2e01",
+        "selected_checkpoint": {
+          "checkpoint": {
+            "artifact_index": [],
+            "do_not_repeat": [
+              {
+                "source_refs": [
+                  {
+                    "patch_id": "gpatch_8f103335ab5d"
+                  }
+                ],
+                "summary": "Do not recreate the implementation owner solely to address the earlier no-runnable-node condition; the patch creating it was already applied at graph revision 1."
+              }
+            ],
+            "goal_contract_revision": 1,
+            "graph_frontier": [
+              {
+                "node_key": "implement-srs-for-official-evaluator",
+                "node_type": "implementation",
+                "source_refs": [
+                  {
+                    "node_key": "implement-srs-for-official-evaluator"
+                  }
+                ],
+                "state": "running",
+                "summary": "Active implementation owner must inspect the SRS and repository, implement all required behavior, add legitimate regression coverage, run and debug relevant tests, and provide requirement-traceable evidence for later independent verification."
+              }
+            ],
+            "human_decisions": [],
+            "key_decisions": [
+              {
+                "source_refs": [
+                  {
+                    "decision_id": "kdec_fc9c91e68809"
+                  },
+                  {
+                    "patch_id": "gpatch_8f103335ab5d"
+                  }
+                ],
+                "summary": "A single end-to-end implementation node was created to resolve the required evaluator goal and produce evidence for subsequent independent verification."
+              }
+            ],
+            "known_failure_boundaries": [],
+            "metadata": {
+              "authoritative_source": "db_state",
+              "checkpoint_is_non_authoritative_context": true,
+              "covered_graph_revision_end": 1,
+              "covered_graph_revision_start": 0,
+              "db_revision": 1,
+              "graph_revision": 1,
+              "ledger_revision": 1,
+              "profile_hash": "ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c",
+              "profile_name": "token_budget_compaction",
+              "profile_path": "docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md",
+              "profile_version": "1",
+              "provider_audit": {
+                "fallback_used": false,
+                "input_token_estimate": 6642,
+                "output_token_estimate": 813,
+                "parse_status": "parsed",
+                "provider_input_entry_id": 9,
+                "provider_latency_ms": 17797,
+                "provider_model": "gpt-5.6-sol",
+                "provider_name": "custom",
+                "provider_validation": {
+                  "status": "accepted"
+                },
+                "reason": "phase4g8_controlled_process_boundary",
+                "request_entry_id": 8,
+                "request_ref": "baec7b1c5ef3129d65bda083955cf91603757d7d12304a82e0250bebf556b566",
+                "response_ref": "daea88d45909d082458b77fb508a541034fc2f99a6de03c1b65a71db1315b75d",
+                "retry_count": 0
+              },
+              "provider_generated": true,
+              "source_fingerprint": "68a541d2aff78f73ce3ae707cca8343c9ee52c1e3005181cbf311a07fa9b5781",
+              "source_segment_id": "dseg_f1de2b01efd2"
+            },
+            "next_strategy_constraints": [
+              {
+                "source_refs": [
+                  {
+                    "goal_item_key": "official-evaluator-resolved"
+                  },
+                  {
+                    "node_key": "implement-srs-for-official-evaluator"
+                  },
+                  {
+                    "gap_key": "official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "Do not mark the required goal satisfied until independent verification evidence exists; continue through the active implementation node and preserve requirement traceability and test results."
+              },
+              {
+                "source_refs": [
+                  {
+                    "node_key": "implement-srs-for-official-evaluator"
+                  }
+                ],
+                "summary": "Do not modify or bypass the fixed official evaluator, weaken or delete tests to conceal failures, or perform production deployment."
+              }
+            ],
+            "objective_summary": "Implement the complete repository SRS represented by the listed DVC changes, add or update legitimate regression tests, run relevant test suites, and produce traceable evidence sufficient for independent verification by the fixed official SWE-EVO evaluator without modifying or bypassing that evaluator.",
+            "open_blockers": [
+              {
+                "source_refs": [
+                  {
+                    "gap_key": "official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "Completion is blocked until implementation results and independently verified evaluator evidence are available."
+              }
+            ],
+            "open_goal_gaps": [
+              {
+                "gap_key": "official-evaluator-resolved:missing_evidence",
+                "gap_type": "missing_evidence",
+                "source_refs": [
+                  {
+                    "gap_key": "official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "The required official-evaluator goal remains open because no verified implementation or test evidence has been recorded."
+              },
+              {
+                "gap_key": "runtime:stale:official-evaluator-resolved:missing_evidence",
+                "gap_type": "stale_or_no_progress",
+                "source_refs": [
+                  {
+                    "gap_key": "runtime:stale:official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "The missing-evidence gap has not yet produced recorded progress."
+              }
+            ],
+            "rejected_approaches": [],
+            "satisfied_goal_items": [],
+            "validator_rejection_lessons": []
+          },
+          "checkpoint_json": "{\"artifact_index\": [], \"do_not_repeat\": [{\"source_refs\": [{\"patch_id\": \"gpatch_8f103335ab5d\"}], \"summary\": \"Do not recreate the implementation owner solely to address the earlier no-runnable-node condition; the patch creating it was already applied at graph revision 1.\"}], \"goal_contract_revision\": 1, \"graph_frontier\": [{\"node_key\": \"implement-srs-for-official-evaluator\", \"node_type\": \"implementation\", \"source_refs\": [{\"node_key\": \"implement-srs-for-official-evaluator\"}], \"state\": \"running\", \"summary\": \"Active implementation owner must inspect the SRS and repository, implement all required behavior, add legitimate regression coverage, run and debug relevant tests, and provide requirement-traceable evidence for later independent verification.\"}], \"human_decisions\": [], \"key_decisions\": [{\"source_refs\": [{\"decision_id\": \"kdec_fc9c91e68809\"}, {\"patch_id\": \"gpatch_8f103335ab5d\"}], \"summary\": \"A single end-to-end implementation node was created to resolve the required evaluator goal and produce evidence for subsequent independent verification.\"}], \"known_failure_boundaries\": [], \"metadata\": {\"authoritative_source\": \"db_state\", \"checkpoint_is_non_authoritative_context\": true, \"covered_graph_revision_end\": 1, \"covered_graph_revision_start\": 0, \"db_revision\": 1, \"graph_revision\": 1, \"ledger_revision\": 1, \"profile_hash\": \"ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c\", \"profile_name\": \"token_budget_compaction\", \"profile_path\": \"docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md\", \"profile_version\": \"1\", \"provider_audit\": {\"fallback_used\": false, \"input_token_estimate\": 6642, \"output_token_estimate\": 813, \"parse_status\": \"parsed\", \"provider_input_entry_id\": 9, \"provider_latency_ms\": 17797, \"provider_model\": \"gpt-5.6-sol\", \"provider_name\": \"custom\", \"provider_validation\": {\"status\": \"accepted\"}, \"reason\": \"phase4g8_controlled_process_boundary\", \"request_entry_id\": 8, \"request_ref\": \"baec7b1c5ef3129d65bda083955cf91603757d7d12304a82e0250bebf556b566\", \"response_ref\": \"daea88d45909d082458b77fb508a541034fc2f99a6de03c1b65a71db1315b75d\", \"retry_count\": 0}, \"provider_generated\": true, \"source_fingerprint\": \"68a541d2aff78f73ce3ae707cca8343c9ee52c1e3005181cbf311a07fa9b5781\", \"source_segment_id\": \"dseg_f1de2b01efd2\"}, \"next_strategy_constraints\": [{\"source_refs\": [{\"goal_item_key\": \"official-evaluator-resolved\"}, {\"node_key\": \"implement-srs-for-official-evaluator\"}, {\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"Do not mark the required goal satisfied until independent verification evidence exists; continue through the active implementation node and preserve requirement traceability and test results.\"}, {\"source_refs\": [{\"node_key\": \"implement-srs-for-official-evaluator\"}], \"summary\": \"Do not modify or bypass the fixed official evaluator, weaken or delete tests to conceal failures, or perform production deployment.\"}], \"objective_summary\": \"Implement the complete repository SRS represented by the listed DVC changes, add or update legitimate regression tests, run relevant test suites, and produce traceable evidence sufficient for independent verification by the fixed official SWE-EVO evaluator without modifying or bypassing that evaluator.\", \"open_blockers\": [{\"source_refs\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"Completion is blocked until implementation results and independently verified evaluator evidence are available.\"}], \"open_goal_gaps\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\", \"gap_type\": \"missing_evidence\", \"source_refs\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"The required official-evaluator goal remains open because no verified implementation or test evidence has been recorded.\"}, {\"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\", \"gap_type\": \"stale_or_no_progress\", \"source_refs\": [{\"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\"}], \"summary\": \"The missing-evidence gap has not yet produced recorded progress.\"}], \"rejected_approaches\": [], \"satisfied_goal_items\": [], \"validator_rejection_lessons\": []}",
+          "checkpoint_revision": 1,
+          "covered_decision_end": "kdec_fc9c91e68809",
+          "covered_decision_start": "kdec_fc9c91e68809",
+          "covered_entry_end": 10,
+          "covered_entry_start": 1,
+          "covered_event_end": null,
+          "covered_event_start": null,
+          "created_at": 1784395063,
+          "db_revision": 1,
+          "decision_session_id": "dses_e64b036cef41",
+          "graph_revision": 1,
+          "id": "dchk_afc9788c2e01",
+          "job_id": "rjob_d477b634c34e",
+          "ledger_revision": 1,
+          "metadata": {
+            "fallback_used": false,
+            "input_token_estimate": 6642,
+            "output_token_estimate": 813,
+            "parse_status": "parsed",
+            "provider_input_entry_id": 9,
+            "provider_latency_ms": 17797,
+            "provider_model": "gpt-5.6-sol",
+            "provider_name": "custom",
+            "provider_validation": {
+              "status": "accepted"
+            },
+            "reason": "phase4g8_controlled_process_boundary",
+            "request_entry_id": 8,
+            "request_ref": "baec7b1c5ef3129d65bda083955cf91603757d7d12304a82e0250bebf556b566",
+            "response_ref": "daea88d45909d082458b77fb508a541034fc2f99a6de03c1b65a71db1315b75d",
+            "retry_count": 0
+          },
+          "metadata_json": "{\"fallback_used\": false, \"input_token_estimate\": 6642, \"output_token_estimate\": 813, \"parse_status\": \"parsed\", \"provider_input_entry_id\": 9, \"provider_latency_ms\": 17797, \"provider_model\": \"gpt-5.6-sol\", \"provider_name\": \"custom\", \"provider_validation\": {\"status\": \"accepted\"}, \"reason\": \"phase4g8_controlled_process_boundary\", \"request_entry_id\": 8, \"request_ref\": \"baec7b1c5ef3129d65bda083955cf91603757d7d12304a82e0250bebf556b566\", \"response_ref\": \"daea88d45909d082458b77fb508a541034fc2f99a6de03c1b65a71db1315b75d\", \"retry_count\": 0}",
+          "payload": {
+            "artifact_index": [],
+            "do_not_repeat": [
+              {
+                "source_refs": [
+                  {
+                    "patch_id": "gpatch_8f103335ab5d"
+                  }
+                ],
+                "summary": "Do not recreate the implementation owner solely to address the earlier no-runnable-node condition; the patch creating it was already applied at graph revision 1."
+              }
+            ],
+            "goal_contract_revision": 1,
+            "graph_frontier": [
+              {
+                "node_key": "implement-srs-for-official-evaluator",
+                "node_type": "implementation",
+                "source_refs": [
+                  {
+                    "node_key": "implement-srs-for-official-evaluator"
+                  }
+                ],
+                "state": "running",
+                "summary": "Active implementation owner must inspect the SRS and repository, implement all required behavior, add legitimate regression coverage, run and debug relevant tests, and provide requirement-traceable evidence for later independent verification."
+              }
+            ],
+            "human_decisions": [],
+            "key_decisions": [
+              {
+                "source_refs": [
+                  {
+                    "decision_id": "kdec_fc9c91e68809"
+                  },
+                  {
+                    "patch_id": "gpatch_8f103335ab5d"
+                  }
+                ],
+                "summary": "A single end-to-end implementation node was created to resolve the required evaluator goal and produce evidence for subsequent independent verification."
+              }
+            ],
+            "known_failure_boundaries": [],
+            "metadata": {
+              "authoritative_source": "db_state",
+              "checkpoint_is_non_authoritative_context": true,
+              "covered_graph_revision_end": 1,
+              "covered_graph_revision_start": 0,
+              "db_revision": 1,
+              "graph_revision": 1,
+              "ledger_revision": 1,
+              "profile_hash": "ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c",
+              "profile_name": "token_budget_compaction",
+              "profile_path": "docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md",
+              "profile_version": "1",
+              "provider_audit": {
+                "fallback_used": false,
+                "input_token_estimate": 6642,
+                "output_token_estimate": 813,
+                "parse_status": "parsed",
+                "provider_input_entry_id": 9,
+                "provider_latency_ms": 17797,
+                "provider_model": "gpt-5.6-sol",
+                "provider_name": "custom",
+                "provider_validation": {
+                  "status": "accepted"
+                },
+                "reason": "phase4g8_controlled_process_boundary",
+                "request_entry_id": 8,
+                "request_ref": "baec7b1c5ef3129d65bda083955cf91603757d7d12304a82e0250bebf556b566",
+                "response_ref": "daea88d45909d082458b77fb508a541034fc2f99a6de03c1b65a71db1315b75d",
+                "retry_count": 0
+              },
+              "provider_generated": true,
+              "source_fingerprint": "68a541d2aff78f73ce3ae707cca8343c9ee52c1e3005181cbf311a07fa9b5781",
+              "source_segment_id": "dseg_f1de2b01efd2"
+            },
+            "next_strategy_constraints": [
+              {
+                "source_refs": [
+                  {
+                    "goal_item_key": "official-evaluator-resolved"
+                  },
+                  {
+                    "node_key": "implement-srs-for-official-evaluator"
+                  },
+                  {
+                    "gap_key": "official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "Do not mark the required goal satisfied until independent verification evidence exists; continue through the active implementation node and preserve requirement traceability and test results."
+              },
+              {
+                "source_refs": [
+                  {
+                    "node_key": "implement-srs-for-official-evaluator"
+                  }
+                ],
+                "summary": "Do not modify or bypass the fixed official evaluator, weaken or delete tests to conceal failures, or perform production deployment."
+              }
+            ],
+            "objective_summary": "Implement the complete repository SRS represented by the listed DVC changes, add or update legitimate regression tests, run relevant test suites, and produce traceable evidence sufficient for independent verification by the fixed official SWE-EVO evaluator without modifying or bypassing that evaluator.",
+            "open_blockers": [
+              {
+                "source_refs": [
+                  {
+                    "gap_key": "official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "Completion is blocked until implementation results and independently verified evaluator evidence are available."
+              }
+            ],
+            "open_goal_gaps": [
+              {
+                "gap_key": "official-evaluator-resolved:missing_evidence",
+                "gap_type": "missing_evidence",
+                "source_refs": [
+                  {
+                    "gap_key": "official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "The required official-evaluator goal remains open because no verified implementation or test evidence has been recorded."
+              },
+              {
+                "gap_key": "runtime:stale:official-evaluator-resolved:missing_evidence",
+                "gap_type": "stale_or_no_progress",
+                "source_refs": [
+                  {
+                    "gap_key": "runtime:stale:official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "The missing-evidence gap has not yet produced recorded progress."
+              }
+            ],
+            "rejected_approaches": [],
+            "satisfied_goal_items": [],
+            "validator_rejection_lessons": []
+          },
+          "payload_json": "{\"artifact_index\": [], \"do_not_repeat\": [{\"source_refs\": [{\"patch_id\": \"gpatch_8f103335ab5d\"}], \"summary\": \"Do not recreate the implementation owner solely to address the earlier no-runnable-node condition; the patch creating it was already applied at graph revision 1.\"}], \"goal_contract_revision\": 1, \"graph_frontier\": [{\"node_key\": \"implement-srs-for-official-evaluator\", \"node_type\": \"implementation\", \"source_refs\": [{\"node_key\": \"implement-srs-for-official-evaluator\"}], \"state\": \"running\", \"summary\": \"Active implementation owner must inspect the SRS and repository, implement all required behavior, add legitimate regression coverage, run and debug relevant tests, and provide requirement-traceable evidence for later independent verification.\"}], \"human_decisions\": [], \"key_decisions\": [{\"source_refs\": [{\"decision_id\": \"kdec_fc9c91e68809\"}, {\"patch_id\": \"gpatch_8f103335ab5d\"}], \"summary\": \"A single end-to-end implementation node was created to resolve the required evaluator goal and produce evidence for subsequent independent verification.\"}], \"known_failure_boundaries\": [], \"metadata\": {\"authoritative_source\": \"db_state\", \"checkpoint_is_non_authoritative_context\": true, \"covered_graph_revision_end\": 1, \"covered_graph_revision_start\": 0, \"db_revision\": 1, \"graph_revision\": 1, \"ledger_revision\": 1, \"profile_hash\": \"ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c\", \"profile_name\": \"token_budget_compaction\", \"profile_path\": \"docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md\", \"profile_version\": \"1\", \"provider_audit\": {\"fallback_used\": false, \"input_token_estimate\": 6642, \"output_token_estimate\": 813, \"parse_status\": \"parsed\", \"provider_input_entry_id\": 9, \"provider_latency_ms\": 17797, \"provider_model\": \"gpt-5.6-sol\", \"provider_name\": \"custom\", \"provider_validation\": {\"status\": \"accepted\"}, \"reason\": \"phase4g8_controlled_process_boundary\", \"request_entry_id\": 8, \"request_ref\": \"baec7b1c5ef3129d65bda083955cf91603757d7d12304a82e0250bebf556b566\", \"response_ref\": \"daea88d45909d082458b77fb508a541034fc2f99a6de03c1b65a71db1315b75d\", \"retry_count\": 0}, \"provider_generated\": true, \"source_fingerprint\": \"68a541d2aff78f73ce3ae707cca8343c9ee52c1e3005181cbf311a07fa9b5781\", \"source_segment_id\": \"dseg_f1de2b01efd2\"}, \"next_strategy_constraints\": [{\"source_refs\": [{\"goal_item_key\": \"official-evaluator-resolved\"}, {\"node_key\": \"implement-srs-for-official-evaluator\"}, {\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"Do not mark the required goal satisfied until independent verification evidence exists; continue through the active implementation node and preserve requirement traceability and test results.\"}, {\"source_refs\": [{\"node_key\": \"implement-srs-for-official-evaluator\"}], \"summary\": \"Do not modify or bypass the fixed official evaluator, weaken or delete tests to conceal failures, or perform production deployment.\"}], \"objective_summary\": \"Implement the complete repository SRS represented by the listed DVC changes, add or update legitimate regression tests, run relevant test suites, and produce traceable evidence sufficient for independent verification by the fixed official SWE-EVO evaluator without modifying or bypassing that evaluator.\", \"open_blockers\": [{\"source_refs\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"Completion is blocked until implementation results and independently verified evaluator evidence are available.\"}], \"open_goal_gaps\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\", \"gap_type\": \"missing_evidence\", \"source_refs\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"The required official-evaluator goal remains open because no verified implementation or test evidence has been recorded.\"}, {\"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\", \"gap_type\": \"stale_or_no_progress\", \"source_refs\": [{\"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\"}], \"summary\": \"The missing-evidence gap has not yet produced recorded progress.\"}], \"rejected_approaches\": [], \"satisfied_goal_items\": [], \"validator_rejection_lessons\": []}",
+          "payload_text": "{\n  \"artifact_index\": [],\n  \"do_not_repeat\": [\n    {\n      \"source_refs\": [\n        {\n          \"patch_id\": \"gpatch_8f103335ab5d\"\n        }\n      ],\n      \"summary\": \"Do not recreate the implementation owner solely to address the earlier no-runnable-node condition; the patch creating it was already applied at graph revision 1.\"\n    }\n  ],\n  \"goal_contract_revision\": 1,\n  \"graph_frontier\": [\n    {\n      \"node_key\": \"implement-srs-for-official-evaluator\",\n      \"node_type\": \"implementation\",\n      \"source_refs\": [\n        {\n          \"node_key\": \"implement-srs-for-official-evaluator\"\n        }\n      ],\n      \"state\": \"running\",\n      \"summary\": \"Active implementation owner must inspect the SRS and repository, implement all required behavior, add legitimate regression coverage, run and debug relevant tests, and provide requirement-traceable evidence for later independent verification.\"\n    }\n  ],\n  \"human_decisions\": [],\n  \"key_decisions\": [\n    {\n      \"source_refs\": [\n        {\n          \"decision_id\": \"kdec_fc9c91e68809\"\n        },\n        {\n          \"patch_id\": \"gpatch_8f103335ab5d\"\n        }\n      ],\n      \"summary\": \"A single end-to-end implementation node was created to resolve the required evaluator goal and produce evidence for subsequent independent verification.\"\n    }\n  ],\n  \"known_failure_boundaries\": [],\n  \"metadata\": {\n    \"authoritative_source\": \"db_state\",\n    \"checkpoint_is_non_authoritative_context\": true,\n    \"covered_graph_revision_end\": 1,\n    \"covered_graph_revision_start\": 0,\n    \"db_revision\": 1,\n    \"graph_revision\": 1,\n    \"ledger_revision\": 1,\n    \"profile_hash\": \"ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c\",\n    \"profile_name\": \"token_budget_compaction\",\n    \"profile_path\": \"docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md\",\n    \"profile_version\": \"1\",\n    \"provider_audit\": {\n      \"fallback_used\": false,\n      \"input_token_estimate\": 6642,\n      \"output_token_estimate\": 813,\n      \"parse_status\": \"parsed\",\n      \"provider_input_entry_id\": 9,\n      \"provider_latency_ms\": 17797,\n      \"provider_model\": \"gpt-5.6-sol\",\n      \"provider_name\": \"custom\",\n      \"provider_validation\": {\n        \"status\": \"accepted\"\n      },\n      \"reason\": \"phase4g8_controlled_process_boundary\",\n      \"request_entry_id\": 8,\n      \"request_ref\": \"baec7b1c5ef3129d65bda083955cf91603757d7d12304a82e0250bebf556b566\",\n      \"response_ref\": \"daea88d45909d082458b77fb508a541034fc2f99a6de03c1b65a71db1315b75d\",\n      \"retry_count\": 0\n    },\n    \"provider_generated\": true,\n    \"source_fingerprint\": \"68a541d2aff78f73ce3ae707cca8343c9ee52c1e3005181cbf311a07fa9b5781\",\n    \"source_segment_id\": \"dseg_f1de2b01efd2\"\n  },\n  \"next_strategy_constraints\": [\n    {\n      \"source_refs\": [\n        {\n          \"goal_item_key\": \"official-evaluator-resolved\"\n        },\n        {\n          \"node_key\": \"implement-srs-for-official-evaluator\"\n        },\n        {\n          \"gap_key\": \"official-evaluator-resolved:missing_evidence\"\n        }\n      ],\n      \"summary\": \"Do not mark the required goal satisfied until independent verification evidence exists; continue through the active implementation node and preserve requirement traceability and test results.\"\n    },\n    {\n      \"source_refs\": [\n        {\n          \"node_key\": \"implement-srs-for-official-evaluator\"\n        }\n      ],\n      \"summary\": \"Do not modify or bypass the fixed official evaluator, weaken or delete tests to conceal failures, or perform production deployment.\"\n    }\n  ],\n  \"objective_summary\": \"Implement the complete repository SRS represented by the listed DVC changes, add or update legitimate regression tests, run relevant test suites, and produce traceable evidence sufficient for independent verification by the fixed official SWE-EVO evaluator without modifying or bypassing that evaluator.\",\n  \"open_blockers\": [\n    {\n      \"source_refs\": [\n        {\n          \"gap_key\": \"official-evaluator-resolved:missing_evidence\"\n        }\n      ],\n      \"summary\": \"Completion is blocked until implementation results and independently verified evaluator evidence are available.\"\n    }\n  ],\n  \"open_goal_gaps\": [\n    {\n      \"gap_key\": \"official-evaluator-resolved:missing_evidence\",\n      \"gap_type\": \"missing_evidence\",\n      \"source_refs\": [\n        {\n          \"gap_key\": \"official-evaluator-resolved:missing_evidence\"\n        }\n      ],\n      \"summary\": \"The required official-evaluator goal remains open because no verified implementation or test evidence has been recorded.\"\n    },\n    {\n      \"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\",\n      \"gap_type\": \"stale_or_no_progress\",\n      \"source_refs\": [\n        {\n          \"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\"\n        }\n      ],\n      \"summary\": \"The missing-evidence gap has not yet produced recorded progress.\"\n    }\n  ],\n  \"rejected_approaches\": [],\n  \"satisfied_goal_items\": [],\n  \"validator_rejection_lessons\": []\n}",
+          "profile_hash": "ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c",
+          "profile_name": "token_budget_compaction",
+          "profile_path": "docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md",
+          "profile_version": "1",
+          "reason": "phase4g8_controlled_process_boundary",
+          "reject_reason": null,
+          "revision": 1,
+          "source_segment_id": "dseg_f1de2b01efd2",
+          "supersedes_checkpoint_id": null,
+          "transcript_ref": "decision_segment:dseg_f1de2b01efd2",
+          "validator_status": "accepted"
+        },
+        "selected_checkpoint_id": "dchk_afc9788c2e01",
+        "selection_mode": "latest_checkpoint",
+        "status": "valid"
+      },
+      "compaction_fallback_count": 0,
+      "consistency": {
+        "status": "passed",
+        "violation_count": 0,
+        "warning_count": 0
+      },
+      "credential_scan_hits": 0,
+      "duplicate_ledger_fact_count": 0,
+      "duplicate_terminal_fact_count": 0,
+      "failures": [],
+      "passed": true,
+      "premature_done": false,
+      "process_boundaries": {
+        "daemon_process_started": true,
+        "daemon_restarted": true,
+        "filesystem_isolation_preflight": true,
+        "fixed_revision_evaluated": true,
+        "independent_evaluator_process": true,
+        "worker_auto_review_preflight": true,
+        "worker_backend_session_resumed": true,
+        "worker_evaluator_environment_parity_preflight": true,
+        "worker_process_started": true,
+        "workspace_ownership_canary": true
+      },
+      "source_config_unchanged": true
+    },
+    "schema": "hermes_phase4g10_arm2_v1",
+    "token_usage": {
+      "aggregate": {
+        "cache_ratio": 0.949251,
+        "cached_input_tokens": 80740864,
+        "input_tokens": 85057485,
+        "output_tokens": 378662,
+        "reasoning_output_tokens": 190874,
+        "total_tokens": 85436147
+      },
+      "context_compactions": 4,
+      "sessions": [
+        {
+          "context_compactions": 0,
+          "node_id": "rnode_4cb1da5a345a",
+          "node_key": "stage-pipeline-run-cache",
+          "session_file": "rollout-2026-07-19T01-24-41-019f7642-42bd-7350-ae41-7d425d5a07f9.jsonl",
+          "usage": {
+            "cached_input_tokens": 15363328,
+            "input_tokens": 15989716,
+            "output_tokens": 67258,
+            "reasoning_output_tokens": 36024,
+            "total_tokens": 16056974
+          }
+        },
+        {
+          "context_compactions": 3,
+          "node_id": "rnode_61c062c83290",
+          "node_key": "implement-srs-for-official-evaluator",
+          "session_file": "rollout-2026-07-19T01-17-25-019f763b-99b0-7943-8a47-bbf36a9d0607.jsonl",
+          "usage": {
+            "cached_input_tokens": 41257728,
+            "input_tokens": 43686626,
+            "output_tokens": 189197,
+            "reasoning_output_tokens": 96723,
+            "total_tokens": 43875823
+          }
+        },
+        {
+          "context_compactions": 0,
+          "node_id": "rnode_09804d0d041b",
+          "node_key": "reporting-plots-templates-completions",
+          "session_file": "rollout-2026-07-19T01-24-41-019f7642-42da-74c2-9bed-e93d441490da.jsonl",
+          "usage": {
+            "cached_input_tokens": 6433536,
+            "input_tokens": 6763080,
+            "output_tokens": 42570,
+            "reasoning_output_tokens": 21016,
+            "total_tokens": 6805650
+          }
+        },
+        {
+          "context_compactions": 1,
+          "node_id": "rnode_22adf51621f1",
+          "node_key": "tree-remote-import-transfer",
+          "session_file": "rollout-2026-07-19T01-24-41-019f7642-4316-7603-af8e-94336a5234a5.jsonl",
+          "usage": {
+            "cached_input_tokens": 17686272,
+            "input_tokens": 18618063,
+            "output_tokens": 79637,
+            "reasoning_output_tokens": 37111,
+            "total_tokens": 18697700
+          }
+        }
+      ]
+    }
+  },
+  "ownership_canary": {
+    "audited_at": 1784406452,
+    "checks": {
+      "sibling_content_preserved": true,
+      "sibling_owner_preserved": true,
+      "symlink_still_external": true,
+      "symlink_target_content_preserved": true,
+      "symlink_target_owner_preserved": true,
+      "two_child_worktrees_created": true,
+      "worktree_root_owner_applied": true
+    },
+    "child_worktrees": [
+      "reporting-plots-templates-completions",
+      "stage-pipeline-run-cache",
+      "tree-remote-import-transfer"
+    ],
+    "expected_worker_owner": {
+      "gid": 82560884,
+      "uid": 606824269
+    },
+    "initial_sentinel_owner": {
+      "gid": 0,
+      "uid": 0
+    },
+    "initial_target_owner": {
+      "gid": 0,
+      "uid": 0
+    },
+    "link": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-worktrees/ownership-canary/target-link",
+    "passed": true,
+    "schema": "hermes_runtime_ownership_canary_v1",
+    "sentinel": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-worktrees/ownership-canary/sentinel.txt",
+    "sentinel_sha256": "6a06cc3081f91b08af4e0a5ea5ba385e7a4e5b76acb42288c752c7a276d3981d",
+    "sibling": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-worktrees/ownership-canary",
+    "target": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/reports/ownership-canary-target.txt",
+    "target_sha256": "ef6df610944ce2d1d3f1b4521339dbf50bea25fdbd9166bfe21058dbd02c5760",
+    "worktree_root": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-worktrees"
+  },
+  "run_id": "phase4g10-clean-large-ccf9c3e173",
+  "schema": "hermes_phase4g10_clean_replay_v1",
+  "source_after": {
+    "clean": true,
+    "revision": "f617ca11826c6095153626e81f557a99ebdbcbce",
+    "root": "/tmp/hermes-agent-runtime-kernel",
+    "status": []
+  },
+  "source_before": {
+    "clean": true,
+    "revision": "f617ca11826c6095153626e81f557a99ebdbcbce",
+    "root": "/tmp/hermes-agent-runtime-kernel",
+    "status": []
+  }
+}

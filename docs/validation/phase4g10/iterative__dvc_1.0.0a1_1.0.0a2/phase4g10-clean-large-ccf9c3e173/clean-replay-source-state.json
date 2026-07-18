@@ -1,0 +1,14 @@
+{
+  "source_after": {
+    "clean": true,
+    "revision": "f617ca11826c6095153626e81f557a99ebdbcbce",
+    "root": "/tmp/hermes-agent-runtime-kernel",
+    "status": []
+  },
+  "source_before": {
+    "clean": true,
+    "revision": "f617ca11826c6095153626e81f557a99ebdbcbce",
+    "root": "/tmp/hermes-agent-runtime-kernel",
+    "status": []
+  }
+}

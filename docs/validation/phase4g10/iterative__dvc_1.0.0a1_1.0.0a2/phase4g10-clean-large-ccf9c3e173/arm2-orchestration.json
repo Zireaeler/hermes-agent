@@ -1,0 +1,1166 @@
+{
+  "children": [
+    {
+      "contract": {
+        "acceptance_criteria": [
+          "Implement the plots and plot-marker behavior, plural command naming within scope, HTML doctype, requested output strings, non-zeroed y-axis behavior, and init-template newline requirements.",
+          "Implement no-commit diff handling, tabulated Markdown output for diff, metrics, and params, and corresponding shell-completion updates.",
+          "Add or update legitimate focused regression tests and pass the locally runnable reporting, plotting, init, and completion test subsets.",
+          "Provide requirement-traceable changed-file and test evidence, and escalate edits needed in primary-owned CLI bindings, Repo bindings, schema, or serialization files instead of writing outside scope."
+        ],
+        "declared_write_scope": [
+          "dvc/command/plot.py",
+          "dvc/command/diff.py",
+          "dvc/command/metrics.py",
+          "dvc/command/params.py",
+          "dvc/command/init.py",
+          "dvc/repo/plot/**",
+          "dvc/repo/diff.py",
+          "dvc/repo/metrics/**",
+          "dvc/repo/params/**",
+          "dvc/repo/init.py",
+          "dvc/utils/diff.py",
+          "scripts/completion/**",
+          "tests/func/test_plot.py",
+          "tests/func/test_diff.py",
+          "tests/func/test_init.py",
+          "tests/func/metrics/**",
+          "tests/func/params/**",
+          "tests/unit/test_plot.py",
+          "tests/unit/command/test_plot.py",
+          "tests/unit/command/test_diff.py",
+          "tests/unit/command/test_metrics.py",
+          "tests/unit/command/test_params.py"
+        ],
+        "outcome": "Complete the plots, diff, metrics/params reporting, templates, and shell-completion responsibility family with focused regression coverage.",
+        "prohibited_actions": [
+          "modify_or_bypass_fixed_official_evaluator",
+          "weaken_or_delete_tests_to_conceal_failures",
+          "write_outside_declared_scope",
+          "production_deployment"
+        ],
+        "success_evidence": [
+          "changed_files",
+          "verification",
+          "worker_summary"
+        ],
+        "workspace_mode": "isolated_worktree"
+      },
+      "node_id": "rnode_09804d0d041b",
+      "node_key": "reporting-plots-templates-completions",
+      "session_ids": [
+        "019f7642-42da-74c2-9bed-e93d441490da"
+      ],
+      "state": "succeeded",
+      "workspace_path": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-worktrees/reporting-plots-templates-completions"
+    },
+    {
+      "contract": {
+        "acceptance_criteria": [
+          "Implement stage commit and dry-run fixes, locked-import logging behavior, warning suppression, checkout and run simplification, and removal of check_can_commit where required.",
+          "Implement pipeline output behavior within scope, stage-name validation, string-target handling, and build-cache-to-run-cache behavior including uncached outputs.",
+          "Add or update legitimate focused stage, run, repro, commit, checkout, and pipeline regression tests and pass the locally runnable relevant subsets.",
+          "Provide requirement-traceable changed-file and test evidence, and coordinate transfer-facing run-cache collection and shared schema or serialization edits with the primary integration owner instead of writing outside scope."
+        ],
+        "declared_write_scope": [
+          "dvc/stage/**",
+          "dvc/repo/run.py",
+          "dvc/repo/reproduce.py",
+          "dvc/repo/commit.py",
+          "dvc/repo/checkout.py",
+          "dvc/command/run.py",
+          "dvc/command/repro.py",
+          "dvc/command/commit.py",
+          "dvc/command/checkout.py",
+          "dvc/command/pipeline.py",
+          "dvc/utils/stage.py",
+          "tests/func/test_stage.py",
+          "tests/func/test_pipeline.py",
+          "tests/func/test_repro.py",
+          "tests/func/test_repro_multistage.py",
+          "tests/func/test_run_multistage.py",
+          "tests/func/test_run_single_stage.py",
+          "tests/func/test_commit.py",
+          "tests/func/test_checkout.py",
+          "tests/unit/test_stage.py",
+          "tests/unit/repo/test_reproduce.py",
+          "tests/unit/command/test_run.py",
+          "tests/unit/command/test_repro.py",
+          "tests/unit/command/test_commit.py",
+          "tests/unit/command/test_checkout.py"
+        ],
+        "outcome": "Complete the stage lifecycle, pipeline behavior, checkout/run refactor, and run-cache responsibility family with focused regression coverage.",
+        "prohibited_actions": [
+          "modify_or_bypass_fixed_official_evaluator",
+          "weaken_or_delete_tests_to_conceal_failures",
+          "write_outside_declared_scope",
+          "production_deployment"
+        ],
+        "success_evidence": [
+          "changed_files",
+          "verification",
+          "worker_summary"
+        ],
+        "workspace_mode": "isolated_worktree"
+      },
+      "node_id": "rnode_4cb1da5a345a",
+      "node_key": "stage-pipeline-run-cache",
+      "session_ids": [
+        "019f7642-42bd-7350-ae41-7d425d5a07f9"
+      ],
+      "state": "succeeded",
+      "workspace_path": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-worktrees/stage-pipeline-run-cache"
+    },
+    {
+      "contract": {
+        "acceptance_criteria": [
+          "Support GitTree-backed file objects in utilities and streaming and pulling behavior through DvcTree and RepoTree open paths.",
+          "Implement S3 SSE-KMS configuration, remote-default validation, import safeguards, recursive update, transfer and run-cache collection, and Python compatibility fixes within scope.",
+          "Apply the requested remote-test fixture and flaky-test changes without weakening assertions, add focused regressions for tree, import, update, and transfer behavior, and pass locally runnable tree, SCM, remote, import/update, data-cloud, and utility test subsets.",
+          "Provide requirement-traceable changed-file and test evidence, distinguish unavailable service-dependent validation from local failures, and escalate shared integration edits rather than writing outside scope."
+        ],
+        "declared_write_scope": [
+          "dvc/repo/tree.py",
+          "dvc/scm/tree.py",
+          "dvc/scm/git/tree.py",
+          "dvc/remote/**",
+          "dvc/data_cloud.py",
+          "dvc/config.py",
+          "dvc/external_repo.py",
+          "dvc/dependency/repo.py",
+          "dvc/repo/fetch.py",
+          "dvc/repo/pull.py",
+          "dvc/repo/push.py",
+          "dvc/repo/imp.py",
+          "dvc/repo/imp_url.py",
+          "dvc/repo/update.py",
+          "dvc/command/data_sync.py",
+          "dvc/command/remote.py",
+          "dvc/command/imp.py",
+          "dvc/command/imp_url.py",
+          "dvc/command/update.py",
+          "dvc/utils/__init__.py",
+          "dvc/utils/collections.py",
+          "dvc/utils/fs.py",
+          "dvc/utils/http.py",
+          "tests/remotes.py",
+          "tests/func/remote/**",
+          "tests/func/test_tree.py",
+          "tests/func/test_data_cloud.py",
+          "tests/func/test_remote.py",
+          "tests/func/test_s3.py",
+          "tests/func/test_import.py",
+          "tests/func/test_import_url.py",
+          "tests/func/test_update.py",
+          "tests/func/test_external_repo.py",
+          "tests/func/test_utils.py",
+          "tests/unit/remote/**",
+          "tests/unit/repo/test_tree.py",
+          "tests/unit/scm/**",
+          "tests/unit/utils/**",
+          "tests/unit/command/test_data_sync.py",
+          "tests/unit/command/test_imp.py",
+          "tests/unit/command/test_imp_url.py",
+          "tests/unit/command/test_update.py",
+          "tests/unit/test_config.py"
+        ],
+        "outcome": "Complete the tree/remote streaming, import/update, transfer, remote configuration, and compatibility responsibility family with focused regression coverage.",
+        "prohibited_actions": [
+          "modify_or_bypass_fixed_official_evaluator",
+          "weaken_or_delete_tests_to_conceal_failures",
+          "write_outside_declared_scope",
+          "production_deployment"
+        ],
+        "success_evidence": [
+          "changed_files",
+          "verification",
+          "worker_summary"
+        ],
+        "workspace_mode": "isolated_worktree"
+      },
+      "node_id": "rnode_22adf51621f1",
+      "node_key": "tree-remote-import-transfer",
+      "session_ids": [
+        "019f7642-4316-7603-af8e-94336a5234a5"
+      ],
+      "state": "succeeded",
+      "workspace_path": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-worktrees/tree-remote-import-transfer"
+    }
+  ],
+  "classification": {
+    "effective_orchestration": "passed",
+    "runtime_correctness": "passed",
+    "task_capability": "task-failed"
+  },
+  "contributions": [
+    {
+      "artifact_id": "art_8f781a780621",
+      "base_revision": "fc42ca721c25bdd24875c999e37fb4f589ecd63c",
+      "changed_files": [
+        "dvc/command/metrics.py",
+        "dvc/command/params.py",
+        "dvc/command/plot.py",
+        "dvc/repo/diff.py",
+        "dvc/repo/plot/__init__.py",
+        "dvc/repo/plot/template.py",
+        "dvc/utils/diff.py",
+        "scripts/completion/dvc.bash",
+        "scripts/completion/dvc.zsh",
+        "tests/func/test_diff.py",
+        "tests/func/test_init.py",
+        "tests/func/test_plot.py",
+        "tests/unit/command/test_metrics.py",
+        "tests/unit/command/test_params.py",
+        "tests/unit/command/test_plot.py",
+        "tests/unit/test_plot.py"
+      ],
+      "file_sha256": {
+        "dvc/command/metrics.py": "cfd197139167424ad8b71389ee7275a5edfc7c65e85b6c7ecaa8815fb0be8f4d",
+        "dvc/command/params.py": "d39644b832528ae35600377fb3b7159b40395a1c42244102ab0cad6a99f7f9b9",
+        "dvc/command/plot.py": "02097e2d1f7d6178dacabe24c1f3a4b68b1f2c4cee1e7063c79a8e6049f63f30",
+        "dvc/repo/diff.py": "8486dcbe276aeea8c26d8816fe839ff69004bf4b0567b0a5e311833a3bf633ac",
+        "dvc/repo/plot/__init__.py": "0484c444395569f4a376bec3b535cb7d6dce44c3a324c692fa823597bb96950b",
+        "dvc/repo/plot/template.py": "39afb77f59790572fa6dcdc7bb066e3366e9ef349a6193ec046b4fefed32002e",
+        "dvc/utils/diff.py": "b3949adba3a0b53e75568eeb417168cd0f3b2cbc7e7f6e5ec4d539fa1c626b5a",
+        "scripts/completion/dvc.bash": "96889bc03ef15d30de85e8d808be2e995c785c25812df71aa234d4aebcf6b493",
+        "scripts/completion/dvc.zsh": "fd9afeeedbd9cc3978b38b9bf777f3d8ffbf49f3fd0ead5866c3c3ff9f7edec2",
+        "tests/func/test_diff.py": "a11da4f7d653dd0ad5695bdca7088006291674d357d5c5a657642fea04dd40db",
+        "tests/func/test_init.py": "4e5f0b375294012e3ad10c592b841ae65269dbff8f6df722c1866b9e7e2c36e5",
+        "tests/func/test_plot.py": "8430730decdaa752174704aa5d72ff7517415c1501c8a68571dc19467104fec1",
+        "tests/unit/command/test_metrics.py": "67ea06c8c8cb46546b4effdedee9da6faa13ace9d23140d0cba851742f77a84f",
+        "tests/unit/command/test_params.py": "573ba0867891875a84f805d7fc1519d57f6a78aaa0eb947370886838eafd9489",
+        "tests/unit/command/test_plot.py": "08b0fc336a2ce931ff463253eea1912c98fc9f5ae913847dafc12d5998c4a946",
+        "tests/unit/test_plot.py": "43532d5021c7ab9786c79c3c7fac6310034aacced976ee9896cb1e0dc83c2ca1"
+      },
+      "integration_owner_node_key": "implement-srs-for-official-evaluator",
+      "materialization_attempt": 1,
+      "materialization_id": "mat_f87e9fd9cda0",
+      "node_key": "reporting-plots-templates-completions",
+      "patch_bytes": 28516,
+      "patch_ref": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-contributions/reporting-plots-templates-completions/attempt-1.patch",
+      "patch_sha256": "72b5ee1e596294e4650813c2e6e9457c26c6aa627d2fe89430dd5f034ed2440d",
+      "schema": "runtime_node_contribution_v1",
+      "scope_status": "verified",
+      "workspace_path": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-worktrees/reporting-plots-templates-completions"
+    },
+    {
+      "artifact_id": "art_1bf771269486",
+      "base_revision": "fc42ca721c25bdd24875c999e37fb4f589ecd63c",
+      "changed_files": [
+        "dvc/command/repro.py",
+        "dvc/command/run.py",
+        "dvc/repo/checkout.py",
+        "dvc/repo/commit.py",
+        "dvc/repo/reproduce.py",
+        "dvc/repo/run.py",
+        "dvc/stage/__init__.py",
+        "dvc/stage/cache.py",
+        "dvc/stage/exceptions.py",
+        "dvc/stage/loader.py",
+        "tests/func/test_checkout.py",
+        "tests/func/test_repro.py",
+        "tests/func/test_run_multistage.py",
+        "tests/func/test_run_single_stage.py",
+        "tests/unit/command/test_repro.py",
+        "tests/unit/command/test_run.py",
+        "tests/unit/repo/test_reproduce.py",
+        "tests/unit/test_stage.py"
+      ],
+      "file_sha256": {
+        "dvc/command/repro.py": "c22df288c941d464c9e539bda31999b05a0733b771fa48ec4c1fe75b3555eb3e",
+        "dvc/command/run.py": "ccbcf87902efe60909caf2e759f3131556d11a7cab6f07c3274945b49498cbef",
+        "dvc/repo/checkout.py": "89112dd1e1873853d66c4b58c60a19392df111d8e01c411632c7082a2957322c",
+        "dvc/repo/commit.py": "a9b4d2a78770979a8318975bc6236b09656d7774b536e8670e86ad5cbaed7e56",
+        "dvc/repo/reproduce.py": "e7588ba8b9de1094cbeddfc043e6150490404d1f2a956ae53f270fc0ccba4953",
+        "dvc/repo/run.py": "cb40bb478b734617f8bf3a208443c1ec54c98aad6a4e25cbb2bf3491926f7631",
+        "dvc/stage/__init__.py": "80732eebe9abe1ad67d56bb8316b9a6861f6154d30a44a2cc29a83097a0d965a",
+        "dvc/stage/cache.py": "04c31bcffdbbc274ac93e1123d1cf25d34ca9dce9f290f5d9c1eb685faa83a19",
+        "dvc/stage/exceptions.py": "3eeb68a04a25b89117b55238b32a3747bd1f018600148b083607cef370bb3a8e",
+        "dvc/stage/loader.py": "5c58f9d9034ea1447ed2cc7e2d397fef6556598c9f53b7d8cbde3c2a9c6460d9",
+        "tests/func/test_checkout.py": "589cb0cfb3bd5fdbbd0209462f9064fdee1879ea2900a79a692555bf9b34167b",
+        "tests/func/test_repro.py": "1ecbfb0e2688a654292574654f00c34ae34ef92a977eae7d39ece715a90bab42",
+        "tests/func/test_run_multistage.py": "b5d072499a660d6c7facd886629e1eb6db730cd362374bce717642ff288b749a",
+        "tests/func/test_run_single_stage.py": "e3dd8a74cb1fe0244ac01d952f6d57ebe6b0be1ee58eaccc0aa27b6d68631141",
+        "tests/unit/command/test_repro.py": "43b6b7a8cca5dd0e94e1697e0efffb5e1f752764d04bac262b3c7795e2160a94",
+        "tests/unit/command/test_run.py": "6a65ed03e0f96be68749917518c149ac67fccc325514e96f60928b85f5e5a0f0",
+        "tests/unit/repo/test_reproduce.py": "f51dd1cbb8db136031f76df97416aa7f2fee28aba36b552c3e0db63682f4f145",
+        "tests/unit/test_stage.py": "3bb059e5707116908dc291712cb782ab3bd506dee65fdf1cefa40e55cb64f8c0"
+      },
+      "integration_owner_node_key": "implement-srs-for-official-evaluator",
+      "materialization_attempt": 1,
+      "materialization_id": "mat_9de7d32d3f96",
+      "node_key": "stage-pipeline-run-cache",
+      "patch_bytes": 36160,
+      "patch_ref": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-contributions/stage-pipeline-run-cache/attempt-1.patch",
+      "patch_sha256": "1a252f08dda040cfa25e22a45a3fba8291bb6f6a4d5d17243180e9281b269339",
+      "schema": "runtime_node_contribution_v1",
+      "scope_status": "verified",
+      "workspace_path": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-worktrees/stage-pipeline-run-cache"
+    },
+    {
+      "artifact_id": "art_532192cbd646",
+      "base_revision": "fc42ca721c25bdd24875c999e37fb4f589ecd63c",
+      "changed_files": [
+        "dvc/command/remote.py",
+        "dvc/command/update.py",
+        "dvc/config.py",
+        "dvc/data_cloud.py",
+        "dvc/remote/s3.py",
+        "dvc/repo/imp_url.py",
+        "dvc/repo/tree.py",
+        "dvc/repo/update.py",
+        "dvc/scm/git/tree.py",
+        "dvc/scm/tree.py",
+        "dvc/utils/__init__.py",
+        "dvc/utils/fs.py",
+        "tests/func/test_data_cloud.py",
+        "tests/func/test_import.py",
+        "tests/func/test_remote.py",
+        "tests/func/test_tree.py",
+        "tests/func/test_update.py",
+        "tests/remotes.py",
+        "tests/unit/command/test_update.py",
+        "tests/unit/remote/test_remote_dir.py",
+        "tests/unit/remote/test_s3.py",
+        "tests/unit/repo/test_tree.py",
+        "tests/unit/test_config.py"
+      ],
+      "file_sha256": {
+        "dvc/command/remote.py": "2feee19483fcdbc597f374ca65f066b0f14aaa6f2c66030985b05da99f181b93",
+        "dvc/command/update.py": "8da242e870643ecd59e35abccf89abb099e8403b5ca091a64356eca26c095a70",
+        "dvc/config.py": "8e32c6dd9ab6f298fcd2e8af029b3d34a525fe8684cc7772a6950c74ba510f44",
+        "dvc/data_cloud.py": "e5f4ed57e16ddee7b71f094fc01148c1d267f38c7331ba5850df1aea4c417d7c",
+        "dvc/remote/s3.py": "5a6dd0c8d570b280f96afbb6800892824068a31a8f9ba5ea017af876f3180fcc",
+        "dvc/repo/imp_url.py": "a7796dea46945cd076f546b06768a4a8c25720739ab6bc4253767fcb391e3749",
+        "dvc/repo/tree.py": "c3e197f5ae53042f397bade85eb5038c80e95b35befc7506a36a3a7d1db5b268",
+        "dvc/repo/update.py": "576826e02835eedc86abf6dd048f2e59bf595595b68224bdc6bd43ae3facf050",
+        "dvc/scm/git/tree.py": "468863ee2da6b3e8df5866c97492955e013de9588ef2e259180d21398759d828",
+        "dvc/scm/tree.py": "27e0eacd4ee4bc67b8538ac6f14499007f63dbf26202bbee6e24840388755daf",
+        "dvc/utils/__init__.py": "97cb6da228629b7e83308681e3e0abeeff81ed7073760f6d0c6074205ca6d746",
+        "dvc/utils/fs.py": "6323785d901a6b610fe6544b55c73606327cdde268eafbc841f96396157e8560",
+        "tests/func/test_data_cloud.py": "d9545422db832a96273aaa1b73df97c83172e2d81610381a48fe49c58e28c36e",
+        "tests/func/test_import.py": "fc851b3b8229a90acfab65176c79573b7c13f02f1a1bf4ea18efdf6d7c835ca5",
+        "tests/func/test_remote.py": "8a67a72f17d48fb0022cd4989842569940b9d47ca2c3f0865ee934c5866df53a",
+        "tests/func/test_tree.py": "afe85873cb8b1f0c79e8b9a594b4570623150abe8ab278cc546ffce0e2bf8765",
+        "tests/func/test_update.py": "acd388a4b90e6f1982b61736ecf5c7b0dc4636ab64692c466a43b3017baef452",
+        "tests/remotes.py": "7cc41b7da9df81bab198f6bda76d6116e09037e416bd5f577e127d61f421bb20",
+        "tests/unit/command/test_update.py": "4a13dc80e5034dc8035da22624e373dc70f0b270d71607b69d270283724b5baa",
+        "tests/unit/remote/test_remote_dir.py": "da67649e28d20ffd95b882867ef8614ef18c8d16e280fa4db91d6ffc69ad7cd9",
+        "tests/unit/remote/test_s3.py": "c0c09516e29503d3486fba9c81708d9a9d553e9cdff0212d488a360d42565e10",
+        "tests/unit/repo/test_tree.py": "ba030c5c43d964efbeb64df0863891838ca21da222125e5768787cc572ee249f",
+        "tests/unit/test_config.py": "1f29494b53a8a7d88d533528f07b04687c4c0476e935e626671730c37ed7eb63"
+      },
+      "integration_owner_node_key": "implement-srs-for-official-evaluator",
+      "materialization_attempt": 1,
+      "materialization_id": "mat_d29a4582d112",
+      "node_key": "tree-remote-import-transfer",
+      "patch_bytes": 31955,
+      "patch_ref": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-contributions/tree-remote-import-transfer/attempt-1.patch",
+      "patch_sha256": "9be342fdde2e7d2eeec311fff3ad590cbb21d9806d55be8ab1a5b4641e3e1b4b",
+      "schema": "runtime_node_contribution_v1",
+      "scope_status": "verified",
+      "workspace_path": "/tmp/hermes-phase4g10-clean-replay/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-clean-large-ccf9c3e173/runtime-worktrees/tree-remote-import-transfer"
+    }
+  ],
+  "evaluator_progression": [
+    {
+      "fail_to_pass": {
+        "failed": 61,
+        "failed_tests": [
+          "tests/func/metrics/test_diff.py::test_no_commits",
+          "tests/func/params/test_diff.py::test_no_commits",
+          "tests/func/plots/test_plots.py::test_plot_no_data",
+          "tests/func/plots/test_plots.py::test_plot_wrong_metric_type",
+          "tests/func/plots/test_plots.py::test_should_raise_on_no_template",
+          "tests/func/plots/test_plots.py::test_should_raise_on_no_template_and_datafile",
+          "tests/func/plots/test_plots.py::test_throw_on_no_metric_at_all",
+          "tests/func/test_diff.py::test_no_commits",
+          "tests/unit/command/test_diff.py::test_default",
+          "tests/unit/command/test_diff.py::test_no_changes",
+          "tests/unit/command/test_diff.py::test_show_hash",
+          "tests/unit/command/test_diff.py::test_show_json",
+          "tests/unit/command/test_diff.py::test_show_json_and_hash",
+          "tests/unit/command/test_plots.py::test_metrics_diff",
+          "tests/unit/command/test_plots.py::test_metrics_show",
+          "tests/unit/command/test_plots.py::test_plots_show_json",
+          "tests/unit/command/test_repro.py::test_default_arguments",
+          "tests/unit/command/test_repro.py::test_downstream",
+          "tests/unit/command/test_run.py::test_run",
+          "tests/unit/command/test_run.py::test_run_args_from_cli",
+          "tests/unit/command/test_run.py::test_run_args_with_spaces",
+          "tests/unit/command/test_update.py::test_update",
+          "tests/unit/repo/plots/test_data.py::test_finding_data[fields0]",
+          "tests/unit/repo/plots/test_data.py::test_finding_data[fields1]",
+          "tests/unit/repo/plots/test_data.py::test_finding_lists[dictionary0-expected_result0]",
+          "tests/unit/repo/plots/test_data.py::test_finding_lists[dictionary1-expected_result1]",
+          "tests/unit/repo/plots/test_data.py::test_finding_lists[dictionary2-expected_result2]",
+          "tests/unit/repo/plots/test_data.py::test_parse_json[$.some.path-expected_result1]",
+          "tests/unit/repo/plots/test_data.py::test_parse_json[$.some.path[*].a-expected_result0]",
+          "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions0-False-expected_revisions0]",
+          "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions1-True-expected_revisions1]",
+          "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions2-False-expected_revisions2]",
+          "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions3-True-expected_revisions3]",
+          "tests/unit/scm/test_git.py::test_no_commits",
+          "tests/unit/stage/test_run.py::test_run_stage_dry",
+          "tests/unit/stage/test_stage.py::test_meta_ignored",
+          "tests/unit/stage/test_stage.py::test_stage_checksum",
+          "tests/unit/stage/test_stage.py::test_wdir_default_ignored",
+          "tests/unit/stage/test_stage.py::test_wdir_non_default_is_not_ignored",
+          "tests/unit/utils/test_fs.py::TestContainsLink::test_path_object_and_str_are_valid_arg_types",
+          "tests/unit/utils/test_fs.py::TestContainsLink::test_should_raise_exception_on_base_path_not_in_path",
+          "tests/unit/utils/test_fs.py::TestContainsLink::test_should_return_false_on_no_more_dirs_below_path",
+          "tests/unit/utils/test_fs.py::TestContainsLink::test_should_return_false_on_path_eq_to_base_path",
+          "tests/unit/utils/test_fs.py::TestContainsLink::test_should_return_false_when_base_path_is_symlink",
+          "tests/unit/utils/test_fs.py::TestContainsLink::test_should_return_true_on_symlink_in_path",
+          "tests/unit/utils/test_fs.py::TestMtimeAndSize::test",
+          "tests/unit/utils/test_fs.py::test_copy_fobj_to_file",
+          "tests/unit/utils/test_fs.py::test_copyfile[dir]",
+          "tests/unit/utils/test_fs.py::test_copyfile[file]",
+          "tests/unit/utils/test_fs.py::test_get_inode",
+          "tests/unit/utils/test_fs.py::test_makedirs",
+          "tests/unit/utils/test_fs.py::test_move",
+          "tests/unit/utils/test_fs.py::test_path_isin_accepts_pathinfo",
+          "tests/unit/utils/test_fs.py::test_path_isin_on_common_substring_path",
+          "tests/unit/utils/test_fs.py::test_path_isin_on_same_path",
+          "tests/unit/utils/test_fs.py::test_path_isin_positive",
+          "tests/unit/utils/test_fs.py::test_path_isin_with_absolute_path",
+          "tests/unit/utils/test_fs.py::test_path_object_and_str_are_valid_types_get_mtime_and_size",
+          "tests/unit/utils/test_fs.py::test_remove",
+          "tests/unit/utils/test_fs.py::test_should_call_recursive_on_no_condition_matched",
+          "tests/unit/utils/test_fs.py::test_walk_files"
+        ],
+        "failed_tests_truncated": 0,
+        "passed": 7,
+        "total": 68
+      },
+      "node_key": "verify-official-evaluator-resolved-6b2f6451",
+      "pass_to_pass": {
+        "failed": 0,
+        "failed_tests": [],
+        "failed_tests_truncated": 0,
+        "passed": 242,
+        "total": 242
+      },
+      "resolved": false,
+      "round": 1,
+      "run_id": 6,
+      "wall_time_seconds": 248
+    },
+    {
+      "fail_to_pass": {
+        "failed": 15,
+        "failed_tests": [
+          "tests/func/plots/test_plots.py::test_plot_no_data",
+          "tests/func/plots/test_plots.py::test_plot_wrong_metric_type",
+          "tests/func/plots/test_plots.py::test_should_raise_on_no_template",
+          "tests/func/plots/test_plots.py::test_should_raise_on_no_template_and_datafile",
+          "tests/func/plots/test_plots.py::test_throw_on_no_metric_at_all",
+          "tests/unit/command/test_diff.py::test_default",
+          "tests/unit/command/test_diff.py::test_no_changes",
+          "tests/unit/command/test_diff.py::test_show_hash",
+          "tests/unit/command/test_diff.py::test_show_json",
+          "tests/unit/command/test_diff.py::test_show_json_and_hash",
+          "tests/unit/command/test_plots.py::test_metrics_diff",
+          "tests/unit/command/test_plots.py::test_metrics_show",
+          "tests/unit/command/test_plots.py::test_plots_show_json",
+          "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions0-False-expected_revisions0]",
+          "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions1-True-expected_revisions1]"
+        ],
+        "failed_tests_truncated": 0,
+        "passed": 53,
+        "total": 68
+      },
+      "node_key": "verify-official-evaluator-resolved-2809b433",
+      "pass_to_pass": {
+        "failed": 1,
+        "failed_tests": [
+          "tests/unit/stage/test_stage.py::TestPathConversion::test"
+        ],
+        "failed_tests_truncated": 0,
+        "passed": 241,
+        "total": 242
+      },
+      "resolved": false,
+      "round": 2,
+      "run_id": 8,
+      "wall_time_seconds": 313
+    },
+    {
+      "fail_to_pass": {
+        "failed": 14,
+        "failed_tests": [
+          "tests/func/plots/test_plots.py::test_plot_no_data",
+          "tests/func/plots/test_plots.py::test_plot_wrong_metric_type",
+          "tests/func/plots/test_plots.py::test_should_raise_on_no_template",
+          "tests/func/plots/test_plots.py::test_should_raise_on_no_template_and_datafile",
+          "tests/func/plots/test_plots.py::test_throw_on_no_metric_at_all",
+          "tests/unit/command/test_diff.py::test_default",
+          "tests/unit/command/test_diff.py::test_no_changes",
+          "tests/unit/command/test_diff.py::test_show_hash",
+          "tests/unit/command/test_diff.py::test_show_json",
+          "tests/unit/command/test_diff.py::test_show_json_and_hash",
+          "tests/unit/command/test_plots.py::test_metrics_diff",
+          "tests/unit/command/test_plots.py::test_metrics_show",
+          "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions0-False-expected_revisions0]",
+          "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions1-True-expected_revisions1]"
+        ],
+        "failed_tests_truncated": 0,
+        "passed": 54,
+        "total": 68
+      },
+      "node_key": "verify-official-evaluator-resolved-333468f6",
+      "pass_to_pass": {
+        "failed": 1,
+        "failed_tests": [
+          "tests/unit/stage/test_stage.py::TestPathConversion::test"
+        ],
+        "failed_tests_truncated": 0,
+        "passed": 241,
+        "total": 242
+      },
+      "resolved": false,
+      "round": 3,
+      "run_id": 10,
+      "wall_time_seconds": 312
+    }
+  ],
+  "execution_metrics": {
+    "accepted_checkpoint_count": 1,
+    "child_parallel_savings_upper_bound_seconds": 3781,
+    "child_parallel_wall_seconds": 2484,
+    "child_serial_wall_seconds": 6265,
+    "decision_round_count": 2,
+    "durable_child_count": 3,
+    "evaluator_round_count": 3,
+    "execution_node_count": 7,
+    "finished_at": 1784406452,
+    "graph_patch_count": 2,
+    "implementation_node_count": 4,
+    "materialization_count": 10,
+    "started_at": 1784395011,
+    "strategy_node_count": 0,
+    "verification_node_count": 3,
+    "wall_time_seconds": 11441
+  },
+  "generated_at": 1784406453,
+  "instance_id": "iterative__dvc_1.0.0a1_1.0.0a2",
+  "integration_attribution": {
+    "accepted_contributions": [],
+    "contribution_lineage_refs": {
+      "art_1bf771269486": "event:21694",
+      "art_532192cbd646": "event:21694",
+      "art_8f781a780621": "event:21694"
+    },
+    "modified_contributions": [
+      "art_8f781a780621",
+      "art_1bf771269486",
+      "art_532192cbd646"
+    ],
+    "node_key": "implement-srs-for-official-evaluator",
+    "rejected_contributions": [],
+    "runtime_materialization_attempt": 4,
+    "runtime_materialization_id": "mat_ee06333468f6"
+  },
+  "job_id": "rjob_d477b634c34e",
+  "orchestration_assertions": {
+    "accepted_early_structure_checkpoint": true,
+    "candidate_has_contribution_lineage": true,
+    "child_scopes_declared": true,
+    "initial_graph_single_primary": true,
+    "isolated_child_workspaces_and_sessions": true,
+    "official_evaluator_fixed_revision": true,
+    "primary_same_session_resumed": true,
+    "two_contributions_integrated": true,
+    "two_nonempty_frozen_contributions": true,
+    "two_or_three_durable_children": true
+  },
+  "primary": {
+    "checkpoint_event_id": 1040,
+    "node_id": "rnode_61c062c83290",
+    "node_key": "implement-srs-for-official-evaluator",
+    "resume_count": 4,
+    "session_ids": [
+      "019f763b-99b0-7943-8a47-bbf36a9d0607"
+    ]
+  },
+  "quality": {
+    "fail_to_pass": {
+      "failed": 14,
+      "failed_tests": [
+        "tests/func/plots/test_plots.py::test_plot_no_data",
+        "tests/func/plots/test_plots.py::test_plot_wrong_metric_type",
+        "tests/func/plots/test_plots.py::test_should_raise_on_no_template",
+        "tests/func/plots/test_plots.py::test_should_raise_on_no_template_and_datafile",
+        "tests/func/plots/test_plots.py::test_throw_on_no_metric_at_all",
+        "tests/unit/command/test_diff.py::test_default",
+        "tests/unit/command/test_diff.py::test_no_changes",
+        "tests/unit/command/test_diff.py::test_show_hash",
+        "tests/unit/command/test_diff.py::test_show_json",
+        "tests/unit/command/test_diff.py::test_show_json_and_hash",
+        "tests/unit/command/test_plots.py::test_metrics_diff",
+        "tests/unit/command/test_plots.py::test_metrics_show",
+        "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions0-False-expected_revisions0]",
+        "tests/unit/repo/plots/test_diff.py::test_revisions[arg_revisions1-True-expected_revisions1]"
+      ],
+      "failed_tests_truncated": 0,
+      "passed": 54,
+      "total": 68
+    },
+    "official_resolved": false,
+    "pass_to_pass": {
+      "failed": 1,
+      "failed_tests": [
+        "tests/unit/stage/test_stage.py::TestPathConversion::test"
+      ],
+      "failed_tests_truncated": 0,
+      "passed": 241,
+      "total": 242
+    },
+    "reference_only": {
+      "hard_quality_gate": null,
+      "phase4g9_native_ultra_best_fail_to_pass": "63/68"
+    }
+  },
+  "run_id": "phase4g10-clean-large-ccf9c3e173",
+  "run_timeline": [
+    {
+      "ended_at": 1784395345,
+      "id": 1,
+      "node_id": "rnode_61c062c83290",
+      "node_key": "implement-srs-for-official-evaluator",
+      "node_type": "implementation",
+      "started_at": 1784395044,
+      "status": "blocked",
+      "task_id": "t_012e1ca2",
+      "wall_time_seconds": 301
+    },
+    {
+      "ended_at": 1784396907,
+      "id": 2,
+      "node_id": "rnode_09804d0d041b",
+      "node_key": "reporting-plots-templates-completions",
+      "node_type": "implementation",
+      "started_at": 1784395481,
+      "status": "blocked",
+      "task_id": "t_9246dcb2",
+      "wall_time_seconds": 1426
+    },
+    {
+      "ended_at": 1784397836,
+      "id": 3,
+      "node_id": "rnode_4cb1da5a345a",
+      "node_key": "stage-pipeline-run-cache",
+      "node_type": "implementation",
+      "started_at": 1784395481,
+      "status": "blocked",
+      "task_id": "t_e14c25e2",
+      "wall_time_seconds": 2355
+    },
+    {
+      "ended_at": 1784397965,
+      "id": 4,
+      "node_id": "rnode_22adf51621f1",
+      "node_key": "tree-remote-import-transfer",
+      "node_type": "implementation",
+      "started_at": 1784395481,
+      "status": "blocked",
+      "task_id": "t_3a18827c",
+      "wall_time_seconds": 2484
+    },
+    {
+      "ended_at": 1784400198,
+      "id": 5,
+      "node_id": "rnode_61c062c83290",
+      "node_key": "implement-srs-for-official-evaluator",
+      "node_type": "implementation",
+      "started_at": 1784397966,
+      "status": "blocked",
+      "task_id": "t_a0346a6c",
+      "wall_time_seconds": 2232
+    },
+    {
+      "ended_at": 1784400447,
+      "id": 6,
+      "node_id": "rnode_523975eaaaa6",
+      "node_key": "verify-official-evaluator-resolved-6b2f6451",
+      "node_type": "verification",
+      "started_at": 1784400199,
+      "status": "done",
+      "task_id": "t_3f632817",
+      "wall_time_seconds": 248
+    },
+    {
+      "ended_at": 1784402722,
+      "id": 7,
+      "node_id": "rnode_61c062c83290",
+      "node_key": "implement-srs-for-official-evaluator",
+      "node_type": "implementation",
+      "started_at": 1784400448,
+      "status": "blocked",
+      "task_id": "t_c1265d0f",
+      "wall_time_seconds": 2274
+    },
+    {
+      "ended_at": 1784403036,
+      "id": 8,
+      "node_id": "rnode_db60a2b2aa56",
+      "node_key": "verify-official-evaluator-resolved-2809b433",
+      "node_type": "verification",
+      "started_at": 1784402723,
+      "status": "done",
+      "task_id": "t_174c609d",
+      "wall_time_seconds": 313
+    },
+    {
+      "ended_at": 1784406138,
+      "id": 9,
+      "node_id": "rnode_61c062c83290",
+      "node_key": "implement-srs-for-official-evaluator",
+      "node_type": "implementation",
+      "started_at": 1784403037,
+      "status": "blocked",
+      "task_id": "t_157a0a8b",
+      "wall_time_seconds": 3101
+    },
+    {
+      "ended_at": 1784406451,
+      "id": 10,
+      "node_id": "rnode_1d6e437e5102",
+      "node_key": "verify-official-evaluator-resolved-333468f6",
+      "node_type": "verification",
+      "started_at": 1784406139,
+      "status": "done",
+      "task_id": "t_3343312d",
+      "wall_time_seconds": 312
+    }
+  ],
+  "runtime_validation": {
+    "checkpoint_chain": {
+      "active_segment_id": "dseg_edb6db487b24",
+      "checked_checkpoint_count": 1,
+      "checks": [
+        {
+          "checkpoint_id": "dchk_afc9788c2e01",
+          "errors": []
+        }
+      ],
+      "errors": [],
+      "latest_checkpoint_id": "dchk_afc9788c2e01",
+      "selected_checkpoint": {
+        "checkpoint": {
+          "artifact_index": [],
+          "do_not_repeat": [
+            {
+              "source_refs": [
+                {
+                  "patch_id": "gpatch_8f103335ab5d"
+                }
+              ],
+              "summary": "Do not recreate the implementation owner solely to address the earlier no-runnable-node condition; the patch creating it was already applied at graph revision 1."
+            }
+          ],
+          "goal_contract_revision": 1,
+          "graph_frontier": [
+            {
+              "node_key": "implement-srs-for-official-evaluator",
+              "node_type": "implementation",
+              "source_refs": [
+                {
+                  "node_key": "implement-srs-for-official-evaluator"
+                }
+              ],
+              "state": "running",
+              "summary": "Active implementation owner must inspect the SRS and repository, implement all required behavior, add legitimate regression coverage, run and debug relevant tests, and provide requirement-traceable evidence for later independent verification."
+            }
+          ],
+          "human_decisions": [],
+          "key_decisions": [
+            {
+              "source_refs": [
+                {
+                  "decision_id": "kdec_fc9c91e68809"
+                },
+                {
+                  "patch_id": "gpatch_8f103335ab5d"
+                }
+              ],
+              "summary": "A single end-to-end implementation node was created to resolve the required evaluator goal and produce evidence for subsequent independent verification."
+            }
+          ],
+          "known_failure_boundaries": [],
+          "metadata": {
+            "authoritative_source": "db_state",
+            "checkpoint_is_non_authoritative_context": true,
+            "covered_graph_revision_end": 1,
+            "covered_graph_revision_start": 0,
+            "db_revision": 1,
+            "graph_revision": 1,
+            "ledger_revision": 1,
+            "profile_hash": "ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c",
+            "profile_name": "token_budget_compaction",
+            "profile_path": "docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md",
+            "profile_version": "1",
+            "provider_audit": {
+              "fallback_used": false,
+              "input_token_estimate": 6642,
+              "output_token_estimate": 813,
+              "parse_status": "parsed",
+              "provider_input_entry_id": 9,
+              "provider_latency_ms": 17797,
+              "provider_model": "gpt-5.6-sol",
+              "provider_name": "custom",
+              "provider_validation": {
+                "status": "accepted"
+              },
+              "reason": "phase4g8_controlled_process_boundary",
+              "request_entry_id": 8,
+              "request_ref": "baec7b1c5ef3129d65bda083955cf91603757d7d12304a82e0250bebf556b566",
+              "response_ref": "daea88d45909d082458b77fb508a541034fc2f99a6de03c1b65a71db1315b75d",
+              "retry_count": 0
+            },
+            "provider_generated": true,
+            "source_fingerprint": "68a541d2aff78f73ce3ae707cca8343c9ee52c1e3005181cbf311a07fa9b5781",
+            "source_segment_id": "dseg_f1de2b01efd2"
+          },
+          "next_strategy_constraints": [
+            {
+              "source_refs": [
+                {
+                  "goal_item_key": "official-evaluator-resolved"
+                },
+                {
+                  "node_key": "implement-srs-for-official-evaluator"
+                },
+                {
+                  "gap_key": "official-evaluator-resolved:missing_evidence"
+                }
+              ],
+              "summary": "Do not mark the required goal satisfied until independent verification evidence exists; continue through the active implementation node and preserve requirement traceability and test results."
+            },
+            {
+              "source_refs": [
+                {
+                  "node_key": "implement-srs-for-official-evaluator"
+                }
+              ],
+              "summary": "Do not modify or bypass the fixed official evaluator, weaken or delete tests to conceal failures, or perform production deployment."
+            }
+          ],
+          "objective_summary": "Implement the complete repository SRS represented by the listed DVC changes, add or update legitimate regression tests, run relevant test suites, and produce traceable evidence sufficient for independent verification by the fixed official SWE-EVO evaluator without modifying or bypassing that evaluator.",
+          "open_blockers": [
+            {
+              "source_refs": [
+                {
+                  "gap_key": "official-evaluator-resolved:missing_evidence"
+                }
+              ],
+              "summary": "Completion is blocked until implementation results and independently verified evaluator evidence are available."
+            }
+          ],
+          "open_goal_gaps": [
+            {
+              "gap_key": "official-evaluator-resolved:missing_evidence",
+              "gap_type": "missing_evidence",
+              "source_refs": [
+                {
+                  "gap_key": "official-evaluator-resolved:missing_evidence"
+                }
+              ],
+              "summary": "The required official-evaluator goal remains open because no verified implementation or test evidence has been recorded."
+            },
+            {
+              "gap_key": "runtime:stale:official-evaluator-resolved:missing_evidence",
+              "gap_type": "stale_or_no_progress",
+              "source_refs": [
+                {
+                  "gap_key": "runtime:stale:official-evaluator-resolved:missing_evidence"
+                }
+              ],
+              "summary": "The missing-evidence gap has not yet produced recorded progress."
+            }
+          ],
+          "rejected_approaches": [],
+          "satisfied_goal_items": [],
+          "validator_rejection_lessons": []
+        },
+        "checkpoint_json": "{\"artifact_index\": [], \"do_not_repeat\": [{\"source_refs\": [{\"patch_id\": \"gpatch_8f103335ab5d\"}], \"summary\": \"Do not recreate the implementation owner solely to address the earlier no-runnable-node condition; the patch creating it was already applied at graph revision 1.\"}], \"goal_contract_revision\": 1, \"graph_frontier\": [{\"node_key\": \"implement-srs-for-official-evaluator\", \"node_type\": \"implementation\", \"source_refs\": [{\"node_key\": \"implement-srs-for-official-evaluator\"}], \"state\": \"running\", \"summary\": \"Active implementation owner must inspect the SRS and repository, implement all required behavior, add legitimate regression coverage, run and debug relevant tests, and provide requirement-traceable evidence for later independent verification.\"}], \"human_decisions\": [], \"key_decisions\": [{\"source_refs\": [{\"decision_id\": \"kdec_fc9c91e68809\"}, {\"patch_id\": \"gpatch_8f103335ab5d\"}], \"summary\": \"A single end-to-end implementation node was created to resolve the required evaluator goal and produce evidence for subsequent independent verification.\"}], \"known_failure_boundaries\": [], \"metadata\": {\"authoritative_source\": \"db_state\", \"checkpoint_is_non_authoritative_context\": true, \"covered_graph_revision_end\": 1, \"covered_graph_revision_start\": 0, \"db_revision\": 1, \"graph_revision\": 1, \"ledger_revision\": 1, \"profile_hash\": \"ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c\", \"profile_name\": \"token_budget_compaction\", \"profile_path\": \"docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md\", \"profile_version\": \"1\", \"provider_audit\": {\"fallback_used\": false, \"input_token_estimate\": 6642, \"output_token_estimate\": 813, \"parse_status\": \"parsed\", \"provider_input_entry_id\": 9, \"provider_latency_ms\": 17797, \"provider_model\": \"gpt-5.6-sol\", \"provider_name\": \"custom\", \"provider_validation\": {\"status\": \"accepted\"}, \"reason\": \"phase4g8_controlled_process_boundary\", \"request_entry_id\": 8, \"request_ref\": \"baec7b1c5ef3129d65bda083955cf91603757d7d12304a82e0250bebf556b566\", \"response_ref\": \"daea88d45909d082458b77fb508a541034fc2f99a6de03c1b65a71db1315b75d\", \"retry_count\": 0}, \"provider_generated\": true, \"source_fingerprint\": \"68a541d2aff78f73ce3ae707cca8343c9ee52c1e3005181cbf311a07fa9b5781\", \"source_segment_id\": \"dseg_f1de2b01efd2\"}, \"next_strategy_constraints\": [{\"source_refs\": [{\"goal_item_key\": \"official-evaluator-resolved\"}, {\"node_key\": \"implement-srs-for-official-evaluator\"}, {\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"Do not mark the required goal satisfied until independent verification evidence exists; continue through the active implementation node and preserve requirement traceability and test results.\"}, {\"source_refs\": [{\"node_key\": \"implement-srs-for-official-evaluator\"}], \"summary\": \"Do not modify or bypass the fixed official evaluator, weaken or delete tests to conceal failures, or perform production deployment.\"}], \"objective_summary\": \"Implement the complete repository SRS represented by the listed DVC changes, add or update legitimate regression tests, run relevant test suites, and produce traceable evidence sufficient for independent verification by the fixed official SWE-EVO evaluator without modifying or bypassing that evaluator.\", \"open_blockers\": [{\"source_refs\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"Completion is blocked until implementation results and independently verified evaluator evidence are available.\"}], \"open_goal_gaps\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\", \"gap_type\": \"missing_evidence\", \"source_refs\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"The required official-evaluator goal remains open because no verified implementation or test evidence has been recorded.\"}, {\"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\", \"gap_type\": \"stale_or_no_progress\", \"source_refs\": [{\"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\"}], \"summary\": \"The missing-evidence gap has not yet produced recorded progress.\"}], \"rejected_approaches\": [], \"satisfied_goal_items\": [], \"validator_rejection_lessons\": []}",
+        "checkpoint_revision": 1,
+        "covered_decision_end": "kdec_fc9c91e68809",
+        "covered_decision_start": "kdec_fc9c91e68809",
+        "covered_entry_end": 10,
+        "covered_entry_start": 1,
+        "covered_event_end": null,
+        "covered_event_start": null,
+        "created_at": 1784395063,
+        "db_revision": 1,
+        "decision_session_id": "dses_e64b036cef41",
+        "graph_revision": 1,
+        "id": "dchk_afc9788c2e01",
+        "job_id": "rjob_d477b634c34e",
+        "ledger_revision": 1,
+        "metadata": {
+          "fallback_used": false,
+          "input_token_estimate": 6642,
+          "output_token_estimate": 813,
+          "parse_status": "parsed",
+          "provider_input_entry_id": 9,
+          "provider_latency_ms": 17797,
+          "provider_model": "gpt-5.6-sol",
+          "provider_name": "custom",
+          "provider_validation": {
+            "status": "accepted"
+          },
+          "reason": "phase4g8_controlled_process_boundary",
+          "request_entry_id": 8,
+          "request_ref": "baec7b1c5ef3129d65bda083955cf91603757d7d12304a82e0250bebf556b566",
+          "response_ref": "daea88d45909d082458b77fb508a541034fc2f99a6de03c1b65a71db1315b75d",
+          "retry_count": 0
+        },
+        "metadata_json": "{\"fallback_used\": false, \"input_token_estimate\": 6642, \"output_token_estimate\": 813, \"parse_status\": \"parsed\", \"provider_input_entry_id\": 9, \"provider_latency_ms\": 17797, \"provider_model\": \"gpt-5.6-sol\", \"provider_name\": \"custom\", \"provider_validation\": {\"status\": \"accepted\"}, \"reason\": \"phase4g8_controlled_process_boundary\", \"request_entry_id\": 8, \"request_ref\": \"baec7b1c5ef3129d65bda083955cf91603757d7d12304a82e0250bebf556b566\", \"response_ref\": \"daea88d45909d082458b77fb508a541034fc2f99a6de03c1b65a71db1315b75d\", \"retry_count\": 0}",
+        "payload": {
+          "artifact_index": [],
+          "do_not_repeat": [
+            {
+              "source_refs": [
+                {
+                  "patch_id": "gpatch_8f103335ab5d"
+                }
+              ],
+              "summary": "Do not recreate the implementation owner solely to address the earlier no-runnable-node condition; the patch creating it was already applied at graph revision 1."
+            }
+          ],
+          "goal_contract_revision": 1,
+          "graph_frontier": [
+            {
+              "node_key": "implement-srs-for-official-evaluator",
+              "node_type": "implementation",
+              "source_refs": [
+                {
+                  "node_key": "implement-srs-for-official-evaluator"
+                }
+              ],
+              "state": "running",
+              "summary": "Active implementation owner must inspect the SRS and repository, implement all required behavior, add legitimate regression coverage, run and debug relevant tests, and provide requirement-traceable evidence for later independent verification."
+            }
+          ],
+          "human_decisions": [],
+          "key_decisions": [
+            {
+              "source_refs": [
+                {
+                  "decision_id": "kdec_fc9c91e68809"
+                },
+                {
+                  "patch_id": "gpatch_8f103335ab5d"
+                }
+              ],
+              "summary": "A single end-to-end implementation node was created to resolve the required evaluator goal and produce evidence for subsequent independent verification."
+            }
+          ],
+          "known_failure_boundaries": [],
+          "metadata": {
+            "authoritative_source": "db_state",
+            "checkpoint_is_non_authoritative_context": true,
+            "covered_graph_revision_end": 1,
+            "covered_graph_revision_start": 0,
+            "db_revision": 1,
+            "graph_revision": 1,
+            "ledger_revision": 1,
+            "profile_hash": "ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c",
+            "profile_name": "token_budget_compaction",
+            "profile_path": "docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md",
+            "profile_version": "1",
+            "provider_audit": {
+              "fallback_used": false,
+              "input_token_estimate": 6642,
+              "output_token_estimate": 813,
+              "parse_status": "parsed",
+              "provider_input_entry_id": 9,
+              "provider_latency_ms": 17797,
+              "provider_model": "gpt-5.6-sol",
+              "provider_name": "custom",
+              "provider_validation": {
+                "status": "accepted"
+              },
+              "reason": "phase4g8_controlled_process_boundary",
+              "request_entry_id": 8,
+              "request_ref": "baec7b1c5ef3129d65bda083955cf91603757d7d12304a82e0250bebf556b566",
+              "response_ref": "daea88d45909d082458b77fb508a541034fc2f99a6de03c1b65a71db1315b75d",
+              "retry_count": 0
+            },
+            "provider_generated": true,
+            "source_fingerprint": "68a541d2aff78f73ce3ae707cca8343c9ee52c1e3005181cbf311a07fa9b5781",
+            "source_segment_id": "dseg_f1de2b01efd2"
+          },
+          "next_strategy_constraints": [
+            {
+              "source_refs": [
+                {
+                  "goal_item_key": "official-evaluator-resolved"
+                },
+                {
+                  "node_key": "implement-srs-for-official-evaluator"
+                },
+                {
+                  "gap_key": "official-evaluator-resolved:missing_evidence"
+                }
+              ],
+              "summary": "Do not mark the required goal satisfied until independent verification evidence exists; continue through the active implementation node and preserve requirement traceability and test results."
+            },
+            {
+              "source_refs": [
+                {
+                  "node_key": "implement-srs-for-official-evaluator"
+                }
+              ],
+              "summary": "Do not modify or bypass the fixed official evaluator, weaken or delete tests to conceal failures, or perform production deployment."
+            }
+          ],
+          "objective_summary": "Implement the complete repository SRS represented by the listed DVC changes, add or update legitimate regression tests, run relevant test suites, and produce traceable evidence sufficient for independent verification by the fixed official SWE-EVO evaluator without modifying or bypassing that evaluator.",
+          "open_blockers": [
+            {
+              "source_refs": [
+                {
+                  "gap_key": "official-evaluator-resolved:missing_evidence"
+                }
+              ],
+              "summary": "Completion is blocked until implementation results and independently verified evaluator evidence are available."
+            }
+          ],
+          "open_goal_gaps": [
+            {
+              "gap_key": "official-evaluator-resolved:missing_evidence",
+              "gap_type": "missing_evidence",
+              "source_refs": [
+                {
+                  "gap_key": "official-evaluator-resolved:missing_evidence"
+                }
+              ],
+              "summary": "The required official-evaluator goal remains open because no verified implementation or test evidence has been recorded."
+            },
+            {
+              "gap_key": "runtime:stale:official-evaluator-resolved:missing_evidence",
+              "gap_type": "stale_or_no_progress",
+              "source_refs": [
+                {
+                  "gap_key": "runtime:stale:official-evaluator-resolved:missing_evidence"
+                }
+              ],
+              "summary": "The missing-evidence gap has not yet produced recorded progress."
+            }
+          ],
+          "rejected_approaches": [],
+          "satisfied_goal_items": [],
+          "validator_rejection_lessons": []
+        },
+        "payload_json": "{\"artifact_index\": [], \"do_not_repeat\": [{\"source_refs\": [{\"patch_id\": \"gpatch_8f103335ab5d\"}], \"summary\": \"Do not recreate the implementation owner solely to address the earlier no-runnable-node condition; the patch creating it was already applied at graph revision 1.\"}], \"goal_contract_revision\": 1, \"graph_frontier\": [{\"node_key\": \"implement-srs-for-official-evaluator\", \"node_type\": \"implementation\", \"source_refs\": [{\"node_key\": \"implement-srs-for-official-evaluator\"}], \"state\": \"running\", \"summary\": \"Active implementation owner must inspect the SRS and repository, implement all required behavior, add legitimate regression coverage, run and debug relevant tests, and provide requirement-traceable evidence for later independent verification.\"}], \"human_decisions\": [], \"key_decisions\": [{\"source_refs\": [{\"decision_id\": \"kdec_fc9c91e68809\"}, {\"patch_id\": \"gpatch_8f103335ab5d\"}], \"summary\": \"A single end-to-end implementation node was created to resolve the required evaluator goal and produce evidence for subsequent independent verification.\"}], \"known_failure_boundaries\": [], \"metadata\": {\"authoritative_source\": \"db_state\", \"checkpoint_is_non_authoritative_context\": true, \"covered_graph_revision_end\": 1, \"covered_graph_revision_start\": 0, \"db_revision\": 1, \"graph_revision\": 1, \"ledger_revision\": 1, \"profile_hash\": \"ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c\", \"profile_name\": \"token_budget_compaction\", \"profile_path\": \"docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md\", \"profile_version\": \"1\", \"provider_audit\": {\"fallback_used\": false, \"input_token_estimate\": 6642, \"output_token_estimate\": 813, \"parse_status\": \"parsed\", \"provider_input_entry_id\": 9, \"provider_latency_ms\": 17797, \"provider_model\": \"gpt-5.6-sol\", \"provider_name\": \"custom\", \"provider_validation\": {\"status\": \"accepted\"}, \"reason\": \"phase4g8_controlled_process_boundary\", \"request_entry_id\": 8, \"request_ref\": \"baec7b1c5ef3129d65bda083955cf91603757d7d12304a82e0250bebf556b566\", \"response_ref\": \"daea88d45909d082458b77fb508a541034fc2f99a6de03c1b65a71db1315b75d\", \"retry_count\": 0}, \"provider_generated\": true, \"source_fingerprint\": \"68a541d2aff78f73ce3ae707cca8343c9ee52c1e3005181cbf311a07fa9b5781\", \"source_segment_id\": \"dseg_f1de2b01efd2\"}, \"next_strategy_constraints\": [{\"source_refs\": [{\"goal_item_key\": \"official-evaluator-resolved\"}, {\"node_key\": \"implement-srs-for-official-evaluator\"}, {\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"Do not mark the required goal satisfied until independent verification evidence exists; continue through the active implementation node and preserve requirement traceability and test results.\"}, {\"source_refs\": [{\"node_key\": \"implement-srs-for-official-evaluator\"}], \"summary\": \"Do not modify or bypass the fixed official evaluator, weaken or delete tests to conceal failures, or perform production deployment.\"}], \"objective_summary\": \"Implement the complete repository SRS represented by the listed DVC changes, add or update legitimate regression tests, run relevant test suites, and produce traceable evidence sufficient for independent verification by the fixed official SWE-EVO evaluator without modifying or bypassing that evaluator.\", \"open_blockers\": [{\"source_refs\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"Completion is blocked until implementation results and independently verified evaluator evidence are available.\"}], \"open_goal_gaps\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\", \"gap_type\": \"missing_evidence\", \"source_refs\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"The required official-evaluator goal remains open because no verified implementation or test evidence has been recorded.\"}, {\"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\", \"gap_type\": \"stale_or_no_progress\", \"source_refs\": [{\"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\"}], \"summary\": \"The missing-evidence gap has not yet produced recorded progress.\"}], \"rejected_approaches\": [], \"satisfied_goal_items\": [], \"validator_rejection_lessons\": []}",
+        "payload_text": "{\n  \"artifact_index\": [],\n  \"do_not_repeat\": [\n    {\n      \"source_refs\": [\n        {\n          \"patch_id\": \"gpatch_8f103335ab5d\"\n        }\n      ],\n      \"summary\": \"Do not recreate the implementation owner solely to address the earlier no-runnable-node condition; the patch creating it was already applied at graph revision 1.\"\n    }\n  ],\n  \"goal_contract_revision\": 1,\n  \"graph_frontier\": [\n    {\n      \"node_key\": \"implement-srs-for-official-evaluator\",\n      \"node_type\": \"implementation\",\n      \"source_refs\": [\n        {\n          \"node_key\": \"implement-srs-for-official-evaluator\"\n        }\n      ],\n      \"state\": \"running\",\n      \"summary\": \"Active implementation owner must inspect the SRS and repository, implement all required behavior, add legitimate regression coverage, run and debug relevant tests, and provide requirement-traceable evidence for later independent verification.\"\n    }\n  ],\n  \"human_decisions\": [],\n  \"key_decisions\": [\n    {\n      \"source_refs\": [\n        {\n          \"decision_id\": \"kdec_fc9c91e68809\"\n        },\n        {\n          \"patch_id\": \"gpatch_8f103335ab5d\"\n        }\n      ],\n      \"summary\": \"A single end-to-end implementation node was created to resolve the required evaluator goal and produce evidence for subsequent independent verification.\"\n    }\n  ],\n  \"known_failure_boundaries\": [],\n  \"metadata\": {\n    \"authoritative_source\": \"db_state\",\n    \"checkpoint_is_non_authoritative_context\": true,\n    \"covered_graph_revision_end\": 1,\n    \"covered_graph_revision_start\": 0,\n    \"db_revision\": 1,\n    \"graph_revision\": 1,\n    \"ledger_revision\": 1,\n    \"profile_hash\": \"ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c\",\n    \"profile_name\": \"token_budget_compaction\",\n    \"profile_path\": \"docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md\",\n    \"profile_version\": \"1\",\n    \"provider_audit\": {\n      \"fallback_used\": false,\n      \"input_token_estimate\": 6642,\n      \"output_token_estimate\": 813,\n      \"parse_status\": \"parsed\",\n      \"provider_input_entry_id\": 9,\n      \"provider_latency_ms\": 17797,\n      \"provider_model\": \"gpt-5.6-sol\",\n      \"provider_name\": \"custom\",\n      \"provider_validation\": {\n        \"status\": \"accepted\"\n      },\n      \"reason\": \"phase4g8_controlled_process_boundary\",\n      \"request_entry_id\": 8,\n      \"request_ref\": \"baec7b1c5ef3129d65bda083955cf91603757d7d12304a82e0250bebf556b566\",\n      \"response_ref\": \"daea88d45909d082458b77fb508a541034fc2f99a6de03c1b65a71db1315b75d\",\n      \"retry_count\": 0\n    },\n    \"provider_generated\": true,\n    \"source_fingerprint\": \"68a541d2aff78f73ce3ae707cca8343c9ee52c1e3005181cbf311a07fa9b5781\",\n    \"source_segment_id\": \"dseg_f1de2b01efd2\"\n  },\n  \"next_strategy_constraints\": [\n    {\n      \"source_refs\": [\n        {\n          \"goal_item_key\": \"official-evaluator-resolved\"\n        },\n        {\n          \"node_key\": \"implement-srs-for-official-evaluator\"\n        },\n        {\n          \"gap_key\": \"official-evaluator-resolved:missing_evidence\"\n        }\n      ],\n      \"summary\": \"Do not mark the required goal satisfied until independent verification evidence exists; continue through the active implementation node and preserve requirement traceability and test results.\"\n    },\n    {\n      \"source_refs\": [\n        {\n          \"node_key\": \"implement-srs-for-official-evaluator\"\n        }\n      ],\n      \"summary\": \"Do not modify or bypass the fixed official evaluator, weaken or delete tests to conceal failures, or perform production deployment.\"\n    }\n  ],\n  \"objective_summary\": \"Implement the complete repository SRS represented by the listed DVC changes, add or update legitimate regression tests, run relevant test suites, and produce traceable evidence sufficient for independent verification by the fixed official SWE-EVO evaluator without modifying or bypassing that evaluator.\",\n  \"open_blockers\": [\n    {\n      \"source_refs\": [\n        {\n          \"gap_key\": \"official-evaluator-resolved:missing_evidence\"\n        }\n      ],\n      \"summary\": \"Completion is blocked until implementation results and independently verified evaluator evidence are available.\"\n    }\n  ],\n  \"open_goal_gaps\": [\n    {\n      \"gap_key\": \"official-evaluator-resolved:missing_evidence\",\n      \"gap_type\": \"missing_evidence\",\n      \"source_refs\": [\n        {\n          \"gap_key\": \"official-evaluator-resolved:missing_evidence\"\n        }\n      ],\n      \"summary\": \"The required official-evaluator goal remains open because no verified implementation or test evidence has been recorded.\"\n    },\n    {\n      \"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\",\n      \"gap_type\": \"stale_or_no_progress\",\n      \"source_refs\": [\n        {\n          \"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\"\n        }\n      ],\n      \"summary\": \"The missing-evidence gap has not yet produced recorded progress.\"\n    }\n  ],\n  \"rejected_approaches\": [],\n  \"satisfied_goal_items\": [],\n  \"validator_rejection_lessons\": []\n}",
+        "profile_hash": "ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c",
+        "profile_name": "token_budget_compaction",
+        "profile_path": "docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md",
+        "profile_version": "1",
+        "reason": "phase4g8_controlled_process_boundary",
+        "reject_reason": null,
+        "revision": 1,
+        "source_segment_id": "dseg_f1de2b01efd2",
+        "supersedes_checkpoint_id": null,
+        "transcript_ref": "decision_segment:dseg_f1de2b01efd2",
+        "validator_status": "accepted"
+      },
+      "selected_checkpoint_id": "dchk_afc9788c2e01",
+      "selection_mode": "latest_checkpoint",
+      "status": "valid"
+    },
+    "compaction_fallback_count": 0,
+    "consistency": {
+      "status": "passed",
+      "violation_count": 0,
+      "warning_count": 0
+    },
+    "credential_scan_hits": 0,
+    "duplicate_ledger_fact_count": 0,
+    "duplicate_terminal_fact_count": 0,
+    "failures": [],
+    "passed": true,
+    "premature_done": false,
+    "process_boundaries": {
+      "daemon_process_started": true,
+      "daemon_restarted": true,
+      "filesystem_isolation_preflight": true,
+      "fixed_revision_evaluated": true,
+      "independent_evaluator_process": true,
+      "worker_auto_review_preflight": true,
+      "worker_backend_session_resumed": true,
+      "worker_evaluator_environment_parity_preflight": true,
+      "worker_process_started": true,
+      "workspace_ownership_canary": true
+    },
+    "source_config_unchanged": true
+  },
+  "schema": "hermes_phase4g10_arm2_v1",
+  "token_usage": {
+    "aggregate": {
+      "cache_ratio": 0.949251,
+      "cached_input_tokens": 80740864,
+      "input_tokens": 85057485,
+      "output_tokens": 378662,
+      "reasoning_output_tokens": 190874,
+      "total_tokens": 85436147
+    },
+    "context_compactions": 4,
+    "sessions": [
+      {
+        "context_compactions": 0,
+        "node_id": "rnode_4cb1da5a345a",
+        "node_key": "stage-pipeline-run-cache",
+        "session_file": "rollout-2026-07-19T01-24-41-019f7642-42bd-7350-ae41-7d425d5a07f9.jsonl",
+        "usage": {
+          "cached_input_tokens": 15363328,
+          "input_tokens": 15989716,
+          "output_tokens": 67258,
+          "reasoning_output_tokens": 36024,
+          "total_tokens": 16056974
+        }
+      },
+      {
+        "context_compactions": 3,
+        "node_id": "rnode_61c062c83290",
+        "node_key": "implement-srs-for-official-evaluator",
+        "session_file": "rollout-2026-07-19T01-17-25-019f763b-99b0-7943-8a47-bbf36a9d0607.jsonl",
+        "usage": {
+          "cached_input_tokens": 41257728,
+          "input_tokens": 43686626,
+          "output_tokens": 189197,
+          "reasoning_output_tokens": 96723,
+          "total_tokens": 43875823
+        }
+      },
+      {
+        "context_compactions": 0,
+        "node_id": "rnode_09804d0d041b",
+        "node_key": "reporting-plots-templates-completions",
+        "session_file": "rollout-2026-07-19T01-24-41-019f7642-42da-74c2-9bed-e93d441490da.jsonl",
+        "usage": {
+          "cached_input_tokens": 6433536,
+          "input_tokens": 6763080,
+          "output_tokens": 42570,
+          "reasoning_output_tokens": 21016,
+          "total_tokens": 6805650
+        }
+      },
+      {
+        "context_compactions": 1,
+        "node_id": "rnode_22adf51621f1",
+        "node_key": "tree-remote-import-transfer",
+        "session_file": "rollout-2026-07-19T01-24-41-019f7642-4316-7603-af8e-94336a5234a5.jsonl",
+        "usage": {
+          "cached_input_tokens": 17686272,
+          "input_tokens": 18618063,
+          "output_tokens": 79637,
+          "reasoning_output_tokens": 37111,
+          "total_tokens": 18697700
+        }
+      }
+    ]
+  }
+}
