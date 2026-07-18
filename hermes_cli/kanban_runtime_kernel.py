@@ -1731,14 +1731,51 @@ def _scope_prefix(scope: str) -> str:
     return clean[:wildcard].rstrip("/")
 
 
-def _scopes_obviously_overlap(left: list[str], right: list[str]) -> bool:
+def _recursive_scope_root(scope: str) -> Optional[str]:
+    clean = str(scope).strip().replace("\\", "/")
+    if not clean.endswith("/**"):
+        return None
+    root = clean[:-3].rstrip("/")
+    if not root or any(marker in root for marker in ("*", "?", "[")):
+        return None
+    return root
+
+
+def _obvious_scope_overlap(
+    left: list[str],
+    right: list[str],
+) -> Optional[tuple[str, str]]:
     for first in left:
         for second in right:
-            a = _scope_prefix(first)
-            b = _scope_prefix(second)
-            if not a or not b or a == b or a.startswith(b + "/") or b.startswith(a + "/"):
-                return True
-    return False
+            a = str(first).strip().replace("\\", "/")
+            b = str(second).strip().replace("\\", "/")
+            if a == b or a == "**" or b == "**":
+                return a, b
+            a_has_glob = any(marker in a for marker in ("*", "?", "["))
+            b_has_glob = any(marker in b for marker in ("*", "?", "["))
+            if a_has_glob and not b_has_glob and fnmatch.fnmatchcase(b, a):
+                return a, b
+            if b_has_glob and not a_has_glob and fnmatch.fnmatchcase(a, b):
+                return a, b
+            a_root = _recursive_scope_root(a)
+            b_root = _recursive_scope_root(b)
+            if a_root and b_root and (
+                a_root == b_root
+                or a_root.startswith(b_root + "/")
+                or b_root.startswith(a_root + "/")
+            ):
+                return a, b
+            b_prefix = _scope_prefix(b)
+            a_prefix = _scope_prefix(a)
+            if a_root and (b_prefix == a_root or b_prefix.startswith(a_root + "/")):
+                return a, b
+            if b_root and (a_prefix == b_root or a_prefix.startswith(b_root + "/")):
+                return a, b
+    return None
+
+
+def _scopes_obviously_overlap(left: list[str], right: list[str]) -> bool:
+    return _obvious_scope_overlap(left, right) is not None
 
 
 def _validate_evidence_ref(conn: sqlite3.Connection, job_id: str, ref: str) -> None:
@@ -1850,8 +1887,16 @@ def _validate_decomposition(conn: sqlite3.Connection, job_id: str, patch: dict[s
                     field_name="decomposition declared_write_scopes",
                 )
                 for other_key in nodes[index + 1:]:
-                    if _scopes_obviously_overlap(node_scopes, scopes.get(other_key) or []):
-                        raise PatchValidationError(f"durable_parallelism write scopes overlap for {node_key!r} and {other_key!r}")
+                    overlap = _obvious_scope_overlap(
+                        node_scopes,
+                        scopes.get(other_key) or [],
+                    )
+                    if overlap is not None:
+                        raise PatchValidationError(
+                            "durable_parallelism write scopes overlap for "
+                            f"{node_key!r} scope {overlap[0]!r} and "
+                            f"{other_key!r} scope {overlap[1]!r}"
+                        )
         covered.update(set(nodes) & patch_node_keys)
     if required and not patch_node_keys.issubset(covered):
         raise PatchValidationError("decomposition must justify every new execution node")
@@ -3454,108 +3499,150 @@ def _structure_request_valid(structure_request: Any) -> bool:
     )
 
 
-def _structure_checkpoint_valid(
+def _structure_checkpoint_validation_error(
     checkpoint: Any,
     *,
     node_key: Optional[str] = None,
-) -> bool:
+) -> Optional[str]:
     if not isinstance(checkpoint, dict):
-        return False
+        return "structure checkpoint must be an object"
     if checkpoint.get("schema") != STRUCTURE_CHECKPOINT_SCHEMA:
-        return False
+        return f"structure checkpoint schema must be {STRUCTURE_CHECKPOINT_SCHEMA!r}"
     if checkpoint.get("kind") != "early_structure_assessment":
-        return False
+        return "structure checkpoint kind must be 'early_structure_assessment'"
     recommendation = checkpoint.get("recommendation")
     if recommendation not in {"continue_single_node", "expand"}:
-        return False
+        return "structure checkpoint recommendation must be continue_single_node or expand"
     if not str(checkpoint.get("summary") or "").strip():
-        return False
+        return "structure checkpoint requires summary"
     inspected = checkpoint.get("inspected_scope")
     if not isinstance(inspected, list) or not inspected:
-        return False
+        return "structure checkpoint requires non-empty inspected_scope"
     if any(not isinstance(value, str) or not value.strip() for value in inspected):
-        return False
+        return "structure checkpoint inspected_scope must be a non-empty string list"
     facts = checkpoint.get("repository_facts") or []
     if not isinstance(facts, list):
-        return False
+        return "structure checkpoint repository_facts must be a list"
     for fact in facts:
         if not isinstance(fact, dict) or not str(fact.get("fact") or "").strip():
-            return False
+            return "structure checkpoint repository fact requires fact text"
         refs = fact.get("evidence_refs") or []
         if not isinstance(refs, list) or any(
             not isinstance(ref, str) or not ref.strip() for ref in refs
         ):
-            return False
+            return "structure checkpoint repository fact evidence_refs must be a string list"
     proposed = checkpoint.get("proposed_nodes") or []
     if not isinstance(proposed, list):
-        return False
+        return "structure checkpoint proposed_nodes must be a list"
     if recommendation == "expand" and not 2 <= len(proposed) <= 3:
-        return False
+        return "expand structure checkpoint requires two or three proposed_nodes"
     if recommendation == "continue_single_node" and proposed:
-        return False
+        return "continue_single_node structure checkpoint must not propose nodes"
     proposed_keys: set[str] = set()
-    proposed_scopes: list[list[str]] = []
+    proposed_scopes: list[tuple[str, list[str]]] = []
     for item in proposed:
         if not isinstance(item, dict):
-            return False
+            return "structure checkpoint proposed node must be an object"
         key = str(item.get("node_key") or "").strip()
         if not key or key in proposed_keys:
-            return False
+            return "structure checkpoint proposed node_key must be non-empty and unique"
         proposed_keys.add(key)
         if not str(item.get("outcome") or "").strip():
-            return False
+            return f"structure checkpoint proposed node {key!r} requires outcome"
         criteria = item.get("acceptance_criteria")
         scopes = item.get("declared_write_scope")
         capabilities = item.get("requested_capabilities") or []
         if not isinstance(criteria, list) or not criteria or any(
             not isinstance(value, str) or not value.strip() for value in criteria
         ):
-            return False
+            return f"structure checkpoint proposed node {key!r} requires acceptance_criteria"
         if not isinstance(scopes, list) or not scopes or any(
             not isinstance(value, str) or not value.strip() for value in scopes
         ):
-            return False
+            return f"structure checkpoint proposed node {key!r} requires declared_write_scope"
         if not isinstance(capabilities, list) or any(
             not isinstance(value, str) or not value.strip() for value in capabilities
         ):
-            return False
+            return f"structure checkpoint proposed node {key!r} requested_capabilities must be a string list"
         try:
             _validate_declared_write_scopes(
                 scopes,
                 field_name="structure checkpoint declared_write_scope",
             )
-        except PatchValidationError:
-            return False
-        proposed_scopes.append(scopes)
-    for index, scopes in enumerate(proposed_scopes):
-        if any(
-            _scopes_obviously_overlap(scopes, other)
-            for other in proposed_scopes[index + 1 :]
-        ):
-            return False
+        except PatchValidationError as exc:
+            return f"structure checkpoint proposed node {key!r}: {exc}"
+        proposed_scopes.append((key, scopes))
+    for index, (key, scopes) in enumerate(proposed_scopes):
+        for other_key, other_scopes in proposed_scopes[index + 1 :]:
+            overlap = _obvious_scope_overlap(scopes, other_scopes)
+            if overlap is not None:
+                return (
+                    "structure checkpoint declared write scope overlap: "
+                    f"node {key!r} scope {overlap[0]!r} vs "
+                    f"node {other_key!r} scope {overlap[1]!r}"
+                )
     owner = str(checkpoint.get("integration_owner_node_key") or "").strip()
     if node_key is not None and owner != node_key:
-        return False
+        return (
+            "structure checkpoint integration_owner_node_key must match "
+            f"{node_key!r}"
+        )
     if recommendation == "expand" and not owner:
-        return False
+        return "expand structure checkpoint requires integration_owner_node_key"
     shared_scope = checkpoint.get("shared_integration_scope") or []
     if not isinstance(shared_scope, list) or any(
         not isinstance(value, str) or not value.strip() for value in shared_scope
     ):
-        return False
+        return "structure checkpoint shared_integration_scope must be a string list"
     try:
         _validate_declared_write_scopes(
             shared_scope,
             field_name="structure checkpoint shared_integration_scope",
         )
-    except PatchValidationError:
-        return False
+    except PatchValidationError as exc:
+        return str(exc)
     risks = checkpoint.get("risks") or []
-    return bool(
-        isinstance(risks, list)
-        and not any(not isinstance(value, str) or not value.strip() for value in risks)
-        and checkpoint.get("worker_session_should_resume") is True
+    if not isinstance(risks, list) or any(
+        not isinstance(value, str) or not value.strip() for value in risks
+    ):
+        return "structure checkpoint risks must be a string list"
+    if checkpoint.get("worker_session_should_resume") is not True:
+        return "structure checkpoint must resume the original worker session"
+    return None
+
+
+def _structure_checkpoint_valid(
+    checkpoint: Any,
+    *,
+    node_key: Optional[str] = None,
+) -> bool:
+    return _structure_checkpoint_validation_error(
+        checkpoint,
+        node_key=node_key,
+    ) is None
+
+
+def _runtime_structure_checkpoint_validation_error(
+    evidence: Any,
+    node: dict[str, Any],
+) -> Optional[str]:
+    if not isinstance(evidence, dict):
+        return "Codex evidence must be an object"
+    checkpoint = evidence.get("runtime_receipt")
+    error = _structure_checkpoint_validation_error(
+        checkpoint,
+        node_key=str(node["node_key"]),
     )
+    if error is not None:
+        return error
+    changed_files = checkpoint.get("changed_files", [])
+    if not isinstance(changed_files, list) or any(
+        not isinstance(value, str) or not value.strip() for value in changed_files
+    ):
+        return "structure checkpoint changed_files must be a string list"
+    if changed_files:
+        return "early structure assessment must not modify workspace files"
+    return None
 
 
 def _runtime_structure_checkpoint_from_evidence(
@@ -3565,7 +3652,7 @@ def _runtime_structure_checkpoint_from_evidence(
     if not isinstance(evidence, dict):
         return None
     checkpoint = evidence.get("runtime_receipt")
-    if not _structure_checkpoint_valid(checkpoint, node_key=str(node["node_key"])):
+    if _runtime_structure_checkpoint_validation_error(evidence, node) is not None:
         return None
     result = dict(checkpoint)
     changed_files = result.get("changed_files", [])
@@ -3969,6 +4056,27 @@ def _receipt_evidence_valid(
     )
 
 
+def _receipt_evidence_validation_error(
+    evidence: Any,
+    *,
+    node: dict[str, Any],
+    conn: sqlite3.Connection,
+) -> Optional[str]:
+    if _receipt_evidence_valid(evidence, node=node, conn=conn):
+        return None
+    if not evidence:
+        return "runtime receipt evidence is missing"
+    if _is_codex_lane_evidence(evidence):
+        receipt = evidence.get("runtime_receipt")
+        if isinstance(receipt, dict) and (
+            receipt.get("schema") == STRUCTURE_CHECKPOINT_SCHEMA
+            or receipt.get("kind") == "early_structure_assessment"
+        ):
+            return _runtime_structure_checkpoint_validation_error(evidence, node)
+        return "runtime_worker_receipt_v1 failed canonical receipt validation"
+    return "runtime receipt evidence does not contain a recognized completion field"
+
+
 def _schedule_recovery_retry_or_fail(
     conn: sqlite3.Connection,
     node: dict[str, Any],
@@ -4300,13 +4408,22 @@ def reconcile_runtime_materializations(
             conn=conn,
         ):
             failure_type = "receipt_missing" if not snapshot.evidence else "receipt_invalid"
+            validation_error = _receipt_evidence_validation_error(
+                snapshot.evidence,
+                node=node,
+                conn=conn,
+            )
             _update_materialization_recovery_status(
                 conn,
                 materialization,
                 _recovery_status_for_failure(failure_type),
                 now=current,
                 recovery_reason=failure_type,
-                payload={"task_id": task_id, "run_id": snapshot_run_id},
+                payload={
+                    "task_id": task_id,
+                    "run_id": snapshot_run_id,
+                    "validation_error": validation_error,
+                },
             )
             if materialization:
                 summary["materializations_updated"].append(materialization["id"])
@@ -4325,6 +4442,7 @@ def reconcile_runtime_materializations(
                     "retryable": True,
                     "policy_decision": "evaluate_retry",
                     "task_status": snapshot.task.status,
+                    "validation_error": validation_error,
                 },
                 node_id=node["id"],
                 task_id=str(task_id),

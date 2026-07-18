@@ -21,6 +21,11 @@ Phase 4G10.1 不重复比较模型能力，也不追求再次达到 `63/68`。�
 共享 CLI/Repo 入口、版本元数据和最终集成由 primary 持有，不能被误算为 child write-scope overlap。
 若当前证据真正否定所有安全拆分，运行应明确失败，不得静默退化为单 worker 后仍声称 Clean Replay。
 
+Declared scope overlap 只在 Runtime 能确定两个 scope 相交时成立，包括相同 scope、全 workspace、exact
+path 命中 glob，以及 `src/**` 这类递归目录覆盖。带文件名约束的 glob 不能仅因静态目录前缀相同就被
+当作整个目录，例如 `tests/**/test_plot*.py` 与 `tests/func/test_stage.py` 不重叠。若 checkpoint 因
+scope 被拒绝，`receipt_invalid` 必须记录具体 node key 和冲突 scope，不能只记录通用 schema failure。
+
 ## 2. 目标
 
 Clean Replay 必须从以下状态启动：

@@ -3846,6 +3846,66 @@ def test_delegation_policy_rejects_overlapping_parallel_write_scopes(conn):
     assert "write scopes overlap" in result["reason"]
 
 
+def test_scope_overlap_does_not_treat_constrained_test_glob_as_all_tests():
+    assert not rk._scopes_obviously_overlap(
+        ["tests/**/test_plot*.py"],
+        ["tests/func/test_stage.py"],
+    )
+    assert rk._scopes_obviously_overlap(
+        ["tests/**/test_plot*.py"],
+        ["tests/func/test_plot.py"],
+    )
+    assert rk._scopes_obviously_overlap(["src/**"], ["src/auth/**"])
+
+
+def test_structure_checkpoint_overlap_error_names_nodes_and_scopes():
+    checkpoint = {
+        "schema": rk.STRUCTURE_CHECKPOINT_SCHEMA,
+        "kind": "early_structure_assessment",
+        "recommendation": "expand",
+        "summary": "Two responsibilities were inspected.",
+        "inspected_scope": ["src", "tests"],
+        "repository_facts": [],
+        "proposed_nodes": [
+            {
+                "node_key": "plots",
+                "outcome": "Implement plots.",
+                "acceptance_criteria": ["Plots pass."],
+                "declared_write_scope": ["tests/**/test_plot*.py"],
+                "requested_capabilities": [],
+            },
+            {
+                "node_key": "stage",
+                "outcome": "Implement stage behavior.",
+                "acceptance_criteria": ["Stage tests pass."],
+                "declared_write_scope": ["tests/func/test_plot.py"],
+                "requested_capabilities": [],
+            },
+        ],
+        "integration_owner_node_key": "primary",
+        "shared_integration_scope": [],
+        "risks": [],
+        "worker_session_should_resume": True,
+    }
+
+    assert rk._structure_checkpoint_validation_error(
+        checkpoint,
+        node_key="primary",
+    ) == (
+        "structure checkpoint declared write scope overlap: "
+        "node 'plots' scope 'tests/**/test_plot*.py' vs "
+        "node 'stage' scope 'tests/func/test_plot.py'"
+    )
+
+    checkpoint["proposed_nodes"][1]["declared_write_scope"] = [
+        "tests/func/test_stage.py"
+    ]
+    assert rk._structure_checkpoint_validation_error(
+        checkpoint,
+        node_key="primary",
+    ) is None
+
+
 def test_terminal_structure_request_is_evented_and_projected_to_decision_delta(conn):
     job_id = _job(conn)
     rk.advance_runtime_job(conn, job_id, create_tasks=True)
@@ -4062,6 +4122,19 @@ def test_early_structure_checkpoint_rejects_workspace_mutation(conn):
 
     assert not rk.ingest_runtime_node_evidence(conn, node["id"])
     assert _node(conn, job_id, "understand-scope")["state"] == "running"
+
+    reconciled = rk.reconcile_runtime_materializations(conn, job_id)
+    assert reconciled["events"] == ["receipt_invalid"]
+    event = conn.execute(
+        """
+        SELECT payload_json FROM execution_events
+         WHERE job_id = ? AND event_type = 'receipt_invalid'
+        """,
+        (job_id,),
+    ).fetchone()
+    assert json.loads(event["payload_json"])["validation_error"] == (
+        "early structure assessment must not modify workspace files"
+    )
 
 
 def test_early_structure_expansion_requires_checkpoint_backed_child_dependencies(conn):
