@@ -906,6 +906,115 @@ def test_evaluated_operator_stop_requires_the_latest_evaluated_candidate(tmp_pat
         )
 
 
+def test_evaluated_coverage_stop_requires_consumed_feedback_and_current_candidate(
+    tmp_path,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _run("git", "init", "--quiet", cwd=workspace)
+    _run("git", "config", "user.email", "phase4g8@example.invalid", cwd=workspace)
+    _run("git", "config", "user.name", "Phase4G8 Test", cwd=workspace)
+    (workspace / "result.txt").write_text("base\n", encoding="utf-8")
+    _run("git", "add", "result.txt", cwd=workspace)
+    _run("git", "commit", "--quiet", "-m", "base", cwd=workspace)
+    base_commit = _run("git", "rev-parse", "HEAD", cwd=workspace)
+    (workspace / "result.txt").write_text("candidate\n", encoding="utf-8")
+    patch = swe_evo.collect_candidate_patch(workspace, base_commit)
+    patch_sha256 = hashlib.sha256(patch.encode("utf-8")).hexdigest()
+    policy = p4g8_run._normalize_evaluated_stop_policy({
+        "schema": p4g8_run.EVALUATED_STOP_POLICY_SCHEMA,
+        "min_completed_evaluator_attempts": 3,
+        "min_consumed_evaluator_feedback": 2,
+        "reason": "clean replay coverage complete",
+    })
+    attempts = [
+        {
+            "run_id": index,
+            "node_id": f"verifier-{index}",
+            "feedback_consumed": index < 3,
+            "result": {
+                "resolved": False,
+                "candidate_patch_sha256": patch_sha256,
+                "feedback_coverage": {"status": "current_failure_complete"},
+                "fail_to_pass": {"passed": 10 + index, "failed": 58 - index, "total": 68},
+                "pass_to_pass": {"passed": 242, "failed": 0, "total": 242},
+            },
+            "provenance": {"target_revision": f"git:evaluated-{index}"},
+            "feedback_consumer_node_ids": ["primary-node"],
+        }
+        for index in range(1, 4)
+    ]
+
+    candidate = p4g8_run._evaluated_coverage_stop_candidate(
+        policy,
+        evaluator_attempts=attempts,
+        workspace=workspace,
+        base_commit=base_commit,
+        required_feedback_consumer_node_id="primary-node",
+    )
+
+    assert candidate["completed_evaluator_attempts"] == 3
+    assert candidate["consumed_evaluator_feedback"] == 2
+    assert candidate["candidate_patch_sha256"] == patch_sha256
+
+    attempts[1]["feedback_consumed"] = False
+    assert p4g8_run._evaluated_coverage_stop_candidate(
+        policy,
+        evaluator_attempts=attempts,
+        workspace=workspace,
+        base_commit=base_commit,
+        required_feedback_consumer_node_id="primary-node",
+    ) is None
+    attempts[1]["feedback_consumed"] = True
+    attempts[1]["feedback_consumer_node_ids"] = ["child-node"]
+    assert p4g8_run._evaluated_coverage_stop_candidate(
+        policy,
+        evaluator_attempts=attempts,
+        workspace=workspace,
+        base_commit=base_commit,
+        required_feedback_consumer_node_id="primary-node",
+    ) is None
+    attempts[1]["feedback_consumer_node_ids"] = ["primary-node"]
+    (workspace / "result.txt").write_text("unevaluated\n", encoding="utf-8")
+    assert p4g8_run._evaluated_coverage_stop_candidate(
+        policy,
+        evaluator_attempts=attempts,
+        workspace=workspace,
+        base_commit=base_commit,
+        required_feedback_consumer_node_id="primary-node",
+    ) is None
+
+
+def test_workspace_ownership_canary_detects_and_accepts_bounded_owner_change(
+    tmp_path,
+):
+    paths = {
+        "root": tmp_path,
+        "reports": tmp_path / "reports",
+    }
+    paths["reports"].mkdir()
+    state = p4g8_run._prepare_workspace_ownership_canary(
+        paths,
+        worker_uid=os.getuid(),
+        worker_gid=os.getgid(),
+    )
+    worktree_root = Path(state["worktree_root"])
+    for name in ("child-a", "child-b"):
+        child = worktree_root / name
+        child.mkdir()
+        (child / ".git").write_text("gitdir: fixture\n", encoding="utf-8")
+
+    audit = p4g8_run._audit_workspace_ownership_canary(
+        paths,
+        state,
+        worker_uid=os.getuid(),
+        worker_gid=os.getgid(),
+    )
+
+    assert audit["passed"] is True
+    assert audit["child_worktrees"] == ["child-a", "child-b"]
+
+
 def test_progress_ledger_evidence_is_idempotent_across_receipt_recovery(kanban_home):
     with kb.connect() as conn:
         rk.ensure_runtime_schema(conn)

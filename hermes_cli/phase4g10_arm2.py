@@ -342,10 +342,16 @@ def build_arm2_orchestration_report(
             "SELECT created_at, updated_at FROM runtime_jobs WHERE id = ?",
             (job_id,),
         ).fetchone()
-        stop = ((runtime_report.get("metrics") or {}).get("operator_stop") or {})
+        runtime_metrics = runtime_report.get("metrics") or {}
+        stop = (
+            runtime_metrics.get("evaluated_validation_stop")
+            or runtime_metrics.get("operator_stop")
+            or {}
+        )
         stop_event = conn.execute(
             "SELECT MIN(created_at) FROM execution_events WHERE job_id = ? "
-            "AND event_type = 'operator_stopped_after_evaluated_plateau'",
+            "AND event_type IN ('operator_stopped_after_evaluated_plateau', "
+            "'validation_stopped_after_evaluated_coverage')",
             (job_id,),
         ).fetchone()[0]
         finished_at = int(stop_event or stop.get("requested_at") or job["updated_at"])

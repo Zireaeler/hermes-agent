@@ -51,6 +51,8 @@ PHASE4G8_COMPACTION_POLICY = {
     "max_segment_entries": 200,
     "max_active_segment_tokens": None,
 }
+EVALUATED_STOP_POLICY_SCHEMA = "hermes_evaluated_validation_stop_v1"
+OWNERSHIP_CANARY_SCHEMA = "hermes_runtime_ownership_canary_v1"
 
 
 def run_phase4g8_real_case(
@@ -76,6 +78,8 @@ def run_phase4g8_real_case(
     run_id_prefix: str = "phase4g8",
     reasoning_effort_override: Optional[str] = None,
     operator_stop: Optional[dict[str, Any]] = None,
+    evaluated_stop_policy: Optional[dict[str, Any]] = None,
+    workspace_ownership_canary: bool = False,
 ) -> dict[str, Any]:
     """Run one qualified SWE-EVO case through production runtime boundaries."""
 
@@ -94,6 +98,9 @@ def run_phase4g8_real_case(
         raise ValueError("max_evaluator_no_progress_streak must be positive")
     if (run_root is None) == (resume_run is None):
         raise ValueError("exactly one of run_root or resume_run is required")
+    effective_evaluated_stop_policy = _normalize_evaluated_stop_policy(
+        evaluated_stop_policy
+    )
     if os.name == "nt" or "fork" not in multiprocessing.get_all_start_methods():
         raise RuntimeError("Phase 4G8 real cases require POSIX fork semantics")
     spec = p4g8.load_qualification_spec(qualification_spec_path.resolve())
@@ -123,6 +130,13 @@ def run_phase4g8_real_case(
         if resumed_run
         else _prepare_real_layout(root, spec, worker_uid=worker_uid, worker_gid=worker_gid)
     )
+    ownership_canary = (
+        _prepare_workspace_ownership_canary(paths, worker_uid=worker_uid, worker_gid=worker_gid)
+        if workspace_ownership_canary and not resumed_run
+        else _load_workspace_ownership_canary(paths)
+        if workspace_ownership_canary
+        else None
+    )
     if orchestration_policy:
         contribution_root = paths["root"] / "runtime-contributions"
         contribution_root.mkdir(parents=True, exist_ok=True)
@@ -139,6 +153,8 @@ def run_phase4g8_real_case(
         "worker_evaluator_environment_parity_preflight": False,
         "worker_auto_review_preflight": False,
     }
+    if workspace_ownership_canary:
+        boundaries["workspace_ownership_canary"] = False
     if selected_fault_profile in {"medium", "large"}:
         boundaries.update({
             "worker_process_interrupted": False,
@@ -168,6 +184,8 @@ def run_phase4g8_real_case(
     evaluator_budget_exhausted = False
     resource_exhausted = False
     operator_stop_applied: Optional[dict[str, Any]] = None
+    evaluated_stop_applied: Optional[dict[str, Any]] = None
+    ownership_canary_audit: dict[str, Any] = {}
     evaluator_progress_status: dict[str, Any] = {}
     evaluator_attempts: list[dict[str, Any]] = []
     evaluator_budget_session_sync: dict[str, Any] = {}
@@ -380,11 +398,42 @@ def run_phase4g8_real_case(
             with kb.connect() as conn:
                 evaluator_attempts = _official_evaluator_attempts(conn, job_id)
                 evaluator_progress_status = _evaluator_progress_status(evaluator_attempts)
+                primary_worker = _implementation_worker(conn, job_id)
             if evaluator_progress_status["latest_feedback_extraction_incomplete"]:
                 raise RuntimeError(
                     "official evaluator feedback extraction incomplete; protected raw "
                     "artifacts retained for infrastructure diagnosis"
                 )
+            evaluated_stop_candidate = _evaluated_coverage_stop_candidate(
+                effective_evaluated_stop_policy,
+                evaluator_attempts=evaluator_attempts,
+                workspace=paths["workspace"],
+                base_commit=str(spec["base_commit"]),
+                required_feedback_consumer_node_id=str(
+                    (primary_worker or {}).get("node_id") or ""
+                ),
+            )
+            if evaluated_stop_candidate is not None:
+                evaluated_stop_applied = evaluated_stop_candidate
+                if daemon_process is not None:
+                    _stop_daemon(daemon_process, hard=False)
+                    daemon_process = None
+                _terminate_owned_job_workers(job_id, run_id=run_id)
+                with kb.connect() as conn:
+                    evaluator_budget_session_sync = rk.sync_runtime_backend_sessions(
+                        conn,
+                        job_id,
+                    )
+                    rk._event_once(
+                        conn,
+                        job_id,
+                        "validation_stopped_after_evaluated_coverage",
+                        "evaluated-coverage-stop:"
+                        + str(evaluated_stop_applied["requested_at"]),
+                        evaluated_stop_applied,
+                        source="phase4g8_runner",
+                    )
+                break
             with kb.connect() as conn:
                 dispatchable = _dispatchable_task_ids(conn, job_id, exclude_task_id=excluded_crashed_task_id)
                 kb.dispatch_once(
@@ -552,6 +601,16 @@ def run_phase4g8_real_case(
             paths["workspace"],
             base_commit=str(spec["base_commit"]),
         )
+        if ownership_canary is not None:
+            ownership_canary_audit = _audit_workspace_ownership_canary(
+                paths,
+                ownership_canary,
+                worker_uid=worker_uid,
+                worker_gid=worker_gid,
+            )
+            boundaries["workspace_ownership_canary"] = bool(
+                ownership_canary_audit.get("passed")
+            )
         with kb.connect() as conn:
             if receipt_before_ingest_node_id and receipt_before_ingest_materialization_id:
                 after = p4g8.runtime_fact_counts(
@@ -601,6 +660,8 @@ def run_phase4g8_real_case(
                     "evaluator_budget_exhausted": evaluator_budget_exhausted,
                     "resource_exhausted": resource_exhausted,
                     "operator_stop": operator_stop_applied,
+                    "evaluated_validation_stop": evaluated_stop_applied,
+                    "workspace_ownership_canary": ownership_canary_audit,
                     "evaluator_budget_session_sync": evaluator_budget_session_sync,
                     "evaluator_container_cleanup": evaluator_container_cleanup,
                     "resumed_run": resumed_run,
@@ -636,7 +697,9 @@ def run_phase4g8_real_case(
             "run_report": report,
             "termination": {
                 "reason": (
-                    "operator_requested_stop_after_evaluated_plateau"
+                    "evaluated_validation_coverage_satisfied"
+                    if evaluated_stop_applied is not None
+                    else "operator_requested_stop_after_evaluated_plateau"
                     if operator_stop_applied is not None
                     else
                     "total_resource_budget_exhausted"
@@ -646,6 +709,7 @@ def run_phase4g8_real_case(
                 "evaluator_budget_exhausted": evaluator_budget_exhausted,
                 "resource_exhausted": resource_exhausted,
                 "operator_stop": operator_stop_applied,
+                "evaluated_validation_stop": evaluated_stop_applied,
             },
             "paths": {
                 "root": str(root),
@@ -926,6 +990,107 @@ def _assert_worker_filesystem_isolation(
     if fingerprint["sha256"] != expected["sha256"]:
         raise RuntimeError("Phase 4G8 isolated worker environment fingerprint mismatch")
     return fingerprint
+
+
+def _prepare_workspace_ownership_canary(
+    paths: dict[str, Path],
+    *,
+    worker_uid: int,
+    worker_gid: int,
+) -> dict[str, Any]:
+    worktree_root = paths["root"] / "runtime-worktrees"
+    sibling = worktree_root / "ownership-canary"
+    target = paths["reports"] / "ownership-canary-target.txt"
+    sentinel = sibling / "sentinel.txt"
+    link = sibling / "target-link"
+    worktree_root.mkdir(parents=True, exist_ok=True)
+    sibling.mkdir()
+    target.write_text("outside worktree root\n", encoding="utf-8")
+    sentinel.write_text("sibling worktree ownership\n", encoding="utf-8")
+    link.symlink_to(target)
+    state = {
+        "schema": OWNERSHIP_CANARY_SCHEMA,
+        "worktree_root": str(worktree_root),
+        "sibling": str(sibling),
+        "sentinel": str(sentinel),
+        "target": str(target),
+        "link": str(link),
+        "expected_worker_owner": {"uid": int(worker_uid), "gid": int(worker_gid)},
+        "initial_sentinel_owner": {
+            "uid": sentinel.stat().st_uid,
+            "gid": sentinel.stat().st_gid,
+        },
+        "initial_target_owner": {
+            "uid": target.stat().st_uid,
+            "gid": target.stat().st_gid,
+        },
+        "sentinel_sha256": hashlib.sha256(sentinel.read_bytes()).hexdigest(),
+        "target_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+    }
+    _write_json(paths["reports"] / "ownership-canary.json", state)
+    return state
+
+
+def _load_workspace_ownership_canary(paths: dict[str, Path]) -> dict[str, Any]:
+    path = paths["reports"] / "ownership-canary.json"
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("resume run is missing a valid ownership canary") from exc
+    if not isinstance(state, dict) or state.get("schema") != OWNERSHIP_CANARY_SCHEMA:
+        raise ValueError("resume run ownership canary schema is invalid")
+    return state
+
+
+def _audit_workspace_ownership_canary(
+    paths: dict[str, Path],
+    state: dict[str, Any],
+    *,
+    worker_uid: int,
+    worker_gid: int,
+) -> dict[str, Any]:
+    worktree_root = Path(str(state["worktree_root"]))
+    sibling = Path(str(state["sibling"]))
+    sentinel = Path(str(state["sentinel"]))
+    target = Path(str(state["target"]))
+    link = Path(str(state["link"]))
+    child_worktrees = sorted(
+        path.name
+        for path in worktree_root.iterdir()
+        if path.is_dir() and path != sibling and (path / ".git").is_file()
+    )
+    checks = {
+        "worktree_root_owner_applied": (
+            worktree_root.stat().st_uid,
+            worktree_root.stat().st_gid,
+        ) == (int(worker_uid), int(worker_gid)),
+        "sibling_owner_preserved": {
+            "uid": sentinel.stat().st_uid,
+            "gid": sentinel.stat().st_gid,
+        } == state["initial_sentinel_owner"],
+        "sibling_content_preserved": hashlib.sha256(
+            sentinel.read_bytes()
+        ).hexdigest() == state["sentinel_sha256"],
+        "symlink_target_owner_preserved": {
+            "uid": target.stat().st_uid,
+            "gid": target.stat().st_gid,
+        } == state["initial_target_owner"],
+        "symlink_target_content_preserved": hashlib.sha256(
+            target.read_bytes()
+        ).hexdigest() == state["target_sha256"],
+        "symlink_still_external": link.is_symlink()
+        and link.resolve() == target.resolve(),
+        "two_child_worktrees_created": len(child_worktrees) >= 2,
+    }
+    audit = {
+        **state,
+        "checks": checks,
+        "child_worktrees": child_worktrees,
+        "passed": all(checks.values()),
+        "audited_at": int(time.time()),
+    }
+    _write_json(paths["reports"] / "ownership-canary.json", audit)
+    return audit
 
 
 def _prepare_real_layout(
@@ -3173,7 +3338,7 @@ def _append_and_compact_real_checkpoint(
 def _implementation_worker(conn: sqlite3.Connection, job_id: str) -> Optional[dict[str, Any]]:
     row = conn.execute(
         """
-        SELECT n.node_key, n.state, n.latest_task_id, t.worker_pid
+        SELECT n.id AS node_id, n.node_key, n.state, n.latest_task_id, t.worker_pid
           FROM execution_nodes n LEFT JOIN tasks t ON t.id = n.latest_task_id
          WHERE n.job_id = ? AND n.node_type != 'verification' AND n.latest_task_id IS NOT NULL
          ORDER BY n.created_at LIMIT 1
@@ -3243,15 +3408,17 @@ def _official_evaluator_attempts(conn: sqlite3.Connection, job_id: str) -> list[
         """,
         (job_id,),
     ).fetchall()
-    consumed_verifier_ids: set[str] = set()
+    consumers_by_verifier_id: dict[str, set[str]] = {}
     for event in conn.execute(
         "SELECT payload_json FROM execution_events WHERE job_id = ? "
         "AND event_type = 'evaluator_failure_feedback_consumed'",
         (job_id,),
     ).fetchall():
         payload = rk._loads(event["payload_json"])
-        if payload.get("source_verifier_node_id"):
-            consumed_verifier_ids.add(str(payload["source_verifier_node_id"]))
+        verifier_id = str(payload.get("source_verifier_node_id") or "")
+        consumer_id = str(payload.get("consumer_node_id") or "")
+        if verifier_id:
+            consumers_by_verifier_id.setdefault(verifier_id, set()).add(consumer_id)
     attempts: list[dict[str, Any]] = []
     for row in rows:
         try:
@@ -3264,13 +3431,17 @@ def _official_evaluator_attempts(conn: sqlite3.Connection, job_id: str) -> list[
         if not isinstance(result, dict) or result.get("schema") != p4g8.EVALUATOR_RESULT_SCHEMA:
             continue
         provenance = receipt.get("verification_provenance")
+        consumer_node_ids = sorted(
+            consumers_by_verifier_id.get(str(row["node_id"]), set()) - {""}
+        )
         attempts.append({
             "run_id": int(row["run_id"]),
             "task_id": str(row["task_id"]),
             "node_id": str(row["node_id"]),
             "result": result,
             "provenance": provenance if isinstance(provenance, dict) else {},
-            "feedback_consumed": str(row["node_id"]) in consumed_verifier_ids,
+            "feedback_consumed": bool(consumer_node_ids),
+            "feedback_consumer_node_ids": consumer_node_ids,
         })
     return attempts
 
@@ -3320,6 +3491,95 @@ def _validate_evaluated_operator_stop(
         "target_revision": str((latest.get("provenance") or {}).get("target_revision") or ""),
         "fail_to_pass": dict(result.get("fail_to_pass") or {}),
         "pass_to_pass": dict(result.get("pass_to_pass") or {}),
+    }
+
+
+def _normalize_evaluated_stop_policy(
+    policy: Optional[dict[str, Any]],
+) -> Optional[dict[str, Any]]:
+    if policy is None:
+        return None
+    if (
+        not isinstance(policy, dict)
+        or policy.get("schema") != EVALUATED_STOP_POLICY_SCHEMA
+    ):
+        raise ValueError("evaluated stop policy has an invalid schema")
+    try:
+        min_attempts = int(policy["min_completed_evaluator_attempts"])
+        min_consumed = int(policy["min_consumed_evaluator_feedback"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("evaluated stop policy thresholds are invalid") from exc
+    if min_attempts < 1 or min_consumed < 0 or min_attempts <= min_consumed:
+        raise ValueError(
+            "evaluated stop policy requires more attempts than consumed feedback"
+        )
+    reason = p4g8.redact_sensitive_text(str(policy.get("reason") or "")).strip()
+    if not reason:
+        raise ValueError("evaluated stop policy reason is required")
+    return {
+        "schema": EVALUATED_STOP_POLICY_SCHEMA,
+        "min_completed_evaluator_attempts": min_attempts,
+        "min_consumed_evaluator_feedback": min_consumed,
+        "reason": reason[:2000],
+    }
+
+
+def _evaluated_coverage_stop_candidate(
+    policy: Optional[dict[str, Any]],
+    *,
+    evaluator_attempts: list[dict[str, Any]],
+    workspace: Path,
+    base_commit: str,
+    required_feedback_consumer_node_id: str,
+) -> Optional[dict[str, Any]]:
+    if policy is None or any(
+        attempt.get("result", {}).get("resolved") is True
+        for attempt in evaluator_attempts
+    ):
+        return None
+    completed = len(evaluator_attempts)
+    consumed = [
+        attempt
+        for attempt in evaluator_attempts
+        if attempt.get("feedback_consumed")
+        and attempt.get("feedback_consumer_node_ids")
+        == [required_feedback_consumer_node_id]
+    ]
+    if (
+        completed < int(policy["min_completed_evaluator_attempts"])
+        or len(consumed) < int(policy["min_consumed_evaluator_feedback"])
+    ):
+        return None
+    request = {
+        "schema": "hermes_evaluated_operator_stop_v1",
+        "reason": str(policy["reason"]),
+        "requested_at": int(time.time()),
+    }
+    try:
+        validated = _validate_evaluated_operator_stop(
+            request,
+            evaluator_attempts=evaluator_attempts,
+            workspace=workspace,
+            base_commit=base_commit,
+        )
+    except ValueError as exc:
+        if "workspace changed after the latest evaluator" in str(exc):
+            return None
+        raise
+    return {
+        "schema": EVALUATED_STOP_POLICY_SCHEMA,
+        "reason": validated["reason"],
+        "requested_at": validated["requested_at"],
+        "completed_evaluator_attempts": completed,
+        "consumed_evaluator_feedback": len(consumed),
+        "consumed_evaluator_run_ids": [int(item["run_id"]) for item in consumed],
+        "feedback_consumer_node_id": required_feedback_consumer_node_id,
+        "latest_evaluator_run_id": validated["latest_evaluator_run_id"],
+        "latest_evaluator_node_id": validated["latest_evaluator_node_id"],
+        "candidate_patch_sha256": validated["candidate_patch_sha256"],
+        "target_revision": validated["target_revision"],
+        "fail_to_pass": validated["fail_to_pass"],
+        "pass_to_pass": validated["pass_to_pass"],
     }
 
 
