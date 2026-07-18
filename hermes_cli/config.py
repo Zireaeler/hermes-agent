@@ -1578,6 +1578,17 @@ DEFAULT_CONFIG = {
         # assignee strings in this order: configured/plugin worker lane, Hermes
         # profile, skipped_nonspawnable. Codex CLI is the first built-in adapter.
         "worker_lanes": {},
+        # Runtime Kernel durable orchestration is opt-in. The default preserves
+        # one coherent primary worker. Early structure assessment requires a
+        # writable trusted external lane with max_concurrency >= 2 and a clean
+        # Git repository workspace.
+        "runtime_orchestration": {
+            "mode": "coherent_single_primary",
+            "worker_lane": "",
+            "max_child_nodes": 3,
+            "artifact_root": "",
+            "retention": "retain",
+        },
         # Independent review/test follow-ups stay evidence-bounded and run as
         # external worker tasks. For larger implementation diffs, Hermes can
         # add extra review shard follow-up tasks that each ask a review worker

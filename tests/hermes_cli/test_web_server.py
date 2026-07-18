@@ -213,7 +213,15 @@ class TestWebServerEndpoints:
         assert snapshot.status_code == 200
         payload = snapshot.json()
         assert payload["job"]["id"] == job_id
-        assert {"goals", "graph", "decision_session", "liveness", "capabilities", "memory"}.issubset(payload)
+        assert {
+            "goals",
+            "graph",
+            "decision_session",
+            "liveness",
+            "capabilities",
+            "memory",
+            "orchestration",
+        }.issubset(payload)
 
         goals = self.client.get(f"/api/runtime/jobs/{job_id}/goals")
         assert goals.status_code == 200
@@ -229,6 +237,15 @@ class TestWebServerEndpoints:
         assert memory.status_code == 200
         assert memory.json()["section"] == "memory"
         assert {"guidance_loaded", "selected_hints", "recent_usage"}.issubset(memory.json()["data"])
+
+        orchestration = self.client.get(
+            f"/api/runtime/jobs/{job_id}/orchestration"
+        )
+        assert orchestration.status_code == 200
+        assert orchestration.json()["section"] == "orchestration"
+        assert orchestration.json()["data"]["mode"] == (
+            "coherent_single_primary"
+        )
 
     def test_get_config_schema(self):
         resp = self.client.get("/api/config/schema")

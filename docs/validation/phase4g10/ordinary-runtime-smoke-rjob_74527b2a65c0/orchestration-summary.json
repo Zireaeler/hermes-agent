@@ -1,0 +1,80 @@
+{
+  "schema": "runtime_orchestration_smoke_summary_v1",
+  "job_id": "rjob_74527b2a65c0",
+  "job_state": "done",
+  "goal_item": {
+    "item_key": "release-report",
+    "state": "satisfied",
+    "verifier_required": false
+  },
+  "policy": {
+    "schema": "runtime_orchestration_policy_v1",
+    "mode": "early_structure_assessment",
+    "max_child_nodes": 2,
+    "worker_lane": "codex-runtime",
+    "base_revision": "d9b4bcf37c70baf3b8e7ab7eccf535703df00284"
+  },
+  "execution": {
+    "decision_count": 2,
+    "accepted_patch_count": 2,
+    "rejected_patch_count": 0,
+    "execution_node_count": 3,
+    "materialization_count": 4,
+    "child_count": 2,
+    "contribution_count": 2,
+    "contribution_bytes": 7211,
+    "primary_resume_count": 1,
+    "verification_node_count": 0
+  },
+  "children": [
+    {
+      "node_key": "release-report-metrics",
+      "state": "succeeded",
+      "artifact_id": "art_7d1353de8f55",
+      "patch_sha256": "aae971d43f92ee05596b885b7ba5748ee91843ccf34fe8345d32acc92b182354",
+      "patch_bytes": 5490,
+      "scope_status": "verified"
+    },
+    {
+      "node_key": "release-report-render",
+      "state": "succeeded",
+      "artifact_id": "art_dbbf0c385c74",
+      "patch_sha256": "84ad27975fa077df399faf8e8c7bfb84160b5e71a9560f5818378a850e7ecfe7",
+      "patch_bytes": 1721,
+      "scope_status": "verified"
+    }
+  ],
+  "integration": {
+    "node_key": "release-report-primary",
+    "backend_session_key": "019f771d-d84e-7bf0-aa4d-d2b5becbffed",
+    "resume_count": 1,
+    "accepted_contributions": [
+      "art_7d1353de8f55",
+      "art_dbbf0c385c74"
+    ],
+    "modified_contributions": [],
+    "rejected_contributions": [],
+    "candidate_patch_sha256": "d96f0359b6f456fee8b44cbb08a4785570b08aa0ad4c9083b05425b373d4d829"
+  },
+  "verification": {
+    "command": "PYTHONPATH=src python3 -m unittest discover -s tests -v",
+    "passed": 8,
+    "failed": 0,
+    "git_diff_check": "passed",
+    "runtime_consistency": "passed",
+    "consistency_violations": 0,
+    "consistency_warnings": 0
+  },
+  "transport": {
+    "websocket_enabled": true,
+    "metrics_reconnect_events": 9,
+    "render_reconnect_events": 9,
+    "runtime_retry_created": false
+  },
+  "cleanup": {
+    "status": "cleaned",
+    "reason": "operator_request",
+    "removed_worktree_count": 2,
+    "contributions_retained": 2
+  }
+}

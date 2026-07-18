@@ -85,7 +85,11 @@ def run_real_worker_lane_smoke(
                 materialized.append(node["node_key"])
         if materialized:
             task_ids = _active_task_ids(conn, job_id, materialized)
-            dispatch = kb.dispatch_once(conn, max_spawn=1, only_task_ids=task_ids)
+            dispatch = kb.dispatch_once(
+                conn,
+                max_spawn=max(1, len(task_ids)),
+                only_task_ids=task_ids,
+            )
             dispatches.append(
                 {
                     "step": index + 1,

@@ -28,6 +28,17 @@ integration -> 3 evaluator rounds / 2 same-session remediations`。历史 repair
 
 以下 Phase 4G10 Arm 2 是 Clean Replay 之前的历史对照运行。
 
+## 普通 Runtime Job Smoke
+
+Run：`rjob_74527b2a65c0`
+
+Phase 4G10 的能力已通过普通 `runtime create` 和 production worker lane 路径完成一次非 benchmark smoke：
+primary 只读评估后创建两个隔离 child，冻结两份 contribution，再恢复原 primary session 完成集成。
+最终本地测试 `8/8`，goal satisfied，consistency 无异常，且 evaluator node 数量为 `0`。
+
+- [普通 Runtime Smoke 中文总结](ordinary-runtime-smoke-rjob_74527b2a65c0/execution-summary.md)
+- [普通 Runtime Smoke 结构化摘要](ordinary-runtime-smoke-rjob_74527b2a65c0/orchestration-summary.json)
+
 ## 正式结论
 
 Run：`phase4g10-arm2-large-059ea4b541`

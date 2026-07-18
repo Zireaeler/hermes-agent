@@ -104,6 +104,44 @@ def test_parse_runtime_goal_items_defaults_to_worker_owned_verification():
     }]
 
 
+def test_runtime_orchestration_request_uses_config_and_cli_overrides(monkeypatch):
+    from hermes_cli import config as hc
+
+    monkeypatch.setattr(
+        hc,
+        "load_config",
+        lambda: {
+            "kanban": {
+                "runtime_orchestration": {
+                    "mode": "early_structure_assessment",
+                    "worker_lane": "codex-runtime",
+                    "max_child_nodes": 3,
+                    "artifact_root": "/tmp/runtime-artifacts",
+                    "retention": "retain",
+                }
+            }
+        },
+    )
+    request, assignee = kc._runtime_orchestration_request(
+        argparse.Namespace(
+            assignee=None,
+            orchestration_mode=None,
+            orchestration_root=None,
+            orchestration_max_children=2,
+            orchestration_retention="cleanup_on_terminal",
+        )
+    )
+
+    assert assignee == "codex-runtime"
+    assert request == {
+        "mode": "early_structure_assessment",
+        "worker_lane": "codex-runtime",
+        "max_child_nodes": 2,
+        "artifact_root": "/tmp/runtime-artifacts",
+        "retention": "cleanup_on_terminal",
+    }
+
+
 # ---------------------------------------------------------------------------
 # run_slash smoke tests (end-to-end via the same entry both CLI and gateway use)
 # ---------------------------------------------------------------------------
@@ -217,10 +255,18 @@ def test_run_slash_runtime_create_status_and_list_json(kanban_home):
     status = json.loads(kc.run_slash(f"runtime status {created['id']} --json"))
     assert status["job"]["id"] == created["id"]
     assert status["job"]["metadata"]["initialization_mode"] == "provider_first"
+    assert status["orchestration"]["mode"] == "coherent_single_primary"
+    assert status["orchestration"]["enabled"] is False
     assert status["nodes"] == []
 
     jobs = json.loads(kc.run_slash("runtime list --json"))
     assert [job["id"] for job in jobs] == [created["id"]]
+
+    orchestration = json.loads(
+        kc.run_slash(f"runtime orchestration {created['id']} --json")
+    )
+    assert orchestration["mode"] == "coherent_single_primary"
+    assert orchestration["child_count"] == 0
 
 
 def test_run_slash_runtime_promote_existing_root_task(kanban_home):

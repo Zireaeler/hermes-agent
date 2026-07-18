@@ -25,6 +25,7 @@ _WORKER_LANES: dict[str, "WorkerLane"] = {}
 
 _ALLOWED_LANE_TYPES = {"codex_cli"}
 _ALLOWED_CODEX_MODELS = {
+    "gpt-5.6-sol",
     "gpt-5.5",
     "gpt-5.4",
     "gpt-5.4-mini",

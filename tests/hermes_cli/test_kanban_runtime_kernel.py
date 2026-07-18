@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -4083,6 +4084,49 @@ def test_early_structure_checkpoint_pauses_without_ledger_and_resumes_same_sessi
     assert continuity["resume_session_id"] == session_id
     assert continuity["resume_reason"] == "early_structure_integration"
 
+    conn.execute(
+        "UPDATE backend_worker_sessions SET completed_at = 1 WHERE id = ?",
+        (session["id"],),
+    )
+    kb.record_task_event(
+        conn,
+        resumed_task,
+        "worker_backend_session_resumed",
+        {
+            "worker_lane": "codex-runtime",
+            "worker_kind": "codex_cli",
+            "backend_session_id": session_id,
+            "execution_mode": "resume",
+        },
+    )
+    resumed_node = _node(conn, job_id, "understand-scope")
+    _complete_node(
+        conn,
+        resumed_node,
+        {
+            "verdict": "succeeded",
+            "summary": "The coherent responsibility completed after resume.",
+            "claimed_goal_items": ["runtime-result"],
+            "changed_files": [],
+            "verification": {"passed": True, "summary": "local checks passed"},
+        },
+    )
+    assert rk.ingest_runtime_node_evidence(conn, resumed_node["id"])
+    rk.sync_runtime_backend_sessions(conn, job_id)
+    completed_session = conn.execute(
+        "SELECT * FROM backend_worker_sessions WHERE id = ?",
+        (session["id"],),
+    ).fetchone()
+    completed_attempt = conn.execute(
+        "SELECT * FROM node_materializations WHERE id = ?",
+        (attempt["id"],),
+    ).fetchone()
+    assert completed_session["status"] == "completed"
+    assert completed_session["completed_at"] == completed_attempt["completed_at"]
+    orchestration = rk.summarize_runtime_orchestration(conn, job_id)
+    assert orchestration["worker_sessions"][0]["backend_session_key"] == session_id
+    assert orchestration["worker_sessions"][0]["resume_count"] == 1
+
 
 def test_early_structure_checkpoint_rejects_workspace_mutation(conn):
     job_id = rk.create_runtime_job(
@@ -4669,3 +4713,468 @@ def test_declared_write_scope_violation_prevents_goal_satisfaction(conn):
         "SELECT 1 FROM execution_events WHERE job_id = ? AND event_type = 'write_scope_violation'",
         (job_id,),
     ).fetchone() is not None
+
+
+def _runtime_orchestration_workspace(tmp_path: Path) -> Path:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "README.md").write_text("runtime smoke\n", encoding="utf-8")
+    _git(workspace, "init")
+    _git(workspace, "config", "user.email", "runtime@example.invalid")
+    _git(workspace, "config", "user.name", "Runtime Test")
+    _git(workspace, "add", ".")
+    _git(workspace, "commit", "-m", "base")
+    return workspace
+
+
+def _register_runtime_orchestration_lane(
+    *,
+    sandbox: str = "workspace-write",
+    max_concurrency: int = 3,
+) -> None:
+    register_worker_lane(
+        WorkerLane(
+            name="codex-runtime",
+            kind="codex_cli",
+            description="runtime orchestration test lane",
+            spawn_fn=lambda **_kwargs: None,
+            max_concurrency=max_concurrency,
+            source="test",
+            config={"sandbox": sandbox},
+        )
+    )
+
+
+def test_runtime_orchestration_defaults_to_coherent_single_primary(conn):
+    job_id = _job(conn, verifier_required=False)
+
+    summary = rk.status_runtime_job(conn, job_id)["orchestration"]
+
+    assert summary["schema"] == rk.RUNTIME_ORCHESTRATION_POLICY_SCHEMA
+    assert summary["mode"] == "coherent_single_primary"
+    assert summary["enabled"] is False
+    assert summary["child_count"] == 0
+    assert summary["contribution_count"] == 0
+
+
+def test_runtime_orchestration_resolves_trusted_early_policy(conn, tmp_path):
+    workspace = _runtime_orchestration_workspace(tmp_path)
+    artifact_root = tmp_path / "artifacts"
+    _register_runtime_orchestration_lane(max_concurrency=2)
+
+    job_id = rk.create_runtime_job(
+        conn,
+        _root_task(conn),
+        "split a real coherent deliverable when repository evidence supports it",
+        workspace_path=str(workspace),
+        initial_assignee="codex-runtime",
+        goal_items=[{
+            "item_key": "result",
+            "description": "integrated runtime result",
+            "required": True,
+            "verifier_required": False,
+        }],
+        initialization_mode="fixture",
+        orchestration_policy={
+            "mode": "early_structure_assessment",
+            "max_child_nodes": 3,
+            "artifact_root": str(artifact_root),
+            "retention": "cleanup_on_terminal",
+        },
+    )
+
+    summary = rk.status_runtime_job(conn, job_id)["orchestration"]
+    assert summary["enabled"] is True
+    assert summary["worker_lane"] == "codex-runtime"
+    assert summary["max_child_nodes"] == 2
+    assert summary["base_revision"] == _git(workspace, "rev-parse", "HEAD")
+    assert Path(summary["root"]).parent == artifact_root.resolve()
+    assert summary["retention"] == {
+        "worktrees": "cleanup_on_terminal",
+        "contributions": "retain",
+    }
+
+
+def test_runtime_orchestration_rejects_dirty_workspace(conn, tmp_path):
+    workspace = _runtime_orchestration_workspace(tmp_path)
+    (workspace / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+    _register_runtime_orchestration_lane()
+
+    with pytest.raises(ValueError, match="clean Git workspace"):
+        rk.create_runtime_job(
+            conn,
+            _root_task(conn),
+            "reject dirty workspace",
+            workspace_path=str(workspace),
+            initial_assignee="codex-runtime",
+            initialization_mode="fixture",
+            orchestration_policy={
+                "mode": "early_structure_assessment",
+                "artifact_root": str(tmp_path / "artifacts"),
+            },
+        )
+
+
+def test_runtime_orchestration_rejects_non_git_workspace(conn, tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _register_runtime_orchestration_lane()
+
+    with pytest.raises(ValueError, match="Git repository root"):
+        rk.create_runtime_job(
+            conn,
+            _root_task(conn),
+            "reject non-git workspace",
+            workspace_path=str(workspace),
+            initial_assignee="codex-runtime",
+            initialization_mode="fixture",
+            orchestration_policy={
+                "mode": "early_structure_assessment",
+                "artifact_root": str(tmp_path / "artifacts"),
+            },
+        )
+
+
+def test_runtime_orchestration_rejects_artifact_root_inside_workspace(
+    conn,
+    tmp_path,
+):
+    workspace = _runtime_orchestration_workspace(tmp_path)
+    _register_runtime_orchestration_lane()
+
+    with pytest.raises(ValueError, match="must be outside"):
+        rk.create_runtime_job(
+            conn,
+            _root_task(conn),
+            "reject unsafe artifact root",
+            workspace_path=str(workspace),
+            initial_assignee="codex-runtime",
+            initialization_mode="fixture",
+            orchestration_policy={
+                "mode": "early_structure_assessment",
+                "artifact_root": str(workspace / ".runtime-artifacts"),
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    "sandbox,max_concurrency,error",
+    [
+        ("read-only", 3, "must allow workspace writes"),
+        ("workspace-write", 1, "max_concurrency >= 2"),
+    ],
+)
+def test_runtime_orchestration_rejects_incapable_lane(
+    conn,
+    tmp_path,
+    sandbox,
+    max_concurrency,
+    error,
+):
+    workspace = _runtime_orchestration_workspace(tmp_path)
+    _register_runtime_orchestration_lane(
+        sandbox=sandbox,
+        max_concurrency=max_concurrency,
+    )
+
+    with pytest.raises(ValueError, match=error):
+        rk.create_runtime_job(
+            conn,
+            _root_task(conn),
+            "reject incapable lane",
+            workspace_path=str(workspace),
+            initial_assignee="codex-runtime",
+            initialization_mode="fixture",
+            orchestration_policy={
+                "mode": "early_structure_assessment",
+                "artifact_root": str(tmp_path / "artifacts"),
+            },
+        )
+
+
+def _runtime_orchestration_cleanup_job(conn, tmp_path):
+    workspace = _runtime_orchestration_workspace(tmp_path)
+    _register_runtime_orchestration_lane()
+    job_id = rk.create_runtime_job(
+        conn,
+        _root_task(conn),
+        "clean isolated worktrees only after frozen contributions are durable",
+        workspace_path=str(workspace),
+        initial_assignee="codex-runtime",
+        goal_items=[{
+            "item_key": "result",
+            "description": "integrated runtime result",
+            "required": True,
+            "verifier_required": False,
+        }],
+        initialization_mode="fixture",
+        orchestration_policy={
+            "mode": "early_structure_assessment",
+            "artifact_root": str(tmp_path / "artifacts"),
+            "retention": "cleanup_on_terminal",
+        },
+    )
+    policy = json.loads(
+        conn.execute(
+            "SELECT metadata_json FROM runtime_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()[0]
+    )["orchestration_policy"]
+    worktree = Path(policy["worktree_root"]) / "child-one"
+    worktree.parent.mkdir(parents=True)
+    _git(workspace, "worktree", "add", "--detach", str(worktree), policy["base_revision"])
+    contribution = Path(policy["contribution_root"]) / "child-one" / "attempt-1.patch"
+    contribution.parent.mkdir(parents=True)
+    contribution.write_text("diff --git a/README.md b/README.md\n", encoding="utf-8")
+    digest = hashlib.sha256(contribution.read_bytes()).hexdigest()
+    child_id = "rnode_cleanup_child"
+    now = 1
+    conn.execute(
+        """
+        INSERT INTO execution_nodes (
+            id, job_id, node_key, node_type, state, title, description,
+            assumptions_json, constraints_json, metadata_json,
+            created_at, updated_at, completed_at
+        ) VALUES (?, ?, 'child-one', 'implementation', 'succeeded',
+                  'Child one', 'Child one', '{}', '{}', ?, ?, ?, ?)
+        """,
+        (
+            child_id,
+            job_id,
+            json.dumps({
+                "non_authoritative_contribution": True,
+                "contribution_to_node_key": "understand-scope",
+                "runtime_workspace": {"path": str(worktree)},
+            }),
+            now,
+            now,
+            now,
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO node_artifacts (
+            id, job_id, node_id, artifact_type, path_or_ref, summary,
+            metadata_json, created_at
+        ) VALUES ('artifact-cleanup-child', ?, ?, 'runtime_node_contribution',
+                  ?, 'frozen contribution', ?, ?)
+        """,
+        (
+            job_id,
+            child_id,
+            str(contribution),
+            json.dumps({
+                "patch_sha256": digest,
+                "patch_bytes": contribution.stat().st_size,
+                "scope_status": "verified",
+                "integration_owner_node_key": "understand-scope",
+            }),
+            now,
+        ),
+    )
+    return job_id, worktree, contribution
+
+
+def test_runtime_orchestration_cleanup_refuses_active_job_and_hash_mismatch(
+    conn,
+    tmp_path,
+):
+    job_id, worktree, contribution = _runtime_orchestration_cleanup_job(conn, tmp_path)
+
+    active = rk.cleanup_runtime_orchestration_worktrees(conn, job_id)
+    assert active["status"] == "refused"
+    assert worktree.is_dir()
+
+    conn.execute("UPDATE runtime_jobs SET state = 'done' WHERE id = ?", (job_id,))
+    contribution.write_text("tampered\n", encoding="utf-8")
+    mismatched = rk.cleanup_runtime_orchestration_worktrees(conn, job_id)
+    assert mismatched["status"] == "refused"
+    assert "hash mismatch" in mismatched["reason"]
+    assert worktree.is_dir()
+
+
+def test_runtime_orchestration_terminal_cleanup_retains_contribution(conn, tmp_path):
+    job_id, worktree, contribution = _runtime_orchestration_cleanup_job(conn, tmp_path)
+    conn.execute("UPDATE runtime_jobs SET state = 'done' WHERE id = ?", (job_id,))
+
+    cleaned = rk.cleanup_runtime_orchestration_worktrees(conn, job_id)
+
+    assert cleaned["status"] == "cleaned"
+    assert not worktree.exists()
+    assert contribution.is_file()
+    summary = rk.summarize_runtime_orchestration(conn, job_id)
+    assert summary["latest_cleanup"]["event_type"] == (
+        "runtime_orchestration_worktrees_cleaned"
+    )
+
+
+def test_runtime_orchestration_advance_applies_terminal_retention(conn, tmp_path):
+    job_id, worktree, contribution = _runtime_orchestration_cleanup_job(conn, tmp_path)
+    rk.waive_goal_item(
+        conn,
+        job_id,
+        "result",
+        reason="test closes the goal after contribution archival",
+        source="test",
+    )
+
+    advanced = rk.advance_runtime_job(conn, job_id, create_tasks=False)
+
+    assert advanced.job_state == "done"
+    assert advanced.recovery["orchestration_cleanup"]["status"] == "cleaned"
+    assert not worktree.exists()
+    assert contribution.is_file()
+
+
+def _ordinary_early_expand_patch(
+    conn,
+    job_id: str,
+    primary,
+    checkpoint_event_id: int,
+    *,
+    child_count: int = 2,
+    assignee: str = "codex-runtime",
+    capabilities: list[str] | None = None,
+):
+    capabilities = capabilities or ["filesystem_read", "workspace_write"]
+    children = []
+    dependencies = []
+    scopes = {}
+    for index in range(child_count):
+        key = f"child-{index}"
+        scope = f"src/area-{index}/**"
+        children.append({
+            "op": "create_node",
+            "node_key": key,
+            "node_type": "implementation",
+            "title": f"Child {index}",
+            "description": f"Implement isolated area {index}.",
+            "assignee": assignee,
+            "goal_item_keys": ["initial-runtime-result"],
+            "requested_capabilities": capabilities,
+            "contract": {
+                **_contract(scope),
+                "workspace_mode": "isolated_worktree",
+            },
+        })
+        dependencies.append({
+            "op": "add_dependency",
+            "from_node_key": key,
+            "to_node_key": primary["node_key"],
+        })
+        scopes[key] = [scope]
+    patch = _patch(
+        job_id,
+        _revision(conn, job_id),
+        *children,
+        *dependencies,
+    )
+    patch["decomposition"] = {
+        "policy_version": "1",
+        "mode": "multiple_runtime_nodes",
+        "justifications": [{
+            "type": "durable_parallelism",
+            "nodes": [child["node_key"] for child in children],
+            "explanation": "Repository evidence shows isolated write scopes.",
+            "evidence_refs": [f"event:{checkpoint_event_id}"],
+            "declared_write_scopes": scopes,
+            "integration_owner_node_key": primary["node_key"],
+        }],
+    }
+    return patch
+
+
+def _ordinary_early_validator_job(conn):
+    job_id = _job(conn, verifier_required=False)
+    job = conn.execute(
+        "SELECT metadata_json FROM runtime_jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()
+    metadata = json.loads(job["metadata_json"])
+    metadata["orchestration_policy"] = {
+        "schema": rk.RUNTIME_ORCHESTRATION_POLICY_SCHEMA,
+        "mode": "early_structure_assessment",
+        "enabled": True,
+        "worker_lane": "codex-runtime",
+        "max_child_nodes": 2,
+        "required_child_capabilities": list(
+            rk.RUNTIME_ORCHESTRATION_CHILD_CAPABILITIES
+        ),
+    }
+    conn.execute(
+        "UPDATE runtime_jobs SET metadata_json = ? WHERE id = ?",
+        (json.dumps(metadata), job_id),
+    )
+    primary = _node(conn, job_id, "understand-scope")
+    conn.execute(
+        "UPDATE execution_nodes SET state = 'waiting_structure' WHERE id = ?",
+        (primary["id"],),
+    )
+    checkpoint_event_id = rk._event(
+        conn,
+        job_id,
+        "worker_structure_checkpointed",
+        {
+            "checkpoint": {
+                "schema": rk.STRUCTURE_CHECKPOINT_SCHEMA,
+                "kind": "early_structure_assessment",
+                "recommendation": "expand",
+                "summary": "Two isolated responsibilities were found.",
+            }
+        },
+        node_id=primary["id"],
+    )
+    return job_id, primary, checkpoint_event_id
+
+
+def test_ordinary_runtime_orchestration_enforces_child_budget(conn):
+    job_id, primary, event_id = _ordinary_early_validator_job(conn)
+    patch = _ordinary_early_expand_patch(
+        conn,
+        job_id,
+        primary,
+        event_id,
+        child_count=3,
+    )
+
+    result = rk.apply_graph_patch(conn, job_id, patch)
+
+    assert result["status"] == "rejected"
+    assert "between two and 2 child nodes" in result["reason"]
+
+
+@pytest.mark.parametrize(
+    "assignee,capabilities,error",
+    [
+        (
+            "other-lane",
+            ["filesystem_read", "workspace_write"],
+            "configured worker lane",
+        ),
+        (
+            "codex-runtime",
+            ["network_access"],
+            "capabilities exceed",
+        ),
+    ],
+)
+def test_ordinary_runtime_orchestration_enforces_lane_and_capabilities(
+    conn,
+    assignee,
+    capabilities,
+    error,
+):
+    job_id, primary, event_id = _ordinary_early_validator_job(conn)
+    patch = _ordinary_early_expand_patch(
+        conn,
+        job_id,
+        primary,
+        event_id,
+        assignee=assignee,
+        capabilities=capabilities,
+    )
+
+    result = rk.apply_graph_patch(conn, job_id, patch)
+
+    assert result["status"] == "rejected"
+    assert error in result["reason"]

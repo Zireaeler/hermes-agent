@@ -1481,6 +1481,20 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
                            help="Required goal item; repeatable. Defaults to Phase 1 fixture item.")
     rt_create.add_argument("--created-by", default="runtime", help="Creator recorded on the root Kanban task")
     rt_create.add_argument("--idempotency-key", default=None, help="Dedup key for the root Kanban task")
+    rt_create.add_argument(
+        "--orchestration-mode",
+        choices=["coherent_single_primary", "early_structure_assessment"],
+        default=None,
+        help="Runtime execution structure policy; defaults to kanban.runtime_orchestration.mode",
+    )
+    rt_create.add_argument("--orchestration-root", default=None,
+                           help="Artifact root outside the job workspace")
+    rt_create.add_argument("--orchestration-max-children", type=int, choices=[2, 3], default=None)
+    rt_create.add_argument(
+        "--orchestration-retention",
+        choices=["retain", "cleanup_on_terminal"],
+        default=None,
+    )
     rt_create.add_argument("--json", action="store_true")
 
     rt_promote = runtime_sub.add_parser("promote", help="Promote an existing Kanban root task into a runtime job")
@@ -1489,6 +1503,18 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     rt_promote.add_argument("--assignee", default=None, help="Assignee/worker lane for the initial runtime node")
     rt_promote.add_argument("--workspace-path", default=None, help="Override runtime workspace path")
     rt_promote.add_argument("--goal-item", action="append", default=[], metavar="KEY:DESCRIPTION")
+    rt_promote.add_argument(
+        "--orchestration-mode",
+        choices=["coherent_single_primary", "early_structure_assessment"],
+        default=None,
+    )
+    rt_promote.add_argument("--orchestration-root", default=None)
+    rt_promote.add_argument("--orchestration-max-children", type=int, choices=[2, 3], default=None)
+    rt_promote.add_argument(
+        "--orchestration-retention",
+        choices=["retain", "cleanup_on_terminal"],
+        default=None,
+    )
     rt_promote.add_argument("--json", action="store_true")
 
     rt_status = runtime_sub.add_parser("status", help="Show runtime job status")
@@ -1515,6 +1541,14 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     rt_memory = runtime_sub.add_parser("memory", help="Show runtime memory lifecycle summary")
     rt_memory.add_argument("job_id")
     rt_memory.add_argument("--json", action="store_true")
+
+    rt_orchestration = runtime_sub.add_parser(
+        "orchestration",
+        help="Show durable orchestration state or clean terminal child worktrees",
+    )
+    rt_orchestration.add_argument("job_id")
+    rt_orchestration.add_argument("--cleanup-worktrees", action="store_true")
+    rt_orchestration.add_argument("--json", action="store_true")
 
     rt_soak = runtime_sub.add_parser("soak", help="Run a deterministic runtime soak scenario")
     rt_soak.add_argument("--scenario", default="phase4g-baseline")
@@ -2250,6 +2284,50 @@ def _parse_runtime_goal_items(values: list[str]) -> Optional[list[dict[str, Any]
     return items
 
 
+def _runtime_orchestration_request(
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any], Optional[str]]:
+    """Resolve CLI overrides over the trusted local orchestration config."""
+
+    from hermes_cli.config import load_config
+
+    config = (load_config().get("kanban") or {}).get("runtime_orchestration") or {}
+    if not isinstance(config, dict):
+        raise ValueError("kanban.runtime_orchestration must be a mapping")
+    mode = (
+        getattr(args, "orchestration_mode", None)
+        or config.get("mode")
+        or "coherent_single_primary"
+    )
+    worker_lane = str(config.get("worker_lane") or "").strip()
+    assignee = str(getattr(args, "assignee", None) or worker_lane).strip() or None
+    request: dict[str, Any] = {
+        "mode": mode,
+        "max_child_nodes": (
+            getattr(args, "orchestration_max_children", None)
+            if getattr(args, "orchestration_max_children", None) is not None
+            else config.get("max_child_nodes", 3)
+        ),
+        "retention": (
+            getattr(args, "orchestration_retention", None)
+            or config.get("retention")
+            or "retain"
+        ),
+    }
+    artifact_root = (
+        getattr(args, "orchestration_root", None)
+        if getattr(args, "orchestration_root", None) is not None
+        else config.get("artifact_root")
+    )
+    if artifact_root:
+        request["artifact_root"] = str(artifact_root)
+    if worker_lane:
+        request["worker_lane"] = worker_lane
+    if getattr(args, "assignee", None):
+        request["worker_lane"] = str(args.assignee)
+    return request, assignee
+
+
 def _runtime_summary(status: dict[str, Any]) -> dict[str, Any]:
     job = status["job"]
     return {
@@ -2289,6 +2367,7 @@ def _runtime_summary(status: dict[str, Any]) -> dict[str, Any]:
         "ledger_summary": status.get("ledger_summary", []),
         "frontier_summary": status.get("frontier_summary", {}),
         "liveness": status.get("liveness", {}),
+        "orchestration": status.get("orchestration", {}),
     }
 
 
@@ -2312,6 +2391,8 @@ def _dispatch_runtime(args: argparse.Namespace) -> int:
         return _cmd_runtime_capability(args)
     if sub == "memory":
         return _cmd_runtime_memory(args)
+    if sub == "orchestration":
+        return _cmd_runtime_orchestration(args)
     if sub == "soak":
         return _cmd_runtime_soak(args)
     if sub == "real-smoke":
@@ -2466,6 +2547,7 @@ def _cmd_runtime_create(args: argparse.Namespace) -> int:
 
     workspace_kind, workspace_path = _parse_workspace_flag(args.workspace)
     goal_items = _parse_runtime_goal_items(getattr(args, "goal_item", []))
+    orchestration_policy, assignee = _runtime_orchestration_request(args)
     board = kb.get_current_board()
     with kb.connect() as conn:
         job_id = rk.create_runtime_job_from_objective(
@@ -2474,10 +2556,11 @@ def _cmd_runtime_create(args: argparse.Namespace) -> int:
             board=board,
             workspace_kind=workspace_kind,
             workspace_path=workspace_path,
-            assignee=args.assignee,
+            assignee=assignee,
             created_by=args.created_by,
             goal_items=goal_items,
             idempotency_key=args.idempotency_key,
+            orchestration_policy=orchestration_policy,
         )
         status = rk.status_runtime_job(conn, job_id)
     if getattr(args, "json", False):
@@ -2486,6 +2569,7 @@ def _cmd_runtime_create(args: argparse.Namespace) -> int:
         print(f"Created runtime job {job_id}")
         print(f"  Root task: {status['job']['root_task_id']}")
         print(f"  State:     {status['job']['state']}")
+        print(f"  Orchestra: {status['orchestration']['mode']}")
     return 0
 
 
@@ -2493,6 +2577,7 @@ def _cmd_runtime_promote(args: argparse.Namespace) -> int:
     from hermes_cli import kanban_runtime_kernel as rk
 
     goal_items = _parse_runtime_goal_items(getattr(args, "goal_item", []))
+    orchestration_policy, assignee = _runtime_orchestration_request(args)
     board = kb.get_current_board()
     with kb.connect() as conn:
         job_id = rk.promote_runtime_job(
@@ -2502,7 +2587,8 @@ def _cmd_runtime_promote(args: argparse.Namespace) -> int:
             board=board,
             workspace_path=args.workspace_path,
             goal_items=goal_items,
-            initial_assignee=args.assignee,
+            initial_assignee=assignee,
+            orchestration_policy=orchestration_policy,
         )
         status = rk.status_runtime_job(conn, job_id)
     if getattr(args, "json", False):
@@ -2510,6 +2596,7 @@ def _cmd_runtime_promote(args: argparse.Namespace) -> int:
     else:
         print(f"Promoted {args.task_id} to runtime job {job_id}")
         print(f"  State: {status['job']['state']}")
+        print(f"  Orchestra: {status['orchestration']['mode']}")
     return 0
 
 
@@ -2673,6 +2760,42 @@ def _cmd_runtime_memory(args: argparse.Namespace) -> int:
         f"candidates={result.get('candidate_count', 0)} "
         f"usage_events={len(result.get('recent_usage') or [])}"
     )
+    return 0
+
+
+def _cmd_runtime_orchestration(args: argparse.Namespace) -> int:
+    from hermes_cli import kanban_runtime_kernel as rk
+
+    with kb.connect() as conn:
+        cleanup = None
+        if getattr(args, "cleanup_worktrees", False):
+            cleanup = rk.cleanup_runtime_orchestration_worktrees(
+                conn,
+                args.job_id,
+                reason="operator_request",
+            )
+        result = rk.summarize_runtime_orchestration(conn, args.job_id)
+        if cleanup is not None:
+            result["cleanup_result"] = cleanup
+    if getattr(args, "json", False):
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0 if not cleanup or cleanup.get("status") != "refused" else 1
+    print(
+        f"Runtime orchestration: mode={result['mode']} "
+        f"enabled={result['enabled']} children={result['child_count']} "
+        f"contributions={result['contribution_count']}"
+    )
+    if result.get("worker_lane"):
+        print(
+            f"  Lane: {result['worker_lane']} "
+            f"max_children={result.get('max_child_nodes')}"
+        )
+    if cleanup is not None:
+        print(
+            f"  Cleanup: {cleanup['status']} "
+            f"({cleanup.get('reason') or '-'})"
+        )
+        return 0 if cleanup.get("status") != "refused" else 1
     return 0
 
 

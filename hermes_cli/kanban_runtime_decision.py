@@ -2447,6 +2447,8 @@ def runtime_observability_snapshot(
             conn, job_id, limit=bounded
         ),
         "capabilities": status.get("capabilities") or rk.summarize_runtime_capabilities(conn, job_id, limit=bounded),
+        "orchestration": status.get("orchestration")
+        or rk.summarize_runtime_orchestration(conn, job_id),
         "memory": rm.summarize_runtime_memory(conn, job_id, limit=bounded),
         "consistency": {
             "status": consistency["status"],
@@ -2590,6 +2592,23 @@ def build_decision_provider_request(
             "without_decomposition_max_new_runnable_worker_nodes": 1,
         },
     }
+    orchestration_policy = _loads(job.get("metadata_json")).get(
+        "orchestration_policy"
+    )
+    if isinstance(orchestration_policy, dict):
+        stable_prefix["runtime_orchestration_policy"] = {
+            key: orchestration_policy.get(key)
+            for key in (
+                "schema",
+                "mode",
+                "enabled",
+                "worker_lane",
+                "max_child_nodes",
+                "required_child_capabilities",
+                "require_contribution_attribution",
+            )
+            if orchestration_policy.get(key) is not None
+        }
     memory = rm.select_runtime_memory_hints(conn, job_id, delta)
     if memory.get("guidance", {}).get("loaded"):
         stable_prefix["runtime_guidance"] = {

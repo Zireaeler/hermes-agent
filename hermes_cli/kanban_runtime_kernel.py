@@ -28,6 +28,21 @@ PATCH_SCHEMA = "runtime_graph_patch_v1"
 STRUCTURE_CHECKPOINT_SCHEMA = "runtime_worker_structure_checkpoint_v1"
 EVALUATOR_FAILURE_BUNDLE_SCHEMA = "runtime_evaluator_failure_bundle_v1"
 OFFICIAL_EVALUATOR_RESULT_SCHEMA = "hermes_phase4g8_evaluator_result_v1"
+RUNTIME_ORCHESTRATION_POLICY_SCHEMA = "runtime_orchestration_policy_v1"
+RUNTIME_ORCHESTRATION_MODES = {
+    "coherent_single_primary",
+    "early_structure_assessment",
+}
+RUNTIME_ORCHESTRATION_RETENTION_MODES = {
+    "retain",
+    "cleanup_on_terminal",
+}
+RUNTIME_ORCHESTRATION_CHILD_CAPABILITIES = (
+    "filesystem_read",
+    "workspace_write",
+    "git_read",
+    "process_spawn",
+)
 
 NODE_STATES = {
     "planned",
@@ -1238,6 +1253,7 @@ def create_runtime_job(
     initial_assignee: Optional[str] = None,
     initialization_mode: str = "provider_first",
     runtime_metadata: Optional[dict[str, Any]] = None,
+    orchestration_policy: Optional[dict[str, Any]] = None,
 ) -> str:
     """Create a runtime job and its authoritative goal/decision state."""
 
@@ -1273,6 +1289,18 @@ def create_runtime_job(
     initial_state = "active" if initialization_mode == "fixture" else "waiting_decision"
     decision_profile = "fixture" if initialization_mode == "fixture" else "graph_patch_decision"
     job_metadata = dict(runtime_metadata or {})
+    if orchestration_policy is not None and "orchestration_policy" in job_metadata:
+        raise ValueError(
+            "orchestration_policy cannot be provided both directly and in runtime_metadata"
+        )
+    if "orchestration_policy" not in job_metadata:
+        job_metadata["orchestration_policy"] = resolve_runtime_orchestration_policy(
+            orchestration_policy,
+            job_id=job_id,
+            workspace_path=workspace_path,
+            board=board,
+            initial_assignee=initial_assignee,
+        )
     job_metadata["initialization_mode"] = initialization_mode
     if initial_assignee:
         job_metadata["default_worker_lane"] = initial_assignee
@@ -1435,6 +1463,7 @@ def create_runtime_job_from_objective(
     created_by: str = "runtime",
     goal_items: Optional[list[dict[str, Any]]] = None,
     idempotency_key: Optional[str] = None,
+    orchestration_policy: Optional[dict[str, Any]] = None,
 ) -> str:
     """Create a root Kanban task and promote it into a runtime job."""
 
@@ -1461,6 +1490,7 @@ def create_runtime_job_from_objective(
         goal_items=goal_items,
         initial_assignee=assignee,
         initialization_mode="provider_first",
+        orchestration_policy=orchestration_policy,
     )
 
 
@@ -1473,6 +1503,7 @@ def promote_runtime_job(
     workspace_path: Optional[str] = None,
     goal_items: Optional[list[dict[str, Any]]] = None,
     initial_assignee: Optional[str] = None,
+    orchestration_policy: Optional[dict[str, Any]] = None,
 ) -> str:
     """Create a runtime job rooted at an existing Kanban task."""
 
@@ -1492,6 +1523,7 @@ def promote_runtime_job(
         goal_items=goal_items,
         initial_assignee=initial_assignee,
         initialization_mode="provider_first",
+        orchestration_policy=orchestration_policy,
     )
 
 
@@ -1652,6 +1684,7 @@ def status_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
         "frontier_summary": frontier,
         "liveness": liveness,
         "capabilities": capabilities,
+        "orchestration": summarize_runtime_orchestration(conn, job_id),
     }
 
 
@@ -1933,6 +1966,18 @@ def _validate_early_structure_decision(
         raise PatchValidationError("waiting_structure node has no checkpoint evidence")
     checkpoint_event_id = int(checkpoint_event["id"])
     checkpoint = _loads(checkpoint_event["payload_json"]).get("checkpoint") or {}
+    job = _job(conn, job_id)
+    orchestration_policy = _loads(job.get("metadata_json")).get(
+        "orchestration_policy"
+    )
+    ordinary_policy = bool(
+        isinstance(orchestration_policy, dict)
+        and orchestration_policy.get("schema")
+        == RUNTIME_ORCHESTRATION_POLICY_SCHEMA
+    )
+    max_child_nodes = 3
+    if ordinary_policy:
+        max_child_nodes = int(orchestration_policy.get("max_child_nodes") or 3)
     continue_ops = [op for op in ops if op.get("op") == "continue_node"]
     create_ops = [op for op in ops if op.get("op") == "create_node"]
     if continue_ops:
@@ -1951,9 +1996,10 @@ def _validate_early_structure_decision(
         raise PatchValidationError(
             "continue_single_node checkpoint cannot create durable child nodes"
         )
-    if not 2 <= len(create_ops) <= 3:
+    if not 2 <= len(create_ops) <= max_child_nodes:
         raise PatchValidationError(
-            "early structure expansion requires two or three child nodes"
+            "early structure expansion requires between two and "
+            f"{max_child_nodes} child nodes"
         )
     child_keys = {str(op.get("node_key") or "") for op in create_ops}
     dependencies = {
@@ -1972,6 +2018,21 @@ def _validate_early_structure_decision(
             raise PatchValidationError(
                 "early structure child requires workspace_mode=isolated_worktree"
             )
+        if ordinary_policy:
+            configured_lane = str(orchestration_policy.get("worker_lane") or "")
+            if op.get("assignee") not in {None, "", configured_lane}:
+                raise PatchValidationError(
+                    "early structure child assignee must use the configured worker lane"
+                )
+            allowed_capabilities = set(
+                orchestration_policy.get("required_child_capabilities") or []
+            )
+            requested_capabilities = set(op.get("requested_capabilities") or [])
+            if not requested_capabilities.issubset(allowed_capabilities):
+                raise PatchValidationError(
+                    "early structure child requested capabilities exceed the "
+                    "orchestration policy"
+                )
     decomposition = patch.get("decomposition") or {}
     justifications = decomposition.get("justifications") or []
     matching = [
@@ -3148,13 +3209,24 @@ def sync_runtime_backend_sessions(
             )
         else:
             session_record_id = existing["id"]
+            terminal_at = (
+                materialization.get("completed_at")
+                or (completed_event or {}).get("created_at")
+                or now
+            )
             conn.execute(
                 """
                 UPDATE backend_worker_sessions
                    SET status = ?, latest_materialization_id = ?, worker_lane = ?,
                        workspace_revision = COALESCE(?, workspace_revision),
                        checkpoint_json = ?, last_heartbeat_at = COALESCE(?, last_heartbeat_at),
-                       updated_at = ?, completed_at = CASE WHEN ? = 'completed' THEN COALESCE(completed_at, ?) ELSE completed_at END
+                       updated_at = ?,
+                       completed_at = CASE
+                           WHEN ? = 1 THEN completed_at
+                           WHEN ? = 'completed' THEN ?
+                           WHEN ? IN ('active', 'resume_pending') THEN NULL
+                           ELSE completed_at
+                       END
                  WHERE id = ?
                 """,
                 (
@@ -3165,8 +3237,10 @@ def sync_runtime_backend_sessions(
                     _json(checkpoint),
                     latest_heartbeat["created_at"] if latest_heartbeat else None,
                     now,
+                    1 if stale_projection else 0,
                     status,
-                    now,
+                    terminal_at,
+                    status,
                     session_record_id,
                 ),
             )
@@ -5785,6 +5859,11 @@ def advance_runtime_job(
                             compaction_provider=compaction_provider,
                             fallback_to_deterministic=compaction_fallback_to_deterministic,
                         )
+                cleanup = _maybe_cleanup_runtime_orchestration_worktrees(
+                    conn, job_id
+                )
+                if cleanup is not None:
+                    recovery["orchestration_cleanup"] = cleanup
                 final = status_runtime_job(conn, job_id)["job"]["state"]
                 return AdvanceResult(
                     job_id=job_id,
@@ -5854,6 +5933,9 @@ def advance_runtime_job(
                 compaction_provider=compaction_provider,
                 fallback_to_deterministic=compaction_fallback_to_deterministic,
             )
+    cleanup = _maybe_cleanup_runtime_orchestration_worktrees(conn, job_id)
+    if cleanup is not None:
+        recovery["orchestration_cleanup"] = cleanup
     final_state = _job(conn, job_id)["state"]
     events = [row["event_type"] for row in conn.execute("SELECT event_type FROM execution_events WHERE job_id = ? ORDER BY id", (job_id,))]
     return AdvanceResult(
@@ -7116,6 +7198,555 @@ def _run_git_command(
     return completed.stdout
 
 
+def _path_is_within(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+def resolve_runtime_orchestration_policy(
+    request: Optional[dict[str, Any]],
+    *,
+    job_id: str,
+    workspace_path: Optional[str],
+    board: Optional[str],
+    initial_assignee: Optional[str],
+) -> dict[str, Any]:
+    """Resolve an untrusted orchestration request into local control-plane policy."""
+
+    raw = dict(request or {})
+    allowed_keys = {
+        "schema",
+        "mode",
+        "worker_lane",
+        "max_child_nodes",
+        "artifact_root",
+        "retention",
+    }
+    unknown = sorted(set(raw) - allowed_keys)
+    if unknown:
+        raise ValueError(
+            "runtime orchestration request contains unsupported fields: "
+            + ", ".join(unknown)
+        )
+    schema = raw.get("schema")
+    if schema not in {None, "", RUNTIME_ORCHESTRATION_POLICY_SCHEMA}:
+        raise ValueError("runtime orchestration request has an invalid schema")
+    mode = str(raw.get("mode") or "coherent_single_primary").strip()
+    if mode not in RUNTIME_ORCHESTRATION_MODES:
+        raise ValueError(f"unknown runtime orchestration mode {mode!r}")
+    retention = str(raw.get("retention") or "retain").strip()
+    if retention not in RUNTIME_ORCHESTRATION_RETENTION_MODES:
+        raise ValueError(f"unknown runtime orchestration retention {retention!r}")
+    if mode == "coherent_single_primary":
+        return {
+            "schema": RUNTIME_ORCHESTRATION_POLICY_SCHEMA,
+            "mode": mode,
+            "enabled": False,
+            "retention": {
+                "worktrees": retention,
+                "contributions": "retain",
+            },
+        }
+
+    if not workspace_path:
+        raise ValueError(
+            "early_structure_assessment requires an existing Git workspace"
+        )
+    workspace = Path(workspace_path).expanduser().resolve()
+    if not workspace.is_dir():
+        raise ValueError(
+            "early_structure_assessment requires an existing Git workspace"
+        )
+    try:
+        repository_root = Path(
+            _run_git_command(workspace, ["rev-parse", "--show-toplevel"]).strip()
+        ).resolve()
+    except RuntimeError as exc:
+        raise ValueError(
+            "early_structure_assessment requires a Git repository root"
+        ) from exc
+    if repository_root != workspace:
+        raise ValueError(
+            "early_structure_assessment workspace must be the Git repository root"
+        )
+    if _run_git_command(workspace, ["status", "--porcelain=v1", "--untracked-files=all"]).strip():
+        raise ValueError(
+            "early_structure_assessment requires a clean Git workspace"
+        )
+    base_revision = _run_git_command(workspace, ["rev-parse", "HEAD"]).strip()
+
+    lane_name = str(raw.get("worker_lane") or initial_assignee or "").strip()
+    if not lane_name:
+        raise ValueError(
+            "early_structure_assessment requires a trusted worker lane"
+        )
+    if initial_assignee and lane_name != str(initial_assignee).strip():
+        raise ValueError(
+            "orchestration worker_lane must match the initial assignee"
+        )
+    from hermes_cli.worker_lanes import resolve_worker_assignee
+
+    resolution = resolve_worker_assignee(lane_name)
+    if resolution.kind != "worker_lane" or resolution.lane is None:
+        raise ValueError(
+            "early_structure_assessment requires a registered external worker lane"
+        )
+    lane = resolution.lane
+    sandbox = str((lane.config or {}).get("sandbox") or "")
+    if sandbox == "read-only":
+        raise ValueError(
+            "early_structure_assessment worker lane must allow workspace writes"
+        )
+    lane_concurrency = int(lane.max_concurrency or 1)
+    if lane_concurrency < 2:
+        raise ValueError(
+            "early_structure_assessment worker lane requires max_concurrency >= 2"
+        )
+    try:
+        requested_children = int(raw.get("max_child_nodes") or 3)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("orchestration max_child_nodes must be 2 or 3") from exc
+    if requested_children not in {2, 3}:
+        raise ValueError("orchestration max_child_nodes must be 2 or 3")
+    max_child_nodes = min(requested_children, lane_concurrency)
+    if max_child_nodes < 2:
+        raise ValueError(
+            "early_structure_assessment requires capacity for at least two children"
+        )
+
+    lane_config = dict(lane.config or {})
+    if lane_config.get("network_namespace"):
+        uid = int(lane_config.get("network_uid", -1))
+        gid = int(lane_config.get("network_gid", -1))
+        identity_source = "lane_network_identity"
+    else:
+        uid = int(getattr(os, "geteuid", lambda: 0)())
+        gid = int(getattr(os, "getegid", lambda: 0)())
+        identity_source = "runtime_process_identity"
+    if uid < 0 or gid < 0:
+        raise ValueError("trusted worker lane has an invalid filesystem identity")
+
+    artifact_root_value = str(raw.get("artifact_root") or "").strip()
+    artifact_base = (
+        Path(artifact_root_value).expanduser()
+        if artifact_root_value
+        else kb.board_dir(board) / "runtime-orchestration"
+    )
+    job_root = (artifact_base / _safe_workspace_component(job_id)).resolve()
+    if _path_is_within(job_root, workspace):
+        raise ValueError(
+            "runtime orchestration artifact root must be outside the job workspace"
+        )
+    return {
+        "schema": RUNTIME_ORCHESTRATION_POLICY_SCHEMA,
+        "mode": mode,
+        "enabled": True,
+        "worker_lane": lane.name,
+        "max_child_nodes": max_child_nodes,
+        "require_contribution_attribution": True,
+        "minimum_integrated_contributions": 1,
+        "required_child_capabilities": list(
+            RUNTIME_ORCHESTRATION_CHILD_CAPABILITIES
+        ),
+        "base_revision": base_revision,
+        "root": str(job_root),
+        "worktree_root": str(job_root / "worktrees"),
+        "contribution_root": str(job_root / "contributions"),
+        "workspace_owner": {
+            "source": "trusted_worker_lane",
+            "identity_source": identity_source,
+            "lane": lane.name,
+            "lane_source": lane.source,
+            "uid": uid,
+            "gid": gid,
+        },
+        "retention": {
+            "worktrees": retention,
+            "contributions": "retain",
+        },
+    }
+
+
+def summarize_runtime_orchestration(
+    conn: sqlite3.Connection,
+    job_id: str,
+) -> dict[str, Any]:
+    ensure_runtime_schema(conn)
+    job = _job(conn, job_id)
+    metadata = _loads(job.get("metadata_json"))
+    policy = metadata.get("orchestration_policy")
+    if not isinstance(policy, dict):
+        policy = {
+            "mode": "coherent_single_primary",
+            "enabled": False,
+        }
+    worker_sessions = [
+        {
+            "record_id": row["id"],
+            "node_id": row["node_id"],
+            "node_key": row["node_key"],
+            "backend_kind": row["backend_kind"],
+            "backend_session_key": row["backend_session_key"],
+            "status": row["status"],
+            "initial_materialization_id": row["initial_materialization_id"],
+            "latest_materialization_id": row["latest_materialization_id"],
+            "resume_count": int(row["resume_count"] or 0),
+            "workspace_path": row["workspace_path"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "completed_at": row["completed_at"],
+        }
+        for row in conn.execute(
+            """
+            SELECT session.*, node.node_key
+              FROM backend_worker_sessions session
+              JOIN execution_nodes node ON node.id = session.node_id
+             WHERE session.job_id = ?
+             ORDER BY session.created_at, session.id
+            """,
+            (job_id,),
+        ).fetchall()
+    ]
+    latest_session_by_node = {
+        str(session["node_id"]): session for session in worker_sessions
+    }
+    children: list[dict[str, Any]] = []
+    for row in conn.execute(
+        "SELECT * FROM execution_nodes WHERE job_id = ? ORDER BY created_at, node_key",
+        (job_id,),
+    ).fetchall():
+        node = dict(row)
+        node_metadata = _loads(node.get("metadata_json"))
+        if not node_metadata.get("non_authoritative_contribution"):
+            continue
+        workspace = node_metadata.get("runtime_workspace")
+        children.append(
+            {
+                "node_id": node["id"],
+                "node_key": node["node_key"],
+                "state": node["state"],
+                "assignee": node.get("assignee"),
+                "integration_owner_node_key": node_metadata.get(
+                    "contribution_to_node_key"
+                ),
+                "workspace": workspace if isinstance(workspace, dict) else None,
+                "backend_session": latest_session_by_node.get(str(node["id"])),
+            }
+        )
+    contributions: list[dict[str, Any]] = []
+    for row in conn.execute(
+        """
+        SELECT artifact.id, artifact.node_id, artifact.path_or_ref,
+               artifact.metadata_json, node.node_key
+          FROM node_artifacts artifact
+          JOIN execution_nodes node ON node.id = artifact.node_id
+         WHERE artifact.job_id = ?
+           AND artifact.artifact_type = 'runtime_node_contribution'
+         ORDER BY artifact.created_at, artifact.id
+        """,
+        (job_id,),
+    ).fetchall():
+        payload = _loads(row["metadata_json"])
+        contributions.append(
+            {
+                "artifact_id": row["id"],
+                "node_id": row["node_id"],
+                "node_key": row["node_key"],
+                "path": row["path_or_ref"],
+                "patch_sha256": payload.get("patch_sha256"),
+                "patch_bytes": payload.get("patch_bytes"),
+                "scope_status": payload.get("scope_status"),
+                "integration_owner_node_key": payload.get(
+                    "integration_owner_node_key"
+                ),
+                "materialization_id": payload.get("materialization_id"),
+            }
+        )
+    checkpoint = conn.execute(
+        """
+        SELECT id, payload_json, created_at FROM execution_events
+         WHERE job_id = ? AND event_type = 'worker_structure_checkpointed'
+         ORDER BY id DESC LIMIT 1
+        """,
+        (job_id,),
+    ).fetchone()
+    attribution = conn.execute(
+        """
+        SELECT id, payload_json, created_at FROM execution_events
+         WHERE job_id = ? AND event_type = 'contribution_attribution_verified'
+         ORDER BY id DESC LIMIT 1
+        """,
+        (job_id,),
+    ).fetchone()
+    cleanup = conn.execute(
+        """
+        SELECT id, event_type, payload_json, created_at FROM execution_events
+         WHERE job_id = ?
+           AND event_type IN (
+               'runtime_orchestration_worktrees_cleaned',
+               'runtime_orchestration_cleanup_refused'
+           )
+         ORDER BY id DESC LIMIT 1
+        """,
+        (job_id,),
+    ).fetchone()
+    owner = policy.get("workspace_owner")
+    return {
+        "schema": policy.get("schema"),
+        "mode": policy.get("mode") or "coherent_single_primary",
+        "enabled": bool(policy.get("enabled")),
+        "legacy_policy": policy.get("schema")
+        != RUNTIME_ORCHESTRATION_POLICY_SCHEMA,
+        "worker_lane": policy.get("worker_lane"),
+        "max_child_nodes": policy.get("max_child_nodes"),
+        "base_revision": policy.get("base_revision"),
+        "root": policy.get("root"),
+        "worktree_root": policy.get("worktree_root"),
+        "contribution_root": policy.get("contribution_root"),
+        "workspace_owner": owner if isinstance(owner, dict) else None,
+        "retention": policy.get("retention") or {
+            "worktrees": "retain",
+            "contributions": "retain",
+        },
+        "structure_checkpoint": (
+            {
+                "event_id": int(checkpoint["id"]),
+                "created_at": checkpoint["created_at"],
+                "checkpoint": _loads(checkpoint["payload_json"]).get("checkpoint"),
+            }
+            if checkpoint is not None
+            else None
+        ),
+        "children": children,
+        "child_count": len(children),
+        "worker_sessions": worker_sessions,
+        "worker_session_count": len(worker_sessions),
+        "contributions": contributions,
+        "contribution_count": len(contributions),
+        "contribution_bytes": sum(
+            int(item.get("patch_bytes") or 0) for item in contributions
+        ),
+        "latest_attribution": (
+            {
+                "event_id": int(attribution["id"]),
+                "created_at": attribution["created_at"],
+                **_loads(attribution["payload_json"]),
+            }
+            if attribution is not None
+            else None
+        ),
+        "latest_cleanup": (
+            {
+                "event_id": int(cleanup["id"]),
+                "event_type": cleanup["event_type"],
+                "created_at": cleanup["created_at"],
+                **_loads(cleanup["payload_json"]),
+            }
+            if cleanup is not None
+            else None
+        ),
+    }
+
+
+def cleanup_runtime_orchestration_worktrees(
+    conn: sqlite3.Connection,
+    job_id: str,
+    *,
+    reason: str = "operator_request",
+) -> dict[str, Any]:
+    ensure_runtime_schema(conn)
+    job = _job(conn, job_id)
+    metadata = _loads(job.get("metadata_json"))
+    policy = metadata.get("orchestration_policy")
+    if (
+        not isinstance(policy, dict)
+        or policy.get("schema") != RUNTIME_ORCHESTRATION_POLICY_SCHEMA
+        or policy.get("mode") != "early_structure_assessment"
+    ):
+        return {
+            "status": "not_applicable",
+            "job_id": job_id,
+            "reason": "ordinary early orchestration is not enabled",
+        }
+    if job.get("state") not in {"done", "failed", "cancelled"}:
+        result = {
+            "status": "refused",
+            "job_id": job_id,
+            "reason": "runtime job must be terminal before worktree cleanup",
+        }
+        _event_once(
+            conn,
+            job_id,
+            "runtime_orchestration_cleanup_refused",
+            "orchestration-cleanup-refused:active-job",
+            result,
+            source="runtime_orchestration",
+        )
+        return result
+    workspace_value = str(job.get("workspace_path") or "").strip()
+    worktree_root_value = str(policy.get("worktree_root") or "").strip()
+    contribution_root_value = str(policy.get("contribution_root") or "").strip()
+    workspace = Path(workspace_value).expanduser().resolve() if workspace_value else None
+    worktree_root = (
+        Path(worktree_root_value).expanduser().resolve()
+        if worktree_root_value
+        else None
+    )
+    contribution_root = (
+        Path(contribution_root_value).expanduser().resolve()
+        if contribution_root_value
+        else None
+    )
+    if (
+        workspace is None
+        or not workspace.is_dir()
+        or worktree_root is None
+        or contribution_root is None
+        or worktree_root == contribution_root
+        or _path_is_within(contribution_root, worktree_root)
+        or _path_is_within(worktree_root, contribution_root)
+    ):
+        result = {
+            "status": "refused",
+            "job_id": job_id,
+            "reason": "orchestration workspace or worktree root is unavailable",
+        }
+        _event_once(
+            conn,
+            job_id,
+            "runtime_orchestration_cleanup_refused",
+            "orchestration-cleanup-refused:missing-root",
+            result,
+            source="runtime_orchestration",
+        )
+        return result
+
+    children = []
+    for row in conn.execute(
+        "SELECT * FROM execution_nodes WHERE job_id = ? ORDER BY created_at, node_key",
+        (job_id,),
+    ).fetchall():
+        node = dict(row)
+        node_metadata = _loads(node.get("metadata_json"))
+        if node_metadata.get("non_authoritative_contribution"):
+            children.append((node, node_metadata))
+    artifacts_by_node: dict[str, list[dict[str, Any]]] = {}
+    for row in conn.execute(
+        """
+        SELECT node_id, path_or_ref, metadata_json FROM node_artifacts
+         WHERE job_id = ? AND artifact_type = 'runtime_node_contribution'
+        """,
+        (job_id,),
+    ).fetchall():
+        artifacts_by_node.setdefault(str(row["node_id"]), []).append(dict(row))
+    errors: list[str] = []
+    for node, _node_metadata in children:
+        artifacts = artifacts_by_node.get(str(node["id"]), [])
+        if len(artifacts) != 1:
+            errors.append(
+                f"child {node['node_key']} requires exactly one frozen contribution"
+            )
+            continue
+        artifact = artifacts[0]
+        artifact_metadata = _loads(artifact.get("metadata_json"))
+        patch_path = Path(str(artifact.get("path_or_ref") or "")).resolve()
+        expected = str(artifact_metadata.get("patch_sha256") or "")
+        if not patch_path.is_file() or not expected:
+            errors.append(f"child {node['node_key']} contribution is missing")
+            continue
+        observed = hashlib.sha256(patch_path.read_bytes()).hexdigest()
+        if observed != expected:
+            errors.append(
+                f"child {node['node_key']} contribution hash mismatch"
+            )
+    if errors:
+        result = {
+            "status": "refused",
+            "job_id": job_id,
+            "reason": "; ".join(errors),
+        }
+        _event_once(
+            conn,
+            job_id,
+            "runtime_orchestration_cleanup_refused",
+            "orchestration-cleanup-refused:artifact-verification",
+            result,
+            source="runtime_orchestration",
+        )
+        return result
+
+    removed: list[str] = []
+    for node, node_metadata in children:
+        runtime_workspace = node_metadata.get("runtime_workspace")
+        if not isinstance(runtime_workspace, dict):
+            continue
+        path = Path(str(runtime_workspace.get("path") or "")).expanduser().resolve()
+        if not _path_is_within(path, worktree_root) or path == worktree_root:
+            result = {
+                "status": "refused",
+                "job_id": job_id,
+                "reason": f"child {node['node_key']} worktree is outside configured root",
+            }
+            _event_once(
+                conn,
+                job_id,
+                "runtime_orchestration_cleanup_refused",
+                "orchestration-cleanup-refused:workspace-boundary",
+                result,
+                source="runtime_orchestration",
+            )
+            return result
+        if not path.exists():
+            continue
+        _run_git_command(
+            workspace,
+            ["worktree", "remove", "--force", str(path)],
+            owner_policy=policy,
+        )
+        removed.append(str(path))
+    if worktree_root.is_dir() and not any(worktree_root.iterdir()):
+        worktree_root.rmdir()
+    result = {
+        "status": "cleaned" if removed else "already_clean",
+        "job_id": job_id,
+        "reason": reason,
+        "removed_worktrees": removed,
+        "contributions_retained": sum(len(value) for value in artifacts_by_node.values()),
+    }
+    _event_once(
+        conn,
+        job_id,
+        "runtime_orchestration_worktrees_cleaned",
+        "orchestration-worktrees-cleaned",
+        result,
+        source="runtime_orchestration",
+    )
+    return result
+
+
+def _maybe_cleanup_runtime_orchestration_worktrees(
+    conn: sqlite3.Connection,
+    job_id: str,
+) -> Optional[dict[str, Any]]:
+    job = _job(conn, job_id)
+    policy = _loads(job.get("metadata_json")).get("orchestration_policy")
+    if not isinstance(policy, dict):
+        return None
+    retention = policy.get("retention")
+    if not isinstance(retention, dict) or retention.get("worktrees") != "cleanup_on_terminal":
+        return None
+    if job.get("state") not in {"done", "failed", "cancelled"}:
+        return None
+    return cleanup_runtime_orchestration_worktrees(
+        conn,
+        job_id,
+        reason="cleanup_on_terminal",
+    )
+
+
 def _safe_workspace_component(value: str) -> str:
     normalized = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value)).strip("-.")
     return normalized[:80] or "node"
@@ -7382,7 +8013,8 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
             """
             UPDATE backend_worker_sessions
                SET status = 'resume_pending', latest_materialization_id = ?,
-                   resume_count = resume_count + 1, updated_at = ?
+                   resume_count = resume_count + 1, completed_at = NULL,
+                   updated_at = ?
              WHERE id = ? AND status = 'interrupted'
             """,
             (materialization_id, now, continuity["backend_session_record_id"]),
@@ -7571,26 +8203,29 @@ def _worker_context(
                 "producer_kind": "runtime_evaluator",
                 "provenance_required": True,
             }
+    contribution_worker_boundary = ""
+    if metadata.get("non_authoritative_contribution"):
+        contribution_worker_boundary = (
+            "Runtime contribution boundary: this child does not produce the integrated candidate "
+            "and cannot satisfy the goal item by itself. Complete only the assigned isolated "
+            "responsibility, verify it locally, and use verdict succeeded. Report changed_files "
+            "accurately; Runtime will downgrade any goal claim to partial evidence and freeze the "
+            "worktree patch for the primary integration owner. Do not inspect Hermes databases or "
+            "sibling worker sessions.\n\n"
+        )
     phase4g8_worker_boundary = ""
-    if job_metadata.get("phase4g8_run_id") and node.get("node_type") != "verification":
-        if metadata.get("non_authoritative_contribution"):
-            phase4g8_worker_boundary = (
-                "Runtime contribution boundary: this child does not produce the integrated "
-                "official-evaluator candidate and cannot satisfy the goal item by itself. Complete "
-                "only the assigned isolated responsibility, verify it locally, and use verdict "
-                "succeeded. Report changed_files accurately; Runtime will downgrade any goal claim "
-                "to partial evidence and freeze your worktree patch for the primary integration "
-                "owner. Do not inspect Hermes databases, sibling sessions, protected evaluator "
-                "files, or evaluator artifacts.\n\n"
-            )
-        else:
-            phase4g8_worker_boundary = (
-                "Phase 4G8 trusted-evaluator boundary: an independent official evaluator runs after "
-                "your terminal receipt. Do not inspect Hermes databases, other worker session histories, "
-                "protected evaluator files, or evaluator artifacts. Use only the bounded failure diagnostics "
-                "provided in this node context. Fix repository source and tests; do not alter the evaluator "
-                "environment, toolchain, or harness to make evidence pass.\n\n"
-            )
+    if (
+        job_metadata.get("phase4g8_run_id")
+        and node.get("node_type") != "verification"
+        and not metadata.get("non_authoritative_contribution")
+    ):
+        phase4g8_worker_boundary = (
+            "Phase 4G8 trusted-evaluator boundary: an independent official evaluator runs after "
+            "your terminal receipt. Do not inspect Hermes databases, other worker session histories, "
+            "protected evaluator files, or evaluator artifacts. Use only the bounded failure diagnostics "
+            "provided in this node context. Fix repository source and tests; do not alter the evaluator "
+            "environment, toolchain, or harness to make evidence pass.\n\n"
+        )
     structure_assessment_boundary = ""
     orchestration_policy = job_metadata.get("orchestration_policy")
     prior_structure_checkpoint = conn.execute(
@@ -7609,6 +8244,11 @@ def _worker_context(
         """,
         (job["id"],),
     ).fetchone()
+    structure_max_children = 3
+    structure_required_capabilities = list(
+        RUNTIME_ORCHESTRATION_CHILD_CAPABILITIES
+    )
+    structure_worker_lane = ""
     if (
         isinstance(orchestration_policy, dict)
         and orchestration_policy.get("mode") == "early_structure_assessment"
@@ -7616,6 +8256,20 @@ def _worker_context(
         and prior_structure_checkpoint is None
         and int(initial_execution_nodes["count"] or 0) == 1
     ):
+        if (
+            orchestration_policy.get("schema")
+            == RUNTIME_ORCHESTRATION_POLICY_SCHEMA
+        ):
+            structure_max_children = int(
+                orchestration_policy.get("max_child_nodes") or 3
+            )
+            structure_required_capabilities = list(
+                orchestration_policy.get("required_child_capabilities")
+                or RUNTIME_ORCHESTRATION_CHILD_CAPABILITIES
+            )
+            structure_worker_lane = str(
+                orchestration_policy.get("worker_lane") or ""
+            )
         assessment_replay = orchestration_policy.get("assessment_replay")
         replay_boundary = ""
         if isinstance(assessment_replay, dict):
@@ -7637,20 +8291,25 @@ def _worker_context(
             "boundaries, shared integration surfaces, and likely write scopes. Do not modify "
             "source or tests, do not claim goal completion, and do not perform the full "
             "implementation yet. Decide whether one coherent worker should continue or whether "
-            "2-3 low-coupling durable workers with non-overlapping declared write scopes would "
+            f"2-{structure_max_children} low-coupling durable workers with non-overlapping "
+            "declared write scopes would "
             "provide real parallel value. The existing node remains the integration owner. "
             "Finish this attempt with exactly one final fenced JSON object using schema "
             "runtime_worker_structure_checkpoint_v1 and no prose after it. Set kind to "
             "early_structure_assessment, recommendation to continue_single_node or expand, and "
             "include summary, inspected_scope, repository_facts with evidence_refs, proposed_nodes, "
             "integration_owner_node_key, shared_integration_scope, risks, "
-            "worker_session_should_resume=true, and changed_files=[]. For expand, propose exactly "
-            "2-3 nodes; each needs node_key, outcome, acceptance_criteria, declared_write_scope, "
+            "worker_session_should_resume=true, and changed_files=[]. For expand, propose between "
+            f"2 and {structure_max_children} nodes; each needs node_key, outcome, "
+            "acceptance_criteria, declared_write_scope, "
             "and requested_capabilities. Capability names must come from: filesystem_read, "
             "filesystem_write, workspace_write, git_read, git_write, process_spawn, "
             "long_running_process, network_access, secret_access, external_cost, "
             "destructive_action, workspace_escape, db_read, or db_migration. For "
-            "continue_single_node, proposed_nodes must be empty.\n\n"
+            "continue_single_node, proposed_nodes must be empty. "
+            f"This job permits at most {structure_max_children} children; the trusted worker "
+            f"lane is {structure_worker_lane or 'the Runtime-selected lane'}; child capability "
+            f"requests must be a subset of {_json(structure_required_capabilities)}.\n\n"
             f"{replay_boundary}"
         )
     receipt_recovery_instruction = ""
@@ -7731,6 +8390,7 @@ def _worker_context(
         f"Dependencies:\n{deps}\n\n"
         f"{contribution_context}"
         f"{structure_assessment_boundary}"
+        f"{contribution_worker_boundary}"
         f"{phase4g8_worker_boundary}"
         f"{receipt_recovery_instruction}"
         + (
