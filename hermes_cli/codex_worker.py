@@ -1648,10 +1648,17 @@ def _adapt_missing_phase4g8_runtime_receipt(
 
         with kb.connect() as conn:
             node = conn.execute(
-                "SELECT job_id, metadata_json FROM execution_nodes WHERE latest_task_id = ?",
+                """
+                SELECT n.job_id, n.metadata_json, t.body AS task_body
+                  FROM execution_nodes n
+                  JOIN tasks t ON t.id = n.latest_task_id
+                 WHERE n.latest_task_id = ?
+                """,
                 (task_id,),
             ).fetchone()
             if node is None:
+                return None
+            if "Early structure assessment mode:" in str(node["task_body"] or ""):
                 return None
             metadata = json.loads(node["metadata_json"] or "{}")
             goal_keys = [str(value) for value in metadata.get("goal_item_keys") or [] if str(value).strip()]
@@ -1710,6 +1717,7 @@ def _metadata(
     exit_code: Optional[int],
     timed_out: bool,
     output_tail: str,
+    runtime_receipt_source: Optional[str] = None,
     binary_missing: bool = False,
     json_events: bool = False,
     execution_mode: str = "fresh",
@@ -1719,7 +1727,9 @@ def _metadata(
 ) -> dict[str, Any]:
     succeeded = (exit_code == 0 and not timed_out and not binary_missing)
     receipt = _extract_worker_receipt(output_tail)
-    runtime_receipt = _extract_runtime_receipt(output_tail)
+    runtime_receipt = _extract_runtime_receipt(
+        runtime_receipt_source or output_tail
+    )
     verification = _extract_verification_summary(output_tail)
     review_output_tail = _review_output_tail(output_tail, receipt)
     git_evidence = collect_git_evidence(workspace, baseline=git_baseline)
@@ -2463,9 +2473,6 @@ def run_codex_worker(
         reader.join(timeout=1)
         exit_code = proc.returncode
         output_tail = tail.text()
-        metadata_output = output_tail
-        if runtime_receipt_source and runtime_receipt_source not in output_tail:
-            metadata_output = runtime_receipt_source + "\n" + output_tail
         meta = _metadata(
             lane=lane,
             task_id=task_id,
@@ -2476,7 +2483,8 @@ def run_codex_worker(
             model=model,
             exit_code=exit_code,
             timed_out=timed_out,
-            output_tail=metadata_output,
+            output_tail=output_tail,
+            runtime_receipt_source=runtime_receipt_source or None,
             json_events=effective_json_events,
             execution_mode=execution_mode,
             backend_session_id=backend_session_id,

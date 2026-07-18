@@ -825,6 +825,40 @@ def test_codex_runtime_receipt_extracts_output_schema_raw_json():
     assert receipt["verdict"] == "candidate_ready"
 
 
+def test_metadata_parses_full_runtime_source_separately_from_truncated_tail(tmp_path):
+    runtime_receipt = {
+        "schema": "runtime_worker_structure_checkpoint_v1",
+        "kind": "early_structure_assessment",
+        "recommendation": "continue_single_node",
+        "summary": "assessment complete",
+        "inspected_scope": ["dvc/**"],
+        "repository_facts": [],
+        "proposed_nodes": [],
+        "integration_owner_node_key": "primary",
+        "shared_integration_scope": [],
+        "risks": [],
+        "worker_session_should_resume": True,
+        "changed_files": [],
+    }
+    source = json.dumps(runtime_receipt) + " " * 9000
+
+    meta = _metadata(
+        lane="phase4g8-codex",
+        task_id="missing-task",
+        run_id=1,
+        worker_pid=123,
+        claim_lock="control:123",
+        workspace=str(tmp_path),
+        model="gpt-5.6-sol",
+        exit_code=0,
+        timed_out=False,
+        output_tail=source[-8192:],
+        runtime_receipt_source=json.dumps(runtime_receipt),
+    )
+
+    assert meta["runtime_receipt"] == runtime_receipt
+
+
 def test_codex_runtime_receipt_ignores_truncated_prior_closing_fence():
     receipt = _extract_runtime_receipt(
         "truncated output from an earlier code block\n"

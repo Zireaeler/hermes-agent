@@ -570,6 +570,11 @@ terminal task evidence
 Codex JSON events 记录，可读摘要放在 `summary`、`verification` 和风险字段中。Transport parser 同时接受
 裸 JSON 与历史 fenced JSON，但不得将普通自然语言总结猜测成权威 receipt。
 
+完整终态 agent-message 必须作为独立 `runtime_receipt_source` 解析，不能先与 bounded log tail 拼接。
+大型结构评估或 integration receipt 可以超过 tail budget；tail 截断只影响展示，不能改变机器事实。
+Early assessment 不允许进入 implementation missing-envelope adapter，避免把 structure checkpoint 误投影为
+普通 `pass` receipt 并提前启动 evaluator。
+
 若 structured final output 仍缺失或不合法，才进入 receipt failure。不得因为格式补交而重新执行整个
 implementation node，也不得用 fresh worker 重新审查已经完成的 workspace。
 
