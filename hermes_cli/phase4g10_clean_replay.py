@@ -65,6 +65,27 @@ def _runtime_source_state() -> dict[str, Any]:
     }
 
 
+def _initial_source_state_from_run(run_root: Path) -> dict[str, Any]:
+    db_path = run_root.resolve() / "hermes-home" / "kanban.db"
+    if not db_path.is_file():
+        raise RuntimeError("Clean Replay resume is missing its Runtime database")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("SELECT metadata_json FROM runtime_jobs").fetchall()
+    finally:
+        conn.close()
+    if len(rows) != 1:
+        raise RuntimeError("Clean Replay resume requires exactly one Runtime job")
+    metadata = json.loads(rows[0]["metadata_json"] or "{}")
+    source = (metadata.get("orchestration_policy") or {}).get(
+        "clean_replay_source_state"
+    )
+    if not isinstance(source, dict) or not source.get("revision"):
+        raise RuntimeError("Clean Replay resume is missing its initial source state")
+    return source
+
+
 def _event_counts(
     conn: sqlite3.Connection,
     job_id: str,
@@ -164,7 +185,7 @@ def build_clean_replay_report(
         "fresh_runtime_source_revision": bool(source_before.get("clean"))
         and source_before.get("revision") == source_after.get("revision")
         and bool(source_after.get("clean")),
-        "fresh_run_not_resumed": (payload.get("resume") or {}).get("resumed") is False,
+        "fresh_run_origin": bool(source_before.get("clean")),
         "runtime_correctness_passed": runtime_validation.get("passed") is True,
         "effective_orchestration_passed": orchestration.get("classification", {}).get(
             "effective_orchestration"
@@ -295,19 +316,31 @@ def render_clean_replay_summary(report: dict[str, Any]) -> str:
 def run_clean_replay(
     *,
     qualification_spec_path: Path,
-    run_root: Path,
+    run_root: Path | None,
+    resume_run: Path | None = None,
     source_codex_home: Path,
     artifact_root: Path,
     execute_real: bool,
     max_wall_seconds: float,
     worker_timeout_seconds: int,
 ) -> dict[str, Any]:
-    source_before = _runtime_source_state()
-    if not source_before["clean"]:
+    if (run_root is None) == (resume_run is None):
+        raise ValueError("exactly one of run_root or resume_run is required")
+    current_source = _runtime_source_state()
+    if not current_source["clean"]:
         raise RuntimeError("Clean Replay requires a committed clean Runtime source tree")
+    if resume_run is not None:
+        source_before = _initial_source_state_from_run(resume_run)
+        if source_before.get("revision") != current_source.get("revision"):
+            raise RuntimeError(
+                "Clean Replay cannot resume after the Runtime source revision changed"
+            )
+    else:
+        source_before = current_source
     payload = p4g8_run.run_phase4g8_real_case(
         qualification_spec_path=qualification_spec_path,
         run_root=run_root,
+        resume_run=resume_run,
         source_codex_home=source_codex_home,
         case_size="large",
         execute_real=execute_real,
@@ -322,6 +355,7 @@ def run_clean_replay(
             "require_contribution_attribution": True,
             "minimum_integrated_contributions": 2,
             "max_child_nodes": 3,
+            "clean_replay_source_state": source_before,
             "assessment_replay": {
                 "schema": "runtime_early_structure_replay_v1",
                 "required_recommendation": "expand",
@@ -352,6 +386,10 @@ def run_clean_replay(
     )
     actual_root = Path(str(payload["paths"]["root"])).resolve()
     source_after = _runtime_source_state()
+    _write_json(
+        actual_root / "reports" / "clean-replay-source-state.json",
+        {"source_before": source_before, "source_after": source_after},
+    )
     report = build_clean_replay_report(
         actual_root,
         payload,
@@ -402,7 +440,9 @@ def run_clean_replay(
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--spec", required=True)
-    parser.add_argument("--run-root", required=True)
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--run-root")
+    target.add_argument("--resume-run")
     parser.add_argument("--source-codex-home", default=str(Path.home() / ".codex"))
     parser.add_argument(
         "--artifact-root",
@@ -418,7 +458,8 @@ def main() -> int:
     args = _parse_args()
     report = run_clean_replay(
         qualification_spec_path=Path(args.spec),
-        run_root=Path(args.run_root),
+        run_root=Path(args.run_root) if args.run_root else None,
+        resume_run=Path(args.resume_run) if args.resume_run else None,
         source_codex_home=Path(args.source_codex_home),
         artifact_root=Path(args.artifact_root),
         execute_real=bool(args.execute_real),

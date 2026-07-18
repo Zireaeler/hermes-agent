@@ -37,6 +37,16 @@ Clean Replay 必须从以下状态启动：
 - 已锁定且通过 base/gold qualification 的同一 DVC Large 实例；
 - 与 Phase 4G10 相同的真实模型源和普通 `max` worker profile。
 
+外层 runner 或宿主进程中断后，允许使用 `--resume-run <existing-run>` 从同一 DB、workspace、
+worktree 和 backend session 继续。Resume 必须读取首次创建 job 时写入
+`orchestration_policy.clean_replay_source_state` 的源码 revision；当前 Runtime revision 与初始 revision
+不一致时必须拒绝恢复。一次 fresh-origin run 是否 clean 由初始 provenance、完整事件历史和最终断言决定，
+不能仅根据最后一次 runner invocation 是否带 `--resume-run` 判断。
+
+并行 child 中断时，recovery 必须一次性识别并回收所有 dead running tasks，分别保留其 task、
+materialization 和 backend session lineage，再为每个 nonterminal child 创建可恢复的新 attempt。不得因同时
+存在多个 dead child 要求人工修改 DB，也不得只恢复第一个 child。
+
 Worker 和 Decision Provider 使用 `max` 推理档；Runtime Compaction Provider 使用独立的 `low` 推理档。
 Compaction 是受 schema 和 provenance validator 约束的状态压缩，不承担任务求解或 graph decision，不应
 继承 worker 的高推理预算。两者必须分别配置和审计，真实 compaction 仍禁止 deterministic fallback。
@@ -147,6 +157,13 @@ Runner 在 shared worktree root 下预置一个 sibling directory 和一个指�
 - 至少两份 evaluator feedback 由该 primary continuity 消费；
 - 后续 attribution 可以引用首次 integration lineage；
 - Runtime consistency 为 `0 violation / 0 warning`。
+
+若 Clean Replay runner 自身中断，还必须满足：
+
+- 使用同一 run id 和同一初始源码 revision 恢复；
+- 所有 dead child 均由确定性 crash recovery 回收；
+- 不产生历史 repair event、receipt recovery branch 或重复 terminal/ledger fact；
+- `clean-replay-source-state.json` 同时记录初始和最终源码状态。
 
 ## 6. 报告与证据
 

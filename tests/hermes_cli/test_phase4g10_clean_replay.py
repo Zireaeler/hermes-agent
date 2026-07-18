@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import sqlite3
 
+import pytest
+
 from hermes_cli import kanban_db as kb
 from hermes_cli import kanban_runtime_kernel as rk
 from hermes_cli import kanban_runtime_phase4g8_run as p4g8_run
@@ -215,7 +217,9 @@ def test_run_clean_replay_freezes_policy_and_cleans_only_after_archive(
     assert run["reasoning_effort_override"] == "max"
     assert run["compaction_reasoning_effort_override"] == "low"
     assert run["decision_timeout_seconds"] == 600.0
+    assert run["resume_run"] is None
     assert run["workspace_ownership_canary"] is True
+    assert run["orchestration_policy"]["clean_replay_source_state"] == source
     replay = run["orchestration_policy"]["assessment_replay"]
     assert replay["required_recommendation"] == "expand"
     assert len(replay["validated_responsibility_families"]) == 3
@@ -229,3 +233,121 @@ def test_run_clean_replay_freezes_policy_and_cleans_only_after_archive(
     assert result["artifact_archive"]["status"] == "verified"
     assert result["local_cleanup"]["status"] == "cleaned_after_verified_archive"
     assert (reports / "clean-replay-summary.md").is_file()
+
+
+def test_clean_replay_resume_uses_initial_source_revision(tmp_path, monkeypatch):
+    run_root = tmp_path / "existing-run"
+    db_dir = run_root / "hermes-home"
+    db_dir.mkdir(parents=True)
+    conn = sqlite3.connect(db_dir / "kanban.db")
+    conn.execute(
+        "CREATE TABLE runtime_jobs (metadata_json TEXT NOT NULL)"
+    )
+    initial_source = {
+        "root": "/repo",
+        "revision": "same-revision",
+        "clean": True,
+        "status": [],
+    }
+    conn.execute(
+        "INSERT INTO runtime_jobs (metadata_json) VALUES (?)",
+        (json.dumps({
+            "orchestration_policy": {
+                "clean_replay_source_state": initial_source,
+            }
+        }),),
+    )
+    conn.commit()
+    conn.close()
+    reports = run_root / "reports"
+    reports.mkdir()
+    payload = {
+        "run_id": run_root.name,
+        "job_id": "job-clean",
+        "paths": {"root": str(run_root)},
+    }
+    calls = {}
+    monkeypatch.setattr(clean, "_runtime_source_state", lambda: initial_source)
+    def fake_resume(**kwargs):
+        calls["run"] = kwargs
+        return payload
+
+    monkeypatch.setattr(
+        clean.p4g8_run,
+        "run_phase4g8_real_case",
+        fake_resume,
+    )
+    monkeypatch.setattr(
+        clean,
+        "build_clean_replay_report",
+        lambda *a, **k: {
+            "classification": {"clean_replay": "passed"},
+            "orchestration": {},
+        },
+    )
+    monkeypatch.setattr(
+        clean.validation_artifacts,
+        "archive_validation_run",
+        lambda *a, **k: {
+            "status": "verified",
+            "artifact_path": str(tmp_path / "archive"),
+        },
+    )
+    monkeypatch.setattr(
+        clean.validation_artifacts,
+        "cleanup_rebuildable_entries",
+        lambda *a, **k: {"status": "cleaned_after_verified_archive"},
+    )
+    monkeypatch.setattr(clean, "render_clean_replay_summary", lambda report: "ok\n")
+
+    clean.run_clean_replay(
+        qualification_spec_path=tmp_path / "qualified.json",
+        run_root=None,
+        resume_run=run_root,
+        source_codex_home=tmp_path / "codex",
+        artifact_root=tmp_path / "artifacts",
+        execute_real=True,
+        max_wall_seconds=100,
+        worker_timeout_seconds=50,
+    )
+
+    assert calls["run"]["run_root"] is None
+    assert calls["run"]["resume_run"] == run_root
+
+
+def test_clean_replay_resume_rejects_changed_runtime_revision(tmp_path, monkeypatch):
+    run_root = tmp_path / "existing-run"
+    db_dir = run_root / "hermes-home"
+    db_dir.mkdir(parents=True)
+    conn = sqlite3.connect(db_dir / "kanban.db")
+    conn.execute("CREATE TABLE runtime_jobs (metadata_json TEXT NOT NULL)")
+    conn.execute(
+        "INSERT INTO runtime_jobs (metadata_json) VALUES (?)",
+        (json.dumps({
+            "orchestration_policy": {
+                "clean_replay_source_state": {
+                    "revision": "old-revision",
+                    "clean": True,
+                },
+            }
+        }),),
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(
+        clean,
+        "_runtime_source_state",
+        lambda: {"revision": "new-revision", "clean": True},
+    )
+
+    with pytest.raises(RuntimeError, match="source revision changed"):
+        clean.run_clean_replay(
+            qualification_spec_path=tmp_path / "qualified.json",
+            run_root=None,
+            resume_run=run_root,
+            source_codex_home=tmp_path / "codex",
+            artifact_root=tmp_path / "artifacts",
+            execute_real=True,
+            max_wall_seconds=100,
+            worker_timeout_seconds=50,
+        )

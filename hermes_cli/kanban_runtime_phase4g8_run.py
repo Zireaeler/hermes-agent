@@ -173,7 +173,7 @@ def run_phase4g8_real_case(
     started = time.monotonic()
     old_environment: dict[str, Optional[str]] = {}
     worker_killed = False
-    excluded_crashed_task_id: Optional[str] = None
+    excluded_crashed_task_ids: set[str] = set()
     daemon_restarted = False
     large_lease_exercised = False
     evaluator_daemon_stopped = False
@@ -263,7 +263,7 @@ def run_phase4g8_real_case(
             worker_killed = bool(
                 pre_recovery["worker_interrupted"] or recovered["worker_interrupted"]
             )
-            excluded_crashed_task_id = recovered["dead_running_task_id"]
+            excluded_crashed_task_ids.update(recovered["dead_running_task_ids"])
             daemon_restarted = True
             boundaries["daemon_restarted"] = True
             resume_audit["before_recovery"] = pre_recovery
@@ -438,7 +438,11 @@ def run_phase4g8_real_case(
                     )
                 break
             with kb.connect() as conn:
-                dispatchable = _dispatchable_task_ids(conn, job_id, exclude_task_id=excluded_crashed_task_id)
+                dispatchable = _dispatchable_task_ids(
+                    conn,
+                    job_id,
+                    exclude_task_ids=excluded_crashed_task_ids,
+                )
                 kb.dispatch_once(
                     conn,
                     max_spawn=3,
@@ -507,7 +511,7 @@ def run_phase4g8_real_case(
             ):
                 p4g8.terminate_owned_process_group(int(worker["worker_pid"]), run_id=run_id, hard=True)
                 worker_killed = True
-                excluded_crashed_task_id = str(worker["latest_task_id"])
+                excluded_crashed_task_ids.add(str(worker["latest_task_id"]))
                 boundaries["worker_process_interrupted"] = True
 
             if any(int(session.get("resume_count") or 0) > 0 for session in continuity.get("sessions") or []):
@@ -3023,8 +3027,6 @@ def _reconstruct_resume_state(job_id: str, *, case_size: str) -> dict[str, Any]:
         ):
             if not _pid_is_alive(int(row["worker_pid"])):
                 dead_running.append(str(row["id"]))
-        if len(dead_running) > 1:
-            raise RuntimeError("resume run has multiple dead running tasks and requires operator repair")
         evaluator_attempts = _official_evaluator_attempts(conn, job_id)
         accepted_checkpoints = _accepted_checkpoint_count(conn, job_id)
     worker_interrupted = bool(
@@ -3048,6 +3050,7 @@ def _reconstruct_resume_state(job_id: str, *, case_size: str) -> dict[str, Any]:
         "boundaries": boundaries,
         "worker_interrupted": worker_interrupted,
         "dead_running_task_id": dead_running[0] if dead_running else None,
+        "dead_running_task_ids": dead_running,
         "prior_materialization_count": len(materializations),
         "prior_supervisor_start_count": len(supervisor_starts),
         "prior_session_resume_count": sum(int(row["resume_count"] or 0) for row in sessions),
@@ -3368,7 +3371,7 @@ def _dispatchable_task_ids(
     conn: sqlite3.Connection,
     job_id: str,
     *,
-    exclude_task_id: Optional[str],
+    exclude_task_ids: set[str],
 ) -> list[str]:
     rows = conn.execute(
         """
@@ -3379,10 +3382,11 @@ def _dispatchable_task_ids(
         """,
         (job_id,),
     ).fetchall()
+    excluded = {str(task_id) for task_id in exclude_task_ids}
     return [
         str(row["latest_task_id"])
         for row in rows
-        if row["latest_task_id"] and str(row["latest_task_id"]) != str(exclude_task_id or "")
+        if row["latest_task_id"] and str(row["latest_task_id"]) not in excluded
     ]
 
 

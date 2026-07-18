@@ -1355,6 +1355,103 @@ def test_reconstruct_resume_state_recovers_dead_worker_and_session(kanban_home):
     assert refreshed_session["status"] == "interrupted"
 
 
+def test_resume_recovers_multiple_dead_parallel_workers(kanban_home):
+    node_keys = ["plots", "stage", "tree"]
+    with kb.connect() as conn:
+        root = kb.create_task(
+            conn,
+            title="phase4g8 parallel resume",
+            initial_status="running",
+        )
+        job_id = rk.create_runtime_job(
+            conn,
+            root,
+            "resume all durable children",
+            goal_items=[
+                {"item_key": key, "description": key, "required": True}
+                for key in node_keys
+            ],
+            initialization_mode="provider_first",
+        )
+        ops = []
+        scopes = {}
+        for key in node_keys:
+            scope = f"src/{key}/**"
+            scopes[key] = [scope]
+            ops.append({
+                "op": "create_node",
+                "node_key": key,
+                "node_type": "implementation",
+                "title": key.title(),
+                "description": f"Implement {key}.",
+                "goal_item_keys": [key],
+                "contract": {
+                    "outcome": f"Complete {key}.",
+                    "acceptance_criteria": [f"{key} passes"],
+                    "success_evidence": ["test_result"],
+                    "declared_write_scope": [scope],
+                    "prohibited_actions": ["production_deployment"],
+                },
+            })
+        patch = {
+            "schema": rk.PATCH_SCHEMA,
+            "expected_revision": 0,
+            "rationale_summary": "Create three isolated durable children.",
+            "ops": ops,
+            "decomposition": {
+                "policy_version": "1",
+                "mode": "multiple_runtime_nodes",
+                "justifications": [{
+                    "type": "durable_parallelism",
+                    "nodes": node_keys,
+                    "explanation": "Each child owns a disjoint responsibility.",
+                    "evidence_refs": [],
+                    "declared_write_scopes": scopes,
+                    "integration_owner_node_key": "plots",
+                }],
+            },
+        }
+        assert rk.apply_graph_patch(conn, job_id, patch)["status"] == "applied"
+        rk.reduce_runtime_job(conn, job_id)
+        task_ids = []
+        for node in conn.execute(
+            "SELECT * FROM execution_nodes WHERE job_id = ? ORDER BY created_at",
+            (job_id,),
+        ).fetchall():
+            rk.materialize_runtime_node(conn, dict(node))
+            refreshed = conn.execute(
+                "SELECT latest_task_id FROM execution_nodes WHERE id = ?",
+                (node["id"],),
+            ).fetchone()
+            task_id = refreshed["latest_task_id"]
+            task_ids.append(task_id)
+            conn.execute(
+                "UPDATE tasks SET status = 'running', worker_pid = 99999999, "
+                "claim_lock = ? WHERE id = ?",
+                (kb._claimer_id(), task_id),
+            )
+
+    recovered = p4g8_run._reconstruct_resume_state(job_id, case_size="small")
+
+    assert recovered["dead_running_task_ids"] == task_ids
+    assert recovered["worker_interrupted"] is True
+
+    recovery = p4g8_run._prepare_resumed_runtime_job(job_id)
+
+    assert recovery["detected_crashed_tasks"] == task_ids
+    assert recovery["resumed_nodes"] == node_keys
+    with kb.connect() as conn:
+        states = conn.execute(
+            "SELECT node_key, state, latest_task_id FROM execution_nodes "
+            "WHERE job_id = ? ORDER BY created_at",
+            (job_id,),
+        ).fetchall()
+    assert [dict(row) for row in states] == [
+        {"node_key": key, "state": "ready", "latest_task_id": None}
+        for key in node_keys
+    ]
+
+
 def test_resume_repairs_pre_lineage_contribution_attribution_failure(
     kanban_home,
     tmp_path,
