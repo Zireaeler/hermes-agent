@@ -129,6 +129,13 @@ def test_isolated_worktree_git_lifecycle_uses_declared_workspace_owner(
     policy["base_revision"] = base_revision
     rk._apply_workspace_owner(workspace, policy)
 
+    worktree_root = Path(policy["worktree_root"])
+    worktree_root.mkdir()
+    sibling_sentinel = worktree_root / "existing-sibling" / "sentinel.txt"
+    sibling_sentinel.parent.mkdir()
+    sibling_sentinel.write_text("belongs to another worktree\n", encoding="utf-8")
+    sibling_owner = (sibling_sentinel.stat().st_uid, sibling_sentinel.stat().st_gid)
+
     job_id = rk.create_runtime_job(
         conn,
         _root_task(conn),
@@ -173,6 +180,7 @@ def test_isolated_worktree_git_lifecycle_uses_declared_workspace_owner(
     )
     assert gitdir.stat().st_uid == owner["uid"]
     assert gitdir.stat().st_gid == owner["gid"]
+    assert (sibling_sentinel.stat().st_uid, sibling_sentinel.stat().st_gid) == sibling_owner
 
     changed = worktree / "feature.py"
     changed.write_text("value = 2\n", encoding="utf-8")
@@ -196,6 +204,35 @@ def test_isolated_worktree_git_lifecycle_uses_declared_workspace_owner(
     ).fetchone()
     assert artifact is not None
     assert Path(artifact["path_or_ref"]).read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or os.geteuid() != 0,
+    reason="requires a root supervisor and POSIX symlink ownership",
+)
+def test_apply_workspace_owner_does_not_follow_symlink_targets(tmp_path):
+    owner = {"uid": 65534, "gid": 65534}
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    regular = workspace / "regular.txt"
+    regular.write_text("owned by worker\n", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("must retain supervisor ownership\n", encoding="utf-8")
+    outside_owner = (outside.stat().st_uid, outside.stat().st_gid)
+    link = workspace / "outside-link"
+    link.symlink_to(outside)
+
+    rk._apply_workspace_owner(workspace, {"workspace_owner": owner})
+
+    assert (regular.stat().st_uid, regular.stat().st_gid) == (
+        owner["uid"],
+        owner["gid"],
+    )
+    assert (link.lstat().st_uid, link.lstat().st_gid) == (
+        owner["uid"],
+        owner["gid"],
+    )
+    assert (outside.stat().st_uid, outside.stat().st_gid) == outside_owner
 
 
 def _complete_node(conn, node, evidence: dict):
@@ -1719,6 +1756,13 @@ def test_supervisor_tick_uses_lock_and_does_not_duplicate_materialization(conn):
     assert second["status"] == "advanced"
     assert second["result"]["materialized_nodes"] == []
     assert conn.execute("SELECT COUNT(*) FROM node_materializations WHERE job_id = ?", (job_id,)).fetchone()[0] == 1
+    starts = conn.execute(
+        "SELECT payload_json FROM execution_events "
+        "WHERE job_id = ? AND event_type = 'runtime_supervisor_started'",
+        (job_id,),
+    ).fetchall()
+    assert len(starts) == 1
+    assert json.loads(starts[0]["payload_json"])["owner"] == "supervisor-a"
 
     held = rk.acquire_runtime_advance_lock(conn, job_id, owner="supervisor-held", ttl_seconds=60)
     assert held["acquired"] is True

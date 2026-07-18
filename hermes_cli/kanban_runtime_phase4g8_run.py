@@ -2836,6 +2836,14 @@ def _reconstruct_resume_state(job_id: str, *, case_size: str) -> dict[str, Any]:
             "SELECT resume_count FROM backend_worker_sessions WHERE job_id = ?",
             (job_id,),
         ).fetchall()
+        supervisor_starts = conn.execute(
+            """
+            SELECT id FROM execution_events
+             WHERE job_id = ? AND event_type = 'runtime_supervisor_started'
+             ORDER BY id
+            """,
+            (job_id,),
+        ).fetchall()
         dead_running = []
         for row in conn.execute(
             """
@@ -2857,7 +2865,7 @@ def _reconstruct_resume_state(job_id: str, *, case_size: str) -> dict[str, Any]:
     resumed_session = any(int(row["resume_count"] or 0) > 0 for row in sessions)
     evaluator_provenance = evaluator_attempts[-1]["provenance"] if evaluator_attempts else {}
     boundaries: dict[str, bool] = {
-        "daemon_process_started": bool(materializations),
+        "daemon_process_started": bool(supervisor_starts or materializations),
         "daemon_restarted": True,
         "worker_process_started": bool(materializations),
         "independent_evaluator_process": bool(evaluator_provenance.get("producer_session_id")),
@@ -2873,6 +2881,7 @@ def _reconstruct_resume_state(job_id: str, *, case_size: str) -> dict[str, Any]:
         "worker_interrupted": worker_interrupted,
         "dead_running_task_id": dead_running[0] if dead_running else None,
         "prior_materialization_count": len(materializations),
+        "prior_supervisor_start_count": len(supervisor_starts),
         "prior_session_resume_count": sum(int(row["resume_count"] or 0) for row in sessions),
         "accepted_checkpoint_count": accepted_checkpoints,
         "prior_evaluator_attempt_count": len(evaluator_attempts),

@@ -6816,6 +6816,29 @@ def supervisor_runtime_tick(
         }
     owner_id = str(lock["owner"])
     try:
+        prior_start = conn.execute(
+            """
+            SELECT id, payload_json FROM execution_events
+             WHERE job_id = ? AND event_type = 'runtime_supervisor_started'
+             ORDER BY id
+            """,
+            (job_id,),
+        ).fetchall()
+        if not any(
+            str(_loads(row["payload_json"]).get("owner") or "") == owner_id
+            for row in prior_start
+        ):
+            _event(
+                conn,
+                job_id,
+                "runtime_supervisor_started",
+                {
+                    "owner": owner_id,
+                    "process_id": os.getpid(),
+                    "lock_ttl_seconds": int(lock_ttl_seconds),
+                },
+                source="runtime_supervisor",
+            )
         result = advance_runtime_job(
             conn,
             job_id,
@@ -6980,18 +7003,31 @@ def _safe_workspace_component(value: str) -> str:
     return normalized[:80] or "node"
 
 
-def _apply_workspace_owner(path: Path, policy: dict[str, Any]) -> None:
+def _chown_workspace_path(path: Path, uid: int, gid: int) -> None:
+    try:
+        os.chown(path, uid, gid, follow_symlinks=False)
+    except (NotImplementedError, TypeError):
+        if not hasattr(os, "lchown"):
+            raise
+        os.lchown(path, uid, gid)
+
+
+def _apply_workspace_owner(
+    path: Path,
+    policy: dict[str, Any],
+    *,
+    recursive: bool = True,
+) -> None:
     owner = _workspace_owner_ids(policy)
     if owner is None:
         return
     uid, gid = owner
-    for root, dirs, files in os.walk(path):
-        os.chown(root, uid, gid)
-        for name in dirs:
-            os.chown(Path(root) / name, uid, gid)
-        for name in files:
-            os.chown(Path(root) / name, uid, gid)
-    os.chown(path, uid, gid)
+    _chown_workspace_path(path, uid, gid)
+    if not recursive or path.is_symlink():
+        return
+    for root, dirs, files in os.walk(path, followlinks=False):
+        for name in [*dirs, *files]:
+            _chown_workspace_path(Path(root) / name, uid, gid)
 
 
 def _prepare_runtime_node_workspace(
@@ -7030,7 +7066,7 @@ def _prepare_runtime_node_workspace(
         )
     ).expanduser().resolve()
     worktree_root.mkdir(parents=True, exist_ok=True)
-    _apply_workspace_owner(worktree_root, policy)
+    _apply_workspace_owner(worktree_root, policy, recursive=False)
     path = worktree_root / _safe_workspace_component(str(node["node_key"]))
     if path.exists():
         if not (path / ".git").exists():

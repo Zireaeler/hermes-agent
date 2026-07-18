@@ -1128,6 +1128,39 @@ def test_refresh_existing_node_codex_homes_preserves_session_state(tmp_path):
     assert state.read_bytes() == b"durable-session-state"
 
 
+def test_reconstruct_resume_state_uses_supervisor_lifecycle_fact(kanban_home):
+    with kb.connect() as conn:
+        root = kb.create_task(
+            conn,
+            title="phase4g8 supervisor lifecycle",
+            initial_status="running",
+        )
+        job_id = rk.create_runtime_job(
+            conn,
+            root,
+            "preserve the daemon boundary without a materialization",
+            initialization_mode="fixture",
+            runtime_metadata={"phase4g8_run_id": "phase4g8-supervisor-boundary"},
+        )
+        tick = rk.supervisor_runtime_tick(
+            conn,
+            job_id,
+            owner="runtime-daemon:test:123",
+            create_tasks=False,
+        )
+        assert tick["status"] == "advanced"
+        assert conn.execute(
+            "SELECT COUNT(*) FROM node_materializations WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()[0] == 0
+
+    recovered = p4g8_run._reconstruct_resume_state(job_id, case_size="small")
+
+    assert recovered["boundaries"]["daemon_process_started"] is True
+    assert recovered["prior_supervisor_start_count"] == 1
+    assert recovered["prior_materialization_count"] == 0
+
+
 def test_reconstruct_resume_state_recovers_dead_worker_and_session(kanban_home):
     with kb.connect() as conn:
         root = kb.create_task(conn, title="phase4g8 resume", initial_status="running")
@@ -1786,6 +1819,14 @@ def test_phase4g8_adapts_legacy_candidate_shape_without_granting_completion(
             },
         )
 
+        reconciled = rk.reconcile_runtime_materializations(conn, job_id)
+        assert reconciled["events"] == []
+        assert reconciled["scheduled_retries"] == []
+        assert conn.execute(
+            "SELECT state FROM execution_nodes WHERE id = ?",
+            (node["id"],),
+        ).fetchone()["state"] == "running"
+
         now = int(time.time())
         conn.execute(
             """
@@ -1928,6 +1969,13 @@ def test_phase4g8_adapts_legacy_structure_request_as_blocked(
                 },
             },
         )
+        reconciled = rk.reconcile_runtime_materializations(conn, job_id)
+        assert reconciled["events"] == []
+        assert reconciled["scheduled_retries"] == []
+        assert conn.execute(
+            "SELECT state FROM execution_nodes WHERE id = ?",
+            (node["id"],),
+        ).fetchone()["state"] == "running"
         now = int(time.time())
         conn.execute(
             """

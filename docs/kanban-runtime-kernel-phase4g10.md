@@ -525,3 +525,52 @@ budget、progress ledger 幂等键和 resume boundary reporting 等问题。最�
 `0 violation / 0 warning`，duplicate terminal/ledger facts 均为 `0`。
 
 完整结果见 [Phase 4G10 验证索引](validation/phase4g10/README.md)。
+
+## 15. 实测问题的设计审计
+
+Arm 2 暴露的八项问题不能统一归类为“测试脚本问题”，也不能统一归类为仍未修复的 Runtime
+缺陷。当前处置如下。
+
+| 问题 | 判断 | 当前保证 |
+|---|---|---|
+| child worktree ownership | 核心执行边界缺陷 | Git lifecycle 以本地 control-plane 声明的 workspace owner 运行；共享 worktree root 只修改根目录 owner，不能递归影响 sibling worktree；递归 owner 修正不跟随 symlink，只作用于当前 child tree。LLM graph patch 不能写入该 owner policy。 |
+| primary resume 丢失 contribution context | 核心 continuity 缺陷，已修复 | 每次 resume 重新查询 dependency artifacts，将最新 frozen contribution bundle 放入完整 task context，再构造 continuation instruction。 |
+| attribution 要求每轮重新触碰所有 child files | attribution 语义错误，已修复 | 首次 integration 必须以当前 changed files 证明接受或修改；后续 remediation 可以引用已验证 attribution lineage，不要求无意义地重复修改文件。 |
+| resume 后 attribution lineage 丢失 | 持久化缺陷，已修复 | `contribution_lineage_refs` 从历史 verified event 恢复，并随 materialization resume 继续校验。 |
+| 大型 receipt 被预算截断 | transport/ingest 缺陷，已修复 | 完整 `runtime_worker_receipt_v1` 从 Codex JSON event 的 agent message 单独捕获；bounded output tail 只用于可读日志，不能作为 receipt 事实源。 |
+| receipt recovery 创建无效 strategy branch | 协议升级期间的错误恢复，当前正常路径已修复 | terminal evidence 先经过受限 adapter，再做 canonical schema/provenance validation；可适配 receipt 不计为 `receipt_invalid`，不消耗 recovery budget。Phase 4G8 repair 函数只用于迁移已经落库的历史坏状态。 |
+| adapter recovery 重复 ledger fact | ledger 幂等缺陷，已修复 | `(job_id, goal_item_id, evidence_ref)` 是唯一事实键；重复 ingest 使用 upsert，不生成第二条 committed progress fact。 |
+| operator-stop resume 丢失 daemon-start boundary | lifecycle observability 缺陷 | supervisor owner 首次取得 job lease 时写入一次 `runtime_supervisor_started`；resume 报告优先从该 DB event 恢复边界。旧数据库没有该事件时才使用 materialization 作为兼容推断。 |
+
+### 15.1 Receipt 正常路径与历史修复
+
+当前顺序必须保持为：
+
+```text
+terminal task evidence
+    -> bounded deterministic adapter（仅匹配已知旧协议）
+    -> canonical schema / provenance validation
+    -> receipt ingest
+    -> progress ledger / runtime events
+    -> reducer
+    -> 仍存在结构未知时才请求 Decision Provider
+```
+
+不得恢复为：
+
+```text
+先标记 receipt_invalid
+    -> 创建 recovery strategy node
+    -> 稍后再尝试理解原 receipt
+```
+
+`_ingest_adaptable_*` 和 `_repair_resume_*` 的存在表示系统能够修复旧 DB，不表示新运行应经过这些
+函数。回归测试必须同时覆盖：当前可适配 receipt 不产生 receipt recovery event，以及历史坏状态仍可
+确定性迁移。
+
+### 15.2 Ownership 信任边界
+
+`workspace_owner` 是本地 materialization/control-plane policy，不是 Decision Provider 提案内容。
+它只决定 supervisor 以哪个既有 OS identity 创建和读取隔离 worktree，不授予新的 Runtime
+capability。若未来允许多种 worker lane 使用不同 OS identity，应将 owner 直接绑定到经过本地注册的
+lane profile；不得允许模型通过 node metadata 选择任意 UID/GID。
