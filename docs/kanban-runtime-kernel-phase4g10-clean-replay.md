@@ -41,6 +41,10 @@ Worker 和 Decision Provider 使用 `max` 推理档；Runtime Compaction Provide
 Compaction 是受 schema 和 provenance validator 约束的状态压缩，不承担任务求解或 graph decision，不应
 继承 worker 的高推理预算。两者必须分别配置和审计，真实 compaction 仍禁止 deterministic fallback。
 
+Clean Replay 的 Decision Provider timeout 固定为 600 秒。三 child expansion 请求包含完整、机器可校验的
+scope 和 contract，真实 `max` 探针耗时约 270 秒；300 秒 timeout 对正常 provider latency 没有足够余量，
+会把合法结构决策误分类为 transport failure。提高 timeout 不改变 graph policy，也不允许 fallback patch。
+
 运行必须覆盖：
 
 ```text

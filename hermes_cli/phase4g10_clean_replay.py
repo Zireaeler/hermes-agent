@@ -313,6 +313,7 @@ def run_clean_replay(
         execute_real=execute_real,
         max_wall_seconds=max_wall_seconds,
         worker_timeout_seconds=worker_timeout_seconds,
+        decision_timeout_seconds=600.0,
         max_unresolved_evaluator_attempts=100,
         max_evaluator_no_progress_streak=100,
         orchestration_policy={
