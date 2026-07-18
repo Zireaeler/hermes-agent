@@ -1,0 +1,5 @@
+{
+  "reason": "第 6 与第 7 次 official evaluator 均为 63/68、242/242 且失败集合完全相同；第 7 次反馈已进入同一 primary thread，worker 确认 signature 未变并开始检查，但停止前未产生新 candidate。由于 evaluator 没有提供更完整 diagnostics，归档最后一个已评估 candidate。",
+  "requested_at": 1784337482,
+  "schema": "hermes_evaluated_operator_stop_v1"
+}

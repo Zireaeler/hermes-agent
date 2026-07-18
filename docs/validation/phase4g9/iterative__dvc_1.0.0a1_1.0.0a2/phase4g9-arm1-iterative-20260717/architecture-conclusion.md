@@ -14,9 +14,10 @@ Native Codex Ultra orchestra 在复杂 brownfield 演进任务上是有效的执
 
 1. native parent/subagent 通信对耦合代码任务有显著价值；
 2. 这种价值不等于最终质量保证；
-3. Hermes Runtime 只有在最终质量不低于 native Arm 1 的前提下，证明 durable isolation、恢复和
-   责任边界降低了执行成本或失败风险，才有架构价值；
-4. 目前不能宣称 Hermes Runtime 比 native orchestra 更强，因为 Arm 2 尚未在相同协议下运行。
+3. Hermes Runtime 的最终质量、durable isolation、恢复、执行成本和失败风险应作为多个维度比较，
+   不应把 native Arm 1 的单次 `63/68` 设成架构价值硬门槛；
+4. 后续 Phase 4G10 Arm 2 已在同一任务达到 `63/68`、`242/242` 并证明真实 durable split，但单次
+   对照仍不足以宣称 Hermes Runtime 普遍强于 native orchestra。
 
 ## Native Ultra 的优势
 
@@ -109,8 +110,10 @@ primary integration owner
 - 记录 node 数、worker handoff、并行度、token/cache、compaction 和恢复事件；
 - 首先比较最终 F2P/P2P，再比较时间和编排成本。
 
-用户关心的核心门槛是：Runtime 可以比 native orchestra 慢，但最终结果不应更差。若 Arm 2 只让
-流程更可审计，却在相同反馈下低于 `63/68`，则不能证明系统级 orchestra 对该任务有正价值。
+`63/68` 是重要参考，但不是 Arm 2 的 pass/fail gate。Arm 2 必须先证明 durable workers 被真实
+拆分、隔离执行并对最终 candidate 产生可归因贡献，再分别比较质量、时间、token、恢复和协调成本。
+低于 `63/68` 需要解释差距，但不会自动否定 Runtime correctness 或 effective orchestration；达到
+`63/68` 也不能在没有真实拆分证据时证明系统级 orchestra 有价值。
 
 ## 本次结论的证据边界
 
@@ -123,4 +126,3 @@ primary integration owner
 - 停止原因是三轮相同 official failure set 后的 operator decision。
 
 这些边界均保留在 `run-report.json`，没有从总结中抹去。
-

@@ -492,3 +492,36 @@ Arm 2 实测完成需要：
 - 无论 resolved 与否都保留 best candidate 和完整过程；
 - 中文报告明确区分 Runtime correctness、effective orchestration 和 task capability；
 - 与 Phase 4G8/4G9 的比较不使用预设分数结论。
+
+## 14. 实施与真实验证结果
+
+Phase 4G10 已完成实现和 DVC Large Arm 2 实测。
+
+Run：`phase4g10-arm2-large-059ea4b541`
+
+```text
+Runtime correctness: passed
+Effective orchestration: passed
+Task capability: task-failed
+F2P: 63/68
+P2P: 242/242
+```
+
+真实执行创建了一个 primary 和三个 durable implementation children。三个 child 使用独立 worktree
+和 Codex thread，分别产出 `38,778`、`25,151`、`12,898` bytes 的 frozen contribution；原
+primary thread 恢复后将三项都作为 modified contribution 集成。全部强制 orchestra 断言通过。
+
+Official evaluator progression：
+
+```text
+13 -> 52 -> 54 -> 56 -> 58 -> 63 -> 63 / 68
+```
+
+第 6、7 轮失败集合完全相同，使用经过 evaluator candidate hash 校验的 operator stop 结束。该停止
+不是固定轮数预算，也没有将未评估 workspace 归档为最终 candidate。
+
+运行中发现并修复 worktree ownership、resume context、contribution attribution lineage、receipt
+budget、progress ledger 幂等键和 resume boundary reporting 等问题。最终 consistency 为
+`0 violation / 0 warning`，duplicate terminal/ledger facts 均为 `0`。
+
+完整结果见 [Phase 4G10 验证索引](validation/phase4g10/README.md)。

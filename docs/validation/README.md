@@ -22,8 +22,18 @@ record。
 ## Phase 4G9
 
 - [Phase 4G9 验证索引](phase4g9/README.md)
-- Native Arm 1：`phase4g9-arm1-native-20260717`，unresolved，F2P `7/68`，
-  P2P `242/242`。
+- Native Arm 1 完整迭代：`phase4g9-arm1-iterative-20260717`，`task-failed`，best F2P
+  `63/68`、P2P `242/242`，12 次 evaluator，54 个 native subagents。
 
-Phase 4G9 Arm 1 保留了详细 derived report，但 cleanup 期间丢失了原始 Codex session 和
-worker event files；对应 artifact catalog 已明确记录该事实。
+旧单轮预备 run `phase4g9-arm1-native-20260717` 的原始 session 已在早期 cleanup 中丢失；完整
+iterative run 已使用 verified stable archive 保留原始 evidence。
+
+## Phase 4G10
+
+- [Phase 4G10 验证索引](phase4g10/README.md)
+- Runtime Arm 2：`phase4g10-arm2-large-059ea4b541`；
+- 三轴结论：`runtime-correct / orchestration-effective / task-failed`；
+- 真实结构：1 primary + 3 durable implementation children；
+- 最终 F2P `63/68`、P2P `242/242`；
+- 7 次 evaluator，总 wall time `14,830s`；
+- 355 个原始 evidence 文件已进入 verified stable archive。

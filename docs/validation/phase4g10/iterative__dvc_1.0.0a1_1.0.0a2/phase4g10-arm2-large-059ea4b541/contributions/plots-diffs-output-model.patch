@@ -1,0 +1,1197 @@
+diff --git a/dvc/cli.py b/dvc/cli.py
+index 49a3bc9..e986c8b 100644
+--- a/dvc/cli.py
++++ b/dvc/cli.py
+@@ -27,7 +27,7 @@ from .command import (
+     move,
+     params,
+     pipeline,
+-    plot,
++    plots,
+     remote,
+     remove,
+     repro,
+@@ -74,7 +74,7 @@ COMMANDS = [
+     version,
+     update,
+     git_hook,
+-    plot,
++    plots,
+ ]
+ 
+ 
+diff --git a/dvc/command/metrics.py b/dvc/command/metrics.py
+index 1944012..b392f7a 100644
+--- a/dvc/command/metrics.py
++++ b/dvc/command/metrics.py
+@@ -87,7 +87,7 @@ class CmdMetricsRemove(CmdBase):
+         return 0
+ 
+ 
+-def _show_diff(diff):
++def _show_diff(diff, markdown=False):
+     from collections import OrderedDict
+ 
+     from dvc.utils.diff import table
+@@ -105,7 +105,9 @@ def _show_diff(diff):
+                 ]
+             )
+ 
+-    return table(["Path", "Metric", "Value", "Change"], rows)
++    return table(
++        ["Path", "Metric", "Value", "Change"], rows, markdown=markdown
++    )
+ 
+ 
+ class CmdMetricsDiff(CmdBase):
+@@ -124,7 +126,7 @@ class CmdMetricsDiff(CmdBase):
+ 
+                 logger.info(json.dumps(diff))
+             else:
+-                table = _show_diff(diff)
++                table = _show_diff(diff, markdown=self.args.show_md)
+                 if table:
+                     logger.info(table)
+ 
+@@ -263,6 +265,12 @@ def add_parser(subparsers, parent_parser):
+         default=False,
+         help="Show output in JSON format.",
+     )
++    metrics_diff_parser.add_argument(
++        "--show-md",
++        action="store_true",
++        default=False,
++        help="Show tabulated output in Markdown format.",
++    )
+     metrics_diff_parser.set_defaults(func=CmdMetricsDiff)
+ 
+     METRICS_REMOVE_HELP = "Remove metric mark on a DVC-tracked file."
+diff --git a/dvc/command/params.py b/dvc/command/params.py
+index 881b2cf..e877870 100644
+--- a/dvc/command/params.py
++++ b/dvc/command/params.py
+@@ -8,7 +8,7 @@ from dvc.exceptions import DvcException
+ logger = logging.getLogger(__name__)
+ 
+ 
+-def _show_diff(diff):
++def _show_diff(diff, markdown=False):
+     from dvc.utils.diff import table
+ 
+     rows = []
+@@ -17,7 +17,7 @@ def _show_diff(diff):
+         for param, change in sorted_pdiff.items():
+             rows.append([fname, param, change["old"], change["new"]])
+ 
+-    return table(["Path", "Param", "Old", "New"], rows)
++    return table(["Path", "Param", "Old", "New"], rows, markdown=markdown)
+ 
+ 
+ class CmdParamsDiff(CmdBase):
+@@ -34,7 +34,7 @@ class CmdParamsDiff(CmdBase):
+ 
+                 logger.info(json.dumps(diff))
+             else:
+-                table = _show_diff(diff)
++                table = _show_diff(diff, markdown=self.args.show_md)
+                 if table:
+                     logger.info(table)
+ 
+@@ -94,4 +94,10 @@ def add_parser(subparsers, parent_parser):
+         default=False,
+         help="Show output in JSON format.",
+     )
++    params_diff_parser.add_argument(
++        "--show-md",
++        action="store_true",
++        default=False,
++        help="Show tabulated output in Markdown format.",
++    )
+     params_diff_parser.set_defaults(func=CmdParamsDiff)
+diff --git a/dvc/command/plot.py b/dvc/command/plot.py
+index f52dd63..21b0cfe 100644
+--- a/dvc/command/plot.py
++++ b/dvc/command/plot.py
+@@ -9,7 +9,7 @@ from dvc.repo.plot.data import WORKSPACE_REVISION_NAME
+ logger = logging.getLogger(__name__)
+ 
+ 
+-class CmdPLot(CmdBase):
++class CmdPlots(CmdBase):
+     def _revisions(self):
+         raise NotImplementedError
+ 
+@@ -79,12 +79,12 @@ class CmdPLot(CmdBase):
+         return 0
+ 
+ 
+-class CmdPlotShow(CmdPLot):
++class CmdPlotsShow(CmdPlots):
+     def _revisions(self):
+         return None
+ 
+ 
+-class CmdPlotDiff(CmdPLot):
++class CmdPlotsDiff(CmdPlots):
+     def _revisions(self):
+         revisions = self.args.revisions or []
+         if len(revisions) <= 1:
+@@ -96,29 +96,29 @@ class CmdPlotDiff(CmdPLot):
+ 
+ def add_parser(subparsers, parent_parser):
+     PLOT_HELP = (
+-        "Generating plots for metrics stored in structured files "
++        "Generate plots for metrics stored in structured files "
+         "(JSON, CSV, TSV)."
+     )
+ 
+     plot_parser = subparsers.add_parser(
+-        "plot",
++        "plots",
+         parents=[parent_parser],
+-        description=append_doc_link(PLOT_HELP, "plot"),
++        description=append_doc_link(PLOT_HELP, "plots"),
+         help=PLOT_HELP,
+         formatter_class=argparse.RawDescriptionHelpFormatter,
+     )
+     plot_subparsers = plot_parser.add_subparsers(
+         dest="cmd",
+-        help="Use `dvc plot CMD --help` to display command-specific help.",
++        help="Use `dvc plots CMD --help` to display command-specific help.",
+     )
+ 
+     fix_subparsers(plot_subparsers)
+ 
+-    SHOW_HELP = "Generate a plot image file from a metrics file."
++    SHOW_HELP = "Generate a plot from a metrics file."
+     plot_show_parser = plot_subparsers.add_parser(
+         "show",
+         parents=[parent_parser],
+-        description=append_doc_link(SHOW_HELP, "plot/show"),
++        description=append_doc_link(SHOW_HELP, "plots/show"),
+         help=SHOW_HELP,
+         formatter_class=argparse.RawDescriptionHelpFormatter,
+     )
+@@ -168,7 +168,7 @@ def add_parser(subparsers, parent_parser):
+     plot_show_parser.add_argument(
+         "datafile", nargs="?", default=None, help="Metrics file to visualize.",
+     )
+-    plot_show_parser.set_defaults(func=CmdPlotShow)
++    plot_show_parser.set_defaults(func=CmdPlotsShow)
+ 
+     PLOT_DIFF_HELP = (
+         "Plot metrics differences between commits in the DVC "
+@@ -177,7 +177,7 @@ def add_parser(subparsers, parent_parser):
+     plot_diff_parser = plot_subparsers.add_parser(
+         "diff",
+         parents=[parent_parser],
+-        description=append_doc_link(PLOT_DIFF_HELP, "plot/diff"),
++        description=append_doc_link(PLOT_DIFF_HELP, "plots/diff"),
+         help=PLOT_DIFF_HELP,
+         formatter_class=argparse.RawDescriptionHelpFormatter,
+     )
+@@ -220,7 +220,7 @@ def add_parser(subparsers, parent_parser):
+         "--no-csv-header",
+         action="store_true",
+         default=False,
+-        help="Provided CSV ot TSV datafile does not have a header.",
++        help="Provided CSV or TSV datafile does not have a header.",
+     )
+     plot_diff_parser.add_argument(
+         "--no-html",
+@@ -237,4 +237,10 @@ def add_parser(subparsers, parent_parser):
+         default=None,
+         help="Git revisions to plot from",
+     )
+-    plot_diff_parser.set_defaults(func=CmdPlotDiff)
++    plot_diff_parser.set_defaults(func=CmdPlotsDiff)
++
++
++# Compatibility imports for callers which used the pre-1.0 class names.
++CmdPLot = CmdPlots
++CmdPlotShow = CmdPlotsShow
++CmdPlotDiff = CmdPlotsDiff
+diff --git a/dvc/output/__init__.py b/dvc/output/__init__.py
+index a7630e5..718a336 100644
+--- a/dvc/output/__init__.py
++++ b/dvc/output/__init__.py
+@@ -55,9 +55,10 @@ SCHEMA[Required(BaseOutput.PARAM_PATH)] = str
+ SCHEMA[BaseOutput.PARAM_CACHE] = bool
+ SCHEMA[BaseOutput.PARAM_METRIC] = BaseOutput.METRIC_SCHEMA
+ SCHEMA[BaseOutput.PARAM_PERSIST] = bool
++SCHEMA[BaseOutput.PARAM_PLOT] = bool
+ 
+ 
+-def _get(stage, p, info, cache, metric, persist=False):
++def _get(stage, p, info, cache, metric, persist=False, plot=False):
+     parsed = urlparse(p)
+ 
+     if parsed.scheme == "remote":
+@@ -70,6 +71,7 @@ def _get(stage, p, info, cache, metric, persist=False):
+             remote=remote,
+             metric=metric,
+             persist=persist,
++            plot=plot,
+         )
+ 
+     for o in OUTS:
+@@ -82,6 +84,7 @@ def _get(stage, p, info, cache, metric, persist=False):
+                 remote=None,
+                 metric=metric,
+                 persist=persist,
++                plot=plot,
+             )
+     return LocalOutput(
+         stage,
+@@ -91,6 +94,7 @@ def _get(stage, p, info, cache, metric, persist=False):
+         remote=None,
+         metric=metric,
+         persist=persist,
++        plot=plot,
+     )
+ 
+ 
+@@ -101,25 +105,42 @@ def loadd_from(stage, d_list):
+         cache = d.pop(BaseOutput.PARAM_CACHE, True)
+         metric = d.pop(BaseOutput.PARAM_METRIC, False)
+         persist = d.pop(BaseOutput.PARAM_PERSIST, False)
++        plot = d.pop(BaseOutput.PARAM_PLOT, False)
+         ret.append(
+             _get(
+-                stage, p, info=d, cache=cache, metric=metric, persist=persist,
++                stage,
++                p,
++                info=d,
++                cache=cache,
++                metric=metric,
++                persist=persist,
++                plot=plot,
+             )
+         )
+     return ret
+ 
+ 
+-def loads_from(stage, s_list, use_cache=True, metric=False, persist=False):
++def loads_from(
++    stage, s_list, use_cache=True, metric=False, persist=False, plot=False
++):
+     ret = []
+     for s in s_list:
++        if isinstance(s, dict):
++            assert len(s) == 1
++            path, flags = next(iter(s.items()))
++            flags = flags or {}
++        else:
++            path, flags = s, {}
++
+         ret.append(
+             _get(
+                 stage,
+-                s,
++                path,
+                 info={},
+-                cache=use_cache,
+-                metric=metric,
+-                persist=persist,
++                cache=flags.get(BaseOutput.PARAM_CACHE, use_cache),
++                metric=flags.get(BaseOutput.PARAM_METRIC, metric),
++                persist=flags.get(BaseOutput.PARAM_PERSIST, persist),
++                plot=flags.get(BaseOutput.PARAM_PLOT, plot),
+             )
+         )
+     return ret
+diff --git a/dvc/output/base.py b/dvc/output/base.py
+index 21fa415..0b566bb 100644
+--- a/dvc/output/base.py
++++ b/dvc/output/base.py
+@@ -51,6 +51,7 @@ class BaseOutput(object):
+     PARAM_METRIC_TYPE = "type"
+     PARAM_METRIC_XPATH = "xpath"
+     PARAM_PERSIST = "persist"
++    PARAM_PLOT = "plot"
+ 
+     METRIC_SCHEMA = Any(
+         None,
+@@ -76,6 +77,7 @@ class BaseOutput(object):
+         cache=True,
+         metric=False,
+         persist=False,
++        plot=False,
+     ):
+         self._validate_output_path(path)
+         # This output (and dependency) objects have too many paths/urls
+@@ -96,6 +98,7 @@ class BaseOutput(object):
+         self.use_cache = False if self.IS_DEPENDENCY else cache
+         self.metric = False if self.IS_DEPENDENCY else metric
+         self.persist = persist
++        self.plot = False if self.IS_DEPENDENCY else plot
+ 
+         self.path_info = self._parse_path(remote, path)
+         if self.use_cache and self.cache is None:
+@@ -267,15 +270,18 @@ class BaseOutput(object):
+ 
+         ret[self.PARAM_CACHE] = self.use_cache
+ 
+-        if isinstance(self.metric, dict):
++        metric = copy(self.metric)
++        if isinstance(metric, dict):
+             if (
+-                self.PARAM_METRIC_XPATH in self.metric
+-                and not self.metric[self.PARAM_METRIC_XPATH]
++                self.PARAM_METRIC_XPATH in metric
++                and not metric[self.PARAM_METRIC_XPATH]
+             ):
+-                del self.metric[self.PARAM_METRIC_XPATH]
++                del metric[self.PARAM_METRIC_XPATH]
+ 
+-        ret[self.PARAM_METRIC] = self.metric
++        ret[self.PARAM_METRIC] = metric
+         ret[self.PARAM_PERSIST] = self.persist
++        if self.plot:
++            ret[self.PARAM_PLOT] = self.plot
+ 
+         return ret
+ 
+diff --git a/dvc/repo/diff.py b/dvc/repo/diff.py
+index bdc886c..bf7958c 100644
+--- a/dvc/repo/diff.py
++++ b/dvc/repo/diff.py
+@@ -53,12 +53,17 @@ def diff(self, a_rev="HEAD", b_rev=None):
+         }
+ 
+     working_tree = self.tree
+-    a_tree = self.scm.get_tree(a_rev)
++    # An unborn Git repository has no HEAD tree. Treat it as an empty old
++    # revision so that the workspace's DVC outputs are reported as added.
++    a_tree = self.scm.get_tree(a_rev) if self.scm.has_rev("HEAD") else None
+     b_tree = self.scm.get_tree(b_rev) if b_rev else working_tree
+ 
+     try:
+-        self.tree = a_tree
+-        old = _paths_checksums()
++        if a_tree is None:
++            old = {}
++        else:
++            self.tree = a_tree
++            old = _paths_checksums()
+ 
+         self.tree = b_tree
+         new = _paths_checksums()
+diff --git a/dvc/repo/plot/__init__.py b/dvc/repo/plot/__init__.py
+index 1d7f544..1bf178d 100644
+--- a/dvc/repo/plot/__init__.py
++++ b/dvc/repo/plot/__init__.py
+@@ -10,7 +10,8 @@ from dvc.repo.plot.template import NoDataForTemplateError, Template
+ 
+ logger = logging.getLogger(__name__)
+ 
+-PAGE_HTML = """<html>
++PAGE_HTML = """<!DOCTYPE html>
++<html>
+ <head>
+     <title>DVC Plot</title>
+     <script src="https://cdn.jsdelivr.net/npm/vega@5.10.0"></script>
+diff --git a/dvc/repo/plot/template.py b/dvc/repo/plot/template.py
+index cc59014..e016bd8 100644
+--- a/dvc/repo/plot/template.py
++++ b/dvc/repo/plot/template.py
+@@ -59,6 +59,7 @@ class Template:
+                 indent=self.INDENT,
+                 separators=self.SEPARATORS,
+             )
++            fobj.write("\n")
+ 
+     @staticmethod
+     def get_data_anchor(template_content):
+@@ -191,6 +192,7 @@ class DefaultLinearTemplate(Template):
+                 "field": Template.Y_ANCHOR,
+                 "type": "quantitative",
+                 "title": Template.Y_TITLE_ANCHOR,
++                "scale": {"zero": False},
+             },
+             "color": {"field": "rev", "type": "nominal"},
+         },
+@@ -240,6 +242,7 @@ class DefaultScatterTemplate(Template):
+                 "field": Template.Y_ANCHOR,
+                 "type": "quantitative",
+                 "title": Template.Y_TITLE_ANCHOR,
++                "scale": {"zero": False},
+             },
+             "color": {"field": "rev", "type": "nominal"},
+         },
+@@ -247,7 +250,7 @@ class DefaultScatterTemplate(Template):
+ 
+ 
+ class PlotTemplates:
+-    TEMPLATES_DIR = "plot"
++    TEMPLATES_DIR = "plots"
+     TEMPLATES = [
+         DefaultLinearTemplate,
+         DefaultConfusionTemplate,
+diff --git a/dvc/schema.py b/dvc/schema.py
+index 9695a9b..9013e30 100644
+--- a/dvc/schema.py
++++ b/dvc/schema.py
+@@ -1,8 +1,9 @@
+-from voluptuous import Any, Optional, Required, Schema
++from voluptuous import All, Any, Length, Optional, Required, Schema
+ 
+ from dvc import dependency, output
+ from dvc.output import CHECKSUMS_SCHEMA
+-from dvc.stage.params import OutputParams, StageParams
++from dvc.output.base import BaseOutput
++from dvc.stage.params import StageParams
+ 
+ STAGES = "stages"
+ SINGLE_STAGE_SCHEMA = {
+@@ -16,6 +17,12 @@ SINGLE_STAGE_SCHEMA = {
+     StageParams.PARAM_ALWAYS_CHANGED: bool,
+ }
+ 
++# Dependencies share most of the output schema, but output markers are not
++# valid dependency attributes.
++DEPENDENCY_SCHEMA = dependency.SCHEMA.copy()
++DEPENDENCY_SCHEMA.pop(BaseOutput.PARAM_PLOT, None)
++SINGLE_STAGE_SCHEMA[StageParams.PARAM_DEPS] = Any([DEPENDENCY_SCHEMA], None)
++
+ DATA_SCHEMA = {**CHECKSUMS_SCHEMA, Required("path"): str}
+ LOCK_FILE_STAGE_SCHEMA = {
+     Required(StageParams.PARAM_CMD): str,
+@@ -25,6 +32,21 @@ LOCK_FILE_STAGE_SCHEMA = {
+ }
+ LOCKFILE_SCHEMA = {str: LOCK_FILE_STAGE_SCHEMA}
+ 
++PIPELINE_OUTPUT_SCHEMA = Any(
++    str,
++    All(
++        {
++            str: {
++                Optional(BaseOutput.PARAM_CACHE): bool,
++                Optional(BaseOutput.PARAM_METRIC): BaseOutput.METRIC_SCHEMA,
++                Optional(BaseOutput.PARAM_PERSIST): bool,
++                Optional(BaseOutput.PARAM_PLOT): bool,
++            }
++        },
++        Length(min=1, max=1),
++    ),
++)
++
+ SINGLE_PIPELINE_STAGE_SCHEMA = {
+     str: {
+         StageParams.PARAM_CMD: str,
+@@ -34,7 +56,7 @@ SINGLE_PIPELINE_STAGE_SCHEMA = {
+         Optional(StageParams.PARAM_LOCKED): bool,
+         Optional(StageParams.PARAM_META): object,
+         Optional(StageParams.PARAM_ALWAYS_CHANGED): bool,
+-        **{Optional(p.value): [str] for p in OutputParams},
++        Optional(StageParams.PARAM_OUTS): [PIPELINE_OUTPUT_SCHEMA],
+     }
+ }
+ MULTI_STAGE_SCHEMA = {STAGES: SINGLE_PIPELINE_STAGE_SCHEMA}
+diff --git a/dvc/serialize.py b/dvc/serialize.py
+index 1088531..f4908dd 100644
+--- a/dvc/serialize.py
++++ b/dvc/serialize.py
+@@ -21,17 +21,20 @@ sort_by_path = partial(sorted, key=attrgetter("def_path"))
+ 
+ 
+ def _get_outs(stage: "PipelineStage"):
+-    outs_bucket = {}
++    outs = []
+     for o in sort_by_path(stage.outs):
+-        bucket_key = ["metrics"] if o.metric else ["outs"]
+-
+-        if not o.metric and o.persist:
+-            bucket_key += ["persist"]
++        flags = OrderedDict()
+         if not o.use_cache:
+-            bucket_key += ["no_cache"]
+-        key = "_".join(bucket_key)
+-        outs_bucket[key] = outs_bucket.get(key, []) + [o.def_path]
+-    return [(key, outs_bucket[key]) for key in sorted(outs_bucket.keys())]
++            flags[o.PARAM_CACHE] = False
++        if o.metric:
++            flags[o.PARAM_METRIC] = o.metric
++        if o.persist:
++            flags[o.PARAM_PERSIST] = True
++        if o.plot:
++            flags[o.PARAM_PLOT] = True
++
++        outs.append({o.def_path: flags} if flags else o.def_path)
++    return outs
+ 
+ 
+ def get_params_deps(stage: "PipelineStage"):
+@@ -80,7 +83,7 @@ def to_pipeline_file(stage: "PipelineStage"):
+         (stage.PARAM_WDIR, stage.resolve_wdir()),
+         (stage.PARAM_DEPS, sorted([d.def_path for d in deps])),
+         (stage.PARAM_PARAMS, serialized_params),
+-        *_get_outs(stage),
++        (stage.PARAM_OUTS, _get_outs(stage)),
+         (stage.PARAM_LOCKED, stage.locked),
+         (stage.PARAM_ALWAYS_CHANGED, stage.always_changed),
+     ]
+diff --git a/dvc/utils/diff.py b/dvc/utils/diff.py
+index 9b57f62..f9eb823 100644
+--- a/dvc/utils/diff.py
++++ b/dvc/utils/diff.py
+@@ -85,7 +85,7 @@ def diff(old, new, with_unchanged=False):
+     return dict(res)
+ 
+ 
+-def table(header, rows):
++def table(header, rows, markdown=False):
+     from texttable import Texttable
+ 
+     if not rows:
+@@ -96,9 +96,15 @@ def table(header, rows):
+     # disable automatic formatting
+     t.set_cols_dtype(["t"] * len(header))
+ 
+-    # remove borders to make it easier for users to copy stuff
+-    t.set_chars([""] * len(header))
+-    t.set_deco(0)
++    if markdown:
++        # A leading/trailing pipe is optional in Markdown tables. Keeping
++        # those borders off also makes the output easy to paste elsewhere.
++        t.set_chars(["-", "|", "|", "-"])
++        t.set_deco(Texttable.HEADER | Texttable.VLINES)
++    else:
++        # remove borders to make it easier for users to copy stuff
++        t.set_chars([""] * len(header))
++        t.set_deco(0)
+ 
+     t.add_rows([header] + rows)
+ 
+diff --git a/scripts/completion/dvc.bash b/scripts/completion/dvc.bash
+index 78f966a..ab1219b 100644
+--- a/scripts/completion/dvc.bash
++++ b/scripts/completion/dvc.bash
+@@ -5,8 +5,8 @@
+ #   - https://stackoverflow.com/questions/12933362
+ 
+ _dvc_commands='add cache checkout commit config destroy diff fetch get-url get gc \
+-  import-url import init install lock list metrics move pipeline plot pull push \
+-  remote remove repro root run status unlock unprotect update version'
++  import-url import init install lock list metrics move params pipeline plots \
++  pull push remote remove repro root run status unlock unprotect update version'
+ 
+ _dvc_options='-h --help -V --version'
+ _dvc_global_options='-h --help -q --quiet -v --verbose'
+@@ -21,7 +21,7 @@ _dvc_commit='-f --force -d --with-deps -R --recursive'
+ _dvc_commit_COMPGEN=_dvc_compgen_DVCFiles
+ _dvc_config='-u --unset --local --system --global'
+ _dvc_destroy='-f --force'
+-_dvc_diff='-t --show-json --show-hash'
++_dvc_diff='--show-json --show-hash'
+ _dvc_fetch='-j --jobs -r --remote -a --all-branches -T --all-tags -d --with-deps -R --recursive'
+ _dvc_fetch_COMPGEN=_dvc_compgen_DVCFiles
+ _dvc_gc='-a --all-branches --all-commits -T --all-tags -w --workspace -c --cloud -r --remote -f --force -p --projects -j --jobs'
+@@ -35,15 +35,13 @@ _dvc_list='-R --recursive --outs-only --rev'
+ _dvc_list_COMPGEN=_dvc_compgen_files
+ _dvc_lock=''
+ _dvc_lock_COMPGEN=_dvc_compgen_DVCFiles
+-_dvc_metrics='add diff modify remove show'
+-_dvc_metrics_add='-t --type -x --xpath'
++_dvc_metrics='add diff remove show'
++_dvc_metrics_add=''
+ _dvc_metrics_add_COMPGEN=_dvc_compgen_files
+-_dvc_metrics_diff='--targets -t --type -x --xpath -R --show-json'
+-_dvc_metrics_modify='-t --type -x --xpath'
+-_dvc_metrics_modify_COMPGEN=_dvc_compgen_files
++_dvc_metrics_diff='--targets -R --recursive --all --show-json --show-md'
+ _dvc_metrics_remove=''
+ _dvc_metrics_remove_COMPGEN=_dvc_compgen_files
+-_dvc_metrics_show='-t --type -x --xpath -a --all-branches -T --all-tags -R --recursive'
++_dvc_metrics_show='-a --all-branches -T --all-tags --all-commits -R --recursive --show-json'
+ _dvc_metrics_show_COMPGEN=_dvc_compgen_files
+ _dvc_move=''
+ _dvc_move_COMPGEN=_dvc_compgen_files
+@@ -51,9 +49,11 @@ _dvc_pipeline='list show'
+ _dvc_pipeline_list=''
+ _dvc_pipeline_show='-c --commands -o --outs --ascii --dot --tree -l --locked'
+ _dvc_pipeline_show_COMPGEN=_dvc_compgen_DVCFiles
+-_dvc_plot='show diff'
+-_dvc_plot_show='-t --template -f --file -s --select -x -y --stdout --no-csv-header --no-html --title --xlab --ylab'
+-_dvc_plot_diff='-t --template -d --datafile -f --file -s --select -x -y --stdout --no-csv-header --no-html --title --xlab --ylab'
++_dvc_params='diff'
++_dvc_params_diff='--all --show-json --show-md'
++_dvc_plots='show diff'
++_dvc_plots_show='-t --template -f --file -s --select -x -y --stdout --no-csv-header --no-html --title --xlab --ylab'
++_dvc_plots_diff='-t --template -d --datafile -f --file -s --select -x -y --stdout --no-csv-header --no-html --title --xlab --ylab'
+ _dvc_pull='-j --jobs -r --remote -a --all-branches -T --all-tags -f --force -d --with-deps -R --recursive'
+ _dvc_pull_COMPGEN=_dvc_compgen_DVCFiles
+ _dvc_push='-j --jobs -r --remote -a --all-branches -T --all-tags -d --with-deps -R --recursive'
+diff --git a/scripts/completion/dvc.zsh b/scripts/completion/dvc.zsh
+index 8e6fbfb..855a6d3 100644
+--- a/scripts/completion/dvc.zsh
++++ b/scripts/completion/dvc.zsh
+@@ -31,10 +31,11 @@ _dvc_commands() {
+     "lock:Lock DVC-file."
+     "metrics:Commands to add, manage, collect and display metrics."
+     "move:Rename or move a DVC controlled data file or a directory."
++    "params:Commands to display params."
+     "pipeline:Manage pipelines."
+     "pull:Pull data files from a DVC remote storage."
+     "push:Push data files to a DVC remote storage."
+-    "plot:Generate plot for metrics structured as JSON, CSV or TSV."
++    "plots:Generate plots for metrics structured as JSON, CSV or TSV."
+     "remote:Manage remote storage configuration."
+     "remove:Remove outputs of DVC-file."
+     "repro:Check for changes and reproduce DVC-file and dependencies."
+@@ -174,7 +175,11 @@ _dvc_list=(
+ )
+ 
+ _dvc_metrics=(
+-  "1:Sub command:(add show diff modify remove)"
++  "1:Sub command:(add show diff remove)"
++)
++
++_dvc_params=(
++  "1:Sub command:(diff)"
+ )
+ 
+ _dvc_move=(
+@@ -207,7 +212,7 @@ _dvc_push=(
+   "*:Stages:_files -g '(*.dvc|Dvcfile)'"
+ )
+ 
+-_dvc_plot=(
++_dvc_plots=(
+   "1:Sub command:(show diff)"
+ )
+ 
+@@ -312,10 +317,11 @@ case $words[1] in
+   list) _arguments $_dvc_global_options $_dvc_list ;;
+   metrics) _arguments $_dvc_global_options $_dvc_metrics ;;
+   move) _arguments $_dvc_global_options $_dvc_move ;;
++  params) _arguments $_dvc_global_options $_dvc_params ;;
+   pipeline) _arguments $_dvc_global_options $_dvc_pipeline ;;
+   pull) _arguments $_dvc_global_options $_dvc_pull ;;
+   push) _arguments $_dvc_global_options $_dvc_push ;;
+-  plot) _arguments $_dvc_global_options $_dvc_plot ;;
++  plots) _arguments $_dvc_global_options $_dvc_plots ;;
+   remote) _arguments $_dvc_global_options $_dvc_remote ;;
+   remove) _arguments $_dvc_global_options $_dvc_remove ;;
+   repro) _arguments $_dvc_global_options $_dvc_repro ;;
+diff --git a/tests/func/test_diff.py b/tests/func/test_diff.py
+index 66579c2..74102ad 100644
+--- a/tests/func/test_diff.py
++++ b/tests/func/test_diff.py
+@@ -32,6 +32,30 @@ def test_added(tmp_dir, scm, dvc):
+     }
+ 
+ 
++def test_repo_without_commits(tmp_dir):
++    from git import Repo as GitRepo
++
++    from dvc.repo import Repo
++
++    repo_dir = tmp_dir / "empty"
++    repo_dir.mkdir()
++    GitRepo.init(str(repo_dir)).close()
++    repo = Repo.init(str(repo_dir))
++    try:
++        (repo_dir / "file").write_text("text")
++        (repo_dir / "file.dvc").write_text(
++            "outs:\n- md5: {}\n  path: file\n".format(digest("text"))
++        )
++
++        assert repo.diff() == {
++            "added": [{"path": "file", "hash": digest("text")}],
++            "deleted": [],
++            "modified": [],
++        }
++    finally:
++        repo.close()
++
++
+ def test_no_cache_entry(tmp_dir, scm, dvc):
+     tmp_dir.dvc_gen("file", "first", commit="add a file")
+ 
+diff --git a/tests/func/test_dvcfile.py b/tests/func/test_dvcfile.py
+index 51e6e00..042fe45 100644
+--- a/tests/func/test_dvcfile.py
++++ b/tests/func/test_dvcfile.py
+@@ -29,6 +29,63 @@ def test_run_load_one_for_multistage(tmp_dir, dvc):
+     assert dvc.reproduce(":copy-foo-foo2")
+ 
+ 
++def test_load_unified_pipeline_output_attributes(tmp_dir, dvc):
++    tmp_dir.gen(
++        {
++            PIPELINE_FILE: (
++                "stages:\n"
++                "  report:\n"
++                "    cmd: echo report\n"
++                "    outs:\n"
++                "    - report.json:\n"
++                "        cache: false\n"
++                "        metric: true\n"
++                "        persist: true\n"
++                "        plot: true\n"
++            )
++        }
++    )
++
++    (output,) = Dvcfile(dvc, PIPELINE_FILE).stages["report"].outs
++    assert output.def_path == "report.json"
++    assert not output.use_cache
++    assert output.metric
++    assert output.persist
++    assert output.plot
++
++
++def test_dump_unified_pipeline_output_attributes(tmp_dir, dvc):
++    tmp_dir.gen("source", "source")
++    stage = dvc.run(
++        cmd="cp source report.json",
++        deps=["source"],
++        name="report",
++        outs_persist_no_cache=["report.json"],
++    )
++    stage.outs[0].metric = True
++    stage.outs[0].plot = True
++    stage.dvcfile.dump(stage, update_pipeline=True)
++
++    data, _ = Dvcfile(dvc, PIPELINE_FILE)._load()
++    assert data["stages"]["report"]["outs"] == [
++        {
++            "report.json": {
++                "cache": False,
++                "metric": True,
++                "persist": True,
++                "plot": True,
++            }
++        }
++    ]
++
++
++def test_load_plot_marker_from_single_stage_file(tmp_dir, dvc):
++    tmp_dir.gen("plot.dvc", "outs:\n- path: plot.json\n  plot: true\n")
++
++    (output,) = Dvcfile(dvc, "plot.dvc").stage.outs
++    assert output.plot
++
++
+ def test_run_load_one_for_multistage_non_existing(tmp_dir, dvc):
+     with pytest.raises(StageFileDoesNotExistError):
+         assert Dvcfile(dvc, PIPELINE_FILE).stages.get("copy-foo-foo2")
+diff --git a/tests/func/test_plot.py b/tests/func/test_plot.py
+index cd1acc6..ea735b5 100644
+--- a/tests/func/test_plot.py
++++ b/tests/func/test_plot.py
+@@ -10,13 +10,13 @@ from bs4 import BeautifulSoup
+ from funcy import first
+ 
+ from dvc.compat import fspath
+-from dvc.repo.plot import NoDataOrTemplateProvided
+-from dvc.repo.plot.data import (
++from dvc.repo.plots import NoDataOrTemplateProvided
++from dvc.repo.plots.data import (
+     NoMetricInHistoryError,
+     PlotData,
+     PlotMetricTypeError,
+ )
+-from dvc.repo.plot.template import (
++from dvc.repo.plots.template import (
+     NoDataForTemplateError,
+     NoFieldInDataError,
+     TemplateNotFoundError,
+@@ -245,7 +245,7 @@ def test_plot_multiple_revs_default(tmp_dir, scm, dvc):
+ 
+ def test_plot_multiple_revs(tmp_dir, scm, dvc):
+     shutil.copy(
+-        fspath(tmp_dir / ".dvc" / "plot" / "default.json"), "template.json"
++        fspath(tmp_dir / ".dvc" / "plots" / "default.json"), "template.json"
+     )
+ 
+     metric_1 = [{"y": 2}, {"y": 3}]
+@@ -326,7 +326,7 @@ def test_throw_on_no_metric_at_all(tmp_dir, scm, dvc, caplog):
+ def custom_template(tmp_dir, dvc):
+     custom_template = tmp_dir / "custom_template.json"
+     shutil.copy(
+-        fspath(tmp_dir / ".dvc" / "plot" / "default.json"),
++        fspath(tmp_dir / ".dvc" / "plots" / "default.json"),
+         fspath(custom_template),
+     )
+     return custom_template
+@@ -383,7 +383,7 @@ def test_custom_template_with_specified_data(
+ 
+ def test_plot_override_specified_data_source(tmp_dir, scm, dvc):
+     shutil.copy(
+-        fspath(tmp_dir / ".dvc" / "plot" / "default.json"),
++        fspath(tmp_dir / ".dvc" / "plots" / "default.json"),
+         fspath(tmp_dir / "newtemplate.json"),
+     )
+     _replace(
+@@ -475,6 +475,8 @@ def test_plot_embed(tmp_dir, scm, dvc):
+ 
+     plot_string = dvc.plot("metric.json", embed=True, y_field="val")
+ 
++    assert plot_string.startswith("<!DOCTYPE html>")
++
+     page_content = BeautifulSoup(plot_string)
+     data_dump = json.dumps(
+         [
+diff --git a/tests/unit/command/test_metrics.py b/tests/unit/command/test_metrics.py
+index 9b1c5a2..443a1d4 100644
+--- a/tests/unit/command/test_metrics.py
++++ b/tests/unit/command/test_metrics.py
+@@ -135,3 +135,24 @@ def test_metrics_diff_sorted():
+         "metrics.yaml   a.d.e    4       1     \n"
+         "metrics.yaml   x.b      6       1     "
+     )
++
++
++def test_metrics_diff_markdown():
++    assert _show_diff(
++        {"metrics.json": {"a.b.c": {"old": 1, "new": 2, "diff": 1}}},
++        markdown=True,
++    ) == (
++        "    Path     | Metric | Value | Change\n"
++        "-------------|--------|-------|-------\n"
++        "metrics.json | a.b.c  | 2     | 1     "
++    )
++
++
++def test_metrics_diff_show_md_flag(dvc, mocker):
++    cli_args = parse_args(["metrics", "diff", "--show-md"])
++    cmd = cli_args.func(cli_args)
++    mocker.patch("dvc.repo.metrics.diff.diff", return_value={})
++    show = mocker.patch("dvc.command.metrics._show_diff", return_value="")
++
++    assert cmd.run() == 0
++    show.assert_called_once_with({}, markdown=True)
+diff --git a/tests/unit/command/test_params.py b/tests/unit/command/test_params.py
+index bb0b6f1..1a5c738 100644
+--- a/tests/unit/command/test_params.py
++++ b/tests/unit/command/test_params.py
+@@ -100,3 +100,24 @@ def test_params_diff_sorted():
+         "params.yaml   a.d.e   3     4  \n"
+         "params.yaml   x.b     5     6  "
+     )
++
++
++def test_params_diff_markdown():
++    assert _show_diff(
++        {"params.yaml": {"train.lr": {"old": 0.1, "new": 0.2}}},
++        markdown=True,
++    ) == (
++        "   Path     |  Param   | Old | New\n"
++        "------------|----------|-----|----\n"
++        "params.yaml | train.lr | 0.1 | 0.2"
++    )
++
++
++def test_params_diff_show_md_flag(dvc, mocker):
++    cli_args = parse_args(["params", "diff", "--show-md"])
++    cmd = cli_args.func(cli_args)
++    mocker.patch("dvc.repo.params.diff.diff", return_value={})
++    show = mocker.patch("dvc.command.params._show_diff", return_value="")
++
++    assert cmd.run() == 0
++    show.assert_called_once_with({}, markdown=True)
+diff --git a/tests/unit/command/test_plot.py b/tests/unit/command/test_plot.py
+index 1a4d3fb..ac10e42 100644
+--- a/tests/unit/command/test_plot.py
++++ b/tests/unit/command/test_plot.py
+@@ -1,13 +1,13 @@
+ import pytest
+ 
+ from dvc.cli import parse_args
+-from dvc.command.plot import CmdPlotDiff, CmdPlotShow
++from dvc.command.plots import CmdPlotsDiff, CmdPlotsShow
+ 
+ 
+ def test_metrics_diff(mocker):
+     cli_args = parse_args(
+         [
+-            "plot",
++            "plots",
+             "diff",
+             "--file",
+             "result.extension",
+@@ -34,7 +34,7 @@ def test_metrics_diff(mocker):
+             "tag2",
+         ]
+     )
+-    assert cli_args.func == CmdPlotDiff
++    assert cli_args.func == CmdPlotsDiff
+ 
+     cmd = cli_args.func(cli_args)
+ 
+@@ -63,7 +63,7 @@ def test_metrics_diff(mocker):
+ def test_metrics_show(mocker):
+     cli_args = parse_args(
+         [
+-            "plot",
++            "plots",
+             "show",
+             "-f",
+             "result.extension",
+@@ -77,7 +77,7 @@ def test_metrics_show(mocker):
+             "datafile",
+         ]
+     )
+-    assert cli_args.func == CmdPlotShow
++    assert cli_args.func == CmdPlotsShow
+ 
+     cmd = cli_args.func(cli_args)
+ 
+@@ -115,7 +115,7 @@ def test_metrics_show(mocker):
+ def test_revisions(mocker, arg_revisions, is_dirty, expected_revisions):
+     args = mocker.MagicMock()
+ 
+-    cmd = CmdPlotDiff(args)
++    cmd = CmdPlotsDiff(args)
+     mocker.patch.object(args, "revisions", arg_revisions)
+     mocker.patch.object(cmd.repo.scm, "is_dirty", return_value=is_dirty)
+ 
+diff --git a/tests/unit/output/test_output.py b/tests/unit/output/test_output.py
+index c09392f..7e6bf73 100644
+--- a/tests/unit/output/test_output.py
++++ b/tests/unit/output/test_output.py
+@@ -87,3 +87,25 @@ def test_get_used_cache(exists, expected_message, mocker, caplog):
+     with caplog.at_level(logging.WARNING, logger="dvc"):
+         assert isinstance(output.get_used_cache(), NamedCache)
+     assert first(caplog.messages) == expected_message
++
++
++def test_plot_output_attribute(mocker):
++    stage = mocker.MagicMock()
++    output = BaseOutput(
++        stage,
++        "plot.json",
++        info={},
++        cache=False,
++        metric=True,
++        persist=True,
++        plot=True,
++    )
++
++    assert output.plot
++    assert output.dumpd() == {
++        "path": "plot.json",
++        "cache": False,
++        "metric": True,
++        "persist": True,
++        "plot": True,
++    }
+diff --git a/tests/unit/test_dvcfile.py b/tests/unit/test_dvcfile.py
+index 41982e5..4ada325 100644
+--- a/tests/unit/test_dvcfile.py
++++ b/tests/unit/test_dvcfile.py
+@@ -1,6 +1,8 @@
+ import pytest
++from voluptuous import MultipleInvalid
+ 
+ from dvc.dvcfile import Dvcfile, PipelineFile, SingleStageFile
++from dvc.schema import COMPILED_MULTI_STAGE_SCHEMA
+ 
+ 
+ @pytest.mark.parametrize(
+@@ -24,3 +26,47 @@ def test_pipelines_file(path):
+ def test_pipelines_single_stage_file(path):
+     file_obj = Dvcfile(object(), path)
+     assert isinstance(file_obj, SingleStageFile)
++
++
++def test_unified_pipeline_output_schema():
++    data = {
++        "stages": {
++            "train": {
++                "cmd": "python train.py",
++                "outs": [
++                    "model.pkl",
++                    {
++                        "report.json": {
++                            "cache": False,
++                            "metric": True,
++                            "persist": True,
++                            "plot": True,
++                        }
++                    },
++                ],
++            }
++        }
++    }
++
++    assert COMPILED_MULTI_STAGE_SCHEMA(data) == data
++
++
++@pytest.mark.parametrize(
++    "legacy_key",
++    [
++        "outs_no_cache",
++        "outs_persist",
++        "outs_persist_no_cache",
++        "metrics",
++        "metrics_no_cache",
++    ],
++)
++def test_pipeline_output_schema_rejects_legacy_buckets(legacy_key):
++    data = {
++        "stages": {
++            "train": {"cmd": "python train.py", legacy_key: ["out"]}
++        }
++    }
++
++    with pytest.raises(MultipleInvalid):
++        COMPILED_MULTI_STAGE_SCHEMA(data)
+diff --git a/tests/unit/test_plot.py b/tests/unit/test_plot.py
+index 016f63d..c77a7f9 100644
+--- a/tests/unit/test_plot.py
++++ b/tests/unit/test_plot.py
+@@ -2,7 +2,11 @@ from collections import OrderedDict
+ 
+ import pytest
+ 
+-from dvc.repo.plot.data import _apply_path, _find_data, _lists
++from dvc.repo.plots.data import _apply_path, _find_data, _lists
++from dvc.repo.plots.template import (
++    DefaultLinearTemplate,
++    DefaultScatterTemplate,
++)
+ 
+ 
+ @pytest.mark.parametrize(
+@@ -46,3 +50,18 @@ def test_finding_data(fields):
+     result = _find_data(data, fields=fields)
+ 
+     assert result == [{"x": 2, "y": 3}, {"x": 1, "y": 5}]
++
++
++@pytest.mark.parametrize(
++    "template", [DefaultLinearTemplate, DefaultScatterTemplate]
++)
++def test_default_templates_do_not_force_zero_y_axis(template):
++    assert template.DEFAULT_CONTENT["encoding"]["y"]["scale"] == {
++        "zero": False
++    }
++
++
++def test_template_dump_ends_with_newline(tmp_path):
++    DefaultLinearTemplate(str(tmp_path)).dump()
++
++    assert (tmp_path / "default.json").read_bytes().endswith(b"\n")
+
+diff --git a/dvc/command/plots.py b/dvc/command/plots.py
+new file mode 100644
+index 0000000..8969c16
+--- /dev/null
++++ b/dvc/command/plots.py
+@@ -0,0 +1,8 @@
++from dvc.command.plot import (
++    CmdPlots,
++    CmdPlotsDiff,
++    CmdPlotsShow,
++    add_parser,
++)
++
++__all__ = ["CmdPlots", "CmdPlotsDiff", "CmdPlotsShow", "add_parser"]
+diff --git a/dvc/repo/plots/__init__.py b/dvc/repo/plots/__init__.py
+new file mode 100644
+index 0000000..2aed04a
+--- /dev/null
++++ b/dvc/repo/plots/__init__.py
+@@ -0,0 +1,23 @@
++from dvc.repo.plot import (
++    DIV_HTML,
++    PAGE_HTML,
++    NoDataOrTemplateProvided,
++    TooManyDataSourcesError,
++    _evaluate_templatepath,
++    _infer_y_field,
++    _parse_template,
++    fill_template,
++    plot,
++)
++
++__all__ = [
++    "DIV_HTML",
++    "PAGE_HTML",
++    "NoDataOrTemplateProvided",
++    "TooManyDataSourcesError",
++    "_evaluate_templatepath",
++    "_infer_y_field",
++    "_parse_template",
++    "fill_template",
++    "plot",
++]
+diff --git a/dvc/repo/plots/data.py b/dvc/repo/plots/data.py
+new file mode 100644
+index 0000000..6ca1dd7
+--- /dev/null
++++ b/dvc/repo/plots/data.py
+@@ -0,0 +1,43 @@
++from dvc.repo.plot.data import (
++    CSVPlotData,
++    JSONPlotData,
++    JsonParsingError,
++    NoMetricInHistoryError,
++    NoMetricOnRevisionError,
++    PlotData,
++    PlotDataStructureError,
++    PlotMetricTypeError,
++    WORKSPACE_REVISION_NAME,
++    YAMLPlotData,
++    _append_index,
++    _append_revision,
++    _apply_path,
++    _filter_fields,
++    _find_data,
++    _lists,
++    _load_from_revision,
++    _load_from_revisions,
++    plot_data,
++)
++
++__all__ = [
++    "CSVPlotData",
++    "JSONPlotData",
++    "JsonParsingError",
++    "NoMetricInHistoryError",
++    "NoMetricOnRevisionError",
++    "PlotData",
++    "PlotDataStructureError",
++    "PlotMetricTypeError",
++    "WORKSPACE_REVISION_NAME",
++    "YAMLPlotData",
++    "_append_index",
++    "_append_revision",
++    "_apply_path",
++    "_filter_fields",
++    "_find_data",
++    "_lists",
++    "_load_from_revision",
++    "_load_from_revisions",
++    "plot_data",
++]
+diff --git a/dvc/repo/plots/template.py b/dvc/repo/plots/template.py
+new file mode 100644
+index 0000000..0951af4
+--- /dev/null
++++ b/dvc/repo/plots/template.py
+@@ -0,0 +1,21 @@
++from dvc.repo.plot.template import (
++    DefaultConfusionTemplate,
++    DefaultLinearTemplate,
++    DefaultScatterTemplate,
++    NoDataForTemplateError,
++    NoFieldInDataError,
++    PlotTemplates,
++    Template,
++    TemplateNotFoundError,
++)
++
++__all__ = [
++    "DefaultConfusionTemplate",
++    "DefaultLinearTemplate",
++    "DefaultScatterTemplate",
++    "NoDataForTemplateError",
++    "NoFieldInDataError",
++    "PlotTemplates",
++    "Template",
++    "TemplateNotFoundError",
++]

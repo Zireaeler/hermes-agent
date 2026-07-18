@@ -1,0 +1,1037 @@
+{
+  "schema": "hermes_phase4g8_real_case_v1",
+  "run_id": "phase4g10-arm2-large-059ea4b541",
+  "job_id": "rjob_399daf487d55",
+  "worker_identity": {
+    "uid": 758416542,
+    "gid": 166949201
+  },
+  "worker_environment": {
+    "schema": "hermes_phase4g8_worker_toolchain_v1",
+    "cache_key": "47d615e3203a7e45eb96",
+    "official_image": "xingyaoww/sweb.eval.x86_64.iterative_s_dvc-3760",
+    "image_id": "sha256:cd8af7f1566242aceab8707f57ad4aac857fe20fc7a97d235ba5abeec5b3d49f",
+    "image_content_identity": "xingyaoww/sweb.eval.x86_64.iterative_s_dvc-3760@sha256:cd8af7f1566242aceab8707f57ad4aac857fe20fc7a97d235ba5abeec5b3d49f",
+    "repo_digests": [
+      "xingyaoww/sweb.eval.x86_64.iterative_s_dvc-3760@sha256:cd8af7f1566242aceab8707f57ad4aac857fe20fc7a97d235ba5abeec5b3d49f"
+    ],
+    "setup_sha256": "e1d30742e01d1388d9df387291e08cc6de1d9553852e64d79506ae1c1d53bcb4",
+    "setup_env_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "resolved_environment_sha256": "666a583a499a3ec2f65ad7f658b2ce28ba6c6c0db1997ef40d7dce63c26ce0f6",
+    "environment_fingerprint": {
+      "package_count": 168,
+      "python_implementation": "CPython",
+      "python_version": "3.9.19",
+      "schema": "hermes_phase4g8_environment_fingerprint_v1",
+      "selected_packages": {
+        "numpy": "1.20.0",
+        "pytest": "7.4.4"
+      },
+      "sha256": "666a583a499a3ec2f65ad7f658b2ce28ba6c6c0db1997ef40d7dce63c26ce0f6"
+    },
+    "parity_status": "passed"
+  },
+  "worker_approval": {
+    "configured": true,
+    "policy": "on-request",
+    "reviewer": "auto_review",
+    "auto_review_policy_version": "phase4g8-dangerous-operations-v1",
+    "auto_review_policy_sha256": "71121855720c07665e7b98031f95485a4c180a723dcc7f012d38a22afde05016",
+    "guardian_approval_enabled": true,
+    "exec_policy_version": "phase4g8-exec-policy-v1",
+    "exec_policy_sha256": "0defe5084bc4fc56de084d1298780cdadb620006f327d8041988771dd8ceb8e5"
+  },
+  "resume": {
+    "resumed": true,
+    "node_codex_homes": {
+      "refreshed": [
+        "node-0081585e0a591b83a10a481d",
+        "node-1a1b422f5d03ae0af751e67b",
+        "node-4db09d9a5aa515babfc370d8",
+        "node-8b09e57d8c7fd879a3f8076d",
+        "node-bd2c59152fc88042e0dbd6e8"
+      ],
+      "refreshed_count": 5,
+      "preserved_state_file_count": 36
+    },
+    "runtime_recovery": {
+      "dead_worker_tasks": [],
+      "detected_crashed_tasks": [],
+      "session_sync": {
+        "job_id": "rjob_399daf487d55",
+        "discovered": [],
+        "updated": [
+          "bws_3172273c757f",
+          "bws_69075ce53ae1",
+          "bws_f18176d209c7",
+          "bws_19bc86c8b627",
+          "bws_47203ae31f33",
+          "bws_60b4bf3dbc96",
+          "bws_b8005dd7ad90",
+          "bws_9b89ef2bbfe9",
+          "bws_62b828cf3116",
+          "bws_410633bd1148",
+          "bws_dc69951811a9",
+          "bws_4537fa70bfb8",
+          "bws_3172273c757f",
+          "bws_3172273c757f",
+          "bws_3172273c757f",
+          "bws_3172273c757f",
+          "bws_3172273c757f",
+          "bws_3172273c757f",
+          "bws_3172273c757f",
+          "bws_3172273c757f"
+        ],
+        "resumed": [],
+        "resume_failed": [],
+        "identity_conflicts": []
+      },
+      "reclaimed_dead_advance_lock": {
+        "reclaimed": false,
+        "reason": "no_advance_lock"
+      },
+      "resumed_nodes": [],
+      "timeout_branch_repair": {
+        "repaired": false,
+        "reason": "no_matching_timeout_branch"
+      },
+      "contribution_attribution_branch_repair": {
+        "repaired": false,
+        "reason": "attribution_node_not_failed"
+      },
+      "receipt_branch_repair": {
+        "repaired": false,
+        "reason": "no_receipt_recovery_requeue"
+      },
+      "structure_request_branch_repair": {
+        "repaired": false,
+        "consumed": false,
+        "reason": "no_adapted_structure_request",
+        "superseded_nodes": []
+      },
+      "requeued_incomplete_evaluators": [],
+      "adapted_candidate_receipts": [],
+      "adapted_structure_request_receipts": [],
+      "requeued_receipt_recoveries": []
+    },
+    "before_recovery": {
+      "boundaries": {
+        "daemon_process_started": true,
+        "daemon_restarted": true,
+        "worker_process_started": true,
+        "independent_evaluator_process": true,
+        "fixed_revision_evaluated": true
+      },
+      "worker_interrupted": true,
+      "dead_running_task_id": null,
+      "prior_materialization_count": 20,
+      "prior_session_resume_count": 8,
+      "accepted_checkpoint_count": 1,
+      "prior_evaluator_attempt_count": 7
+    },
+    "after_recovery": {
+      "boundaries": {
+        "daemon_process_started": true,
+        "daemon_restarted": true,
+        "worker_process_started": true,
+        "independent_evaluator_process": true,
+        "fixed_revision_evaluated": true
+      },
+      "worker_interrupted": true,
+      "dead_running_task_id": null,
+      "prior_materialization_count": 20,
+      "prior_session_resume_count": 8,
+      "accepted_checkpoint_count": 1,
+      "prior_evaluator_attempt_count": 7
+    }
+  },
+  "model_source": {
+    "source": "codex_config",
+    "provider": "MySub2api",
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high",
+    "base_url_sha256": "d7006f4957539674e207643c9937cbcdc637ab6ef7a3e3e4b85e2a054a6b241b"
+  },
+  "model_transport_audit": {
+    "schema": "hermes_phase4g8_model_transport_audit_v1",
+    "http_request_count": 0,
+    "websocket_upgrade_attempt_count": 0,
+    "websocket_101_count": 0,
+    "websocket_failure_count": 0
+  },
+  "candidate_evidence": {
+    "schema": "hermes_phase4g8_candidate_evidence_v1",
+    "status": "archived",
+    "base_commit": "fc42ca721c25bdd24875c999e37fb4f589ecd63c",
+    "workspace_revision": "git:fc42ca721c25bdd24875c999e37fb4f589ecd63c:worktree:7e00355163ab7966e699c94e42078198274c9a9bdacb6f50b1edd6d8b10b22d5",
+    "patch_sha256": "62374385dfb782bfab284e353170d1d0628f8121ece4e289456dc6fa4512a3d4",
+    "patch_bytes": 215493,
+    "changed_files": [
+      ".pre-commit-config.yaml",
+      ".travis.yml",
+      "dvc/cache.py",
+      "dvc/cli.py",
+      "dvc/command/base.py",
+      "dvc/command/diff.py",
+      "dvc/command/ls/ls_colors.py",
+      "dvc/command/metrics.py",
+      "dvc/command/params.py",
+      "dvc/command/pipeline.py",
+      "dvc/command/plot.py",
+      "dvc/command/remote.py",
+      "dvc/command/repro.py",
+      "dvc/command/run.py",
+      "dvc/command/update.py",
+      "dvc/compat.py",
+      "dvc/config.py",
+      "dvc/dagascii.py",
+      "dvc/data_cloud.py",
+      "dvc/dependency/base.py",
+      "dvc/dependency/param.py",
+      "dvc/ignore.py",
+      "dvc/lock.py",
+      "dvc/output/__init__.py",
+      "dvc/output/base.py",
+      "dvc/output/local.py",
+      "dvc/path_info.py",
+      "dvc/remote/base.py",
+      "dvc/remote/local.py",
+      "dvc/remote/pool.py",
+      "dvc/remote/s3.py",
+      "dvc/repo/__init__.py",
+      "dvc/repo/brancher.py",
+      "dvc/repo/commit.py",
+      "dvc/repo/diff.py",
+      "dvc/repo/graph.py",
+      "dvc/repo/imp_url.py",
+      "dvc/repo/metrics/__init__.py",
+      "dvc/repo/metrics/show.py",
+      "dvc/repo/params/__init__.py",
+      "dvc/repo/params/show.py",
+      "dvc/repo/plot/__init__.py",
+      "dvc/repo/plot/data.py",
+      "dvc/repo/plot/template.py",
+      "dvc/repo/reproduce.py",
+      "dvc/repo/run.py",
+      "dvc/repo/tree.py",
+      "dvc/repo/update.py",
+      "dvc/schema.py",
+      "dvc/scm/base.py",
+      "dvc/scm/git/__init__.py",
+      "dvc/scm/tree.py",
+      "dvc/serialize.py",
+      "dvc/stage/__init__.py",
+      "dvc/stage/cache.py",
+      "dvc/stage/exceptions.py",
+      "dvc/stage/loader.py",
+      "dvc/stage/params.py",
+      "dvc/state.py",
+      "dvc/system.py",
+      "dvc/updater.py",
+      "dvc/utils/__init__.py",
+      "dvc/utils/diff.py",
+      "dvc/utils/fs.py",
+      "dvc/version.py",
+      "scripts/completion/dvc.bash",
+      "scripts/completion/dvc.zsh",
+      "setup.py",
+      "tests/basic_env.py",
+      "tests/dir_helpers.py",
+      "tests/func/metrics/test_diff.py",
+      "tests/func/params/test_diff.py",
+      "tests/func/test_cli.py",
+      "tests/func/test_data_cloud.py",
+      "tests/func/test_diff.py",
+      "tests/func/test_dvcfile.py",
+      "tests/func/test_ignore.py",
+      "tests/func/test_import.py",
+      "tests/func/test_install.py",
+      "tests/func/test_lockfile.py",
+      "tests/func/test_plot.py",
+      "tests/func/test_remote.py",
+      "tests/func/test_repro.py",
+      "tests/func/test_run_multistage.py",
+      "tests/func/test_run_single_stage.py",
+      "tests/func/test_stage.py",
+      "tests/func/test_tree.py",
+      "tests/func/test_update.py",
+      "tests/unit/command/test_diff.py",
+      "tests/unit/command/test_metrics.py",
+      "tests/unit/command/test_params.py",
+      "tests/unit/command/test_plot.py",
+      "tests/unit/command/test_repro.py",
+      "tests/unit/command/test_run.py",
+      "tests/unit/command/test_update.py",
+      "tests/unit/output/test_output.py",
+      "tests/unit/remote/test_base.py",
+      "tests/unit/remote/test_gdrive.py",
+      "tests/unit/remote/test_s3.py",
+      "tests/unit/repo/test_repo.py",
+      "tests/unit/repo/test_reproduce.py",
+      "tests/unit/repo/test_tree.py",
+      "tests/unit/scm/test_git.py",
+      "tests/unit/test_config.py",
+      "tests/unit/test_dvcfile.py",
+      "tests/unit/test_plot.py",
+      "tests/unit/test_stage.py",
+      "tests/unit/test_version.py",
+      "tests/unit/utils/test_fs.py",
+      "tests/unit/utils/test_utils.py",
+      "dvc/command/plots.py",
+      "dvc/repo/plots/",
+      "dvc/stage/run.py",
+      "dvc/utils/networkx.py"
+    ],
+    "protected_oracle_included": false,
+    "patch_ref": "candidate.patch"
+  },
+  "previous_run_retention": [],
+  "run_report": {
+    "schema": "hermes_phase4g8_run_report_v1",
+    "instance_id": "iterative__dvc_1.0.0a1_1.0.0a2",
+    "job_id": "rjob_399daf487d55",
+    "classification": "runtime-correct/task-failed",
+    "runtime_validation": {
+      "passed": true,
+      "failures": [],
+      "consistency": {
+        "status": "passed",
+        "violation_count": 0,
+        "warning_count": 0
+      },
+      "checkpoint_chain": {
+        "status": "valid",
+        "selection_mode": "latest_checkpoint",
+        "latest_checkpoint_id": "dchk_9b30bd133c7b",
+        "selected_checkpoint_id": "dchk_9b30bd133c7b",
+        "selected_checkpoint": {
+          "id": "dchk_9b30bd133c7b",
+          "job_id": "rjob_399daf487d55",
+          "decision_session_id": "dses_56de80eb7877",
+          "revision": 1,
+          "checkpoint_json": "{\"artifact_index\": [], \"do_not_repeat\": [{\"source_refs\": [{\"patch_id\": \"gpatch_4ce5bb1dc82a\"}], \"summary\": \"Do not recreate the implementation node or reapply its already-applied creation patch while the existing node is running.\"}, {\"source_refs\": [{\"patch_id\": \"gpatch_4ce5bb1dc82a\"}], \"summary\": \"Do not modify, bypass, or weaken the fixed official evaluator.\"}], \"goal_contract_revision\": 1, \"graph_frontier\": [{\"node_key\": \"implement-srs-and-validate\", \"node_type\": \"implementation\", \"source_refs\": [{\"node_key\": \"implement-srs-and-validate\"}], \"state\": \"running\", \"summary\": \"Inspect the repository and specification context, implement the required behavioral deltas coherently, add or update regression coverage, run and debug relevant tests, preserve the fixed evaluator, and produce reproducible evidence for independent verification.\"}], \"human_decisions\": [], \"key_decisions\": [{\"source_refs\": [{\"decision_id\": \"kdec_f5f6d71b928f\"}, {\"patch_id\": \"gpatch_4ce5bb1dc82a\"}], \"summary\": \"A single implementation node linked to the required evaluator-resolution goal was created to handle the supplied SRS, testing, and evidence preparation before independent verification; its patch was applied at graph revision 1.\"}], \"known_failure_boundaries\": [], \"metadata\": {\"checkpoint_is_non_authoritative_context\": true, \"covered_graph_revision_end\": 1, \"covered_graph_revision_start\": 0, \"db_is_authoritative\": true, \"db_revision\": 1, \"graph_revision\": 1, \"ledger_revision\": 1, \"profile_hash\": \"ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c\", \"profile_name\": \"token_budget_compaction\", \"profile_path\": \"docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md\", \"profile_version\": \"1\", \"provider_audit\": {\"fallback_used\": false, \"input_token_estimate\": 6638, \"output_token_estimate\": 1196, \"parse_status\": \"parsed\", \"provider_input_entry_id\": 9, \"provider_latency_ms\": 99720, \"provider_model\": \"gpt-5.6-sol\", \"provider_name\": \"custom\", \"provider_validation\": {\"status\": \"accepted\"}, \"reason\": \"phase4g8_controlled_process_boundary\", \"request_entry_id\": 8, \"request_ref\": \"0dcb1b5e748459a20bd6c0f30763a144ff9dcda5cdaec3768194f13100f0fbf9\", \"response_ref\": \"2b73291d402d0f95341d32ed436e0a4244dd3eb9648275f7593ffe2d565ed4f5\", \"retry_count\": 0}, \"provider_generated\": true, \"source_fingerprint\": \"712e20d3aa3bec99ce803f9e68346a04d15326944da3815a28eaf873869c175a\", \"source_segment_id\": \"dseg_d921013c6e92\"}, \"next_strategy_constraints\": [{\"source_refs\": [{\"decision_id\": \"kdec_f5f6d71b928f\"}, {\"node_key\": \"implement-srs-and-validate\"}, {\"goal_item_key\": \"official-evaluator-resolved\"}, {\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"Continue or await the existing implementation node and require its changed files, verification commands, test results, and residual limitations before inserting independent verification; do not treat the required goal as satisfied without verified evidence.\"}, {\"source_refs\": [{\"decision_id\": \"kdec_f5f6d71b928f\"}], \"summary\": \"The fixed official evaluator must not be modified, bypassed, or weakened.\"}], \"objective_summary\": \"Implement the supplied multi-change DVC SRS, including plot and HTML behavior, init template newlines, logging and locked-import behavior, tree file-object and streaming support, stage/run/repro/run-cache fixes, dvc.yaml output-schema changes, diff and Markdown output, Python 3.6 compatibility, remote/config/import/update/push-pull fixes, and related regression coverage; then pass the fixed official SWE-EVO evaluator.\", \"open_blockers\": [{\"source_refs\": [{\"node_key\": \"implement-srs-and-validate\"}, {\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}, {\"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\"}], \"summary\": \"Completion is blocked pending changed-file, test, and reproducible verification evidence from the running implementation node; the required goal still has a stale missing-evidence condition.\"}], \"open_goal_gaps\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\", \"gap_type\": \"missing_evidence\", \"source_refs\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"The required official-evaluator goal remains open because no verified implementation or evaluator evidence has been recorded.\"}, {\"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\", \"gap_type\": \"stale_or_no_progress\", \"source_refs\": [{\"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\"}], \"summary\": \"The runtime currently marks the missing-evidence gap as stale or lacking new progress.\"}], \"rejected_approaches\": [], \"satisfied_goal_items\": [], \"validator_rejection_lessons\": []}",
+          "reason": "phase4g8_controlled_process_boundary",
+          "transcript_ref": "decision_segment:dseg_d921013c6e92",
+          "created_at": 1784322008,
+          "source_segment_id": "dseg_d921013c6e92",
+          "profile_name": "token_budget_compaction",
+          "profile_version": "1",
+          "profile_hash": "ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c",
+          "profile_path": "docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md",
+          "checkpoint_revision": 1,
+          "db_revision": 1,
+          "graph_revision": 1,
+          "ledger_revision": 1,
+          "covered_event_start": null,
+          "covered_event_end": null,
+          "covered_decision_start": "kdec_f5f6d71b928f",
+          "covered_decision_end": "kdec_f5f6d71b928f",
+          "covered_entry_start": 1,
+          "covered_entry_end": 10,
+          "payload_json": "{\"artifact_index\": [], \"do_not_repeat\": [{\"source_refs\": [{\"patch_id\": \"gpatch_4ce5bb1dc82a\"}], \"summary\": \"Do not recreate the implementation node or reapply its already-applied creation patch while the existing node is running.\"}, {\"source_refs\": [{\"patch_id\": \"gpatch_4ce5bb1dc82a\"}], \"summary\": \"Do not modify, bypass, or weaken the fixed official evaluator.\"}], \"goal_contract_revision\": 1, \"graph_frontier\": [{\"node_key\": \"implement-srs-and-validate\", \"node_type\": \"implementation\", \"source_refs\": [{\"node_key\": \"implement-srs-and-validate\"}], \"state\": \"running\", \"summary\": \"Inspect the repository and specification context, implement the required behavioral deltas coherently, add or update regression coverage, run and debug relevant tests, preserve the fixed evaluator, and produce reproducible evidence for independent verification.\"}], \"human_decisions\": [], \"key_decisions\": [{\"source_refs\": [{\"decision_id\": \"kdec_f5f6d71b928f\"}, {\"patch_id\": \"gpatch_4ce5bb1dc82a\"}], \"summary\": \"A single implementation node linked to the required evaluator-resolution goal was created to handle the supplied SRS, testing, and evidence preparation before independent verification; its patch was applied at graph revision 1.\"}], \"known_failure_boundaries\": [], \"metadata\": {\"checkpoint_is_non_authoritative_context\": true, \"covered_graph_revision_end\": 1, \"covered_graph_revision_start\": 0, \"db_is_authoritative\": true, \"db_revision\": 1, \"graph_revision\": 1, \"ledger_revision\": 1, \"profile_hash\": \"ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c\", \"profile_name\": \"token_budget_compaction\", \"profile_path\": \"docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md\", \"profile_version\": \"1\", \"provider_audit\": {\"fallback_used\": false, \"input_token_estimate\": 6638, \"output_token_estimate\": 1196, \"parse_status\": \"parsed\", \"provider_input_entry_id\": 9, \"provider_latency_ms\": 99720, \"provider_model\": \"gpt-5.6-sol\", \"provider_name\": \"custom\", \"provider_validation\": {\"status\": \"accepted\"}, \"reason\": \"phase4g8_controlled_process_boundary\", \"request_entry_id\": 8, \"request_ref\": \"0dcb1b5e748459a20bd6c0f30763a144ff9dcda5cdaec3768194f13100f0fbf9\", \"response_ref\": \"2b73291d402d0f95341d32ed436e0a4244dd3eb9648275f7593ffe2d565ed4f5\", \"retry_count\": 0}, \"provider_generated\": true, \"source_fingerprint\": \"712e20d3aa3bec99ce803f9e68346a04d15326944da3815a28eaf873869c175a\", \"source_segment_id\": \"dseg_d921013c6e92\"}, \"next_strategy_constraints\": [{\"source_refs\": [{\"decision_id\": \"kdec_f5f6d71b928f\"}, {\"node_key\": \"implement-srs-and-validate\"}, {\"goal_item_key\": \"official-evaluator-resolved\"}, {\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"Continue or await the existing implementation node and require its changed files, verification commands, test results, and residual limitations before inserting independent verification; do not treat the required goal as satisfied without verified evidence.\"}, {\"source_refs\": [{\"decision_id\": \"kdec_f5f6d71b928f\"}], \"summary\": \"The fixed official evaluator must not be modified, bypassed, or weakened.\"}], \"objective_summary\": \"Implement the supplied multi-change DVC SRS, including plot and HTML behavior, init template newlines, logging and locked-import behavior, tree file-object and streaming support, stage/run/repro/run-cache fixes, dvc.yaml output-schema changes, diff and Markdown output, Python 3.6 compatibility, remote/config/import/update/push-pull fixes, and related regression coverage; then pass the fixed official SWE-EVO evaluator.\", \"open_blockers\": [{\"source_refs\": [{\"node_key\": \"implement-srs-and-validate\"}, {\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}, {\"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\"}], \"summary\": \"Completion is blocked pending changed-file, test, and reproducible verification evidence from the running implementation node; the required goal still has a stale missing-evidence condition.\"}], \"open_goal_gaps\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\", \"gap_type\": \"missing_evidence\", \"source_refs\": [{\"gap_key\": \"official-evaluator-resolved:missing_evidence\"}], \"summary\": \"The required official-evaluator goal remains open because no verified implementation or evaluator evidence has been recorded.\"}, {\"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\", \"gap_type\": \"stale_or_no_progress\", \"source_refs\": [{\"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\"}], \"summary\": \"The runtime currently marks the missing-evidence gap as stale or lacking new progress.\"}], \"rejected_approaches\": [], \"satisfied_goal_items\": [], \"validator_rejection_lessons\": []}",
+          "payload_text": "{\n  \"artifact_index\": [],\n  \"do_not_repeat\": [\n    {\n      \"source_refs\": [\n        {\n          \"patch_id\": \"gpatch_4ce5bb1dc82a\"\n        }\n      ],\n      \"summary\": \"Do not recreate the implementation node or reapply its already-applied creation patch while the existing node is running.\"\n    },\n    {\n      \"source_refs\": [\n        {\n          \"patch_id\": \"gpatch_4ce5bb1dc82a\"\n        }\n      ],\n      \"summary\": \"Do not modify, bypass, or weaken the fixed official evaluator.\"\n    }\n  ],\n  \"goal_contract_revision\": 1,\n  \"graph_frontier\": [\n    {\n      \"node_key\": \"implement-srs-and-validate\",\n      \"node_type\": \"implementation\",\n      \"source_refs\": [\n        {\n          \"node_key\": \"implement-srs-and-validate\"\n        }\n      ],\n      \"state\": \"running\",\n      \"summary\": \"Inspect the repository and specification context, implement the required behavioral deltas coherently, add or update regression coverage, run and debug relevant tests, preserve the fixed evaluator, and produce reproducible evidence for independent verification.\"\n    }\n  ],\n  \"human_decisions\": [],\n  \"key_decisions\": [\n    {\n      \"source_refs\": [\n        {\n          \"decision_id\": \"kdec_f5f6d71b928f\"\n        },\n        {\n          \"patch_id\": \"gpatch_4ce5bb1dc82a\"\n        }\n      ],\n      \"summary\": \"A single implementation node linked to the required evaluator-resolution goal was created to handle the supplied SRS, testing, and evidence preparation before independent verification; its patch was applied at graph revision 1.\"\n    }\n  ],\n  \"known_failure_boundaries\": [],\n  \"metadata\": {\n    \"checkpoint_is_non_authoritative_context\": true,\n    \"covered_graph_revision_end\": 1,\n    \"covered_graph_revision_start\": 0,\n    \"db_is_authoritative\": true,\n    \"db_revision\": 1,\n    \"graph_revision\": 1,\n    \"ledger_revision\": 1,\n    \"profile_hash\": \"ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c\",\n    \"profile_name\": \"token_budget_compaction\",\n    \"profile_path\": \"docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md\",\n    \"profile_version\": \"1\",\n    \"provider_audit\": {\n      \"fallback_used\": false,\n      \"input_token_estimate\": 6638,\n      \"output_token_estimate\": 1196,\n      \"parse_status\": \"parsed\",\n      \"provider_input_entry_id\": 9,\n      \"provider_latency_ms\": 99720,\n      \"provider_model\": \"gpt-5.6-sol\",\n      \"provider_name\": \"custom\",\n      \"provider_validation\": {\n        \"status\": \"accepted\"\n      },\n      \"reason\": \"phase4g8_controlled_process_boundary\",\n      \"request_entry_id\": 8,\n      \"request_ref\": \"0dcb1b5e748459a20bd6c0f30763a144ff9dcda5cdaec3768194f13100f0fbf9\",\n      \"response_ref\": \"2b73291d402d0f95341d32ed436e0a4244dd3eb9648275f7593ffe2d565ed4f5\",\n      \"retry_count\": 0\n    },\n    \"provider_generated\": true,\n    \"source_fingerprint\": \"712e20d3aa3bec99ce803f9e68346a04d15326944da3815a28eaf873869c175a\",\n    \"source_segment_id\": \"dseg_d921013c6e92\"\n  },\n  \"next_strategy_constraints\": [\n    {\n      \"source_refs\": [\n        {\n          \"decision_id\": \"kdec_f5f6d71b928f\"\n        },\n        {\n          \"node_key\": \"implement-srs-and-validate\"\n        },\n        {\n          \"goal_item_key\": \"official-evaluator-resolved\"\n        },\n        {\n          \"gap_key\": \"official-evaluator-resolved:missing_evidence\"\n        }\n      ],\n      \"summary\": \"Continue or await the existing implementation node and require its changed files, verification commands, test results, and residual limitations before inserting independent verification; do not treat the required goal as satisfied without verified evidence.\"\n    },\n    {\n      \"source_refs\": [\n        {\n          \"decision_id\": \"kdec_f5f6d71b928f\"\n        }\n      ],\n      \"summary\": \"The fixed official evaluator must not be modified, bypassed, or weakened.\"\n    }\n  ],\n  \"objective_summary\": \"Implement the supplied multi-change DVC SRS, including plot and HTML behavior, init template newlines, logging and locked-import behavior, tree file-object and streaming support, stage/run/repro/run-cache fixes, dvc.yaml output-schema changes, diff and Markdown output, Python 3.6 compatibility, remote/config/import/update/push-pull fixes, and related regression coverage; then pass the fixed official SWE-EVO evaluator.\",\n  \"open_blockers\": [\n    {\n      \"source_refs\": [\n        {\n          \"node_key\": \"implement-srs-and-validate\"\n        },\n        {\n          \"gap_key\": \"official-evaluator-resolved:missing_evidence\"\n        },\n        {\n          \"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\"\n        }\n      ],\n      \"summary\": \"Completion is blocked pending changed-file, test, and reproducible verification evidence from the running implementation node; the required goal still has a stale missing-evidence condition.\"\n    }\n  ],\n  \"open_goal_gaps\": [\n    {\n      \"gap_key\": \"official-evaluator-resolved:missing_evidence\",\n      \"gap_type\": \"missing_evidence\",\n      \"source_refs\": [\n        {\n          \"gap_key\": \"official-evaluator-resolved:missing_evidence\"\n        }\n      ],\n      \"summary\": \"The required official-evaluator goal remains open because no verified implementation or evaluator evidence has been recorded.\"\n    },\n    {\n      \"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\",\n      \"gap_type\": \"stale_or_no_progress\",\n      \"source_refs\": [\n        {\n          \"gap_key\": \"runtime:stale:official-evaluator-resolved:missing_evidence\"\n        }\n      ],\n      \"summary\": \"The runtime currently marks the missing-evidence gap as stale or lacking new progress.\"\n    }\n  ],\n  \"rejected_approaches\": [],\n  \"satisfied_goal_items\": [],\n  \"validator_rejection_lessons\": []\n}",
+          "validator_status": "accepted",
+          "reject_reason": null,
+          "supersedes_checkpoint_id": null,
+          "metadata_json": "{\"fallback_used\": false, \"input_token_estimate\": 6638, \"output_token_estimate\": 1196, \"parse_status\": \"parsed\", \"provider_input_entry_id\": 9, \"provider_latency_ms\": 99720, \"provider_model\": \"gpt-5.6-sol\", \"provider_name\": \"custom\", \"provider_validation\": {\"status\": \"accepted\"}, \"reason\": \"phase4g8_controlled_process_boundary\", \"request_entry_id\": 8, \"request_ref\": \"0dcb1b5e748459a20bd6c0f30763a144ff9dcda5cdaec3768194f13100f0fbf9\", \"response_ref\": \"2b73291d402d0f95341d32ed436e0a4244dd3eb9648275f7593ffe2d565ed4f5\", \"retry_count\": 0}",
+          "checkpoint": {
+            "artifact_index": [],
+            "do_not_repeat": [
+              {
+                "source_refs": [
+                  {
+                    "patch_id": "gpatch_4ce5bb1dc82a"
+                  }
+                ],
+                "summary": "Do not recreate the implementation node or reapply its already-applied creation patch while the existing node is running."
+              },
+              {
+                "source_refs": [
+                  {
+                    "patch_id": "gpatch_4ce5bb1dc82a"
+                  }
+                ],
+                "summary": "Do not modify, bypass, or weaken the fixed official evaluator."
+              }
+            ],
+            "goal_contract_revision": 1,
+            "graph_frontier": [
+              {
+                "node_key": "implement-srs-and-validate",
+                "node_type": "implementation",
+                "source_refs": [
+                  {
+                    "node_key": "implement-srs-and-validate"
+                  }
+                ],
+                "state": "running",
+                "summary": "Inspect the repository and specification context, implement the required behavioral deltas coherently, add or update regression coverage, run and debug relevant tests, preserve the fixed evaluator, and produce reproducible evidence for independent verification."
+              }
+            ],
+            "human_decisions": [],
+            "key_decisions": [
+              {
+                "source_refs": [
+                  {
+                    "decision_id": "kdec_f5f6d71b928f"
+                  },
+                  {
+                    "patch_id": "gpatch_4ce5bb1dc82a"
+                  }
+                ],
+                "summary": "A single implementation node linked to the required evaluator-resolution goal was created to handle the supplied SRS, testing, and evidence preparation before independent verification; its patch was applied at graph revision 1."
+              }
+            ],
+            "known_failure_boundaries": [],
+            "metadata": {
+              "checkpoint_is_non_authoritative_context": true,
+              "covered_graph_revision_end": 1,
+              "covered_graph_revision_start": 0,
+              "db_is_authoritative": true,
+              "db_revision": 1,
+              "graph_revision": 1,
+              "ledger_revision": 1,
+              "profile_hash": "ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c",
+              "profile_name": "token_budget_compaction",
+              "profile_path": "docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md",
+              "profile_version": "1",
+              "provider_audit": {
+                "fallback_used": false,
+                "input_token_estimate": 6638,
+                "output_token_estimate": 1196,
+                "parse_status": "parsed",
+                "provider_input_entry_id": 9,
+                "provider_latency_ms": 99720,
+                "provider_model": "gpt-5.6-sol",
+                "provider_name": "custom",
+                "provider_validation": {
+                  "status": "accepted"
+                },
+                "reason": "phase4g8_controlled_process_boundary",
+                "request_entry_id": 8,
+                "request_ref": "0dcb1b5e748459a20bd6c0f30763a144ff9dcda5cdaec3768194f13100f0fbf9",
+                "response_ref": "2b73291d402d0f95341d32ed436e0a4244dd3eb9648275f7593ffe2d565ed4f5",
+                "retry_count": 0
+              },
+              "provider_generated": true,
+              "source_fingerprint": "712e20d3aa3bec99ce803f9e68346a04d15326944da3815a28eaf873869c175a",
+              "source_segment_id": "dseg_d921013c6e92"
+            },
+            "next_strategy_constraints": [
+              {
+                "source_refs": [
+                  {
+                    "decision_id": "kdec_f5f6d71b928f"
+                  },
+                  {
+                    "node_key": "implement-srs-and-validate"
+                  },
+                  {
+                    "goal_item_key": "official-evaluator-resolved"
+                  },
+                  {
+                    "gap_key": "official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "Continue or await the existing implementation node and require its changed files, verification commands, test results, and residual limitations before inserting independent verification; do not treat the required goal as satisfied without verified evidence."
+              },
+              {
+                "source_refs": [
+                  {
+                    "decision_id": "kdec_f5f6d71b928f"
+                  }
+                ],
+                "summary": "The fixed official evaluator must not be modified, bypassed, or weakened."
+              }
+            ],
+            "objective_summary": "Implement the supplied multi-change DVC SRS, including plot and HTML behavior, init template newlines, logging and locked-import behavior, tree file-object and streaming support, stage/run/repro/run-cache fixes, dvc.yaml output-schema changes, diff and Markdown output, Python 3.6 compatibility, remote/config/import/update/push-pull fixes, and related regression coverage; then pass the fixed official SWE-EVO evaluator.",
+            "open_blockers": [
+              {
+                "source_refs": [
+                  {
+                    "node_key": "implement-srs-and-validate"
+                  },
+                  {
+                    "gap_key": "official-evaluator-resolved:missing_evidence"
+                  },
+                  {
+                    "gap_key": "runtime:stale:official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "Completion is blocked pending changed-file, test, and reproducible verification evidence from the running implementation node; the required goal still has a stale missing-evidence condition."
+              }
+            ],
+            "open_goal_gaps": [
+              {
+                "gap_key": "official-evaluator-resolved:missing_evidence",
+                "gap_type": "missing_evidence",
+                "source_refs": [
+                  {
+                    "gap_key": "official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "The required official-evaluator goal remains open because no verified implementation or evaluator evidence has been recorded."
+              },
+              {
+                "gap_key": "runtime:stale:official-evaluator-resolved:missing_evidence",
+                "gap_type": "stale_or_no_progress",
+                "source_refs": [
+                  {
+                    "gap_key": "runtime:stale:official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "The runtime currently marks the missing-evidence gap as stale or lacking new progress."
+              }
+            ],
+            "rejected_approaches": [],
+            "satisfied_goal_items": [],
+            "validator_rejection_lessons": []
+          },
+          "payload": {
+            "artifact_index": [],
+            "do_not_repeat": [
+              {
+                "source_refs": [
+                  {
+                    "patch_id": "gpatch_4ce5bb1dc82a"
+                  }
+                ],
+                "summary": "Do not recreate the implementation node or reapply its already-applied creation patch while the existing node is running."
+              },
+              {
+                "source_refs": [
+                  {
+                    "patch_id": "gpatch_4ce5bb1dc82a"
+                  }
+                ],
+                "summary": "Do not modify, bypass, or weaken the fixed official evaluator."
+              }
+            ],
+            "goal_contract_revision": 1,
+            "graph_frontier": [
+              {
+                "node_key": "implement-srs-and-validate",
+                "node_type": "implementation",
+                "source_refs": [
+                  {
+                    "node_key": "implement-srs-and-validate"
+                  }
+                ],
+                "state": "running",
+                "summary": "Inspect the repository and specification context, implement the required behavioral deltas coherently, add or update regression coverage, run and debug relevant tests, preserve the fixed evaluator, and produce reproducible evidence for independent verification."
+              }
+            ],
+            "human_decisions": [],
+            "key_decisions": [
+              {
+                "source_refs": [
+                  {
+                    "decision_id": "kdec_f5f6d71b928f"
+                  },
+                  {
+                    "patch_id": "gpatch_4ce5bb1dc82a"
+                  }
+                ],
+                "summary": "A single implementation node linked to the required evaluator-resolution goal was created to handle the supplied SRS, testing, and evidence preparation before independent verification; its patch was applied at graph revision 1."
+              }
+            ],
+            "known_failure_boundaries": [],
+            "metadata": {
+              "checkpoint_is_non_authoritative_context": true,
+              "covered_graph_revision_end": 1,
+              "covered_graph_revision_start": 0,
+              "db_is_authoritative": true,
+              "db_revision": 1,
+              "graph_revision": 1,
+              "ledger_revision": 1,
+              "profile_hash": "ee4694e62f82bad6e67c32320e9aee37a6e0414f6bcde1cd1bf053ce6d85d86c",
+              "profile_name": "token_budget_compaction",
+              "profile_path": "docs/kanban-runtime-kernel-compaction-profiles/token_budget_compaction.md",
+              "profile_version": "1",
+              "provider_audit": {
+                "fallback_used": false,
+                "input_token_estimate": 6638,
+                "output_token_estimate": 1196,
+                "parse_status": "parsed",
+                "provider_input_entry_id": 9,
+                "provider_latency_ms": 99720,
+                "provider_model": "gpt-5.6-sol",
+                "provider_name": "custom",
+                "provider_validation": {
+                  "status": "accepted"
+                },
+                "reason": "phase4g8_controlled_process_boundary",
+                "request_entry_id": 8,
+                "request_ref": "0dcb1b5e748459a20bd6c0f30763a144ff9dcda5cdaec3768194f13100f0fbf9",
+                "response_ref": "2b73291d402d0f95341d32ed436e0a4244dd3eb9648275f7593ffe2d565ed4f5",
+                "retry_count": 0
+              },
+              "provider_generated": true,
+              "source_fingerprint": "712e20d3aa3bec99ce803f9e68346a04d15326944da3815a28eaf873869c175a",
+              "source_segment_id": "dseg_d921013c6e92"
+            },
+            "next_strategy_constraints": [
+              {
+                "source_refs": [
+                  {
+                    "decision_id": "kdec_f5f6d71b928f"
+                  },
+                  {
+                    "node_key": "implement-srs-and-validate"
+                  },
+                  {
+                    "goal_item_key": "official-evaluator-resolved"
+                  },
+                  {
+                    "gap_key": "official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "Continue or await the existing implementation node and require its changed files, verification commands, test results, and residual limitations before inserting independent verification; do not treat the required goal as satisfied without verified evidence."
+              },
+              {
+                "source_refs": [
+                  {
+                    "decision_id": "kdec_f5f6d71b928f"
+                  }
+                ],
+                "summary": "The fixed official evaluator must not be modified, bypassed, or weakened."
+              }
+            ],
+            "objective_summary": "Implement the supplied multi-change DVC SRS, including plot and HTML behavior, init template newlines, logging and locked-import behavior, tree file-object and streaming support, stage/run/repro/run-cache fixes, dvc.yaml output-schema changes, diff and Markdown output, Python 3.6 compatibility, remote/config/import/update/push-pull fixes, and related regression coverage; then pass the fixed official SWE-EVO evaluator.",
+            "open_blockers": [
+              {
+                "source_refs": [
+                  {
+                    "node_key": "implement-srs-and-validate"
+                  },
+                  {
+                    "gap_key": "official-evaluator-resolved:missing_evidence"
+                  },
+                  {
+                    "gap_key": "runtime:stale:official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "Completion is blocked pending changed-file, test, and reproducible verification evidence from the running implementation node; the required goal still has a stale missing-evidence condition."
+              }
+            ],
+            "open_goal_gaps": [
+              {
+                "gap_key": "official-evaluator-resolved:missing_evidence",
+                "gap_type": "missing_evidence",
+                "source_refs": [
+                  {
+                    "gap_key": "official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "The required official-evaluator goal remains open because no verified implementation or evaluator evidence has been recorded."
+              },
+              {
+                "gap_key": "runtime:stale:official-evaluator-resolved:missing_evidence",
+                "gap_type": "stale_or_no_progress",
+                "source_refs": [
+                  {
+                    "gap_key": "runtime:stale:official-evaluator-resolved:missing_evidence"
+                  }
+                ],
+                "summary": "The runtime currently marks the missing-evidence gap as stale or lacking new progress."
+              }
+            ],
+            "rejected_approaches": [],
+            "satisfied_goal_items": [],
+            "validator_rejection_lessons": []
+          },
+          "metadata": {
+            "fallback_used": false,
+            "input_token_estimate": 6638,
+            "output_token_estimate": 1196,
+            "parse_status": "parsed",
+            "provider_input_entry_id": 9,
+            "provider_latency_ms": 99720,
+            "provider_model": "gpt-5.6-sol",
+            "provider_name": "custom",
+            "provider_validation": {
+              "status": "accepted"
+            },
+            "reason": "phase4g8_controlled_process_boundary",
+            "request_entry_id": 8,
+            "request_ref": "0dcb1b5e748459a20bd6c0f30763a144ff9dcda5cdaec3768194f13100f0fbf9",
+            "response_ref": "2b73291d402d0f95341d32ed436e0a4244dd3eb9648275f7593ffe2d565ed4f5",
+            "retry_count": 0
+          }
+        },
+        "active_segment_id": "dseg_e88958b56d30",
+        "checked_checkpoint_count": 1,
+        "errors": [],
+        "checks": [
+          {
+            "checkpoint_id": "dchk_9b30bd133c7b",
+            "errors": []
+          }
+        ]
+      },
+      "compaction_fallback_count": 0,
+      "duplicate_terminal_fact_count": 0,
+      "duplicate_ledger_fact_count": 0,
+      "premature_done": false,
+      "process_boundaries": {
+        "daemon_process_started": true,
+        "daemon_restarted": true,
+        "worker_process_started": true,
+        "independent_evaluator_process": true,
+        "fixed_revision_evaluated": true,
+        "filesystem_isolation_preflight": true,
+        "worker_evaluator_environment_parity_preflight": true,
+        "worker_auto_review_preflight": true
+      },
+      "credential_scan_hits": 0,
+      "source_config_unchanged": true
+    },
+    "capability_validation": {
+      "passed": false,
+      "official_resolved": false,
+      "runtime_job_state": "active",
+      "fail_to_pass": {
+        "passed": 63,
+        "failed": 5,
+        "total": 68,
+        "failed_tests": [
+          "tests/unit/command/test_diff.py::test_default",
+          "tests/unit/command/test_diff.py::test_no_changes",
+          "tests/unit/command/test_diff.py::test_show_hash",
+          "tests/unit/command/test_diff.py::test_show_json",
+          "tests/unit/command/test_diff.py::test_show_json_and_hash"
+        ],
+        "failed_tests_truncated": 0
+      },
+      "pass_to_pass": {
+        "passed": 242,
+        "failed": 0,
+        "total": 242,
+        "failed_tests": [],
+        "failed_tests_truncated": 0
+      }
+    },
+    "metrics": {
+      "wall_time_seconds": 1.204,
+      "case_size": "large",
+      "fault_profile": "small",
+      "orchestration_policy": {
+        "mode": "early_structure_assessment",
+        "required": true,
+        "require_contribution_attribution": true,
+        "minimum_integrated_contributions": 2,
+        "max_child_nodes": 3
+      },
+      "worker_interrupted": true,
+      "evaluator_attempt_count": 7,
+      "evaluator_failure_count": 7,
+      "deprecated_max_unresolved_evaluator_attempts": 100,
+      "max_evaluator_no_progress_streak": 100,
+      "evaluator_progress": {
+        "attempt_count": 7,
+        "effective_failure_count": 7,
+        "latest_resolved": false,
+        "latest_feedback_extraction_incomplete": false,
+        "latest_feedback_consumed": false,
+        "no_progress_streak": 1,
+        "history": [
+          {
+            "node_id": "rnode_9ac510c8987b",
+            "feedback_consumed": true,
+            "fail_to_pass_passed": 13,
+            "pass_to_pass_passed": 242,
+            "failure_signature": "efsig_761b79f57170a646837e46d1",
+            "count_progress": false,
+            "signature_changed": false,
+            "progress": true,
+            "no_progress_streak": 0
+          },
+          {
+            "node_id": "rnode_8463e9e7058a",
+            "feedback_consumed": true,
+            "fail_to_pass_passed": 52,
+            "pass_to_pass_passed": 241,
+            "failure_signature": "efsig_eedaad0825429720838125de",
+            "count_progress": false,
+            "signature_changed": true,
+            "progress": true,
+            "no_progress_streak": 0
+          },
+          {
+            "node_id": "rnode_207b74a362d7",
+            "feedback_consumed": true,
+            "fail_to_pass_passed": 54,
+            "pass_to_pass_passed": 242,
+            "failure_signature": "efsig_7b67585da70ce8977eb352cf",
+            "count_progress": true,
+            "signature_changed": true,
+            "progress": true,
+            "no_progress_streak": 0
+          },
+          {
+            "node_id": "rnode_b70e6157c77f",
+            "feedback_consumed": true,
+            "fail_to_pass_passed": 56,
+            "pass_to_pass_passed": 242,
+            "failure_signature": "efsig_f8551570763c18d80961a3c6",
+            "count_progress": true,
+            "signature_changed": true,
+            "progress": true,
+            "no_progress_streak": 0
+          },
+          {
+            "node_id": "rnode_28f2b369591a",
+            "feedback_consumed": true,
+            "fail_to_pass_passed": 58,
+            "pass_to_pass_passed": 242,
+            "failure_signature": "efsig_dec9d96d400cc8f22b933dd4",
+            "count_progress": true,
+            "signature_changed": true,
+            "progress": true,
+            "no_progress_streak": 0
+          },
+          {
+            "node_id": "rnode_1500746ba1a0",
+            "feedback_consumed": true,
+            "fail_to_pass_passed": 63,
+            "pass_to_pass_passed": 242,
+            "failure_signature": "efsig_76920b2e4a49864eba01205f",
+            "count_progress": true,
+            "signature_changed": true,
+            "progress": true,
+            "no_progress_streak": 0
+          },
+          {
+            "node_id": "rnode_7f7425fbf78d",
+            "feedback_consumed": false,
+            "fail_to_pass_passed": 63,
+            "pass_to_pass_passed": 242,
+            "failure_signature": "efsig_76920b2e4a49864eba01205f",
+            "count_progress": false,
+            "signature_changed": false,
+            "progress": false,
+            "no_progress_streak": 1
+          }
+        ],
+        "exhausted": false
+      },
+      "evaluator_budget_exhausted": false,
+      "resource_exhausted": false,
+      "operator_stop": {
+        "schema": "hermes_evaluated_operator_stop_v1",
+        "reason": "第 6 与第 7 次 official evaluator 均为 63/68、242/242 且失败集合完全相同；第 7 次反馈已进入同一 primary thread，worker 确认 signature 未变并开始检查，但停止前未产生新 candidate。由于 evaluator 没有提供更完整 diagnostics，归档最后一个已评估 candidate。",
+        "requested_at": 1784337482,
+        "latest_evaluator_run_id": 19,
+        "latest_evaluator_node_id": "rnode_7f7425fbf78d",
+        "candidate_patch_sha256": "62374385dfb782bfab284e353170d1d0628f8121ece4e289456dc6fa4512a3d4",
+        "target_revision": "git:fc42ca721c25bdd24875c999e37fb4f589ecd63c:worktree:7e00355163ab7966e699c94e42078198274c9a9bdacb6f50b1edd6d8b10b22d5",
+        "fail_to_pass": {
+          "passed": 63,
+          "failed": 5,
+          "total": 68,
+          "failed_tests": [
+            "tests/unit/command/test_diff.py::test_default",
+            "tests/unit/command/test_diff.py::test_no_changes",
+            "tests/unit/command/test_diff.py::test_show_hash",
+            "tests/unit/command/test_diff.py::test_show_json",
+            "tests/unit/command/test_diff.py::test_show_json_and_hash"
+          ],
+          "failed_tests_truncated": 0
+        },
+        "pass_to_pass": {
+          "passed": 242,
+          "failed": 0,
+          "total": 242,
+          "failed_tests": [],
+          "failed_tests_truncated": 0
+        }
+      },
+      "evaluator_budget_session_sync": {
+        "job_id": "rjob_399daf487d55",
+        "discovered": [],
+        "updated": [
+          "bws_3172273c757f",
+          "bws_69075ce53ae1",
+          "bws_f18176d209c7",
+          "bws_19bc86c8b627",
+          "bws_47203ae31f33",
+          "bws_60b4bf3dbc96",
+          "bws_b8005dd7ad90",
+          "bws_9b89ef2bbfe9",
+          "bws_62b828cf3116",
+          "bws_410633bd1148",
+          "bws_dc69951811a9",
+          "bws_4537fa70bfb8",
+          "bws_3172273c757f",
+          "bws_3172273c757f",
+          "bws_3172273c757f",
+          "bws_3172273c757f",
+          "bws_3172273c757f",
+          "bws_3172273c757f",
+          "bws_3172273c757f",
+          "bws_3172273c757f"
+        ],
+        "resumed": [],
+        "resume_failed": [],
+        "identity_conflicts": []
+      },
+      "evaluator_container_cleanup": [],
+      "resumed_run": true,
+      "resume_audit": {
+        "resumed": true,
+        "node_codex_homes": {
+          "refreshed": [
+            "node-0081585e0a591b83a10a481d",
+            "node-1a1b422f5d03ae0af751e67b",
+            "node-4db09d9a5aa515babfc370d8",
+            "node-8b09e57d8c7fd879a3f8076d",
+            "node-bd2c59152fc88042e0dbd6e8"
+          ],
+          "refreshed_count": 5,
+          "preserved_state_file_count": 36
+        },
+        "runtime_recovery": {
+          "dead_worker_tasks": [],
+          "detected_crashed_tasks": [],
+          "session_sync": {
+            "job_id": "rjob_399daf487d55",
+            "discovered": [],
+            "updated": [
+              "bws_3172273c757f",
+              "bws_69075ce53ae1",
+              "bws_f18176d209c7",
+              "bws_19bc86c8b627",
+              "bws_47203ae31f33",
+              "bws_60b4bf3dbc96",
+              "bws_b8005dd7ad90",
+              "bws_9b89ef2bbfe9",
+              "bws_62b828cf3116",
+              "bws_410633bd1148",
+              "bws_dc69951811a9",
+              "bws_4537fa70bfb8",
+              "bws_3172273c757f",
+              "bws_3172273c757f",
+              "bws_3172273c757f",
+              "bws_3172273c757f",
+              "bws_3172273c757f",
+              "bws_3172273c757f",
+              "bws_3172273c757f",
+              "bws_3172273c757f"
+            ],
+            "resumed": [],
+            "resume_failed": [],
+            "identity_conflicts": []
+          },
+          "reclaimed_dead_advance_lock": {
+            "reclaimed": false,
+            "reason": "no_advance_lock"
+          },
+          "resumed_nodes": [],
+          "timeout_branch_repair": {
+            "repaired": false,
+            "reason": "no_matching_timeout_branch"
+          },
+          "contribution_attribution_branch_repair": {
+            "repaired": false,
+            "reason": "attribution_node_not_failed"
+          },
+          "receipt_branch_repair": {
+            "repaired": false,
+            "reason": "no_receipt_recovery_requeue"
+          },
+          "structure_request_branch_repair": {
+            "repaired": false,
+            "consumed": false,
+            "reason": "no_adapted_structure_request",
+            "superseded_nodes": []
+          },
+          "requeued_incomplete_evaluators": [],
+          "adapted_candidate_receipts": [],
+          "adapted_structure_request_receipts": [],
+          "requeued_receipt_recoveries": []
+        },
+        "before_recovery": {
+          "boundaries": {
+            "daemon_process_started": true,
+            "daemon_restarted": true,
+            "worker_process_started": true,
+            "independent_evaluator_process": true,
+            "fixed_revision_evaluated": true
+          },
+          "worker_interrupted": true,
+          "dead_running_task_id": null,
+          "prior_materialization_count": 20,
+          "prior_session_resume_count": 8,
+          "accepted_checkpoint_count": 1,
+          "prior_evaluator_attempt_count": 7
+        },
+        "after_recovery": {
+          "boundaries": {
+            "daemon_process_started": true,
+            "daemon_restarted": true,
+            "worker_process_started": true,
+            "independent_evaluator_process": true,
+            "fixed_revision_evaluated": true
+          },
+          "worker_interrupted": true,
+          "dead_running_task_id": null,
+          "prior_materialization_count": 20,
+          "prior_session_resume_count": 8,
+          "accepted_checkpoint_count": 1,
+          "prior_evaluator_attempt_count": 7
+        }
+      },
+      "model_transport_audit": {
+        "schema": "hermes_phase4g8_model_transport_audit_v1",
+        "http_request_count": 0,
+        "websocket_upgrade_attempt_count": 0,
+        "websocket_101_count": 0,
+        "websocket_failure_count": 0
+      },
+      "previous_run_retention": []
+    },
+    "generated_at": 1784337509
+  },
+  "termination": {
+    "reason": "operator_requested_stop_after_evaluated_plateau",
+    "evaluator_budget_exhausted": false,
+    "resource_exhausted": false,
+    "operator_stop": {
+      "schema": "hermes_evaluated_operator_stop_v1",
+      "reason": "第 6 与第 7 次 official evaluator 均为 63/68、242/242 且失败集合完全相同；第 7 次反馈已进入同一 primary thread，worker 确认 signature 未变并开始检查，但停止前未产生新 candidate。由于 evaluator 没有提供更完整 diagnostics，归档最后一个已评估 candidate。",
+      "requested_at": 1784337482,
+      "latest_evaluator_run_id": 19,
+      "latest_evaluator_node_id": "rnode_7f7425fbf78d",
+      "candidate_patch_sha256": "62374385dfb782bfab284e353170d1d0628f8121ece4e289456dc6fa4512a3d4",
+      "target_revision": "git:fc42ca721c25bdd24875c999e37fb4f589ecd63c:worktree:7e00355163ab7966e699c94e42078198274c9a9bdacb6f50b1edd6d8b10b22d5",
+      "fail_to_pass": {
+        "passed": 63,
+        "failed": 5,
+        "total": 68,
+        "failed_tests": [
+          "tests/unit/command/test_diff.py::test_default",
+          "tests/unit/command/test_diff.py::test_no_changes",
+          "tests/unit/command/test_diff.py::test_show_hash",
+          "tests/unit/command/test_diff.py::test_show_json",
+          "tests/unit/command/test_diff.py::test_show_json_and_hash"
+        ],
+        "failed_tests_truncated": 0
+      },
+      "pass_to_pass": {
+        "passed": 242,
+        "failed": 0,
+        "total": 242,
+        "failed_tests": [],
+        "failed_tests_truncated": 0
+      }
+    }
+  },
+  "paths": {
+    "root": "/tmp/hermes-phase4g10-arm2/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-arm2-large-059ea4b541",
+    "report": "/tmp/hermes-phase4g10-arm2/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-arm2-large-059ea4b541/reports/run-report.json",
+    "capability_trace": {
+      "json": "/tmp/hermes-phase4g10-arm2/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-arm2-large-059ea4b541/reports/capability-trace.json",
+      "markdown": "/tmp/hermes-phase4g10-arm2/iterative__dvc_1.0.0a1_1.0.0a2/phase4g10-arm2-large-059ea4b541/reports/capability-trace.md"
+    }
+  }
+}

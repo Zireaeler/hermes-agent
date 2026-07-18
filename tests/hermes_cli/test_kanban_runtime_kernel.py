@@ -4288,7 +4288,8 @@ def test_isolated_children_freeze_contributions_for_primary_integration(
     assert rk.ingest_runtime_node_evidence(conn, primary["id"])
     assert rk.status_runtime_job(conn, job_id)["job"]["state"] == "done"
     ledger = conn.execute(
-        "SELECT satisfaction, node_id FROM progress_ledger WHERE job_id = ? ORDER BY created_at",
+        "SELECT satisfaction, node_id FROM progress_ledger "
+        "WHERE job_id = ? ORDER BY created_at, rowid",
         (job_id,),
     ).fetchall()
     assert [row["satisfaction"] for row in ledger[:-1]] == ["partial", "partial"]

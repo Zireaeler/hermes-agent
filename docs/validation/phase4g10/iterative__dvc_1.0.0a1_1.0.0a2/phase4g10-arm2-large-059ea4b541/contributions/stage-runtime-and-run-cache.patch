@@ -1,0 +1,706 @@
+diff --git a/dvc/command/base.py b/dvc/command/base.py
+index addd268..b9dcf00 100644
+--- a/dvc/command/base.py
++++ b/dvc/command/base.py
+@@ -44,7 +44,7 @@ class CmdBase(object):
+         from dvc.dvcfile import PIPELINE_FILE
+ 
+         msg = "assuming default target '{}'.".format(PIPELINE_FILE)
+-        logger.warning(msg)
++        logger.debug(msg)
+         return [PIPELINE_FILE]
+ 
+     # Abstract methods that have to be implemented by any inheritance class
+diff --git a/dvc/command/repro.py b/dvc/command/repro.py
+index 2578934..1d8de1b 100644
+--- a/dvc/command/repro.py
++++ b/dvc/command/repro.py
+@@ -33,7 +33,7 @@ class CmdRepro(CmdBase):
+                     interactive=self.args.interactive,
+                     pipeline=self.args.pipeline,
+                     all_pipelines=self.args.all_pipelines,
+-                    ignore_build_cache=self.args.ignore_build_cache,
++                    run_cache=not self.args.no_run_cache,
+                     no_commit=self.args.no_commit,
+                     downstream=self.args.downstream,
+                     recursive=self.args.recursive,
+@@ -136,11 +136,10 @@ def add_parser(subparsers, parent_parser):
+         help="Reproduce all stages in the specified directory.",
+     )
+     repro_parser.add_argument(
+-        "--ignore-build-cache",
++        "--no-run-cache",
+         action="store_true",
+         default=False,
+-        help="Reproduce all descendants of a changed stage even if their "
+-        "direct dependencies didn't change.",
++        help="Do not use the run-cache when reproducing stages.",
+     )
+     repro_parser.add_argument(
+         "--no-commit",
+diff --git a/dvc/command/run.py b/dvc/command/run.py
+index ef0f656..80f7456 100644
+--- a/dvc/command/run.py
++++ b/dvc/command/run.py
+@@ -42,7 +42,7 @@ class CmdRun(CmdBase):
+                 wdir=self.args.wdir,
+                 no_exec=self.args.no_exec,
+                 overwrite=self.args.overwrite_dvcfile,
+-                ignore_build_cache=self.args.ignore_build_cache,
++                run_cache=not self.args.no_run_cache,
+                 no_commit=self.args.no_commit,
+                 outs_persist=self.args.outs_persist,
+                 outs_persist_no_cache=self.args.outs_persist_no_cache,
+@@ -165,11 +165,10 @@ def add_parser(subparsers, parent_parser):
+         help="Overwrite existing DVC-file without asking for confirmation.",
+     )
+     run_parser.add_argument(
+-        "--ignore-build-cache",
++        "--no-run-cache",
+         action="store_true",
+         default=False,
+-        help="Run this stage even if it has been already ran with the same "
+-        "command/dependencies/outputs/etc before.",
++        help="Do not run this stage from the run-cache.",
+     )
+     run_parser.add_argument(
+         "--no-commit",
+diff --git a/dvc/command/update.py b/dvc/command/update.py
+index c3ef60e..ddd2070 100644
+--- a/dvc/command/update.py
++++ b/dvc/command/update.py
+@@ -12,7 +12,9 @@ class CmdUpdate(CmdBase):
+         ret = 0
+         for target in self.args.targets:
+             try:
+-                self.repo.update(target, self.args.rev)
++                self.repo.update(
++                    target, rev=self.args.rev, recursive=self.args.recursive,
++                )
+             except DvcException:
+                 logger.exception("failed to update '{}'.".format(target))
+                 ret = 1
+@@ -37,4 +39,11 @@ def add_parser(subparsers, parent_parser):
+         help="Git revision (e.g. SHA, branch, tag)",
+         metavar="<commit>",
+     )
++    update_parser.add_argument(
++        "-R",
++        "--recursive",
++        action="store_true",
++        default=False,
++        help="Update all stages in the specified directory.",
++    )
+     update_parser.set_defaults(func=CmdUpdate)
+diff --git a/dvc/repo/commit.py b/dvc/repo/commit.py
+index 74c98c5..735acdc 100644
+--- a/dvc/repo/commit.py
++++ b/dvc/repo/commit.py
+@@ -7,7 +7,6 @@ from . import locked
+ def commit(self, target, with_deps=False, recursive=False, force=False):
+     stages = self.collect(target, with_deps=with_deps, recursive=recursive)
+     for stage in stages:
+-        stage.check_can_commit(force=force)
+-        stage.commit()
++        stage.commit(force=force)
+ 
+         Dvcfile(self, stage.path).dump(stage)
+diff --git a/dvc/repo/imp_url.py b/dvc/repo/imp_url.py
+index 73420eb..893245c 100644
+--- a/dvc/repo/imp_url.py
++++ b/dvc/repo/imp_url.py
+@@ -18,7 +18,11 @@ def imp_url(self, url, out=None, fname=None, erepo=None, locked=True):
+     path, wdir, out = resolve_paths(self, out)
+ 
+     # NOTE: when user is importing something from within his own repository
+-    if os.path.exists(url) and path_isin(os.path.abspath(url), self.root_dir):
++    if (
++        erepo is None
++        and os.path.exists(url)
++        and path_isin(os.path.abspath(url), self.root_dir)
++    ):
+         url = relpath(url, wdir)
+ 
+     stage = create_stage(
+diff --git a/dvc/repo/reproduce.py b/dvc/repo/reproduce.py
+index 8fa2fc9..a2af114 100644
+--- a/dvc/repo/reproduce.py
++++ b/dvc/repo/reproduce.py
+@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
+ 
+ 
+ def _reproduce_stage(stage, **kwargs):
+-    if stage.locked:
++    if stage.locked and not stage.is_import:
+         logger.warning(
+             "{} is locked. Its dependencies are"
+             " not going to be reproduced.".format(stage)
+@@ -167,7 +167,7 @@ def _reproduce_stages(
+         try:
+             ret = _reproduce_stage(stage, **kwargs)
+ 
+-            if len(ret) != 0 and kwargs.get("ignore_build_cache", False):
++            if len(ret) != 0 and not kwargs.get("run_cache", True):
+                 # NOTE: we are walking our pipeline from the top to the
+                 # bottom. If one stage is changed, it will be reproduced,
+                 # which tells us that we should force reproducing all of
+diff --git a/dvc/repo/run.py b/dvc/repo/run.py
+index 43b17f5..3a20797 100644
+--- a/dvc/repo/run.py
++++ b/dvc/repo/run.py
+@@ -83,7 +83,7 @@ def run(self, fname=None, no_exec=False, single_stage=False, **kwargs):
+     else:
+         stage.run(
+             no_commit=kwargs.get("no_commit", False),
+-            ignore_build_cache=kwargs.get("ignore_build_cache", False),
++            run_cache=kwargs.get("run_cache", True),
+         )
+ 
+     dvcfile.dump(stage, update_pipeline=True)
+diff --git a/dvc/repo/update.py b/dvc/repo/update.py
+index 5ade233..da5bf43 100644
+--- a/dvc/repo/update.py
++++ b/dvc/repo/update.py
+@@ -2,13 +2,13 @@ from . import locked
+ 
+ 
+ @locked
+-def update(self, target, rev=None):
++def update(self, target, rev=None, recursive=False):
+     from ..dvcfile import Dvcfile
+ 
+-    dvcfile = Dvcfile(self, target)
+-    stage = dvcfile.stage
+-    stage.update(rev)
++    stages = self.collect(target, recursive=recursive)
++    for stage in stages:
++        stage.update(rev)
+ 
+-    dvcfile.dump(stage)
++        Dvcfile(self, stage.path).dump(stage)
+ 
+-    return stage
++    return stages
+diff --git a/dvc/stage/__init__.py b/dvc/stage/__init__.py
+index a1101f0..3093e95 100644
+--- a/dvc/stage/__init__.py
++++ b/dvc/stage/__init__.py
+@@ -67,13 +67,11 @@ def create_stage(cls, repo, path, **kwargs):
+ 
+     if stage and stage.dvcfile.exists():
+         has_persist_outs = any(out.persist for out in stage.outs)
+-        ignore_build_cache = (
+-            kwargs.get("ignore_build_cache", False) or has_persist_outs
+-        )
++        run_cache = kwargs.get("run_cache", True) and not has_persist_outs
+         if has_persist_outs:
+-            logger.warning("Build cache is ignored when persisting outputs.")
++            logger.warning("Run cache is ignored when persisting outputs.")
+ 
+-        if not ignore_build_cache and stage.can_be_skipped:
++        if run_cache and stage.can_be_skipped:
+             logger.info("Stage is cached, skipping.")
+             return None
+ 
+@@ -509,7 +507,8 @@ class Stage(params.StageParams):
+             if entry.checksum and entry.changed_checksum()
+         ]
+ 
+-    def check_can_commit(self, force):
++    @rwlocked(write=["outs"])
++    def commit(self, force=False):
+         changed_deps = self._changed_entries(self.deps)
+         changed_outs = self._changed_entries(self.outs)
+ 
+@@ -527,10 +526,8 @@ class Stage(params.StageParams):
+                     "unable to commit changed {}. Use `-f|--force` to "
+                     "force.".format(self)
+                 )
+-            self.save()
+ 
+-    @rwlocked(write=["outs"])
+-    def commit(self):
++        self.save()
+         for out in self.outs:
+             out.commit()
+ 
+@@ -620,9 +617,7 @@ class Stage(params.StageParams):
+             raise StageCmdFailedError(self, retcode)
+ 
+     @rwlocked(read=["deps"], write=["outs"])
+-    def run(
+-        self, dry=False, no_commit=False, force=False, ignore_build_cache=False
+-    ):
++    def run(self, dry=False, no_commit=False, force=False, run_cache=True):
+         if (self.cmd or self.is_import) and not self.locked and not dry:
+             self.remove_outs(ignore_remove=False, force=False)
+ 
+@@ -655,6 +650,7 @@ class Stage(params.StageParams):
+                 self.check_missing_outputs()
+ 
+         else:
++            stage_cached = False
+             if not dry:
+                 stage_cache = self.repo.stage_cache
+                 stage_cached = (
+@@ -663,31 +659,33 @@ class Stage(params.StageParams):
+                     and not self.always_changed
+                     and self._already_cached()
+                 )
+-                use_build_cache = False
++                use_run_cache = False
+                 if not stage_cached:
+                     self._save_deps()
+-                    use_build_cache = (
+-                        not force
+-                        and not ignore_build_cache
+-                        and stage_cache.is_cached(self)
++                    use_run_cache = (
++                        not force and run_cache and stage_cache.is_cached(self)
+                     )
+ 
+-                if use_build_cache:
+-                    # restore stage from build cache
++                if use_run_cache:
++                    # restore stage from run-cache
+                     self.repo.stage_cache.restore(self)
+                     stage_cached = self._outs_cached()
+ 
+-                if stage_cached:
+-                    logger.info("Stage is cached, skipping.")
+-                    self.checkout()
+-                else:
+-                    logger.info("Running command:\n\t{}".format(self.cmd))
++            if stage_cached:
++                logger.info("Stage is cached, skipping.")
++                self.checkout()
++            else:
++                logger.info("Running command:\n\t{}".format(self.cmd))
++                if not dry:
+                     self._run()
+ 
+-        if not dry:
++        if dry:
++            return
++
++        if no_commit:
+             self.save()
+-            if not no_commit:
+-                self.commit()
++        else:
++            self.commit(force=True)
+ 
+     def check_missing_outputs(self):
+         paths = [str(out) for out in self.outs if not out.exists]
+diff --git a/dvc/stage/cache.py b/dvc/stage/cache.py
+index af6528f..91c756c 100644
+--- a/dvc/stage/cache.py
++++ b/dvc/stage/cache.py
+@@ -114,7 +114,7 @@ class StageCache:
+             rel = src.relative_to(from_remote.path_info)
+             dst = to_remote.path_info / rel
+             key = dst.parent
+-            # check if any build cache already exists for this key
++            # check if any run-cache entry already exists for this key
+             if to_remote.exists(key) and first(to_remote.walk_files(key)):
+                 continue
+             func(src, dst)
+diff --git a/tests/func/test_import.py b/tests/func/test_import.py
+index 3eddc11..ab4b5b6 100644
+--- a/tests/func/test_import.py
++++ b/tests/func/test_import.py
+@@ -30,6 +30,17 @@ def test_import(tmp_dir, scm, dvc, erepo_dir):
+     }
+ 
+ 
++def test_import_does_not_rewrite_external_path(tmp_dir, dvc, erepo_dir):
++    with erepo_dir.chdir():
++        erepo_dir.scm_gen("data", "external", commit="create data")
++
++    tmp_dir.gen({"data": "local", "nested": {}})
++    stage = dvc.imp(fspath(erepo_dir), "data", out="nested/imported")
++
++    assert stage.deps[0].def_path == "data"
++    assert (tmp_dir / "nested" / "imported").read_text() == "external"
++
++
+ @pytest.mark.parametrize("src_is_dvc", [True, False])
+ def test_import_git_file(tmp_dir, scm, dvc, git_dir, src_is_dvc):
+     if src_is_dvc:
+diff --git a/tests/func/test_repro.py b/tests/func/test_repro.py
+index 10652b1..ebb8c27 100644
+--- a/tests/func/test_repro.py
++++ b/tests/func/test_repro.py
+@@ -480,7 +480,7 @@ class TestReproIgnoreBuildCache(TestDvc):
+         with open(code2, "a") as fobj:
+             fobj.write("\n\n")
+ 
+-        stages = self.dvc.reproduce(file3_stage.path, ignore_build_cache=True)
++        stages = self.dvc.reproduce(file3_stage.path, run_cache=False)
+         self.assertEqual(len(stages), 2)
+         self.assertEqual(stages[0].path, file2_stage.path)
+         self.assertEqual(stages[1].path, file3_stage.path)
+diff --git a/tests/func/test_run_single_stage.py b/tests/func/test_run_single_stage.py
+index 88a7479..db8aea4 100644
+--- a/tests/func/test_run_single_stage.py
++++ b/tests/func/test_run_single_stage.py
+@@ -343,7 +343,7 @@ class TestRunUnprotectOutsCopy(TestDvc):
+             [
+                 "run",
+                 "--overwrite-dvcfile",
+-                "--ignore-build-cache",
++                "--no-run-cache",
+                 "--single-stage",
+                 "-d",
+                 self.CODE,
+@@ -401,7 +401,7 @@ class TestRunUnprotectOutsSymlink(TestDvc):
+             [
+                 "run",
+                 "--overwrite-dvcfile",
+-                "--ignore-build-cache",
++                "--no-run-cache",
+                 "--single-stage",
+                 "-d",
+                 self.CODE,
+@@ -460,7 +460,7 @@ class TestRunUnprotectOutsHardlink(TestDvc):
+             [
+                 "run",
+                 "--overwrite-dvcfile",
+-                "--ignore-build-cache",
++                "--no-run-cache",
+                 "--single-stage",
+                 "-d",
+                 self.CODE,
+@@ -545,7 +545,7 @@ class TestCmdRunOverwrite(TestDvc):
+                 "-d",
+                 self.CODE,
+                 "--overwrite-dvcfile",
+-                "--ignore-build-cache",
++                "--no-run-cache",
+                 "--single-stage",
+                 "-o",
+                 "out",
+@@ -664,8 +664,7 @@ def test_rerun_deterministic_ignore_cache(tmp_dir, run_copy):
+ 
+     assert run_copy("foo", "out", single_stage=True) is not None
+     assert (
+-        run_copy("foo", "out", ignore_build_cache=True, single_stage=True)
+-        is not None
++        run_copy("foo", "out", run_cache=False, single_stage=True) is not None
+     )
+ 
+ 
+@@ -932,8 +931,8 @@ class TestShouldNotCheckoutUponCorruptedLocalHardlinkCache(TestDvc):
+ 
+ 
+ class TestPersistentOutput(TestDvc):
+-    def test_ignore_build_cache(self):
+-        warning = "Build cache is ignored when persisting outputs."
++    def test_no_run_cache(self):
++        warning = "Run cache is ignored when persisting outputs."
+ 
+         with open("immutable", "w") as fobj:
+             fobj.write("1")
+@@ -957,7 +956,7 @@ class TestPersistentOutput(TestDvc):
+             assert warning in self._caplog.text
+ 
+         # Even if the "immutable" dependency didn't change
+-        # it should run the command again, as it is "ignoring build cache"
++        # it should run the command again, as it is not using run-cache
+         with open("greetings", "r") as fobj:
+             assert "hello\nhello\n" == fobj.read()
+ 
+diff --git a/tests/func/test_stage.py b/tests/func/test_stage.py
+index ee9266f..08b0f97 100644
+--- a/tests/func/test_stage.py
++++ b/tests/func/test_stage.py
+@@ -1,4 +1,5 @@
+ import os
++import shutil
+ import tempfile
+ 
+ import pytest
+@@ -212,3 +213,25 @@ def test_stage_addressing(tmp_dir, dvc, run_copy):
+             stage2.addressing
+             == os.path.relpath(stage2.path) + ":" + stage2.name
+         )
++
++
++def test_push_pull_run_cache_with_uncached_output(tmp_dir, dvc, local_remote):
++    tmp_dir.gen("dep", "dep")
++    dvc.run(
++        cmd="cp dep out",
++        deps=["dep"],
++        outs_no_cache=["out"],
++        single_stage=True,
++    )
++
++    dvc.push(run_cache=True)
++    remote_run_cache = os.path.join(local_remote, "runs")
++    assert sum(len(files) for _, _, files in os.walk(remote_run_cache)) == 1
++
++    shutil.rmtree(dvc.stage_cache.cache_dir)
++    dvc.pull(run_cache=True)
++
++    assert (
++        sum(len(files) for _, _, files in os.walk(dvc.stage_cache.cache_dir))
++        == 1
++    )
+diff --git a/tests/func/test_update.py b/tests/func/test_update.py
+index 2da66f3..500ff66 100644
+--- a/tests/func/test_update.py
++++ b/tests/func/test_update.py
+@@ -149,7 +149,7 @@ def test_update_rev(tmp_dir, dvc, scm, git_dir):
+         git_dir.scm_gen({"foo": "foobar foo"}, commit="branch2 commit")
+         branch2_head = git_dir.scm.get_rev()
+ 
+-    stage = dvc.update("foo.dvc", rev="branch1")
++    (stage,) = dvc.update("foo.dvc", rev="branch1")
+     assert stage.deps[0].def_repo == {
+         "url": fspath(git_dir),
+         "rev": "branch1",
+@@ -158,7 +158,7 @@ def test_update_rev(tmp_dir, dvc, scm, git_dir):
+     with open(fspath_py35(tmp_dir / "foo")) as f:
+         assert "foobar" == f.read()
+ 
+-    stage = dvc.update("foo.dvc", rev="branch2")
++    (stage,) = dvc.update("foo.dvc", rev="branch2")
+     assert stage.deps[0].def_repo == {
+         "url": fspath(git_dir),
+         "rev": "branch2",
+@@ -166,3 +166,22 @@ def test_update_rev(tmp_dir, dvc, scm, git_dir):
+     }
+     with open(fspath_py35(tmp_dir / "foo")) as f:
+         assert "foobar foo" == f.read()
++
++
++def test_update_recursive(tmp_dir, dvc, tmp_path_factory):
++    source = tmp_path_factory.mktemp("update-sources")
++    (source / "one").write_text("one")
++    (source / "two").write_text("two")
++    tmp_dir.gen({"imports": {}})
++
++    stage_one = dvc.imp_url(fspath(source / "one"), "imports/one")
++    stage_two = dvc.imp_url(fspath(source / "two"), "imports/two")
++
++    (source / "one").write_text("updated one")
++    (source / "two").write_text("updated two")
++
++    stages = dvc.update("imports", recursive=True)
++
++    assert set(stages) == {stage_one, stage_two}
++    assert (tmp_dir / "imports" / "one").read_text() == "updated one"
++    assert (tmp_dir / "imports" / "two").read_text() == "updated two"
+diff --git a/tests/unit/command/test_repro.py b/tests/unit/command/test_repro.py
+index 1e20a04..5364cf4 100644
+--- a/tests/unit/command/test_repro.py
++++ b/tests/unit/command/test_repro.py
+@@ -1,3 +1,5 @@
++import logging
++
+ from dvc.cli import parse_args
+ from dvc.command.repro import CmdRepro
+ from dvc.dvcfile import PIPELINE_FILE
+@@ -7,12 +9,12 @@ default_arguments = {
+     "downstream": False,
+     "dry": False,
+     "force": False,
+-    "ignore_build_cache": False,
+     "interactive": False,
+     "no_commit": False,
+     "pipeline": False,
+     "single_item": False,
+     "recursive": False,
++    "run_cache": True,
+ }
+ 
+ 
+@@ -30,3 +32,29 @@ def test_downstream(dvc, mocker):
+     arguments = default_arguments.copy()
+     arguments.update({"downstream": True})
+     cmd.repo.reproduce.assert_called_with(PIPELINE_FILE, **arguments)
++
++
++def test_no_run_cache(dvc, mocker):
++    cmd = CmdRepro(parse_args(["repro", "--no-run-cache"]))
++    mocker.patch.object(cmd.repo, "reproduce", return_value=[])
++
++    assert cmd.run() == 0
++
++    arguments = default_arguments.copy()
++    arguments["run_cache"] = False
++    cmd.repo.reproduce.assert_called_with(PIPELINE_FILE, **arguments)
++
++
++def test_default_target_is_debug_only(dvc, mocker, caplog):
++    cmd = CmdRepro(parse_args(["repro"]))
++    mocker.patch.object(cmd.repo, "reproduce", return_value=[])
++
++    with caplog.at_level(logging.DEBUG, logger="dvc"):
++        assert cmd.run() == 0
++
++    record = next(
++        record
++        for record in caplog.records
++        if "assuming default target" in record.getMessage()
++    )
++    assert record.levelno == logging.DEBUG
+diff --git a/tests/unit/command/test_run.py b/tests/unit/command/test_run.py
+index e595b1d..00cd61f 100644
+--- a/tests/unit/command/test_run.py
++++ b/tests/unit/command/test_run.py
+@@ -24,7 +24,7 @@ def test_run(mocker, dvc):
+             "wdir",
+             "--no-exec",
+             "--overwrite-dvcfile",
+-            "--ignore-build-cache",
++            "--no-run-cache",
+             "--no-commit",
+             "--outs-persist",
+             "outs-persist",
+@@ -58,7 +58,7 @@ def test_run(mocker, dvc):
+         wdir="wdir",
+         no_exec=True,
+         overwrite=True,
+-        ignore_build_cache=True,
++        run_cache=False,
+         no_commit=True,
+         always_changed=True,
+         cmd="command",
+@@ -85,7 +85,7 @@ def test_run_args_from_cli(mocker, dvc):
+         wdir=None,
+         no_exec=False,
+         overwrite=False,
+-        ignore_build_cache=False,
++        run_cache=True,
+         no_commit=False,
+         always_changed=False,
+         cmd="echo foo",
+@@ -112,7 +112,7 @@ def test_run_args_with_spaces(mocker, dvc):
+         wdir=None,
+         no_exec=False,
+         overwrite=False,
+-        ignore_build_cache=False,
++        run_cache=True,
+         no_commit=False,
+         always_changed=False,
+         cmd='echo "foo bar"',
+diff --git a/tests/unit/command/test_update.py b/tests/unit/command/test_update.py
+index ff8e779..b842baa 100644
+--- a/tests/unit/command/test_update.py
++++ b/tests/unit/command/test_update.py
+@@ -5,9 +5,14 @@ from dvc.command.update import CmdUpdate
+ 
+ 
+ @pytest.mark.parametrize(
+-    "command,rev", [(["update"], None), (["update", "--rev", "REV"], "REV")]
++    "command,rev,recursive",
++    [
++        (["update"], None, False),
++        (["update", "--rev", "REV"], "REV", False),
++        (["update", "--recursive"], None, True),
++    ],
+ )
+-def test_update(dvc, mocker, command, rev):
++def test_update(dvc, mocker, command, rev, recursive):
+     targets = ["target1", "target2", "target3"]
+     cli_args = parse_args(command + targets)
+     assert cli_args.func == CmdUpdate
+@@ -16,5 +21,7 @@ def test_update(dvc, mocker, command, rev):
+ 
+     assert cmd.run() == 0
+ 
+-    calls = [mocker.call(target, rev) for target in targets]
++    calls = [
++        mocker.call(target, rev=rev, recursive=recursive) for target in targets
++    ]
+     m.assert_has_calls(calls)
+diff --git a/tests/unit/repo/test_reproduce.py b/tests/unit/repo/test_reproduce.py
+index 1050e76..f86f396 100644
+--- a/tests/unit/repo/test_reproduce.py
++++ b/tests/unit/repo/test_reproduce.py
+@@ -1,6 +1,28 @@
++import logging
++
+ import mock
+ 
+-from dvc.repo.reproduce import _get_active_graph
++from dvc.repo.reproduce import _get_active_graph, _reproduce_stage
++
++
++def test_locked_import_does_not_warn(mocker, caplog):
++    stage = mocker.Mock(locked=True, is_import=True)
++    stage.reproduce.return_value = None
++
++    with caplog.at_level(logging.WARNING, logger="dvc"):
++        assert _reproduce_stage(stage) == []
++
++    assert "is locked" not in caplog.text
++
++
++def test_locked_stage_warns(mocker, caplog):
++    stage = mocker.Mock(locked=True, is_import=False)
++    stage.reproduce.return_value = None
++
++    with caplog.at_level(logging.WARNING, logger="dvc"):
++        assert _reproduce_stage(stage) == []
++
++    assert "is locked" in caplog.text
+ 
+ 
+ def test_get_active_graph(tmp_dir, dvc):
+diff --git a/tests/unit/test_stage.py b/tests/unit/test_stage.py
+index dcfb771..12df64e 100644
+--- a/tests/unit/test_stage.py
++++ b/tests/unit/test_stage.py
+@@ -1,3 +1,4 @@
++import logging
+ import os
+ import signal
+ import subprocess
+@@ -104,6 +105,27 @@ def test_always_changed(dvc):
+         assert stage.status()["path"] == ["always changed"]
+ 
+ 
++def test_dry_run_does_not_mutate_stage(dvc, mocker, caplog):
++    stage = Stage(dvc, "stage.dvc", cmd="echo output")
++    remove_outs = mocker.patch.object(stage, "remove_outs")
++    run = mocker.patch.object(stage, "_run")
++    save = mocker.patch.object(stage, "save")
++    commit = mocker.patch.object(stage, "commit")
++
++    with dvc.lock, dvc.state, caplog.at_level(logging.INFO, logger="dvc"):
++        stage.run(dry=True)
++
++    assert "Running command:\n\techo output" in caplog.text
++    remove_outs.assert_not_called()
++    run.assert_not_called()
++    save.assert_not_called()
++    commit.assert_not_called()
++
++
++def test_stage_has_no_check_can_commit():
++    assert not hasattr(Stage, "check_can_commit")
++
++
+ def test_stage_cache(tmp_dir, dvc, run_copy, mocker):
+     tmp_dir.gen("dep", "dep")
+     stage = run_copy("dep", "out", single_stage=True)
+@@ -138,3 +160,16 @@ def test_stage_cache(tmp_dir, dvc, run_copy, mocker):
+ 
+     assert (tmp_dir / "out").exists()
+     assert (tmp_dir / "out").read_text() == "dep"
++
++
++def test_stage_cache_supports_uncached_outputs(tmp_dir, dvc):
++    tmp_dir.gen("dep", "dep")
++    stage = dvc.run(
++        cmd="cp dep out",
++        deps=["dep"],
++        outs_no_cache=["out"],
++        single_stage=True,
++    )
++
++    with dvc.lock, dvc.state:
++        assert dvc.stage_cache.is_cached(stage)
+

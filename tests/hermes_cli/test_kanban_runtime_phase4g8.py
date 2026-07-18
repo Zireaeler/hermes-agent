@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -852,6 +853,102 @@ def test_phase4g8_real_case_requires_exactly_one_run_target(tmp_path):
             case_size="small",
             execute_real=True,
         )
+
+
+def test_evaluated_operator_stop_requires_the_latest_evaluated_candidate(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _run("git", "init", "--quiet", cwd=workspace)
+    _run("git", "config", "user.email", "phase4g8@example.invalid", cwd=workspace)
+    _run("git", "config", "user.name", "Phase4G8 Test", cwd=workspace)
+    (workspace / "result.txt").write_text("base\n", encoding="utf-8")
+    _run("git", "add", "result.txt", cwd=workspace)
+    _run("git", "commit", "--quiet", "-m", "base", cwd=workspace)
+    base_commit = _run("git", "rev-parse", "HEAD", cwd=workspace)
+    (workspace / "result.txt").write_text("candidate\n", encoding="utf-8")
+    patch = swe_evo.collect_candidate_patch(workspace, base_commit)
+    patch_sha256 = hashlib.sha256(patch.encode("utf-8")).hexdigest()
+    attempts = [{
+        "run_id": 7,
+        "node_id": "verifier-7",
+        "result": {
+            "resolved": False,
+            "candidate_patch_sha256": patch_sha256,
+            "feedback_coverage": {"status": "current_failure_complete"},
+            "fail_to_pass": {"passed": 63, "failed": 5, "total": 68},
+            "pass_to_pass": {"passed": 242, "failed": 0, "total": 242},
+        },
+        "provenance": {"target_revision": "git:evaluated"},
+    }]
+    request = {
+        "schema": "hermes_evaluated_operator_stop_v1",
+        "reason": "same complete failure set",
+        "requested_at": 123,
+    }
+
+    validated = p4g8_run._validate_evaluated_operator_stop(
+        request,
+        evaluator_attempts=attempts,
+        workspace=workspace,
+        base_commit=base_commit,
+    )
+
+    assert validated["candidate_patch_sha256"] == patch_sha256
+    assert validated["latest_evaluator_run_id"] == 7
+
+    (workspace / "result.txt").write_text("unevaluated\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="workspace changed after the latest evaluator"):
+        p4g8_run._validate_evaluated_operator_stop(
+            request,
+            evaluator_attempts=attempts,
+            workspace=workspace,
+            base_commit=base_commit,
+        )
+
+
+def test_progress_ledger_evidence_is_idempotent_across_receipt_recovery(kanban_home):
+    with kb.connect() as conn:
+        rk.ensure_runtime_schema(conn)
+        conn.execute("DROP INDEX idx_progress_ledger_evidence")
+        for ledger_id, satisfaction, verification_state, created_at in (
+            ("ledger-old", "none", "unverified", 1),
+            ("ledger-new", "full", "implementation_verified", 2),
+        ):
+            conn.execute(
+                """
+                INSERT INTO progress_ledger (
+                    id, job_id, contract_id, goal_item_id, node_id,
+                    evidence_ref, satisfaction, verification_state,
+                    confidence, summary, metadata_json, created_at
+                ) VALUES (?, 'job', 'contract', 'item', 'node', 'evidence',
+                          ?, ?, 1.0, 'summary', '{}', ?)
+                """,
+                (ledger_id, satisfaction, verification_state, created_at),
+            )
+
+        rk.ensure_runtime_schema(conn)
+        rows = conn.execute(
+            "SELECT satisfaction, verification_state FROM progress_ledger"
+        ).fetchall()
+        assert [tuple(row) for row in rows] == [
+            ("full", "implementation_verified")
+        ]
+
+        rk._insert_ledger(
+            conn,
+            "job",
+            "contract",
+            "item",
+            "node",
+            "contradicted",
+            "failed",
+            "updated",
+            {"runtime_evidence_ref": "evidence"},
+        )
+        rows = conn.execute(
+            "SELECT satisfaction, verification_state FROM progress_ledger"
+        ).fetchall()
+        assert [tuple(row) for row in rows] == [("contradicted", "failed")]
 
 
 def test_completed_evaluator_raw_artifacts_are_removed_after_extraction(tmp_path):

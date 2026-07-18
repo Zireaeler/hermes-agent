@@ -298,6 +298,7 @@ def test_run_arm2_freezes_real_policy_and_archives_orchestra_evidence(tmp_path, 
     assert run["case_size"] == "large"
     assert run["execute_real"] is True
     assert run["reasoning_effort_override"] == "max"
+    assert run["operator_stop"] is None
     assert run["orchestration_policy"] == {
         "mode": "early_structure_assessment",
         "required": True,
@@ -317,3 +318,47 @@ def test_run_arm2_freezes_real_policy_and_archives_orchestra_evidence(tmp_path, 
     assert report["artifact_archive"]["status"] == "verified"
     assert (run_root / "reports" / "arm2-orchestration.json").is_file()
     assert (run_root / "reports" / "execution-summary.md").is_file()
+
+
+def test_operator_stop_request_round_trip(tmp_path):
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+
+    request = arm2.request_operator_stop(run_root, reason="evaluated plateau")
+
+    assert request["schema"] == "hermes_evaluated_operator_stop_v1"
+    assert request["reason"] == "evaluated plateau"
+    assert arm2._load_operator_stop_request(run_root) == request
+
+
+def test_run_arm2_forwards_existing_operator_stop(tmp_path, monkeypatch):
+    run_root, payload = _arm2_run_root(tmp_path)
+    request = arm2.request_operator_stop(run_root, reason="same complete failure set")
+    calls: dict[str, object] = {}
+
+    def fake_run(**kwargs):
+        calls["run"] = kwargs
+        return payload
+
+    monkeypatch.setattr(arm2.p4g8_run, "run_phase4g8_real_case", fake_run)
+    monkeypatch.setattr(
+        arm2.validation_artifacts,
+        "archive_validation_run",
+        lambda *args, **kwargs: {
+            "status": "verified",
+            "artifact_path": "/archive/arm2",
+        },
+    )
+
+    arm2.run_arm2(
+        qualification_spec_path=tmp_path / "qualified.json",
+        run_root=run_root,
+        resume_run=run_root,
+        source_codex_home=tmp_path / "source-codex-home",
+        artifact_root=tmp_path / "artifacts",
+        execute_real=True,
+        max_wall_seconds=1234,
+        worker_timeout_seconds=567,
+    )
+
+    assert calls["run"]["operator_stop"] == request

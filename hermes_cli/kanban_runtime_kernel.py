@@ -701,6 +701,15 @@ def ensure_runtime_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_runtime_capability_policies_job ON runtime_capability_policies(job_id, scope_type, scope_ref);
         CREATE INDEX IF NOT EXISTS idx_runtime_capability_authorizations_job ON runtime_capability_authorizations(job_id, status, scope_type, scope_ref);
         CREATE INDEX IF NOT EXISTS idx_backend_worker_sessions_job ON backend_worker_sessions(job_id, node_id, updated_at);
+        DELETE FROM progress_ledger
+         WHERE evidence_ref IS NOT NULL
+           AND rowid NOT IN (
+               SELECT MAX(rowid) FROM progress_ledger
+                WHERE evidence_ref IS NOT NULL
+                GROUP BY job_id, goal_item_id, evidence_ref
+           );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_progress_ledger_evidence
+            ON progress_ledger(job_id, goal_item_id, evidence_ref);
         """
     )
     _ensure_column(conn, "decision_sessions", "active_segment_id", "TEXT")
@@ -8799,6 +8808,9 @@ def _insert_ledger(
     summary: str,
     metadata: Optional[dict[str, Any]] = None,
 ) -> None:
+    evidence_ref = str(
+        (metadata or {}).get("runtime_evidence_ref") or f"node:{node_id}"
+    )
     conn.execute(
         """
         INSERT INTO progress_ledger (
@@ -8806,6 +8818,15 @@ def _insert_ledger(
             satisfaction, verification_state, confidence, summary,
             metadata_json, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(job_id, goal_item_id, evidence_ref) DO UPDATE SET
+            contract_id = excluded.contract_id,
+            node_id = excluded.node_id,
+            satisfaction = excluded.satisfaction,
+            verification_state = excluded.verification_state,
+            confidence = excluded.confidence,
+            summary = excluded.summary,
+            metadata_json = excluded.metadata_json,
+            created_at = excluded.created_at
         """,
         (
             _id("pledger"),
@@ -8813,7 +8834,7 @@ def _insert_ledger(
             contract_id,
             goal_item_id,
             node_id,
-            str((metadata or {}).get("runtime_evidence_ref") or f"node:{node_id}"),
+            evidence_ref,
             satisfaction,
             verification_state,
             1.0 if satisfaction == "full" else 0.5,

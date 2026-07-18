@@ -75,6 +75,7 @@ def run_phase4g8_real_case(
     fault_profile: Optional[str] = None,
     run_id_prefix: str = "phase4g8",
     reasoning_effort_override: Optional[str] = None,
+    operator_stop: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Run one qualified SWE-EVO case through production runtime boundaries."""
 
@@ -166,6 +167,7 @@ def run_phase4g8_real_case(
     job_id: Optional[str] = None
     evaluator_budget_exhausted = False
     resource_exhausted = False
+    operator_stop_applied: Optional[dict[str, Any]] = None
     evaluator_progress_status: dict[str, Any] = {}
     evaluator_attempts: list[dict[str, Any]] = []
     evaluator_budget_session_sync: dict[str, Any] = {}
@@ -284,6 +286,20 @@ def run_phase4g8_real_case(
             worker_gid=worker_gid,
             resumed=resumed_run,
         )
+        if operator_stop is not None:
+            if not resumed_run:
+                raise ValueError("operator stop is only valid while resuming an existing run")
+            with kb.connect() as conn:
+                evaluator_attempts = _official_evaluator_attempts(conn, job_id)
+            operator_stop_applied = _validate_evaluated_operator_stop(
+                operator_stop,
+                evaluator_attempts=evaluator_attempts,
+                workspace=paths["workspace"],
+                base_commit=str(spec["base_commit"]),
+            )
+            evaluator_progress_status = _evaluator_progress_status(
+                evaluator_attempts
+            )
         decision_provider = rd.RuntimeDecisionProvider(
             provider_name=source["provider_name"],
             model=source["model"],
@@ -327,10 +343,19 @@ def run_phase4g8_real_case(
             compaction_policy=compaction_policy,
             compaction_fallback_to_deterministic=False,
         )
-        daemon_process = _start_daemon(daemon_config, decision_provider, compaction_provider)
-        boundaries["daemon_process_started"] = True
+        if operator_stop_applied is None:
+            daemon_process = _start_daemon(
+                daemon_config,
+                decision_provider,
+                compaction_provider,
+            )
+            boundaries["daemon_process_started"] = True
 
-        deadline = time.monotonic() + max(60.0, float(max_wall_seconds))
+        deadline = (
+            time.monotonic() + max(60.0, float(max_wall_seconds))
+            if operator_stop_applied is None
+            else time.monotonic() - 1.0
+        )
         while time.monotonic() < deadline:
             if time.monotonic() >= next_evaluator_cleanup_at:
                 evaluator_container_cleanup.append(
@@ -506,12 +531,21 @@ def run_phase4g8_real_case(
                 break
             time.sleep(max(0.05, poll_interval_seconds))
         else:
-            resource_exhausted = True
+            resource_exhausted = operator_stop_applied is None
             if daemon_process is not None:
                 _stop_daemon(daemon_process, hard=False)
             _terminate_owned_job_workers(job_id, run_id=run_id)
             with kb.connect() as conn:
                 evaluator_budget_session_sync = rk.sync_runtime_backend_sessions(conn, job_id)
+                if operator_stop_applied is not None:
+                    rk._event_once(
+                        conn,
+                        job_id,
+                        "operator_stopped_after_evaluated_plateau",
+                        "operator-stop:" + str(operator_stop_applied["requested_at"]),
+                        operator_stop_applied,
+                        source="phase4g8_runner",
+                    )
 
         candidate_evidence = _archive_candidate_evidence(
             paths["reports"],
@@ -566,6 +600,7 @@ def run_phase4g8_real_case(
                     "evaluator_progress": evaluator_progress_status,
                     "evaluator_budget_exhausted": evaluator_budget_exhausted,
                     "resource_exhausted": resource_exhausted,
+                    "operator_stop": operator_stop_applied,
                     "evaluator_budget_session_sync": evaluator_budget_session_sync,
                     "evaluator_container_cleanup": evaluator_container_cleanup,
                     "resumed_run": resumed_run,
@@ -601,12 +636,16 @@ def run_phase4g8_real_case(
             "run_report": report,
             "termination": {
                 "reason": (
+                    "operator_requested_stop_after_evaluated_plateau"
+                    if operator_stop_applied is not None
+                    else
                     "total_resource_budget_exhausted"
                     if resource_exhausted
                     else "runtime_terminal"
                 ),
                 "evaluator_budget_exhausted": evaluator_budget_exhausted,
                 "resource_exhausted": resource_exhausted,
+                "operator_stop": operator_stop_applied,
             },
             "paths": {
                 "root": str(root),
@@ -2818,6 +2857,7 @@ def _reconstruct_resume_state(job_id: str, *, case_size: str) -> dict[str, Any]:
     resumed_session = any(int(row["resume_count"] or 0) > 0 for row in sessions)
     evaluator_provenance = evaluator_attempts[-1]["provenance"] if evaluator_attempts else {}
     boundaries: dict[str, bool] = {
+        "daemon_process_started": bool(materializations),
         "daemon_restarted": True,
         "worker_process_started": bool(materializations),
         "independent_evaluator_process": bool(evaluator_provenance.get("producer_session_id")),
@@ -3224,6 +3264,54 @@ def _official_evaluator_attempts(conn: sqlite3.Connection, job_id: str) -> list[
             "feedback_consumed": str(row["node_id"]) in consumed_verifier_ids,
         })
     return attempts
+
+
+def _validate_evaluated_operator_stop(
+    request: dict[str, Any],
+    *,
+    evaluator_attempts: list[dict[str, Any]],
+    workspace: Path,
+    base_commit: str,
+) -> dict[str, Any]:
+    if not isinstance(request, dict) or request.get("schema") != "hermes_evaluated_operator_stop_v1":
+        raise ValueError("operator stop request has an invalid schema")
+    reason = p4g8.redact_sensitive_text(str(request.get("reason") or "")).strip()
+    if not reason:
+        raise ValueError("operator stop reason is required")
+    try:
+        requested_at = int(request["requested_at"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("operator stop requested_at is invalid") from exc
+    if not evaluator_attempts:
+        raise ValueError("operator stop requires a completed official evaluator attempt")
+    latest = evaluator_attempts[-1]
+    result = latest.get("result") or {}
+    coverage = result.get("feedback_coverage") or {}
+    if result.get("resolved") is True:
+        raise ValueError("resolved runs must complete normally instead of using operator stop")
+    if result.get("error") or coverage.get("status") != "current_failure_complete":
+        raise ValueError("operator stop requires complete non-infrastructure evaluator feedback")
+    expected_patch_sha256 = str(result.get("candidate_patch_sha256") or "")
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_patch_sha256):
+        raise ValueError("latest evaluator result is missing candidate patch identity")
+    candidate_patch = swe_evo.collect_candidate_patch(workspace, base_commit)
+    current_patch_sha256 = hashlib.sha256(candidate_patch.encode("utf-8")).hexdigest()
+    if current_patch_sha256 != expected_patch_sha256:
+        raise ValueError(
+            "workspace changed after the latest evaluator; refusing to archive an "
+            "unevaluated candidate"
+        )
+    return {
+        "schema": "hermes_evaluated_operator_stop_v1",
+        "reason": reason[:2000],
+        "requested_at": requested_at,
+        "latest_evaluator_run_id": int(latest["run_id"]),
+        "latest_evaluator_node_id": str(latest["node_id"]),
+        "candidate_patch_sha256": current_patch_sha256,
+        "target_revision": str((latest.get("provenance") or {}).get("target_revision") or ""),
+        "fail_to_pass": dict(result.get("fail_to_pass") or {}),
+        "pass_to_pass": dict(result.get("pass_to_pass") or {}),
+    }
 
 
 def _evaluator_progress_status(attempts: list[dict[str, Any]]) -> dict[str, Any]:
