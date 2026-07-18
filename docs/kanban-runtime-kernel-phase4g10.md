@@ -564,6 +564,15 @@ terminal task evidence
     -> 稍后再尝试理解原 receipt
 ```
 
+真实 Clean Replay 进一步证明，不能只靠 prompt 要求 worker 在长篇 Markdown 之后手工追加 fenced JSON。
+模型可能完成全部实现和验证，却遗漏最后的机器 envelope。Runtime Codex lane 因此必须为 fresh 和 resume
+调用统一传入 `--output-schema`：终态响应是单个 `runtime_worker_receipt_v1` JSON 对象，过程说明继续通过
+Codex JSON events 记录，可读摘要放在 `summary`、`verification` 和风险字段中。Transport parser 同时接受
+裸 JSON 与历史 fenced JSON，但不得将普通自然语言总结猜测成权威 receipt。
+
+若 structured final output 仍缺失或不合法，才进入 receipt failure。不得因为格式补交而重新执行整个
+implementation node，也不得用 fresh worker 重新审查已经完成的 workspace。
+
 `_ingest_adaptable_*` 和 `_repair_resume_*` 的存在表示系统能够修复旧 DB，不表示新运行应经过这些
 函数。回归测试必须同时覆盖：当前可适配 receipt 不产生 receipt recovery event，以及历史坏状态仍可
 确定性迁移。

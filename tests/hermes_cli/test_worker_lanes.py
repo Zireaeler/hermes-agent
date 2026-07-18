@@ -731,6 +731,47 @@ def test_codex_argv_resume_preserves_execution_envelope():
     ]
 
 
+def test_codex_argv_runtime_output_schema_preserves_resume_order():
+    argv = build_codex_argv(
+        binary="/usr/bin/codex",
+        workspace="/tmp/ws",
+        sandbox="workspace-write",
+        approval="never",
+        model="gpt-5.6-sol",
+        json_events=True,
+        resume_session_id="019f-session",
+        output_schema_path="/tmp/codex-home/hermes-schemas/runtime.json",
+    )
+
+    assert argv[-7:] == [
+        "exec",
+        "resume",
+        "--json",
+        "--output-schema",
+        "/tmp/codex-home/hermes-schemas/runtime.json",
+        "019f-session",
+        "-",
+    ]
+
+
+def test_prepare_runtime_output_schema_uses_codex_home_not_workspace(tmp_path):
+    workspace = tmp_path / "workspace"
+    codex_home = tmp_path / "codex-home"
+    workspace.mkdir()
+    task_context = "Runtime footer: {}"
+
+    schema_path = cw._prepare_runtime_output_schema(
+        task_context,
+        {"HOME": str(tmp_path / "home"), "CODEX_HOME": str(codex_home)},
+    )
+
+    assert schema_path is not None
+    assert Path(schema_path).is_relative_to(codex_home)
+    schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
+    assert schema["properties"]["schema"]["enum"] == ["runtime_worker_receipt_v1"]
+    assert not any(workspace.iterdir())
+
+
 def test_codex_receipt_ignores_verdict_instruction_template():
     receipt = _extract_worker_receipt(
         "## Required review output\n"
@@ -765,6 +806,23 @@ def test_codex_runtime_receipt_extracts_only_explicit_json_envelope():
     assert receipt is not None
     assert receipt["claimed_goal_items"] == ["runtime-result"]
     assert _extract_runtime_receipt("runtime_worker_receipt_v1 in prose") is None
+
+
+def test_codex_runtime_receipt_extracts_output_schema_raw_json():
+    receipt = _extract_runtime_receipt(
+        json.dumps(
+            {
+                "schema": "runtime_worker_receipt_v1",
+                "verdict": "candidate_ready",
+                "summary": "integrated candidate ready",
+                "claimed_goal_items": ["runtime-result"],
+                "verification": {"passed": True, "summary": "tests passed"},
+            }
+        )
+    )
+
+    assert receipt is not None
+    assert receipt["verdict"] == "candidate_ready"
 
 
 def test_codex_runtime_receipt_ignores_truncated_prior_closing_fence():
@@ -1895,7 +1953,11 @@ def test_codex_resume_records_resumed_session_and_receipt(
     ) == 0
 
     argv = json.loads(argv_path.read_text(encoding="utf-8"))
-    assert argv[-5:] == ["exec", "resume", "--json", session_id, "-"]
+    assert argv[-7] == "exec"
+    assert argv[-6:-4] == ["resume", "--json"]
+    assert argv[-4] == "--output-schema"
+    assert argv[-3].endswith("/hermes-schemas/runtime-worker-receipt-v1.schema.json")
+    assert argv[-2:] == [session_id, "-"]
     prompt = prompt_path.read_text(encoding="utf-8")
     assert "art_resume_context" in prompt
     assert "/tmp/resume.patch" in prompt

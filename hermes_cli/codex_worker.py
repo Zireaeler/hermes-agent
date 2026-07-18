@@ -73,6 +73,216 @@ _REVIEW_OUTPUT_START_HEADERS = {
     "verification",
 }
 
+_RUNTIME_WORKER_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "schema": {"type": "string", "enum": ["runtime_worker_receipt_v1"]},
+        "verdict": {
+            "type": "string",
+            "enum": [
+                "pass",
+                "succeeded",
+                "candidate_ready",
+                "failed",
+                "blocked",
+                "human_required",
+                "uncertain",
+            ],
+        },
+        "summary": {"type": "string"},
+        "claimed_goal_items": {"type": "array", "items": {"type": "string"}},
+        "partial_goal_items": {"type": "array", "items": {"type": "string"}},
+        "unmet_goal_items": {"type": "array", "items": {"type": "string"}},
+        "contradicted_goal_items": {"type": "array", "items": {"type": "string"}},
+        "changed_files": {"type": "array", "items": {"type": "string"}},
+        "verification": {
+            "type": "object",
+            "properties": {
+                "passed": {"type": "boolean"},
+                "summary": {"type": "string"},
+            },
+            "required": ["passed", "summary"],
+            "additionalProperties": False,
+        },
+        "artifacts": {"type": "array", "items": {"type": "string"}},
+        "accepted_contributions": {"type": "array", "items": {"type": "string"}},
+        "modified_contributions": {"type": "array", "items": {"type": "string"}},
+        "rejected_contributions": {"type": "array", "items": {"type": "string"}},
+        "active_assumptions": {"type": "array", "items": {"type": "string"}},
+        "rejected_approaches": {"type": "array", "items": {"type": "string"}},
+        "known_failure_boundaries": {"type": "array", "items": {"type": "string"}},
+        "structure_request": {
+            "anyOf": [
+                {"type": "null"},
+                {
+                    "type": "object",
+                    "properties": {
+                        "required": {"type": "boolean"},
+                        "blocking": {"type": "boolean"},
+                        "reason_type": {
+                            "type": "string",
+                            "enum": [
+                                "independent_verification",
+                                "capability_boundary",
+                                "human_authority_boundary",
+                                "workspace_isolation",
+                                "durable_parallelism",
+                                "context_or_runtime_limit",
+                                "execution_discovered_gap",
+                            ],
+                        },
+                        "completed_scope": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "discovered_gaps": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "description": {"type": "string"},
+                                    "evidence_refs": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                },
+                                "required": ["description", "evidence_refs"],
+                                "additionalProperties": False,
+                            },
+                        },
+                        "suggested_nodes": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "objective": {"type": "string"},
+                                    "requested_capabilities": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                },
+                                "required": ["objective", "requested_capabilities"],
+                                "additionalProperties": False,
+                            },
+                        },
+                    },
+                    "required": [
+                        "required",
+                        "blocking",
+                        "reason_type",
+                        "completed_scope",
+                        "discovered_gaps",
+                        "suggested_nodes",
+                    ],
+                    "additionalProperties": False,
+                },
+            ]
+        },
+    },
+    "required": [
+        "schema",
+        "verdict",
+        "summary",
+        "claimed_goal_items",
+        "partial_goal_items",
+        "unmet_goal_items",
+        "contradicted_goal_items",
+        "changed_files",
+        "verification",
+        "artifacts",
+        "accepted_contributions",
+        "modified_contributions",
+        "rejected_contributions",
+        "active_assumptions",
+        "rejected_approaches",
+        "known_failure_boundaries",
+        "structure_request",
+    ],
+    "additionalProperties": False,
+}
+
+_RUNTIME_STRUCTURE_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "schema": {
+            "type": "string",
+            "enum": ["runtime_worker_structure_checkpoint_v1"],
+        },
+        "kind": {"type": "string", "enum": ["early_structure_assessment"]},
+        "recommendation": {
+            "type": "string",
+            "enum": ["continue_single_node", "expand"],
+        },
+        "summary": {"type": "string"},
+        "inspected_scope": {"type": "array", "items": {"type": "string"}},
+        "repository_facts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "fact": {"type": "string"},
+                    "evidence_refs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                },
+                "required": ["fact", "evidence_refs"],
+                "additionalProperties": False,
+            },
+        },
+        "proposed_nodes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "node_key": {"type": "string"},
+                    "outcome": {"type": "string"},
+                    "acceptance_criteria": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "declared_write_scope": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "requested_capabilities": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                },
+                "required": [
+                    "node_key",
+                    "outcome",
+                    "acceptance_criteria",
+                    "declared_write_scope",
+                    "requested_capabilities",
+                ],
+                "additionalProperties": False,
+            },
+        },
+        "integration_owner_node_key": {"type": "string"},
+        "shared_integration_scope": {"type": "array", "items": {"type": "string"}},
+        "risks": {"type": "array", "items": {"type": "string"}},
+        "worker_session_should_resume": {"type": "boolean"},
+        "changed_files": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [
+        "schema",
+        "kind",
+        "recommendation",
+        "summary",
+        "inspected_scope",
+        "repository_facts",
+        "proposed_nodes",
+        "integration_owner_node_key",
+        "shared_integration_scope",
+        "risks",
+        "worker_session_should_resume",
+        "changed_files",
+    ],
+    "additionalProperties": False,
+}
+
 _MARKDOWN_HEADING_PREFIX_RE = re.compile(r"^\s*(?:#{1,6}\s*)+")
 
 
@@ -483,6 +693,7 @@ def build_codex_argv(
     model: Optional[str] = None,
     json_events: bool = False,
     resume_session_id: Optional[str] = None,
+    output_schema_path: Optional[str] = None,
 ) -> list[str]:
     argv = [
         binary,
@@ -500,10 +711,51 @@ def build_codex_argv(
         argv.append("resume")
     if json_events:
         argv.append("--json")
+    if output_schema_path:
+        argv.extend(["--output-schema", output_schema_path])
     if resume_session_id:
         argv.append(str(resume_session_id))
     argv.append("-")
     return argv
+
+
+def _prepare_runtime_output_schema(
+    task_context: str,
+    worker_env: dict[str, str],
+) -> Optional[str]:
+    """Persist the structured final-response contract outside the workspace."""
+
+    is_structure_assessment = "Early structure assessment mode:" in task_context
+    if not is_structure_assessment and "Runtime footer:" not in task_context:
+        return None
+    codex_home_value = str(worker_env.get("CODEX_HOME") or "").strip()
+    if not codex_home_value:
+        home_value = str(worker_env.get("HOME") or "").strip()
+        if not home_value:
+            return None
+        codex_home_value = str(Path(home_value).expanduser() / ".codex")
+    schema_name = (
+        "runtime-structure-checkpoint-v1.schema.json"
+        if is_structure_assessment
+        else "runtime-worker-receipt-v1.schema.json"
+    )
+    schema = (
+        _RUNTIME_STRUCTURE_OUTPUT_SCHEMA
+        if is_structure_assessment
+        else _RUNTIME_WORKER_OUTPUT_SCHEMA
+    )
+    schema_dir = Path(codex_home_value).expanduser() / "hermes-schemas"
+    schema_dir.mkdir(parents=True, exist_ok=True)
+    schema_path = schema_dir / schema_name
+    content = json.dumps(schema, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    try:
+        existing = schema_path.read_text(encoding="utf-8")
+    except OSError:
+        existing = ""
+    if existing != content:
+        schema_path.write_text(content, encoding="utf-8")
+    schema_path.chmod(0o644)
+    return str(schema_path.resolve())
 
 
 def wrap_codex_network_argv(
@@ -1365,6 +1617,17 @@ def _extract_runtime_receipt(output: str) -> Optional[dict[str, Any]]:
             "runtime_worker_structure_checkpoint_v1",
         }:
             return candidate
+    stripped = (output or "").strip()
+    if stripped:
+        try:
+            candidate = json.loads(stripped)
+        except json.JSONDecodeError:
+            candidate = None
+        if isinstance(candidate, dict) and candidate.get("schema") in {
+            "runtime_worker_receipt_v1",
+            "runtime_worker_structure_checkpoint_v1",
+        }:
+            return candidate
     return None
 
 
@@ -1599,9 +1862,9 @@ def build_codex_resume_prompt(
             "a reproducible evaluator dependency or import failure as environment-only without "
             "demonstrating a fingerprint mismatch. Resume from the existing workspace and session "
             "context, fix the concrete failures, "
-            "run the strongest available local verification, and finish with the full Markdown "
-            "receipt and final `runtime_worker_receipt_v1` fenced JSON object required by the "
-            "original task. If evidence reveals a durable capability, human authority, workspace, "
+            "run the strongest available local verification, and finish with the single "
+            "`runtime_worker_receipt_v1` JSON object required by the supplied output schema. If "
+            "evidence reveals a durable capability, human authority, workspace, "
             "or independent-verification boundary, return a terminal `structure_request`; do not "
             "create or complete runtime nodes directly."
         )
@@ -1699,8 +1962,9 @@ def build_codex_prompt(task_context: str, *, lane: str, model: Optional[str]) ->
     if is_structure_assessment:
         runtime_receipt_instructions = """
 
-This is an early Runtime structure assessment. Emit one final fenced JSON
-object and no prose after it:
+This is an early Runtime structure assessment. Your final response must be one
+JSON object matching the supplied output schema. Do not wrap it in a Markdown
+fence and do not add prose before or after it:
 
 ```json
 {
@@ -1732,8 +1996,10 @@ context; typical local implementation capabilities are `filesystem_read`,
     elif "Runtime footer:" in task_context:
         runtime_receipt_instructions = """
 
-This is a Runtime Kernel node. After the normal Markdown receipt, emit one
-final fenced JSON object and no prose after it:
+This is a Runtime Kernel node. Your final response must be one JSON object
+matching the supplied output schema. Do not wrap it in a Markdown fence and do
+not add prose before or after it. Put concise human-readable evidence in the
+summary and verification fields:
 
 ```json
 {
@@ -1743,9 +2009,17 @@ final fenced JSON object and no prose after it:
   "claimed_goal_items": ["only keys listed under Goal items"],
   "partial_goal_items": [],
   "unmet_goal_items": [],
+  "contradicted_goal_items": [],
   "changed_files": ["workspace-relative/path"],
   "verification": {"passed": true, "summary": "command and result"},
-  "artifacts": []
+  "artifacts": [],
+  "accepted_contributions": [],
+  "modified_contributions": [],
+  "rejected_contributions": [],
+  "active_assumptions": [],
+  "rejected_approaches": [],
+  "known_failure_boundaries": [],
+  "structure_request": null
 }
 ```
 
@@ -1760,13 +2034,6 @@ For a Runtime node with a required independent evaluator, use verdict
 ready for external evaluation; it is not final goal completion.
 """
         if is_runtime_integration:
-            runtime_receipt_instructions = runtime_receipt_instructions.replace(
-                '  "artifacts": []\n}',
-                '  "artifacts": [],\n'
-                '  "accepted_contributions": ["artifact IDs applied without modification"],\n'
-                '  "modified_contributions": ["artifact IDs adapted during integration"],\n'
-                '  "rejected_contributions": ["artifact IDs not integrated"]\n}',
-            )
             runtime_receipt_instructions += """
 
 Integration receipt requirement: classify every artifact ID from the frozen
@@ -1804,7 +2071,7 @@ mandatory retry feedback. Do not infer retry mode from the phrase appearing in
 ordinary task instructions or examples. Fix those items first and include the
 verification you ran for the requested changes in your receipt.
 
-When finished, print a concise structured receipt:
+For non-Runtime tasks, finish with this concise structured receipt:
 
 Progress:
 - [x] ...
@@ -1947,6 +2214,8 @@ def run_codex_worker(
             if resume_session_id
             else build_codex_prompt(task_context, lane=lane, model=model)
         )
+        codex_env = _safe_env_for_codex(workspace)
+        output_schema_path = _prepare_runtime_output_schema(task_context, codex_env)
         argv = build_codex_argv(
             binary=codex_bin,
             workspace=workspace,
@@ -1955,8 +2224,8 @@ def run_codex_worker(
             model=model,
             json_events=effective_json_events,
             resume_session_id=resume_session_id,
+            output_schema_path=output_schema_path,
         )
-        codex_env = _safe_env_for_codex(workspace)
         argv = wrap_codex_network_argv(
             argv,
             network_namespace,

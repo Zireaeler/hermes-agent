@@ -93,6 +93,10 @@ validation_stopped_after_evaluated_coverage
 
 ### 5.2 Receipt 与 ledger
 
+所有 Runtime Codex materialization 必须使用 Codex structured final output schema。Fresh、primary resume、
+child 和 remediation 使用同一 canonical receipt contract；early assessment 使用独立 structure checkpoint
+schema。机器 receipt 是裸 JSON，Markdown 过程文本只用于可读日志，不能作为 completion truth。
+
 以下事实必须为零：
 
 - `receipt_missing`；
