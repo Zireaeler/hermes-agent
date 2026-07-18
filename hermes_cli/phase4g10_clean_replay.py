@@ -340,6 +340,7 @@ def run_clean_replay(
         fault_profile="small",
         run_id_prefix="phase4g10-clean",
         reasoning_effort_override="max",
+        compaction_reasoning_effort_override="low",
         evaluated_stop_policy={
             "schema": p4g8_run.EVALUATED_STOP_POLICY_SCHEMA,
             "min_completed_evaluator_attempts": 3,

@@ -77,6 +77,7 @@ def run_phase4g8_real_case(
     fault_profile: Optional[str] = None,
     run_id_prefix: str = "phase4g8",
     reasoning_effort_override: Optional[str] = None,
+    compaction_reasoning_effort_override: Optional[str] = None,
     operator_stop: Optional[dict[str, Any]] = None,
     evaluated_stop_policy: Optional[dict[str, Any]] = None,
     workspace_ownership_canary: bool = False,
@@ -337,7 +338,9 @@ def run_phase4g8_real_case(
             max_retries=1,
             timeout_seconds=compaction_timeout_seconds,
             reasoning_effort=(
-                reasoning_effort_override or source.get("reasoning_effort")
+                compaction_reasoning_effort_override
+                or reasoning_effort_override
+                or source.get("reasoning_effort")
             ),
             explicit_base_url=source["explicit_base_url"],
             explicit_api_key=source["explicit_api_key"],

@@ -212,6 +212,8 @@ def test_run_clean_replay_freezes_policy_and_cleans_only_after_archive(
 
     run = calls["run"]
     assert run["run_id_prefix"] == "phase4g10-clean"
+    assert run["reasoning_effort_override"] == "max"
+    assert run["compaction_reasoning_effort_override"] == "low"
     assert run["workspace_ownership_canary"] is True
     replay = run["orchestration_policy"]["assessment_replay"]
     assert replay["required_recommendation"] == "expand"

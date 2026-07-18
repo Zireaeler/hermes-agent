@@ -37,6 +37,10 @@ Clean Replay 必须从以下状态启动：
 - 已锁定且通过 base/gold qualification 的同一 DVC Large 实例；
 - 与 Phase 4G10 相同的真实模型源和普通 `max` worker profile。
 
+Worker 和 Decision Provider 使用 `max` 推理档；Runtime Compaction Provider 使用独立的 `low` 推理档。
+Compaction 是受 schema 和 provenance validator 约束的状态压缩，不承担任务求解或 graph decision，不应
+继承 worker 的高推理预算。两者必须分别配置和审计，真实 compaction 仍禁止 deterministic fallback。
+
 运行必须覆盖：
 
 ```text
