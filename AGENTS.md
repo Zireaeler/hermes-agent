@@ -28,6 +28,7 @@ When working on branch `feature-kanban-runtime-kernel`, treat
 `docs/kanban-runtime-kernel-phase4g10-clean-replay.md` and
 `docs/kanban-runtime-kernel-phase4g11.md` and
 `docs/kanban-runtime-kernel-phase4g12.md` and
+`docs/kanban-runtime-kernel-phase4g13.md` and
 `docs/kanban-runtime-validation-artifact-retention.md` as binding design
 constraints, not background reading. If implementation details conflict with
 those documents, update the relevant design document first or stop and ask for
@@ -49,6 +50,16 @@ Dynamic expansion requires an exact checkpoint candidate reference, goal
 linkage, isolated write scope, remaining child budget, an existing integration
 owner, and evidence-backed decomposition. Ordinary coordination checkpoints
 remain routing-only.
+
+Phase 4G13 makes coordination event-driven rather than child-driven. Do not
+force a first coordination checkpoint merely because a node is an isolated
+child. A worker may include responsibility candidates in a terminal receipt;
+Runtime must persist, validate, and consume those candidates exactly once.
+Deterministic dependency/readiness transitions must not call the Decision
+Provider. Pending terminal candidates may hold their integration owner until an
+accepted patch either expands them or records an explicit no-expansion
+resolution. More checkpoints, resumes, decisions, or nodes are not success
+conditions; coordination overhead must be observable.
 
 Runtime Kernel 的设计、roadmap、phase、真实验证和证据保留文档必须以中文作为规范性
 叙述语言。函数名、类名、schema 字段、`event_type` 值、CLI 命令、API path、
@@ -230,6 +241,14 @@ grant capabilities, update ledger facts, or mark goal completion. A valid
 expansion must atomically create isolated child work, attach it to an existing
 integration owner, and route all current `waiting_coordination`
 responsibilities. More nodes are not themselves a success condition.
+
+Phase 4G13 is the natural discovery and coordination cost-control stage. It
+removes forced child-first checkpoints, allows terminal receipts to carry
+non-authoritative responsibility candidates, requires exact candidate
+resolution, and keeps local reducer transitions provider-free. The real Medium
+comparison must not reveal candidate keys, file scopes, hidden test patches, or
+gold changes to workers. A one-shot isolated acceptance suite may score each
+arm after execution but must not feed an evaluator repair loop.
 
 For this branch, do not routinely rebase `main`, and do not restore the old
 oversized session `019e497b-56e0-7bb0-a357-0db06954ae4d` as implementation
