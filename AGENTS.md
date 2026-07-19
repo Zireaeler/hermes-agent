@@ -24,7 +24,9 @@ When working on branch `feature-kanban-runtime-kernel`, treat
 `docs/kanban-runtime-kernel-phase4g8.md` and
 `docs/kanban-runtime-kernel-phase4g9.md` and
 `docs/kanban-runtime-kernel-phase4g9-iterative.md` and
+`docs/kanban-runtime-kernel-phase4g10.md` and
 `docs/kanban-runtime-kernel-phase4g10-clean-replay.md` and
+`docs/kanban-runtime-kernel-phase4g11.md` and
 `docs/kanban-runtime-validation-artifact-retention.md` as binding design
 constraints, not background reading. If implementation details conflict with
 those documents, update the relevant design document first or stop and ask for
@@ -200,6 +202,17 @@ in real tasks. Report Runtime Validation separately from End-to-End Capability
 Validation: task-quality failure may coexist with runtime-correct evidence, but
 all three small/medium/large tasks must still be officially resolved before
 claiming the production capability baseline or beginning Phase 4H.
+
+Phase 4G11 is the closed-loop runtime coordination stage. Workers still may
+not communicate peer-to-peer or mutate the durable graph, but a nonterminal
+worker may yield a canonical coordination checkpoint at a cooperative safe
+point. Cross-node effects must flow through DB-backed global state, a validated
+Decision Provider control proposal, a durable directive mailbox, same-session
+resume, and explicit directive acknowledgment. Do not treat ordinary progress,
+heartbeats, tool calls, or test completion as coordination events. Do not claim
+that a directive changed execution until the target materialization has
+acknowledged it. Mid-turn message injection and forced interruption are not
+Phase 4G11 MVP requirements.
 
 For this branch, do not routinely rebase `main`, and do not restore the old
 oversized session `019e497b-56e0-7bb0-a357-0db06954ae4d` as implementation
