@@ -92,16 +92,16 @@ Phase 3D Long Running Autonomous Task Runtime
 Phase 4  Production Hardening
 ```
 
-当前代码已经推进到 Phase 4G11 closed-loop runtime coordination：Phase 2D 本地 compaction 闭环、Phase 3 real
+当前代码已经推进到 Phase 4G12 evidence-driven dynamic graph mutation：Phase 2D 本地 compaction 闭环、Phase 3 real
 decision provider、Phase 4 production hardening、Phase 4E recovery、Phase 4F capability
 policy、Phase 4G deterministic soak、Phase 4G0 memory lifecycle、Phase 4G1 real-smoke、
 Phase 4G2 real-provider bounded loop、Phase 4G3 real worker lane smoke、Phase 4G4 worker
 execution continuity、Phase 4G5 real compaction candidate quality、Phase 4G6 active
 long-run reliability soak、Phase 4G7 packaged daemon、Phase 4G8 real long-horizon validation、
 Phase 4G9 Native Ultra 对照、Phase 4G10 early structure assessment / isolated durable
-contribution，以及 Phase 4G11 coordination checkpoint / directive / ACK 闭环均已实现。
-Phase 4G12 将进一步验证 execution-discovered responsibility 能否在 active coordination epoch
-中驱动受控 topology mutation；完成后再进入 Phase 4H dashboard runtime UI。
+contribution、Phase 4G11 coordination checkpoint / directive / ACK 闭环，以及 Phase 4G12
+execution-discovered responsibility 驱动的受控 topology mutation 均已实现。下一阶段是
+Phase 4H dashboard runtime UI 或对 Runtime coordination 成本进行专项优化。
 
 隔离真实验证已经覆盖 decision execute/apply/reject、compaction fallback safety、3-tick
 real-provider loop，以及真实 provider -> validator -> Kanban dispatcher -> Codex worker ->

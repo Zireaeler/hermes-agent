@@ -253,14 +253,16 @@ def test_decision_profile_loader_reads_markdown_profile():
     profile = rd.load_decision_profile("graph_patch_decision")
 
     assert profile["profile_name"] == "graph_patch_decision"
-    assert profile["profile_version"] == "4"
+    assert profile["profile_version"] == "5"
     assert "外部调研本身不构成独立 Runtime node 的理由" in profile["content"]
     assert "最多创建一个新的 runnable worker node" in profile["content"]
     assert "整个 workspace 使用 `**`" in profile["content"]
     assert "不得输出为单个字符串" in profile["content"]
     assert "每个 `waiting_coordination` target node 恰好接收一条" in profile["content"]
     assert "target node 集合必须与 snapshot" in profile["content"]
-    assert "不得混入 `continue_node`" in profile["content"]
+    assert "Evidence-driven coordination epoch" in profile["content"]
+    assert "source_responsibility_ref" in profile["content"]
+    assert "execution_discovered_gap" in profile["content"]
     assert "receipt:<node_key>:attempt-<n>" in profile["content"]
     assert profile["profile_hash"]
     assert profile["profile_path"].endswith("graph_patch_decision.md")

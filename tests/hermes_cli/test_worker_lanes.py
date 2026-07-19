@@ -1146,6 +1146,7 @@ def test_codex_coordination_checkpoint_schema_and_prompt(tmp_path):
     )
     assert "runtime_worker_coordination_checkpoint_v1" in prompt
     assert "Do not claim node or goal completion" in prompt
+    assert "responsibility_candidates" in prompt
     schema_path = _prepare_runtime_output_schema(
         context,
         {"CODEX_HOME": str(tmp_path / "codex-home")},
@@ -1153,6 +1154,15 @@ def test_codex_coordination_checkpoint_schema_and_prompt(tmp_path):
     schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
     assert schema["properties"]["schema"]["enum"] == [
         "runtime_worker_coordination_checkpoint_v1"
+    ]
+    assert "responsibility_candidates" in schema["required"]
+    assert schema["properties"]["responsibility_candidates"]["items"][
+        "properties"
+    ]["reason_type"]["enum"] == [
+        "execution_discovered_gap",
+        "workspace_isolation",
+        "capability_boundary",
+        "independent_verification",
     ]
     receipt = _extract_runtime_receipt(
         json.dumps({

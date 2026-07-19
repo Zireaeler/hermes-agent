@@ -118,6 +118,19 @@ COORDINATION_CHECKPOINT_KINDS = {
     "partial_contribution_ready",
     "integration_risk",
 }
+RESPONSIBILITY_CANDIDATE_REASON_TYPES = {
+    "execution_discovered_gap",
+    "workspace_isolation",
+    "capability_boundary",
+    "independent_verification",
+}
+RESPONSIBILITY_CANDIDATE_CHECKPOINT_KINDS = {
+    "scope_overlap_detected",
+    "gap_discovered",
+    "assumption_invalidated",
+    "blocking_dependency",
+    "integration_risk",
+}
 COORDINATION_DIRECTIVE_ACTIONS = {
     "continue",
     "revise_contract",
@@ -2114,6 +2127,261 @@ def _validate_early_structure_decision(
         )
 
 
+def _responsibility_candidate_from_ref(
+    conn: sqlite3.Connection,
+    job_id: str,
+    source_ref: Any,
+) -> tuple[int, dict[str, Any]]:
+    value = str(source_ref or "").strip()
+    match = re.fullmatch(
+        r"event:(\d+)#responsibility:([A-Za-z0-9][A-Za-z0-9._-]{0,127})",
+        value,
+    )
+    if match is None:
+        raise PatchValidationError(
+            "source_responsibility_ref must use "
+            "event:<id>#responsibility:<candidate_key>"
+        )
+    event_id = int(match.group(1))
+    candidate_key = match.group(2)
+    row = conn.execute(
+        """
+        SELECT payload_json FROM execution_events
+         WHERE id = ? AND job_id = ?
+           AND event_type = 'worker_coordination_checkpointed'
+        """,
+        (event_id, job_id),
+    ).fetchone()
+    if row is None:
+        raise PatchValidationError(
+            "source_responsibility_ref references an unknown coordination event"
+        )
+    checkpoint = _loads(row["payload_json"]).get("checkpoint") or {}
+    candidates = checkpoint.get("responsibility_candidates") or []
+    matches = [
+        candidate
+        for candidate in candidates
+        if isinstance(candidate, dict)
+        and candidate.get("candidate_key") == candidate_key
+    ]
+    if len(matches) != 1:
+        raise PatchValidationError(
+            "source_responsibility_ref does not identify exactly one candidate"
+        )
+    return event_id, dict(matches[0])
+
+
+def _scope_is_within(candidate_scope: str, allowed_scope: str) -> bool:
+    candidate = str(candidate_scope).strip().replace("\\", "/")
+    allowed = str(allowed_scope).strip().replace("\\", "/")
+    if candidate == allowed or allowed == "**":
+        return True
+    if any(marker in allowed for marker in ("*", "?", "[")):
+        return fnmatch.fnmatchcase(candidate, allowed)
+    if allowed.endswith("/**"):
+        root = allowed[:-3].rstrip("/")
+        return candidate == root or candidate.startswith(root + "/")
+    return False
+
+
+def _validate_coordination_epoch_decision(
+    conn: sqlite3.Connection,
+    job_id: str,
+    patch: dict[str, Any],
+    ops: list[dict[str, Any]],
+) -> None:
+    waiting_rows = [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT * FROM execution_nodes
+             WHERE job_id = ? AND state = 'waiting_coordination'
+             ORDER BY node_key
+            """,
+            (job_id,),
+        ).fetchall()
+    ]
+    if not waiting_rows:
+        return
+
+    waiting_keys = {str(row["node_key"]) for row in waiting_rows}
+    active_checkpoint_event_ids = {
+        int(row["event_id"])
+        for row in conn.execute(
+            """
+            SELECT MAX(event.id) AS event_id
+              FROM execution_events event
+              JOIN execution_nodes node ON node.id = event.node_id
+             WHERE event.job_id = ?
+               AND event.event_type = 'worker_coordination_checkpointed'
+               AND node.state = 'waiting_coordination'
+             GROUP BY event.node_id
+            """,
+            (job_id,),
+        ).fetchall()
+    }
+    directive_ops = [op for op in ops if op.get("op") == "issue_directive"]
+    directive_targets = {
+        str(op.get("target_node_key") or "").strip() for op in directive_ops
+    }
+    missing = waiting_keys - directive_targets
+    if missing:
+        raise PatchValidationError(
+            "coordination epoch must issue one directive to every "
+            f"waiting_coordination node: missing {sorted(missing)!r}"
+        )
+
+    create_ops = [op for op in ops if op.get("op") == "create_node"]
+    if not create_ops:
+        disallowed = {
+            str(op.get("op"))
+            for op in ops
+            if op.get("op") not in {"issue_directive", "supersede_directive"}
+        }
+        if disallowed:
+            raise PatchValidationError(
+                "routing-only coordination epoch may only issue or supersede directives"
+            )
+        return
+
+    allowed_ops = {
+        "create_node",
+        "add_dependency",
+        "issue_directive",
+        "supersede_directive",
+    }
+    disallowed = {
+        str(op.get("op")) for op in ops if op.get("op") not in allowed_ops
+    }
+    if disallowed:
+        raise PatchValidationError(
+            "evidence-driven coordination expansion contains unsupported ops "
+            f"{sorted(disallowed)!r}"
+        )
+
+    job = _job(conn, job_id)
+    policy = _loads(job.get("metadata_json")).get("orchestration_policy") or {}
+    if (
+        policy.get("schema") != RUNTIME_ORCHESTRATION_POLICY_SCHEMA
+        or policy.get("mode") != "closed_loop_coordination"
+    ):
+        raise PatchValidationError(
+            "coordination expansion requires closed_loop_coordination policy"
+        )
+    max_children = int(policy.get("max_child_nodes") or 3)
+    current_children = 0
+    for row in conn.execute(
+        "SELECT constraints_json FROM execution_nodes WHERE job_id = ?",
+        (job_id,),
+    ).fetchall():
+        contract = _loads(row["constraints_json"]).get("contract") or {}
+        if contract.get("workspace_mode") == "isolated_worktree":
+            current_children += 1
+    if current_children + len(create_ops) > max_children:
+        raise PatchValidationError(
+            "coordination expansion exceeds remaining orchestration child budget"
+        )
+
+    configured_lane = str(policy.get("worker_lane") or "")
+    allowed_capabilities = set(policy.get("required_child_capabilities") or [])
+    candidate_events: set[int] = set()
+    candidate_owners: dict[str, str] = {}
+    for op in create_ops:
+        node_key = str(op.get("node_key") or "").strip()
+        event_id, candidate = _responsibility_candidate_from_ref(
+            conn,
+            job_id,
+            op.get("source_responsibility_ref"),
+        )
+        if event_id not in active_checkpoint_event_ids:
+            raise PatchValidationError(
+                "source_responsibility_ref must cite the active coordination epoch"
+            )
+        candidate_events.add(event_id)
+        if node_key != str(candidate.get("candidate_key") or "").strip():
+            raise PatchValidationError(
+                "coordination child node_key must match its responsibility candidate"
+            )
+        if candidate.get("reason_type") != "execution_discovered_gap":
+            raise PatchValidationError(
+                "Phase 4G12 coordination child requires an "
+                "execution_discovered_gap candidate"
+            )
+        candidate_goals = set(candidate.get("goal_item_keys") or [])
+        node_goals = set(op.get("goal_item_keys") or [])
+        if not node_goals or not node_goals.issubset(candidate_goals):
+            raise PatchValidationError(
+                "coordination child goal linkage exceeds its responsibility candidate"
+            )
+        contract = op.get("contract") or {}
+        if contract.get("workspace_mode") != "isolated_worktree":
+            raise PatchValidationError(
+                "coordination child requires workspace_mode=isolated_worktree"
+            )
+        candidate_scopes = candidate.get("declared_write_scope") or []
+        child_scopes = contract.get("declared_write_scope") or []
+        if any(
+            not any(_scope_is_within(scope, allowed) for allowed in candidate_scopes)
+            for scope in child_scopes
+        ):
+            raise PatchValidationError(
+                "coordination child write scope exceeds its responsibility candidate"
+            )
+        candidate_criteria = set(candidate.get("acceptance_criteria") or [])
+        child_criteria = set(contract.get("acceptance_criteria") or [])
+        if not candidate_criteria.issubset(child_criteria):
+            raise PatchValidationError(
+                "coordination child contract must preserve candidate acceptance criteria"
+            )
+        if op.get("assignee") not in {None, "", configured_lane}:
+            raise PatchValidationError(
+                "coordination child assignee must use the configured worker lane"
+            )
+        requested = set(op.get("requested_capabilities") or [])
+        if not requested.issubset(allowed_capabilities):
+            raise PatchValidationError(
+                "coordination child requested capabilities exceed orchestration policy"
+            )
+        owner_key = str(candidate.get("integration_owner_node_key") or "")
+        candidate_owners[node_key] = owner_key
+        dependencies = [
+            dep
+            for dep in ops
+            if dep.get("op") == "add_dependency"
+            and dep.get("from_node_key") == node_key
+            and dep.get("to_node_key") == owner_key
+        ]
+        if len(dependencies) != 1:
+            raise PatchValidationError(
+                "coordination child requires exactly one dependency to its integration owner"
+            )
+
+    decomposition = patch.get("decomposition") or {}
+    justifications = decomposition.get("justifications") or []
+    new_keys = {str(op.get("node_key") or "") for op in create_ops}
+    matching = [
+        item
+        for item in justifications
+        if item.get("type") == "execution_discovered_gap"
+        and set(item.get("nodes") or []) == new_keys
+    ]
+    if len(matching) != 1:
+        raise PatchValidationError(
+            "coordination expansion requires one execution_discovered_gap justification"
+        )
+    justification = matching[0]
+    required_refs = {f"event:{event_id}" for event_id in candidate_events}
+    if not required_refs.issubset(set(justification.get("evidence_refs") or [])):
+        raise PatchValidationError(
+            "coordination expansion decomposition must cite every candidate event"
+        )
+    owners = set(candidate_owners.values())
+    if len(owners) != 1 or justification.get("integration_owner_node_key") not in owners:
+        raise PatchValidationError(
+            "coordination expansion decomposition must name the candidate integration owner"
+        )
+
+
 def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]) -> None:
     job = _job(conn, job_id)
     typed_contract_required = (
@@ -2518,6 +2786,7 @@ def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]
 
     _validate_decomposition(conn, job_id, patch, ops)
     _validate_early_structure_decision(conn, job_id, patch, ops)
+    _validate_coordination_epoch_decision(conn, job_id, patch, ops)
 
 
 def _would_create_dependency_cycle(conn: sqlite3.Connection, job_id: str, from_id: str, to_id: str) -> bool:
@@ -2616,6 +2885,7 @@ def _apply_op(
             "goal_item_keys": op.get("goal_item_keys") or [],
             "gap_keys": op.get("gap_keys") or [],
             "human_gate_reason": op.get("human_gate_reason"),
+            "source_responsibility_ref": op.get("source_responsibility_ref"),
             **_node_capability_metadata(op),
         }
         depends_on = op.get("depends_on") or []
@@ -4339,6 +4609,147 @@ def _coordination_checkpoint_validation_error(
                     f"coordination checkpoint finding {finding_key!r} references "
                     f"unknown affected nodes {sorted(unknown)!r}"
                 )
+    candidates = checkpoint.get("responsibility_candidates", [])
+    if not isinstance(candidates, list):
+        return "coordination checkpoint responsibility_candidates must be a list"
+    candidate_keys: set[str] = set()
+    finding_refs = {
+        str(ref)
+        for finding in findings
+        for ref in finding.get("evidence_refs") or []
+    }
+    structural_finding_refs = {
+        str(ref)
+        for finding in findings
+        if finding.get("type") in RESPONSIBILITY_CANDIDATE_CHECKPOINT_KINDS
+        for ref in finding.get("evidence_refs") or []
+    }
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            return "coordination checkpoint responsibility candidate must be an object"
+        candidate_key = str(candidate.get("candidate_key") or "").strip()
+        if (
+            not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", candidate_key)
+            or candidate_key in candidate_keys
+        ):
+            return (
+                "coordination checkpoint responsibility candidate_key must be "
+                "valid and unique"
+            )
+        candidate_keys.add(candidate_key)
+        if candidate.get("reason_type") not in RESPONSIBILITY_CANDIDATE_REASON_TYPES:
+            return (
+                f"coordination checkpoint responsibility candidate {candidate_key!r} "
+                "has unsupported reason_type"
+            )
+        if not str(candidate.get("outcome") or "").strip():
+            return (
+                f"coordination checkpoint responsibility candidate {candidate_key!r} "
+                "requires outcome"
+            )
+        for field in (
+            "acceptance_criteria",
+            "declared_write_scope",
+            "goal_item_keys",
+            "evidence_refs",
+        ):
+            values = candidate.get(field)
+            if (
+                not isinstance(values, list)
+                or not values
+                or any(not isinstance(value, str) or not value.strip() for value in values)
+                or len(values) != len(set(values))
+            ):
+                return (
+                    "coordination checkpoint responsibility candidate "
+                    f"{candidate_key!r} requires a unique non-empty {field} list"
+                )
+        candidate_evidence = set(candidate.get("evidence_refs") or [])
+        if not candidate_evidence.issubset(finding_refs):
+            return (
+                f"coordination checkpoint responsibility candidate {candidate_key!r} "
+                "must cite finding evidence"
+            )
+        if not candidate_evidence.intersection(structural_finding_refs):
+            return (
+                f"coordination checkpoint responsibility candidate {candidate_key!r} "
+                "must cite a structural finding"
+            )
+        owner_key = str(candidate.get("integration_owner_node_key") or "").strip()
+        if not owner_key:
+            return (
+                f"coordination checkpoint responsibility candidate {candidate_key!r} "
+                "requires integration_owner_node_key"
+            )
+        try:
+            _validate_declared_write_scopes(
+                candidate.get("declared_write_scope") or [],
+                field_name="responsibility candidate declared_write_scope",
+            )
+        except PatchValidationError as exc:
+            return str(exc)
+        if conn is not None and node is not None:
+            existing = {
+                str(row["node_key"]): dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM execution_nodes WHERE job_id = ?",
+                    (node["job_id"],),
+                ).fetchall()
+            }
+            if candidate_key in existing:
+                return (
+                    f"coordination checkpoint responsibility candidate {candidate_key!r} "
+                    "already exists as a node"
+                )
+            owner = existing.get(owner_key)
+            if owner is None or owner["state"] in TERMINAL_NODE_STATES:
+                return (
+                    f"coordination checkpoint responsibility candidate {candidate_key!r} "
+                    "requires a nonterminal integration owner"
+                )
+            owner_contract = _loads(owner.get("constraints_json")).get("contract") or {}
+            if owner_contract.get("workspace_mode") != "shared_job_workspace":
+                return (
+                    f"coordination checkpoint responsibility candidate {candidate_key!r} "
+                    "integration owner must use shared_job_workspace"
+                )
+            known_goal_keys = {
+                str(row["item_key"])
+                for row in conn.execute(
+                    """
+                    SELECT item_key FROM goal_items
+                     WHERE contract_id IN (
+                         SELECT id FROM goal_contracts WHERE job_id = ?
+                     )
+                    """,
+                    (node["job_id"],),
+                ).fetchall()
+            }
+            unknown_goals = set(candidate.get("goal_item_keys") or []) - known_goal_keys
+            if unknown_goals:
+                return (
+                    f"coordination checkpoint responsibility candidate {candidate_key!r} "
+                    f"references unknown goal items {sorted(unknown_goals)!r}"
+                )
+            candidate_scopes = candidate.get("declared_write_scope") or []
+            for other_key, other in existing.items():
+                if other_key in {node["node_key"], owner_key}:
+                    continue
+                if other["state"] not in NONTERMINAL_EXECUTION_STATES:
+                    continue
+                other_contract = _loads(other.get("constraints_json")).get("contract") or {}
+                if other_contract.get("workspace_mode") != "isolated_worktree":
+                    continue
+                overlap = _obvious_scope_overlap(
+                    candidate_scopes,
+                    other_contract.get("declared_write_scope") or [],
+                )
+                if overlap is not None:
+                    return (
+                        "coordination checkpoint responsibility candidate write scopes "
+                        f"overlap active node {other_key!r}: "
+                        f"{overlap[0]!r} vs {overlap[1]!r}"
+                    )
     if checkpoint.get("worker_session_should_resume") is not True:
         return "coordination checkpoint must resume the original worker session"
     if conn is not None and node is not None:
@@ -5602,6 +6013,33 @@ def check_runtime_consistency(
                     "node_id": session["node_id"],
                 }
             )
+            continue
+        for field in ("initial_materialization_id", "latest_materialization_id"):
+            if conn.execute(
+                "SELECT 1 FROM node_materializations WHERE id = ? AND node_id = ?",
+                (session[field], session["node_id"]),
+            ).fetchone() is None:
+                violations.append(
+                    {
+                        "type": "backend_session_materialization_missing",
+                        "backend_session_record_id": session["id"],
+                        "field": field,
+                        "materialization_id": session[field],
+                    }
+                )
+        if node["state"] in TERMINAL_NODE_STATES and session["status"] in {
+            "active",
+            "resume_pending",
+            "resuming",
+        }:
+            violations.append(
+                {
+                    "type": "terminal_node_has_active_backend_session",
+                    "node_key": node["node_key"],
+                    "backend_session_record_id": session["id"],
+                    "session_status": session["status"],
+                }
+            )
     for directive in conn.execute(
         "SELECT * FROM runtime_node_directives WHERE job_id = ?",
         (job_id,),
@@ -5682,33 +6120,6 @@ def check_runtime_consistency(
                         ),
                     }
                 )
-            continue
-        for field in ("initial_materialization_id", "latest_materialization_id"):
-            if conn.execute(
-                "SELECT 1 FROM node_materializations WHERE id = ? AND node_id = ?",
-                (session[field], session["node_id"]),
-            ).fetchone() is None:
-                violations.append(
-                    {
-                        "type": "backend_session_materialization_missing",
-                        "backend_session_record_id": session["id"],
-                        "field": field,
-                        "materialization_id": session[field],
-                    }
-                )
-        if node["state"] in TERMINAL_NODE_STATES and session["status"] in {
-            "active",
-            "resume_pending",
-            "resuming",
-        }:
-            violations.append(
-                {
-                    "type": "terminal_node_has_active_backend_session",
-                    "node_key": node["node_key"],
-                    "backend_session_record_id": session["id"],
-                    "session_status": session["status"],
-                }
-            )
     for conflict in conn.execute(
         "SELECT id, payload_json FROM execution_events WHERE job_id = ? AND event_type = 'worker_session_identity_conflict'",
         (job_id,),
@@ -8398,6 +8809,9 @@ def summarize_runtime_orchestration(
                 "integration_owner_node_key": node_metadata.get(
                     "contribution_to_node_key"
                 ),
+                "source_responsibility_ref": node_metadata.get(
+                    "source_responsibility_ref"
+                ),
                 "workspace": workspace if isinstance(workspace, dict) else None,
                 "backend_session": latest_session_by_node.get(str(node["id"])),
             }
@@ -8521,6 +8935,19 @@ def summarize_runtime_orchestration(
         ).fetchall()
     ]
     owner = policy.get("workspace_owner")
+    responsibility_candidate_count = sum(
+        len((item.get("checkpoint") or {}).get("responsibility_candidates") or [])
+        for item in coordination_checkpoints
+    )
+    dynamic_nodes = [
+        {
+            "node_key": item["node_key"],
+            "source_responsibility_ref": item["source_responsibility_ref"],
+            "integration_owner_node_key": item["integration_owner_node_key"],
+        }
+        for item in children
+        if item.get("source_responsibility_ref")
+    ]
     return {
         "schema": policy.get("schema"),
         "mode": policy.get("mode") or "coherent_single_primary",
@@ -8548,8 +8975,16 @@ def summarize_runtime_orchestration(
             else None
         ),
         "coordination": {
+            "epoch_mode": (
+                "evidence_driven_expansion"
+                if dynamic_nodes
+                else "routing_only"
+            ),
             "checkpoint_count": len(coordination_checkpoints),
             "checkpoints": coordination_checkpoints,
+            "responsibility_candidate_count": responsibility_candidate_count,
+            "dynamic_node_count": len(dynamic_nodes),
+            "dynamic_nodes": dynamic_nodes,
             "directive_count": len(directives),
             "directives": directives,
             "directive_status_counts": {
@@ -9318,6 +9753,10 @@ def _worker_context(
     }
     if contribution_bundle:
         footer["runtime_contribution_bundle"] = contribution_bundle
+    if metadata.get("non_authoritative_contribution"):
+        footer["runtime_integration_owner_node_key"] = metadata.get(
+            "contribution_to_node_key"
+        )
     if directive_bundle:
         footer["runtime_coordination_directives"] = directive_bundle
     if node.get("node_type") == "verification":
@@ -9336,12 +9775,18 @@ def _worker_context(
             }
     contribution_worker_boundary = ""
     if metadata.get("non_authoritative_contribution"):
+        integration_owner_key = str(
+            metadata.get("contribution_to_node_key") or ""
+        )
         contribution_worker_boundary = (
             "Runtime contribution boundary: this child does not produce the integrated candidate "
             "and cannot satisfy the goal item by itself. Complete only the assigned isolated "
             "responsibility, verify it locally, and use verdict succeeded. Report changed_files "
             "accurately; Runtime will downgrade any goal claim to partial evidence and freeze the "
-            "worktree patch for the primary integration owner. Do not inspect Hermes databases or "
+            "worktree patch for the primary integration owner "
+            f"{integration_owner_key or 'declared in the Runtime footer'}. Any responsibility "
+            "candidate must use that exact existing node key as integration_owner_node_key; never "
+            "use this isolated child as its own integration owner. Do not inspect Hermes databases or "
             "sibling worker sessions.\n\n"
         )
     phase4g8_worker_boundary = ""
@@ -9476,10 +9921,18 @@ def _worker_context(
             "completion. Finish this materialization with exactly one JSON object using "
             "schema runtime_worker_coordination_checkpoint_v1. Include kind, summary, "
             "phase, completed_scope, remaining_scope, findings, next_intent, "
-            "changed_files, consumed_directive_ids, and "
+            "changed_files, consumed_directive_ids, responsibility_candidates, and "
             "worker_session_should_resume=true. Every finding needs finding_key, type, "
             "summary, affected_node_keys, and evidence_refs. Use only existing node keys "
-            "from the Runtime context.\n\n"
+            "from the Runtime context. responsibility_candidates is normally []. Only "
+            "add a candidate when repository evidence exposes a genuinely separate, "
+            "durable responsibility that should not be absorbed by an existing node. A "
+            "candidate needs candidate_key, outcome, reason_type, acceptance_criteria, "
+            "declared_write_scope, goal_item_keys, integration_owner_node_key, and "
+            "evidence_refs copied from a finding. Candidate reason_type must be one of "
+            "execution_discovered_gap, workspace_isolation, capability_boundary, or "
+            "independent_verification. A candidate is advisory: do not claim that you "
+            "created a node or changed the graph.\n\n"
         )
     receipt_recovery_instruction = ""
     resume_from_materialization_id = (continuity or {}).get(

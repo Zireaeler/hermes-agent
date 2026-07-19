@@ -142,6 +142,11 @@ worker 到达语义 safe point
 - candidate scope 不能与其他 active isolated writer 明显重叠；
 - candidate 是 non-authoritative proposal，不改变 graph revision、ledger 或 completion。
 
+MVP 可以记录四类 candidate，便于 Runtime 保留 worker 发现；但本阶段允许直接进入
+`create_node` 的只有 `execution_discovered_gap`。`capability_boundary`、
+`independent_verification` 和需要其他授权主体的 candidate 必须继续交给现有 capability、verifier
+或 human-gate 路径，不能伪装成同 lane isolated child。
+
 ## 6. Candidate Reference
 
 由 coordination epoch 创建的新 node 必须包含：
@@ -252,3 +257,42 @@ legacy-token-adapter ----> pipeline-integration
 - Runtime orchestra 在质量上优于 native internal subagents；
 - Provider 可以无条件自由修改 graph；
 - Small 验证已经证明 Large/production 收益。
+
+## 11. 实施与验证状态
+
+2026-07-19，Phase 4G12 MVP 已完成：
+
+- coordination checkpoint 支持结构化 `responsibility_candidates`；
+- worker context 明确下发 `runtime_integration_owner_node_key`；
+- dynamic `create_node` 必须使用精确 `source_responsibility_ref`；
+- validator 校验 active epoch、goal、scope、acceptance、lane、capability、child budget、
+  dependency、integration owner 和 decomposition evidence；
+- routing-only epoch 继续禁止混入结构 op；
+- dynamic node lineage 进入 metadata、status 和 orchestration summary；
+- Codex output schema 与 Decision Profile 已升级；
+- consistency checker 修复 queued directive 中间态的 backend-session 循环归属问题；
+- 真实 Small runner 自动保留 hash-verified raw evidence。
+
+真实 run `phase4g12-small-20260719-161352` 的结果：
+
+```text
+initial graph revision 1
+    -> parser candidate event 22
+    -> real Decision Provider creates legacy-token-adapter
+    -> graph revision 2
+    -> parser/renderer resume and ACK
+    -> adapter checkpoint
+    -> routing-only graph revision 3
+    -> 3 frozen contributions
+    -> primary integration
+    -> goal satisfied
+```
+
+最终数据：4 个 durable node、7 次 materialization、2 次真实 Decision、3 条 directive 全部 ACK、
+3 份 frozen contribution 全部 accepted、2/2 tests 通过、consistency 0 violation / 0 warning。
+Runtime/Kanban/Phase 4G 相关回归为 410 passed。
+完整过程见：
+
+```text
+docs/validation/phase4g12/phase4g12-small-20260719-161352/execution-summary.md
+```

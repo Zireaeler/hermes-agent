@@ -353,6 +353,53 @@ _RUNTIME_COORDINATION_OUTPUT_SCHEMA: dict[str, Any] = {
         },
         "next_intent": {"type": "string"},
         "changed_files": {"type": "array", "items": {"type": "string"}},
+        "responsibility_candidates": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "candidate_key": {"type": "string"},
+                    "outcome": {"type": "string"},
+                    "reason_type": {
+                        "type": "string",
+                        "enum": [
+                            "execution_discovered_gap",
+                            "workspace_isolation",
+                            "capability_boundary",
+                            "independent_verification",
+                        ],
+                    },
+                    "acceptance_criteria": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "declared_write_scope": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "goal_item_keys": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "integration_owner_node_key": {"type": "string"},
+                    "evidence_refs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                },
+                "required": [
+                    "candidate_key",
+                    "outcome",
+                    "reason_type",
+                    "acceptance_criteria",
+                    "declared_write_scope",
+                    "goal_item_keys",
+                    "integration_owner_node_key",
+                    "evidence_refs",
+                ],
+                "additionalProperties": False,
+            },
+        },
         "consumed_directive_ids": {
             "type": "array",
             "items": {"type": "string"},
@@ -369,6 +416,7 @@ _RUNTIME_COORDINATION_OUTPUT_SCHEMA: dict[str, Any] = {
         "findings",
         "next_intent",
         "changed_files",
+        "responsibility_candidates",
         "consumed_directive_ids",
         "worker_session_should_resume",
     ],
@@ -2148,6 +2196,7 @@ and do not add prose before or after it:
   ],
   "next_intent": "what this same worker will do after Runtime coordination",
   "changed_files": ["workspace-relative/path"],
+  "responsibility_candidates": [],
   "consumed_directive_ids": [],
   "worker_session_should_resume": true
 }
@@ -2155,8 +2204,12 @@ and do not add prose before or after it:
 
 Use a checkpoint kind from the supplied schema. Report only real cross-node or
 responsibility-level findings. Ordinary tool progress and test completion are
-not coordination findings. Preserve the current workspace for same-session
-resume.
+not coordination findings. Keep `responsibility_candidates` empty unless
+repository evidence exposes a genuinely separate durable responsibility. A
+candidate is advisory and must include the candidate key, outcome, structural
+reason, acceptance criteria, declared write scope, goal linkage, existing
+integration owner, and evidence refs copied from a finding. Preserve the
+current workspace for same-session resume.
 """
     elif "Runtime footer:" in task_context:
         runtime_receipt_instructions = """

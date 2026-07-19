@@ -5277,6 +5277,7 @@ def _coordination_checkpoint(
     affected_node_keys: list[str],
     changed_files: list[str],
     consumed_directive_ids: list[str] | None = None,
+    responsibility_candidates: list[dict] | None = None,
 ):
     return {
         "schema": rk.COORDINATION_CHECKPOINT_SCHEMA,
@@ -5295,6 +5296,7 @@ def _coordination_checkpoint(
         "next_intent": "consume Runtime coordination and finish the responsibility",
         "changed_files": changed_files,
         "consumed_directive_ids": consumed_directive_ids or [],
+        "responsibility_candidates": responsibility_candidates or [],
         "worker_session_should_resume": True,
     }
 
@@ -5478,7 +5480,7 @@ def test_coordination_checkpoint_controls_other_active_node_and_acks_resume(conn
         {
             "worker_lane": "codex-runtime",
             "worker_kind": "codex_cli",
-            "backend_session_id": "019f0000-0000-7000-8000-000000000031",
+            "backend_session_id": "019f0000-0000-7000-8000-0000000000b2",
             "execution_mode": "resume",
         },
         run_id=resumed_renderer["latest_run_id"],
@@ -5727,3 +5729,409 @@ def test_coordination_directive_rejects_stale_revision_and_scope_overlap(conn):
     )
     assert overlap["status"] == "rejected"
     assert "write scopes overlap" in overlap["reason"]
+
+
+def _dynamic_coordination_job(conn, tmp_path):
+    workspace = tmp_path / "dynamic-coordination-repo"
+    (workspace / "src" / "parser").mkdir(parents=True)
+    (workspace / "src" / "renderer").mkdir(parents=True)
+    (workspace / "src" / "parser" / "token.py").write_text(
+        "TOKEN_VERSION = 1\n",
+        encoding="utf-8",
+    )
+    (workspace / "src" / "renderer" / "render.py").write_text(
+        "def render(value): return str(value)\n",
+        encoding="utf-8",
+    )
+    _git(workspace, "init")
+    _git(workspace, "config", "user.email", "runtime@example.invalid")
+    _git(workspace, "config", "user.name", "Runtime Test")
+    _git(workspace, "add", ".")
+    _git(workspace, "commit", "-m", "dynamic coordination base")
+    job_id = rk.create_runtime_job(
+        conn,
+        _root_task(conn),
+        "coordinate active work and add an execution-discovered adapter",
+        goal_items=[{
+            "item_key": "coordinated-result",
+            "description": "parser, renderer, and compatibility adapter integrate",
+            "required": True,
+            "verifier_required": False,
+        }],
+        initial_assignee="codex-runtime",
+        initialization_mode="fixture",
+        workspace_path=str(workspace),
+        runtime_metadata={
+            "orchestration_policy": {
+                "schema": rk.RUNTIME_ORCHESTRATION_POLICY_SCHEMA,
+                "mode": "closed_loop_coordination",
+                "enabled": True,
+                "worker_lane": "codex-runtime",
+                "max_child_nodes": 3,
+                "required_child_capabilities": [
+                    "filesystem_read",
+                    "workspace_write",
+                    "git_read",
+                    "process_spawn",
+                ],
+            },
+        },
+    )
+    owner = _node(conn, job_id, "understand-scope")
+    owner_constraints = json.loads(owner["constraints_json"])
+    owner_constraints["contract"] = {
+        **_contract("**"),
+        "workspace_mode": "shared_job_workspace",
+    }
+    conn.execute(
+        """
+        UPDATE execution_nodes
+           SET node_key = 'integration-owner', state = 'waiting_structure',
+               constraints_json = ?
+         WHERE id = ?
+        """,
+        (json.dumps(owner_constraints), owner["id"]),
+    )
+    structure_event_id = rk._event(
+        conn,
+        job_id,
+        "worker_structure_checkpointed",
+        {
+            "node_key": "integration-owner",
+            "checkpoint": {
+                "schema": rk.STRUCTURE_CHECKPOINT_SCHEMA,
+                "kind": "early_structure_assessment",
+                "recommendation": "expand",
+                "summary": "Parser and renderer have isolated ownership.",
+            },
+        },
+        node_id=owner["id"],
+    )
+    children = [
+        {
+            "op": "create_node",
+            "node_key": key,
+            "node_type": "implementation",
+            "title": f"Implement {key}",
+            "description": f"Implement the isolated {key} responsibility.",
+            "assignee": "codex-runtime",
+            "goal_item_keys": ["coordinated-result"],
+            "requested_capabilities": [
+                "filesystem_read",
+                "workspace_write",
+                "git_read",
+                "process_spawn",
+            ],
+            "contract": {
+                **_contract(scope),
+                "workspace_mode": "isolated_worktree",
+            },
+        }
+        for key, scope in (
+            ("parser", "src/parser/**"),
+            ("renderer", "src/renderer/**"),
+        )
+    ]
+    initial_patch = {
+        "schema": rk.PATCH_SCHEMA,
+        "expected_revision": _revision(conn, job_id),
+        "rationale_summary": "Seed two isolated active responsibilities.",
+        "ops": [
+            *children,
+            *[
+                {
+                    "op": "add_dependency",
+                    "from_node_key": child["node_key"],
+                    "to_node_key": "integration-owner",
+                }
+                for child in children
+            ],
+        ],
+        "decomposition": {
+            "policy_version": "1",
+            "mode": "multiple_runtime_nodes",
+            "justifications": [{
+                "type": "durable_parallelism",
+                "nodes": ["parser", "renderer"],
+                "explanation": "Disjoint parser and renderer write scopes.",
+                "evidence_refs": [f"event:{structure_event_id}"],
+                "declared_write_scopes": {
+                    "parser": ["src/parser/**"],
+                    "renderer": ["src/renderer/**"],
+                },
+                "integration_owner_node_key": "integration-owner",
+            }],
+        },
+    }
+    assert rk.apply_graph_patch(conn, job_id, initial_patch)["status"] == "applied"
+    for key in ("parser", "renderer"):
+        node = _node(conn, job_id, key)
+        metadata = json.loads(node["metadata_json"])
+        metadata["coordination_checkpoint_required"] = True
+        conn.execute(
+            "UPDATE execution_nodes SET metadata_json = ? WHERE id = ?",
+            (json.dumps(metadata), node["id"]),
+        )
+    rk.reduce_runtime_job(conn, job_id)
+    for key in ("parser", "renderer"):
+        node = _node(conn, job_id, key)
+        task_id = rk.materialize_runtime_node(conn, dict(node))
+        assert task_id
+        body = conn.execute(
+            "SELECT body FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()[0]
+        assert '"runtime_integration_owner_node_key": "integration-owner"' in body
+    return job_id
+
+
+def test_coordination_checkpoint_can_drive_evidence_backed_topology_expansion(
+    conn,
+    tmp_path,
+):
+    job_id = _dynamic_coordination_job(conn, tmp_path)
+    parser = _node(conn, job_id, "parser")
+    renderer = _node(conn, job_id, "renderer")
+    candidate = {
+        "candidate_key": "legacy-adapter",
+        "outcome": "Convert legacy records into the current parser contract.",
+        "reason_type": "execution_discovered_gap",
+        "acceptance_criteria": [
+            "Legacy records are converted",
+            "Adapter-focused tests pass",
+        ],
+        "declared_write_scope": ["src/compat/**", "tests/compat/**"],
+        "goal_item_keys": ["coordinated-result"],
+        "integration_owner_node_key": "integration-owner",
+        "evidence_refs": ["workspace:path:src/parser/token.py"],
+    }
+    parser_checkpoint = _coordination_checkpoint(
+        kind="shared_contract_changed",
+        summary="Parser contract changed and exposed a legacy compatibility gap.",
+        finding_key="parser-contract-v2",
+        affected_node_keys=["parser", "renderer", "integration-owner"],
+        changed_files=["src/parser/token.py"],
+        responsibility_candidates=[candidate],
+    )
+    parser_checkpoint["findings"].append({
+        "finding_key": "legacy-record-gap",
+        "type": "gap_discovered",
+        "summary": "Legacy records require an isolated compatibility adapter.",
+        "affected_node_keys": ["integration-owner"],
+        "evidence_refs": ["workspace:path:src/parser/token.py"],
+    })
+    _complete_codex_checkpoint(conn, parser, parser_checkpoint)
+    _complete_codex_checkpoint(
+        conn,
+        renderer,
+        _coordination_checkpoint(
+            kind="blocking_dependency",
+            summary="Renderer is waiting for the final parser contract.",
+            finding_key="renderer-contract-wait",
+            affected_node_keys=["renderer"],
+            changed_files=["src/renderer/render.py"],
+        ),
+    )
+    advanced = rk.advance_runtime_job(conn, job_id, create_tasks=False)
+    assert set(advanced.ingested_nodes) == {"parser", "renderer"}
+    checkpoint_events = {
+        row["node_key"]: int(row["id"])
+        for row in conn.execute(
+            """
+            SELECT event.id, node.node_key
+              FROM execution_events event
+              JOIN execution_nodes node ON node.id = event.node_id
+             WHERE event.job_id = ?
+               AND event.event_type = 'worker_coordination_checkpointed'
+            """,
+            (job_id,),
+        ).fetchall()
+    }
+    parser_event = checkpoint_events["parser"]
+    renderer_event = checkpoint_events["renderer"]
+    before_revision = _revision(conn, job_id)
+    child_contract = {
+        "outcome": candidate["outcome"],
+        "acceptance_criteria": candidate["acceptance_criteria"],
+        "success_evidence": ["changed_files", "verification", "worker_summary"],
+        "declared_write_scope": candidate["declared_write_scope"],
+        "prohibited_actions": ["modify_sibling_scope"],
+        "workspace_mode": "isolated_worktree",
+    }
+    patch = {
+        "schema": rk.PATCH_SCHEMA,
+        "expected_revision": before_revision,
+        "rationale_summary": "Create the compatibility responsibility discovered at runtime.",
+        "ops": [
+            {
+                "op": "create_node",
+                "node_key": "legacy-adapter",
+                "node_type": "implementation",
+                "title": "Implement legacy adapter",
+                "description": "Implement and test legacy record conversion.",
+                "assignee": "codex-runtime",
+                "goal_item_keys": ["coordinated-result"],
+                "source_responsibility_ref": (
+                    f"event:{parser_event}#responsibility:legacy-adapter"
+                ),
+                "requested_capabilities": [
+                    "filesystem_read",
+                    "workspace_write",
+                    "git_read",
+                    "process_spawn",
+                ],
+                "contract": child_contract,
+            },
+            {
+                "op": "add_dependency",
+                "from_node_key": "legacy-adapter",
+                "to_node_key": "integration-owner",
+            },
+            {
+                "op": "issue_directive",
+                "target_node_key": "parser",
+                "source_checkpoint_event_id": parser_event,
+                "target_checkpoint_event_id": parser_event,
+                "action": "continue",
+                "expected_contract_revision": 1,
+                "summary": "Finish parser without entering compatibility scope.",
+                "instructions": ["Finish parser-focused verification."],
+                "evidence_refs": [f"event:{parser_event}"],
+            },
+            {
+                "op": "issue_directive",
+                "target_node_key": "renderer",
+                "source_checkpoint_event_id": parser_event,
+                "target_checkpoint_event_id": renderer_event,
+                "action": "continue",
+                "expected_contract_revision": 1,
+                "summary": "Consume the stable parser contract only.",
+                "instructions": ["Finish renderer without entering compatibility scope."],
+                "evidence_refs": [f"event:{parser_event}"],
+            },
+        ],
+        "decomposition": {
+            "policy_version": "1",
+            "mode": "multiple_runtime_nodes",
+            "justifications": [{
+                "type": "execution_discovered_gap",
+                "nodes": ["legacy-adapter"],
+                "explanation": "Runtime evidence exposed an isolated compatibility gap.",
+                "evidence_refs": [f"event:{parser_event}"],
+                "integration_owner_node_key": "integration-owner",
+            }],
+        },
+    }
+
+    result = rk.apply_graph_patch(conn, job_id, patch)
+
+    assert result["status"] == "applied"
+    assert result["applied_revision"] == before_revision + 1
+    child = _node(conn, job_id, "legacy-adapter")
+    assert child["state"] == "ready"
+    child_metadata = json.loads(child["metadata_json"])
+    assert child_metadata["source_responsibility_ref"] == (
+        f"event:{parser_event}#responsibility:legacy-adapter"
+    )
+    assert child_metadata["contribution_to_node_key"] == "integration-owner"
+    assert _node(conn, job_id, "integration-owner")["state"] == "waiting_dependency"
+    assert _node(conn, job_id, "parser")["state"] == "ready"
+    assert _node(conn, job_id, "renderer")["state"] == "ready"
+    summary = rk.summarize_runtime_orchestration(conn, job_id)
+    assert summary["coordination"]["epoch_mode"] == "evidence_driven_expansion"
+    assert summary["coordination"]["responsibility_candidate_count"] == 1
+    assert summary["coordination"]["dynamic_node_count"] == 1
+    assert rk.check_runtime_consistency(conn, job_id, write_events=False)[
+        "violations"
+    ] == []
+
+
+def test_coordination_expansion_rejects_unreferenced_candidate(conn, tmp_path):
+    job_id = _dynamic_coordination_job(conn, tmp_path)
+    for key, path in (("parser", "src/parser/token.py"), ("renderer", "src/renderer/render.py")):
+        _complete_codex_checkpoint(
+            conn,
+            _node(conn, job_id, key),
+            _coordination_checkpoint(
+                kind="milestone_completed",
+                summary=f"{key} reached a safe point.",
+                finding_key=f"{key}-safe-point",
+                affected_node_keys=[key],
+                changed_files=[path],
+            ),
+        )
+    rk.advance_runtime_job(conn, job_id, create_tasks=False)
+    events = {
+        row["node_key"]: int(row["id"])
+        for row in conn.execute(
+            """
+            SELECT event.id, node.node_key
+              FROM execution_events event
+              JOIN execution_nodes node ON node.id = event.node_id
+             WHERE event.job_id = ?
+               AND event.event_type = 'worker_coordination_checkpointed'
+            """,
+            (job_id,),
+        ).fetchall()
+    }
+    invalid = {
+        "schema": rk.PATCH_SCHEMA,
+        "expected_revision": _revision(conn, job_id),
+        "rationale_summary": "Speculative expansion without a responsibility candidate.",
+        "ops": [
+            {
+                "op": "create_node",
+                "node_key": "speculative-child",
+                "node_type": "implementation",
+                "title": "Speculative child",
+                "description": "This node has no worker candidate.",
+                "goal_item_keys": ["coordinated-result"],
+                "source_responsibility_ref": (
+                    f"event:{events['parser']}#responsibility:speculative-child"
+                ),
+                "contract": {
+                    **_contract("src/speculative/**"),
+                    "workspace_mode": "isolated_worktree",
+                },
+            },
+            {
+                "op": "add_dependency",
+                "from_node_key": "speculative-child",
+                "to_node_key": "integration-owner",
+            },
+            *[
+                {
+                    "op": "issue_directive",
+                    "target_node_key": key,
+                    "source_checkpoint_event_id": events["parser"],
+                    "target_checkpoint_event_id": events[key],
+                    "action": "continue",
+                    "expected_contract_revision": 1,
+                    "summary": f"Continue {key}.",
+                    "instructions": [f"Continue {key}."],
+                    "evidence_refs": [f"event:{events['parser']}"],
+                }
+                for key in ("parser", "renderer")
+            ],
+        ],
+        "decomposition": {
+            "policy_version": "1",
+            "mode": "multiple_runtime_nodes",
+            "justifications": [{
+                "type": "execution_discovered_gap",
+                "nodes": ["speculative-child"],
+                "explanation": "No real candidate exists.",
+                "evidence_refs": [f"event:{events['parser']}"],
+                "integration_owner_node_key": "integration-owner",
+            }],
+        },
+    }
+
+    result = rk.apply_graph_patch(conn, job_id, invalid)
+
+    assert result["status"] == "rejected"
+    assert "does not identify exactly one candidate" in result["reason"]
+    assert conn.execute(
+        "SELECT 1 FROM execution_nodes WHERE job_id = ? AND node_key = ?",
+        (job_id, "speculative-child"),
+    ).fetchone() is None

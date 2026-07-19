@@ -1,0 +1,1877 @@
+{
+  "advance_results": [
+    {
+      "decision_requested": true,
+      "events": [
+        "job_created",
+        "goal_contract_created",
+        "node_created",
+        "goal_gap_detected",
+        "worker_structure_checkpointed",
+        "node_created",
+        "node_created",
+        "structure_checkpoint_expansion_applied",
+        "structure_checkpoint_expansion_applied",
+        "patch_applied",
+        "dependency_satisfied",
+        "dependency_satisfied",
+        "goal_gap_detected",
+        "capability_request_evaluated",
+        "node_materialized",
+        "capability_request_evaluated",
+        "node_materialized",
+        "worker_session_discovered",
+        "worker_session_discovered",
+        "goal_gap_detected",
+        "structure_audit_requested",
+        "worker_coordination_checkpointed",
+        "decision_requested",
+        "worker_coordination_checkpointed",
+        "decision_requested"
+      ],
+      "ingested_nodes": [
+        "parser-contract",
+        "renderer-contract"
+      ],
+      "job_id": "rjob_8ef1528aa3e1",
+      "job_state": "waiting_decision",
+      "materialized_nodes": [],
+      "patch_status": null,
+      "recovery": {
+        "checked_nodes": 2,
+        "evaluator_remediation": {
+          "budget_exhausted": false,
+          "decision_suppressed": false,
+          "enabled": false,
+          "failure_count": 0,
+          "latest_feedback_consumed": false,
+          "not_resumable": [],
+          "progress": {},
+          "scheduled": []
+        },
+        "events": [],
+        "failed_nodes": [],
+        "job_id": "rjob_8ef1528aa3e1",
+        "materializations_updated": [],
+        "policy": {
+          "infra_retry_limit": 1,
+          "receipt_recovery_limit": 1,
+          "run_stale_after_seconds": 900
+        },
+        "scheduled_retries": [],
+        "worker_sessions": {
+          "discovered": [
+            "bws_8a5a36735425",
+            "bws_18b752d7433f"
+          ],
+          "identity_conflicts": [],
+          "job_id": "rjob_8ef1528aa3e1",
+          "resume_failed": [],
+          "resumed": [],
+          "updated": []
+        },
+        "worker_sessions_post_ingest": {
+          "discovered": [],
+          "identity_conflicts": [],
+          "job_id": "rjob_8ef1528aa3e1",
+          "resume_failed": [],
+          "resumed": [],
+          "updated": [
+            "bws_8a5a36735425",
+            "bws_18b752d7433f"
+          ]
+        }
+      }
+    },
+    {
+      "decision_requested": true,
+      "events": [
+        "job_created",
+        "goal_contract_created",
+        "node_created",
+        "goal_gap_detected",
+        "worker_structure_checkpointed",
+        "node_created",
+        "node_created",
+        "structure_checkpoint_expansion_applied",
+        "structure_checkpoint_expansion_applied",
+        "patch_applied",
+        "dependency_satisfied",
+        "dependency_satisfied",
+        "goal_gap_detected",
+        "capability_request_evaluated",
+        "node_materialized",
+        "capability_request_evaluated",
+        "node_materialized",
+        "worker_session_discovered",
+        "worker_session_discovered",
+        "goal_gap_detected",
+        "structure_audit_requested",
+        "worker_coordination_checkpointed",
+        "decision_requested",
+        "worker_coordination_checkpointed",
+        "decision_requested",
+        "node_created",
+        "structure_checkpoint_expansion_applied",
+        "runtime_directive_queued",
+        "runtime_directive_activated",
+        "runtime_directive_queued",
+        "runtime_directive_activated",
+        "patch_applied",
+        "dependency_satisfied",
+        "goal_gap_detected",
+        "goal_gap_detected",
+        "structure_audit_requested",
+        "node_materialized",
+        "capability_request_evaluated",
+        "runtime_directive_delivered",
+        "worker_session_resume_scheduled",
+        "node_materialized",
+        "capability_request_evaluated",
+        "runtime_directive_delivered",
+        "worker_session_resume_scheduled",
+        "node_materialized",
+        "worker_session_discovered",
+        "worker_session_resumed",
+        "worker_session_resumed",
+        "runtime_directive_acknowledged",
+        "node_contribution_frozen",
+        "node_completed",
+        "goal_gap_detected",
+        "runtime_directive_acknowledged",
+        "node_contribution_frozen",
+        "node_completed",
+        "worker_coordination_checkpointed",
+        "goal_gap_detected",
+        "decision_requested",
+        "structure_audit_requested"
+      ],
+      "ingested_nodes": [
+        "parser-contract",
+        "renderer-contract",
+        "legacy-token-adapter"
+      ],
+      "job_id": "rjob_8ef1528aa3e1",
+      "job_state": "waiting_decision",
+      "materialized_nodes": [],
+      "patch_status": null,
+      "recovery": {
+        "checked_nodes": 3,
+        "evaluator_remediation": {
+          "budget_exhausted": false,
+          "decision_suppressed": false,
+          "enabled": false,
+          "failure_count": 0,
+          "latest_feedback_consumed": false,
+          "not_resumable": [],
+          "progress": {},
+          "scheduled": []
+        },
+        "events": [],
+        "failed_nodes": [],
+        "job_id": "rjob_8ef1528aa3e1",
+        "materializations_updated": [],
+        "policy": {
+          "infra_retry_limit": 1,
+          "receipt_recovery_limit": 1,
+          "run_stale_after_seconds": 900
+        },
+        "scheduled_retries": [],
+        "worker_sessions": {
+          "discovered": [
+            "bws_53c9ad2e4c38"
+          ],
+          "identity_conflicts": [],
+          "job_id": "rjob_8ef1528aa3e1",
+          "resume_failed": [],
+          "resumed": [
+            "bws_8a5a36735425",
+            "bws_18b752d7433f"
+          ],
+          "updated": [
+            "bws_8a5a36735425",
+            "bws_18b752d7433f",
+            "bws_8a5a36735425",
+            "bws_18b752d7433f"
+          ]
+        },
+        "worker_sessions_post_ingest": {
+          "discovered": [],
+          "identity_conflicts": [],
+          "job_id": "rjob_8ef1528aa3e1",
+          "resume_failed": [],
+          "resumed": [],
+          "updated": [
+            "bws_8a5a36735425",
+            "bws_18b752d7433f",
+            "bws_53c9ad2e4c38",
+            "bws_8a5a36735425",
+            "bws_18b752d7433f"
+          ]
+        }
+      }
+    },
+    {
+      "decision_requested": false,
+      "events": [
+        "job_created",
+        "goal_contract_created",
+        "node_created",
+        "goal_gap_detected",
+        "worker_structure_checkpointed",
+        "node_created",
+        "node_created",
+        "structure_checkpoint_expansion_applied",
+        "structure_checkpoint_expansion_applied",
+        "patch_applied",
+        "dependency_satisfied",
+        "dependency_satisfied",
+        "goal_gap_detected",
+        "capability_request_evaluated",
+        "node_materialized",
+        "capability_request_evaluated",
+        "node_materialized",
+        "worker_session_discovered",
+        "worker_session_discovered",
+        "goal_gap_detected",
+        "structure_audit_requested",
+        "worker_coordination_checkpointed",
+        "decision_requested",
+        "worker_coordination_checkpointed",
+        "decision_requested",
+        "node_created",
+        "structure_checkpoint_expansion_applied",
+        "runtime_directive_queued",
+        "runtime_directive_activated",
+        "runtime_directive_queued",
+        "runtime_directive_activated",
+        "patch_applied",
+        "dependency_satisfied",
+        "goal_gap_detected",
+        "goal_gap_detected",
+        "structure_audit_requested",
+        "node_materialized",
+        "capability_request_evaluated",
+        "runtime_directive_delivered",
+        "worker_session_resume_scheduled",
+        "node_materialized",
+        "capability_request_evaluated",
+        "runtime_directive_delivered",
+        "worker_session_resume_scheduled",
+        "node_materialized",
+        "worker_session_discovered",
+        "worker_session_resumed",
+        "worker_session_resumed",
+        "runtime_directive_acknowledged",
+        "node_contribution_frozen",
+        "node_completed",
+        "goal_gap_detected",
+        "runtime_directive_acknowledged",
+        "node_contribution_frozen",
+        "node_completed",
+        "worker_coordination_checkpointed",
+        "goal_gap_detected",
+        "decision_requested",
+        "structure_audit_requested",
+        "runtime_directive_queued",
+        "runtime_directive_activated",
+        "patch_applied",
+        "goal_gap_detected",
+        "goal_gap_detected",
+        "structure_audit_requested",
+        "runtime_directive_delivered",
+        "worker_session_resume_scheduled",
+        "node_materialized",
+        "worker_session_resumed",
+        "worker_session_resumed",
+        "worker_session_resumed",
+        "runtime_directive_acknowledged",
+        "node_contribution_frozen",
+        "node_completed",
+        "dependency_satisfied"
+      ],
+      "ingested_nodes": [
+        "legacy-token-adapter"
+      ],
+      "job_id": "rjob_8ef1528aa3e1",
+      "job_state": "active",
+      "materialized_nodes": [],
+      "patch_status": null,
+      "recovery": {
+        "checked_nodes": 1,
+        "evaluator_remediation": {
+          "budget_exhausted": false,
+          "decision_suppressed": false,
+          "enabled": false,
+          "failure_count": 0,
+          "latest_feedback_consumed": false,
+          "not_resumable": [],
+          "progress": {},
+          "scheduled": []
+        },
+        "events": [],
+        "failed_nodes": [],
+        "job_id": "rjob_8ef1528aa3e1",
+        "materializations_updated": [],
+        "policy": {
+          "infra_retry_limit": 1,
+          "receipt_recovery_limit": 1,
+          "run_stale_after_seconds": 900
+        },
+        "scheduled_retries": [],
+        "worker_sessions": {
+          "discovered": [],
+          "identity_conflicts": [],
+          "job_id": "rjob_8ef1528aa3e1",
+          "resume_failed": [],
+          "resumed": [
+            "bws_8a5a36735425",
+            "bws_18b752d7433f",
+            "bws_53c9ad2e4c38"
+          ],
+          "updated": [
+            "bws_8a5a36735425",
+            "bws_18b752d7433f",
+            "bws_53c9ad2e4c38",
+            "bws_8a5a36735425",
+            "bws_18b752d7433f",
+            "bws_53c9ad2e4c38"
+          ]
+        },
+        "worker_sessions_post_ingest": {
+          "discovered": [],
+          "identity_conflicts": [],
+          "job_id": "rjob_8ef1528aa3e1",
+          "resume_failed": [],
+          "resumed": [],
+          "updated": [
+            "bws_8a5a36735425",
+            "bws_18b752d7433f",
+            "bws_53c9ad2e4c38",
+            "bws_8a5a36735425",
+            "bws_18b752d7433f",
+            "bws_53c9ad2e4c38"
+          ]
+        }
+      }
+    },
+    {
+      "decision_requested": false,
+      "events": [
+        "job_created",
+        "goal_contract_created",
+        "node_created",
+        "goal_gap_detected",
+        "worker_structure_checkpointed",
+        "node_created",
+        "node_created",
+        "structure_checkpoint_expansion_applied",
+        "structure_checkpoint_expansion_applied",
+        "patch_applied",
+        "dependency_satisfied",
+        "dependency_satisfied",
+        "goal_gap_detected",
+        "capability_request_evaluated",
+        "node_materialized",
+        "capability_request_evaluated",
+        "node_materialized",
+        "worker_session_discovered",
+        "worker_session_discovered",
+        "goal_gap_detected",
+        "structure_audit_requested",
+        "worker_coordination_checkpointed",
+        "decision_requested",
+        "worker_coordination_checkpointed",
+        "decision_requested",
+        "node_created",
+        "structure_checkpoint_expansion_applied",
+        "runtime_directive_queued",
+        "runtime_directive_activated",
+        "runtime_directive_queued",
+        "runtime_directive_activated",
+        "patch_applied",
+        "dependency_satisfied",
+        "goal_gap_detected",
+        "goal_gap_detected",
+        "structure_audit_requested",
+        "node_materialized",
+        "capability_request_evaluated",
+        "runtime_directive_delivered",
+        "worker_session_resume_scheduled",
+        "node_materialized",
+        "capability_request_evaluated",
+        "runtime_directive_delivered",
+        "worker_session_resume_scheduled",
+        "node_materialized",
+        "worker_session_discovered",
+        "worker_session_resumed",
+        "worker_session_resumed",
+        "runtime_directive_acknowledged",
+        "node_contribution_frozen",
+        "node_completed",
+        "goal_gap_detected",
+        "runtime_directive_acknowledged",
+        "node_contribution_frozen",
+        "node_completed",
+        "worker_coordination_checkpointed",
+        "goal_gap_detected",
+        "decision_requested",
+        "structure_audit_requested",
+        "runtime_directive_queued",
+        "runtime_directive_activated",
+        "patch_applied",
+        "goal_gap_detected",
+        "goal_gap_detected",
+        "structure_audit_requested",
+        "runtime_directive_delivered",
+        "worker_session_resume_scheduled",
+        "node_materialized",
+        "worker_session_resumed",
+        "worker_session_resumed",
+        "worker_session_resumed",
+        "runtime_directive_acknowledged",
+        "node_contribution_frozen",
+        "node_completed",
+        "dependency_satisfied",
+        "node_materialized",
+        "worker_session_discovered",
+        "contribution_attribution_verified",
+        "node_completed"
+      ],
+      "ingested_nodes": [
+        "pipeline-integration"
+      ],
+      "job_id": "rjob_8ef1528aa3e1",
+      "job_state": "done",
+      "materialized_nodes": [],
+      "patch_status": null,
+      "recovery": {
+        "checked_nodes": 1,
+        "evaluator_remediation": {
+          "budget_exhausted": false,
+          "decision_suppressed": false,
+          "enabled": false,
+          "failure_count": 0,
+          "latest_feedback_consumed": false,
+          "not_resumable": [],
+          "progress": {},
+          "scheduled": []
+        },
+        "events": [],
+        "failed_nodes": [],
+        "job_id": "rjob_8ef1528aa3e1",
+        "materializations_updated": [],
+        "policy": {
+          "infra_retry_limit": 1,
+          "receipt_recovery_limit": 1,
+          "run_stale_after_seconds": 900
+        },
+        "scheduled_retries": [],
+        "worker_sessions": {
+          "discovered": [
+            "bws_f8c056ed7a5c"
+          ],
+          "identity_conflicts": [],
+          "job_id": "rjob_8ef1528aa3e1",
+          "resume_failed": [],
+          "resumed": [],
+          "updated": [
+            "bws_8a5a36735425",
+            "bws_18b752d7433f",
+            "bws_53c9ad2e4c38",
+            "bws_8a5a36735425",
+            "bws_18b752d7433f",
+            "bws_53c9ad2e4c38"
+          ]
+        },
+        "worker_sessions_post_ingest": {
+          "discovered": [],
+          "identity_conflicts": [],
+          "job_id": "rjob_8ef1528aa3e1",
+          "resume_failed": [],
+          "resumed": [],
+          "updated": [
+            "bws_8a5a36735425",
+            "bws_18b752d7433f",
+            "bws_53c9ad2e4c38",
+            "bws_f8c056ed7a5c",
+            "bws_8a5a36735425",
+            "bws_18b752d7433f",
+            "bws_53c9ad2e4c38"
+          ]
+        }
+      }
+    }
+  ],
+  "base_revision": "b7eb9eef76a247bc3625dc5ec25f2e582c254cc4",
+  "child_task_ids": [
+    "t_993b7e46",
+    "t_309f7245",
+    "t_b79db655",
+    "t_43af2c0b"
+  ],
+  "children": [
+    {
+      "assignee": "phase4g12-codex",
+      "backend_session": {
+        "backend_kind": "codex_cli",
+        "backend_session_key": "019f7970-5753-7921-a81f-6c12c5d4d443",
+        "completed_at": 1784449073,
+        "created_at": 1784448834,
+        "initial_materialization_id": "mat_3dc59441c84e",
+        "latest_materialization_id": "mat_5dd292511ba2",
+        "node_id": "rnode_a9a0c0cff2c5",
+        "node_key": "parser-contract",
+        "record_id": "bws_8a5a36735425",
+        "resume_count": 1,
+        "status": "completed",
+        "updated_at": 1784449211,
+        "workspace_path": "/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/worktrees/parser-contract"
+      },
+      "integration_owner_node_key": "pipeline-integration",
+      "node_id": "rnode_a9a0c0cff2c5",
+      "node_key": "parser-contract",
+      "source_responsibility_ref": null,
+      "state": "succeeded",
+      "workspace": {
+        "base_revision": "b7eb9eef76a247bc3625dc5ec25f2e582c254cc4",
+        "mode": "isolated_worktree",
+        "path": "/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/worktrees/parser-contract"
+      }
+    },
+    {
+      "assignee": "phase4g12-codex",
+      "backend_session": {
+        "backend_kind": "codex_cli",
+        "backend_session_key": "019f7970-5753-7780-be1a-1b55e19765b4",
+        "completed_at": 1784449073,
+        "created_at": 1784448834,
+        "initial_materialization_id": "mat_fbc359994295",
+        "latest_materialization_id": "mat_618545aa399f",
+        "node_id": "rnode_49280a44c774",
+        "node_key": "renderer-contract",
+        "record_id": "bws_18b752d7433f",
+        "resume_count": 1,
+        "status": "completed",
+        "updated_at": 1784449211,
+        "workspace_path": "/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/worktrees/renderer-contract"
+      },
+      "integration_owner_node_key": "pipeline-integration",
+      "node_id": "rnode_49280a44c774",
+      "node_key": "renderer-contract",
+      "source_responsibility_ref": null,
+      "state": "succeeded",
+      "workspace": {
+        "base_revision": "b7eb9eef76a247bc3625dc5ec25f2e582c254cc4",
+        "mode": "isolated_worktree",
+        "path": "/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/worktrees/renderer-contract"
+      }
+    },
+    {
+      "assignee": "phase4g12-codex",
+      "backend_session": {
+        "backend_kind": "codex_cli",
+        "backend_session_key": "019f7972-7817-7273-a829-fbddf9e5780e",
+        "completed_at": 1784449126,
+        "created_at": 1784448974,
+        "initial_materialization_id": "mat_947875db8a37",
+        "latest_materialization_id": "mat_5348642f69aa",
+        "node_id": "rnode_53bcdcc27562",
+        "node_key": "legacy-token-adapter",
+        "record_id": "bws_53c9ad2e4c38",
+        "resume_count": 1,
+        "status": "completed",
+        "updated_at": 1784449211,
+        "workspace_path": "/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/worktrees/legacy-token-adapter"
+      },
+      "integration_owner_node_key": "pipeline-integration",
+      "node_id": "rnode_53bcdcc27562",
+      "node_key": "legacy-token-adapter",
+      "source_responsibility_ref": "event:22#responsibility:legacy-token-adapter",
+      "state": "succeeded",
+      "workspace": {
+        "base_revision": "b7eb9eef76a247bc3625dc5ec25f2e582c254cc4",
+        "mode": "isolated_worktree",
+        "path": "/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/worktrees/legacy-token-adapter"
+      }
+    }
+  ],
+  "consistency": {
+    "status": "passed",
+    "violation_count": 0,
+    "violations": [],
+    "warning_count": 0,
+    "warnings": []
+  },
+  "contributions": [
+    {
+      "artifact_id": "art_82247e5809c2",
+      "integration_owner_node_key": "pipeline-integration",
+      "materialization_id": "mat_618545aa399f",
+      "node_id": "rnode_49280a44c774",
+      "node_key": "renderer-contract",
+      "patch_bytes": 371,
+      "patch_sha256": "7d80086a05bcfa6ff4fcc48ae43dc34aef1d0855b2fd49d5cd139b138c90b357",
+      "path": "/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/contributions/renderer-contract/attempt-2.patch",
+      "scope_status": "verified"
+    },
+    {
+      "artifact_id": "art_c3c9e599ef58",
+      "integration_owner_node_key": "pipeline-integration",
+      "materialization_id": "mat_5dd292511ba2",
+      "node_id": "rnode_a9a0c0cff2c5",
+      "node_key": "parser-contract",
+      "patch_bytes": 545,
+      "patch_sha256": "ac8e4e8326eeaf9d482364923b709d1acac8f1f4333d1fd9d178157f8812f7bf",
+      "path": "/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/contributions/parser-contract/attempt-2.patch",
+      "scope_status": "verified"
+    },
+    {
+      "artifact_id": "art_baddf0f2023a",
+      "integration_owner_node_key": "pipeline-integration",
+      "materialization_id": "mat_5348642f69aa",
+      "node_id": "rnode_53bcdcc27562",
+      "node_key": "legacy-token-adapter",
+      "patch_bytes": 298,
+      "patch_sha256": "d7dd16e1d8a86fb03f49aed902a66f288c86630a78a465bcd575aeff40a17bd4",
+      "path": "/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/contributions/legacy-token-adapter/attempt-2.patch",
+      "scope_status": "verified"
+    }
+  ],
+  "coordination": {
+    "checkpoint_count": 3,
+    "checkpoints": [
+      {
+        "checkpoint": {
+          "changed_files": [
+            "src/token_parser.py"
+          ],
+          "changed_files_source": "wrapper_git_attempt_delta",
+          "completed_scope": [
+            "Implemented an explicit WordToken contract with fixed kind='word' and text fields.",
+            "Updated parse_tokens to emit lowercase token objects and preserve empty-input behavior.",
+            "Verified parser behavior directly, compiled src/token_parser.py, and passed git diff --check."
+          ],
+          "consumed_directive_ids": [],
+          "findings": [
+            {
+              "affected_node_keys": [
+                "pipeline-integration"
+              ],
+              "evidence_refs": [
+                "workspace:path:tests/test_pipeline.py"
+              ],
+              "finding_key": "legacy-token-adapter-omitted",
+              "summary": "tests/test_pipeline.py imports the absent src.token_compat.adapt_legacy_tokens compatibility module; full unittest discovery fails during collection, and that durable responsibility is outside parser-contract scope.",
+              "type": "gap_discovered"
+            }
+          ],
+          "kind": "gap_discovered",
+          "next_intent": "Resume after Runtime coordination only for parser-contract refinements or integration feedback; leave compatibility and renderer work to pipeline-integration.",
+          "phase": "implementation",
+          "remaining_scope": [
+            "Runtime must coordinate the omitted compatibility adapter before the integrated pipeline suite can pass.",
+            "Parser contract may require follow-up after frozen contributions are integrated."
+          ],
+          "responsibility_candidates": [
+            {
+              "acceptance_criteria": [
+                "Legacy fixture values are converted into lowercase word-token objects.",
+                "Adapted tokens conform to the shared {'kind': 'word', 'text': value} contract."
+              ],
+              "candidate_key": "legacy-token-adapter",
+              "declared_write_scope": [
+                "src/token_compat.py"
+              ],
+              "evidence_refs": [
+                "workspace:path:tests/test_pipeline.py"
+              ],
+              "goal_item_keys": [
+                "versioned-token-pipeline"
+              ],
+              "integration_owner_node_key": "pipeline-integration",
+              "outcome": "Provide the single compatibility adapter that converts legacy fixture tokens to the versioned token-object contract.",
+              "reason_type": "execution_discovered_gap"
+            }
+          ],
+          "schema": "runtime_worker_coordination_checkpoint_v1",
+          "summary": "The parser now emits explicit lowercase word-token objects. Parser-focused checks pass; repository evidence exposes the omitted legacy adapter required for suite collection and integration.",
+          "worker_declared_changed_files": [
+            "src/token_parser.py"
+          ],
+          "worker_lane": {
+            "backend_session_id": "019f7970-5753-7921-a81f-6c12c5d4d443",
+            "binary_missing": false,
+            "execution_mode": "fresh",
+            "exit_code": 0,
+            "json_events": true,
+            "kind": "codex_cli",
+            "name": "phase4g12-codex",
+            "output_tail": "----------------------------------------------------------------------\nImportError: Failed to import test module: test_pipeline\nTraceback (most recent call last):\n  File \"/usr/lib/python3.12/unittest/loader.py\", line 394, in _find_test_path\n    module = self._get_module_from_name(name)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/unittest/loader.py\", line 337, in _get_module_from_name\n    __import__(name)\n  File \"/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/worktrees/parser-contract/tests/test_pipeline.py\", line 4, in <module>\n    from src.token_compat import adapt_legacy_tokens\nModuleNotFoundError: No module named 'src.token_compat'\n\n\n----------------------------------------------------------------------\nRan 1 test in 0.000s\n\nFAILED (errors=1)\no (22) run command: /bin/bash -lc 'python3 -m unittest discover -s tests'\n$ /bin/bash -lc 'python3 -m py_compile src/token_parser.py'\nstatus=in_progress exit_code=None\nx (23) run command: /bin/bash -lc 'python3 -m py_compile src/token_parser.py'\n$ /bin/bash -lc 'python3 -m py_compile src/token_parser.py'\nstatus=completed exit_code=0\no (23) run command: /bin/bash -lc 'python3 -m py_compile src/token_parser.py'\n{\"changed_files\":[\"src/token_parser.py\"],\"completed_scope\":[\"Implemented explicit WordToken objects and verified lowercase parser output plus empty-input behavior.\",\"Confirmed src/token_parser.py compiles under Python 3.12.\"],\"consumed_directive_ids\":[],\"findings\":[{\"affected_node_keys\":[\"pipeline-integration\"],\"evidence_refs\":[\"workspace:path:tests/test_pipeline.py\"],\"finding_key\":\"legacy-token-adapter-omitted\",\"summary\":\"Full unittest discovery cannot collect tests because tests/test_pipeline.py imports the absent src.token_compat module, which is outside this node's write scope.\",\"type\":\"gap_discovered\"}],\"kind\":\"partial_contribution_ready\",\"next_intent\":\"Review the final parser diff and workspace status, then checkpoint this bounded contribution for integration.\",\"phase\":\"verification\",\"remaining_scope\":[\"Compatibility adapter and renderer integration remain with pipeline-integration; this isolated node must not implement them.\"],\"responsibility_candidates\":[{\"acceptance_criteria\":[\"Legacy fixture values are adapted to the versioned token object contract\",\"Compatibility adapter integrates with the renderer through the shared token shape\"],\"candidate_key\":\"legacy-token-adapter\",\"declared_write_scope\":[\"src/token_compat.py\"],\"evidence_refs\":[\"workspace:path:tests/test_pipeline.py\"],\"goal_item_keys\":[\"versioned-token-pipeline\"],\"integration_owner_node_key\":\"pipeline-integration\",\"outcome\":\"Provide one compatibility adapter that converts legacy fixture tokens into lowercase {'kind': 'word', 'text': value} objects.\",\"reason_type\":\"execution_discovered_gap\"}],\"schema\":\"runtime_worker_coordination_checkpoint_v1\",\"summary\":\"The parser-focused checks pass; suite discovery remains blocked at the expected omitted compatibility import.\",\"worker_session_should_resume\":true}\n$ /bin/bash -lc 'git diff --check && git diff -- src/token_parser.py'\nstatus=in_progress exit_code=None\nx (26) run command: /bin/bash -lc 'git diff --check && git diff -- src/token_parser.py'\n$ /bin/bash -lc 'git diff --check && git diff -- src/token_parser.py'\nstatus=completed exit_code=0\ndiff --git a/src/token_parser.py b/src/token_parser.py\nindex 07a65aa..9e4c0b2 100644\n--- a/src/token_parser.py\n+++ b/src/token_parser.py\n@@ -1,2 +1,14 @@\n-def parse_tokens(text: str) -> list[str]:\n-    return [part.lower() for part in text.split() if part]\n+from typing import Literal, TypedDict\n+\n+\n+class WordToken(TypedDict):\n+    kind: Literal[\"word\"]\n+    text: str\n+\n+\n+def parse_tokens(text: str) -> list[WordToken]:\n+    return [\n+        {\"kind\": \"word\", \"text\": part.lower()}\n+        for part in text.split()\n+        if part\n+    ]\no (26) run command: /bin/bash -lc 'git diff --check && git diff -- src/token_parser.py'\n$ /bin/bash -lc 'git status --short --untracked-files=all'\nstatus=in_progress exit_code=None\nx (27) run command: /bin/bash -lc 'git status --short --untracked-files=all'\n$ /bin/bash -lc 'git status --short --untracked-files=all'\nstatus=completed exit_code=0\n M src/token_parser.py\no (27) run command: /bin/bash -lc 'git status --short --untracked-files=all'\n$ /bin/bash -lc 'nl -ba src/token_parser.py'\nstatus=in_progress exit_code=None\nx (28) run command: /bin/bash -lc 'nl -ba src/token_parser.py'\n$ /bin/bash -lc 'nl -ba src/token_parser.py'\nstatus=completed exit_code=0\n     1\tfrom typing import Literal, TypedDict\n     2\t\n     3\t\n     4\tclass WordToken(TypedDict):\n     5\t    kind: Literal[\"word\"]\n     6\t    text: str\n     7\t\n     8\t\n     9\tdef parse_tokens(text: str) -> list[WordToken]:\n    10\t    return [\n    11\t        {\"kind\": \"word\", \"text\": part.lower()}\n    12\t        for part in text.split()\n    13\t        if part\n    14\t    ]\no (28) run command: /bin/bash -lc 'nl -ba src/token_parser.py'\n{\"changed_files\":[\"src/token_parser.py\"],\"completed_scope\":[\"Implemented an explicit WordToken contract with fixed kind='word' and text fields.\",\"Updated parse_tokens to emit lowercase token objects and preserve empty-input behavior.\",\"Verified parser behavior directly, compiled src/token_parser.py, and passed git diff --check.\"],\"consumed_directive_ids\":[],\"findings\":[{\"affected_node_keys\":[\"pipeline-integration\"],\"evidence_refs\":[\"workspace:path:tests/test_pipeline.py\"],\"finding_key\":\"legacy-token-adapter-omitted\",\"summary\":\"tests/test_pipeline.py imports the absent src.token_compat.adapt_legacy_tokens compatibility module; full unittest discovery fails during collection, and that durable responsibility is outside parser-contract scope.\",\"type\":\"gap_discovered\"}],\"kind\":\"gap_discovered\",\"next_intent\":\"Resume after Runtime coordination only for parser-contract refinements or integration feedback; leave compatibility and renderer work to pipeline-integration.\",\"phase\":\"implementation\",\"remaining_scope\":[\"Runtime must coordinate the omitted compatibility adapter before the integrated pipeline suite can pass.\",\"Parser contract may require follow-up after frozen contributions are integrated.\"],\"responsibility_candidates\":[{\"acceptance_criteria\":[\"Legacy fixture values are converted into lowercase word-token objects.\",\"Adapted tokens conform to the shared {'kind': 'word', 'text': value} contract.\"],\"candidate_key\":\"legacy-token-adapter\",\"declared_write_scope\":[\"src/token_compat.py\"],\"evidence_refs\":[\"workspace:path:tests/test_pipeline.py\"],\"goal_item_keys\":[\"versioned-token-pipeline\"],\"integration_owner_node_key\":\"pipeline-integration\",\"outcome\":\"Provide the single compatibility adapter that converts legacy fixture tokens to the versioned token-object contract.\",\"reason_type\":\"execution_discovered_gap\"}],\"schema\":\"runtime_worker_coordination_checkpoint_v1\",\"summary\":\"The parser now emits explicit lowercase word-token objects. Parser-focused checks pass; repository evidence exposes the omitted legacy adapter required for suite collection and integration.\",\"worker_session_should_resume\":true}",
+            "receipt": {
+              "schema": "codex_cli_receipt_v1",
+              "sections": {}
+            },
+            "resume_status": "started",
+            "run_id": 1,
+            "task_id": "t_0ac11c13",
+            "timed_out": false,
+            "verdict": null
+          },
+          "worker_receipt": {
+            "schema": "codex_cli_receipt_v1",
+            "sections": {}
+          },
+          "worker_session_should_resume": true,
+          "workspace_revision": "git:b7eb9eef76a247bc3625dc5ec25f2e582c254cc4:worktree:ca26dd8f8b7304679babf42a99dc9b006dde85372f6613ad57aa3416e1861c0b"
+        },
+        "contract_revision": 1,
+        "created_at": 1784448934,
+        "event_id": 22,
+        "node_id": "rnode_a9a0c0cff2c5",
+        "node_key": "parser-contract"
+      },
+      {
+        "checkpoint": {
+          "changed_files": [],
+          "changed_files_source": "wrapper_git_attempt_delta",
+          "completed_scope": [
+            "Inspected src/token_renderer.py and tests/test_pipeline.py without modifying parser, renderer, or compatibility files.",
+            "Established the required pre-directive coordination safe point."
+          ],
+          "consumed_directive_ids": [],
+          "findings": [
+            {
+              "affected_node_keys": [
+                "renderer-contract",
+                "parser-contract",
+                "pipeline-integration"
+              ],
+              "evidence_refs": [
+                "workspace:src/token_renderer.py:1",
+                "workspace:tests/test_pipeline.py:10",
+                "workspace:tests/test_pipeline.py:15"
+              ],
+              "finding_key": "renderer-awaits-versioned-token-contract",
+              "summary": "The renderer currently accepts list[str] and joins raw values, while pipeline tests require rendering versioned token objects containing kind and text. Renderer implementation is blocked pending Runtime direction on the parser contract and omitted legacy-adapter responsibility.",
+              "type": "blocking_dependency"
+            }
+          ],
+          "kind": "blocking_dependency",
+          "next_intent": "After a Runtime directive freezes the upstream token-object contract and compatibility responsibility, update only src/token_renderer.py and run renderer-focused pipeline checks.",
+          "phase": "coordination",
+          "remaining_scope": [
+            "Consume the Runtime directive.",
+            "Implement the versioned token-object consumer in src/token_renderer.py.",
+            "Run renderer-focused verification and report the resulting partial contribution."
+          ],
+          "responsibility_candidates": [],
+          "schema": "runtime_worker_coordination_checkpoint_v1",
+          "summary": "Reached the mandated read-only safe point: renderer behavior depends on Runtime resolving the parser token-object contract and omitted compatibility-adapter responsibility before implementation begins.",
+          "worker_declared_changed_files": [],
+          "worker_lane": {
+            "backend_session_id": "019f7970-5753-7780-be1a-1b55e19765b4",
+            "binary_missing": false,
+            "execution_mode": "fresh",
+            "exit_code": 0,
+            "json_events": true,
+            "kind": "codex_cli",
+            "name": "phase4g12-codex",
+            "output_tail": "WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir \"/tmp\" (codex_home: AbsolutePathBuf(\"/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/codex-home\"))\n2026-07-19T08:13:55.084257Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedServerResponse(\"HTTP 403: {\\\"error\\\":{\\\"code\\\":\\\"403\\\",\\\"message\\\":\\\"Forbidden\\\",\\\"id\\\":\\\"sin1::rfglf-1784448835037-fc1de9af4e71\\\"}}\\n\")\n{\"changed_files\":[],\"completed_scope\":[],\"consumed_directive_ids\":[],\"findings\":[],\"kind\":\"blocking_dependency\",\"next_intent\":\"Inspect the renderer and pipeline test contract, then stop at the required pre-directive coordination point without editing files.\",\"phase\":\"inspection\",\"remaining_scope\":[\"Inspect the bounded files and identify the parser-contract dependency.\"],\"responsibility_candidates\":[],\"schema\":\"runtime_worker_coordination_checkpoint_v1\",\"summary\":\"Beginning the required read-only bounded slice.\",\"worker_session_should_resume\":true}\n$ /bin/bash -lc 'nl -ba src/token_renderer.py'\nstatus=in_progress exit_code=None\nx (4) run command: /bin/bash -lc 'nl -ba src/token_renderer.py'\n$ /bin/bash -lc 'nl -ba src/token_renderer.py'\nstatus=completed exit_code=0\n     1\tdef render_tokens(tokens: list[str]) -> str:\n     2\t    return \"|\".join(tokens)\no (4) run command: /bin/bash -lc 'nl -ba src/token_renderer.py'\n$ /bin/bash -lc 'git status --short'\nstatus=in_progress exit_code=None\nx (5) run command: /bin/bash -lc 'git status --short'\n$ /bin/bash -lc 'git status --short'\nstatus=completed exit_code=0\no (5) run command: /bin/bash -lc 'git status --short'\n$ /bin/bash -lc 'nl -ba tests/test_pipeline.py'\nstatus=in_progress exit_code=None\nx (6) run command: /bin/bash -lc 'nl -ba tests/test_pipeline.py'\n$ /bin/bash -lc 'nl -ba tests/test_pipeline.py'\nstatus=completed exit_code=0\n     1\timport json\n     2\timport unittest\n     3\t\n     4\tfrom src.token_compat import adapt_legacy_tokens\n     5\tfrom src.token_parser import parse_tokens\n     6\tfrom src.token_renderer import render_tokens\n     7\t\n     8\t\n     9\tclass PipelineTest(unittest.TestCase):\n    10\t    def test_versioned_token_pipeline(self):\n    11\t        tokens = parse_tokens(\"Hello WORLD\")\n    12\t        self.assertTrue(all(token[\"kind\"] == \"word\" for token in tokens))\n    13\t        self.assertEqual(render_tokens(tokens), \"word:hello|word:world\")\n    14\t\n    15\t    def test_legacy_tokens_use_the_same_contract(self):\n    16\t        with open(\"fixtures/legacy_tokens.json\", encoding=\"utf-8\") as handle:\n    17\t            legacy = json.load(handle)\n    18\t        tokens = adapt_legacy_tokens(legacy)\n    19\t        self.assertEqual(tokens, [\n    20\t            {\"kind\": \"word\", \"text\": \"legacy\"},\n    21\t            {\"kind\": \"word\", \"text\": \"value\"},\n    22\t        ])\n    23\t        self.assertEqual(render_tokens(tokens), \"word:legacy|word:value\")\n    24\t\n    25\t\n    26\tif __name__ == \"__main__\":\n    27\t    unittest.main()\no (6) run command: /bin/bash -lc 'nl -ba tests/test_pipeline.py'\n$ /bin/bash -lc \"pwd && rg --files -g 'AGENTS.md' -g '\"'!vendor'\"' -g '\"'!node_modules'\"'\"\nstatus=in_progress exit_code=None\nx (7) run command: /bin/bash -lc \"pwd && rg --files -g 'AGENTS.md' -g '\"'!vendor'\"' -g '\"'!node_modules'\"'\"\n$ /bin/bash -lc \"pwd && rg --files -g 'AGENTS.md' -g '\"'!vendor'\"' -g '\"'!node_modules'\"'\"\nstatus=failed exit_code=1\n/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/worktrees/renderer-contract\no (7) run command: /bin/bash -lc \"pwd && rg --files -g 'AGENTS.md' -g '\"'!vendor'\"' -g '\"'!node_modules'\"'\"\n{\"changed_files\":[],\"completed_scope\":[\"Inspected src/token_renderer.py and tests/test_pipeline.py without modifying parser, renderer, or compatibility files.\",\"Established the required pre-directive coordination safe point.\"],\"consumed_directive_ids\":[],\"findings\":[{\"affected_node_keys\":[\"renderer-contract\",\"parser-contract\",\"pipeline-integration\"],\"evidence_refs\":[\"workspace:src/token_renderer.py:1\",\"workspace:tests/test_pipeline.py:10\",\"workspace:tests/test_pipeline.py:15\"],\"finding_key\":\"renderer-awaits-versioned-token-contract\",\"summary\":\"The renderer currently accepts list[str] and joins raw values, while pipeline tests require rendering versioned token objects containing kind and text. Renderer implementation is blocked pending Runtime direction on the parser contract and omitted legacy-adapter responsibility.\",\"type\":\"blocking_dependency\"}],\"kind\":\"blocking_dependency\",\"next_intent\":\"After a Runtime directive freezes the upstream token-object contract and compatibility responsibility, update only src/token_renderer.py and run renderer-focused pipeline checks.\",\"phase\":\"coordination\",\"remaining_scope\":[\"Consume the Runtime directive.\",\"Implement the versioned token-object consumer in src/token_renderer.py.\",\"Run renderer-focused verification and report the resulting partial contribution.\"],\"responsibility_candidates\":[],\"schema\":\"runtime_worker_coordination_checkpoint_v1\",\"summary\":\"Reached the mandated read-only safe point: renderer behavior depends on Runtime resolving the parser token-object contract and omitted compatibility-adapter responsibility before implementation begins.\",\"worker_session_should_resume\":true}",
+            "receipt": {
+              "schema": "codex_cli_receipt_v1",
+              "sections": {}
+            },
+            "resume_status": "started",
+            "run_id": 2,
+            "task_id": "t_15797b69",
+            "timed_out": false,
+            "verdict": null
+          },
+          "worker_receipt": {
+            "schema": "codex_cli_receipt_v1",
+            "sections": {}
+          },
+          "worker_session_should_resume": true,
+          "workspace_revision": "git:b7eb9eef76a247bc3625dc5ec25f2e582c254cc4"
+        },
+        "contract_revision": 1,
+        "created_at": 1784448934,
+        "event_id": 24,
+        "node_id": "rnode_49280a44c774",
+        "node_key": "renderer-contract"
+      },
+      {
+        "checkpoint": {
+          "changed_files": [
+            "src/token_compat.py"
+          ],
+          "changed_files_source": "wrapper_git_attempt_delta",
+          "completed_scope": [
+            "Implemented adapt_legacy_tokens to convert legacy strings into lowercase {'kind': 'word', 'text': value} objects.",
+            "Verified the adapter against fixtures/legacy_tokens.json, compiled it successfully, and passed git diff --check."
+          ],
+          "consumed_directive_ids": [],
+          "findings": [
+            {
+              "affected_node_keys": [
+                "pipeline-integration"
+              ],
+              "evidence_refs": [
+                "workspace:tests/test_pipeline.py:10",
+                "workspace:src/token_parser.py:1",
+                "workspace:src/token_renderer.py:1"
+              ],
+              "finding_key": "integrated-suite-awaits-parser-renderer-contributions",
+              "summary": "python3 -m unittest discover -s tests still errors because the base parser returns strings and the base renderer only joins strings; pipeline-integration must combine their frozen versioned-token contributions with this adapter.",
+              "type": "integration_risk"
+            }
+          ],
+          "kind": "partial_contribution_ready",
+          "next_intent": "On Runtime resume, retain the adapter patch and address only adapter-specific integration feedback before the integration owner runs the combined suite.",
+          "phase": "verification",
+          "remaining_scope": [
+            "Verify the adapter within the integrated parser and renderer pipeline after pipeline-integration combines frozen contributions."
+          ],
+          "responsibility_candidates": [],
+          "schema": "runtime_worker_coordination_checkpoint_v1",
+          "summary": "Succeeded in producing and locally verifying the bounded legacy-token adapter contribution; integrated suite success remains with pipeline-integration.",
+          "worker_declared_changed_files": [
+            "src/token_compat.py"
+          ],
+          "worker_lane": {
+            "backend_session_id": "019f7972-7817-7273-a829-fbddf9e5780e",
+            "binary_missing": false,
+            "execution_mode": "fresh",
+            "exit_code": 0,
+            "json_events": true,
+            "kind": "codex_cli",
+            "name": "phase4g12-codex",
+            "output_tail": "nittest discover -s tests'\nstatus=in_progress exit_code=None\nx (23) run command: /bin/bash -lc 'python3 -m unittest discover -s tests'\n$ /bin/bash -lc \"python3 -c 'from src.token_compat import adapt_legacy_tokens; assert adapt_legacy_tokens([\\\"Legacy\\\", \\\"VALUE\\\"]) == [{\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"legacy\\\"}, {\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"value\\\"}]'\"\nstatus=in_progress exit_code=None\nx (24) run command: /bin/bash -lc \"python3 -c 'from src.token_compat import adapt_legacy_tokens; assert adapt_legacy_tokens([\\\"Legacy\\\", \\\"VALUE\\\"]) == [{\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"legacy\\\"}, {\\\"\n[truncated 41 chars]\n$ /bin/bash -lc 'python3 -m py_compile src/token_compat.py'\nstatus=in_progress exit_code=None\nx (25) run command: /bin/bash -lc 'python3 -m py_compile src/token_compat.py'\n$ /bin/bash -lc \"python3 -c 'from src.token_compat import adapt_legacy_tokens; assert adapt_legacy_tokens([\\\"Legacy\\\", \\\"VALUE\\\"]) == [{\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"legacy\\\"}, {\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"value\\\"}]'\"\nstatus=completed exit_code=0\no (24) run command: /bin/bash -lc \"python3 -c 'from src.token_compat import adapt_legacy_tokens; assert adapt_legacy_tokens([\\\"Legacy\\\", \\\"VALUE\\\"]) == [{\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"legacy\\\"}, {\\\"\n[truncated 41 chars]\n$ /bin/bash -lc 'python3 -m py_compile src/token_compat.py'\nstatus=completed exit_code=0\no (25) run command: /bin/bash -lc 'python3 -m py_compile src/token_compat.py'\n$ /bin/bash -lc 'python3 -m unittest discover -s tests'\nstatus=failed exit_code=1\nEE\n======================================================================\nERROR: test_legacy_tokens_use_the_same_contract (test_pipeline.PipelineTest.test_legacy_tokens_use_the_same_contract)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/worktrees/legacy-token-adapter/tests/test_pipeline.py\", line 23, in test_legacy_tokens_use_the_same_contract\n    self.assertEqual(render_tokens(tokens), \"word:legacy|word:value\")\n                     ^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/worktrees/legacy-token-adapter/src/token_renderer.py\", line 2, in render_tokens\n    return \"|\".join(tokens)\n           ^^^^^^^^^^^^^^^^\nTypeError: sequence item 0: expected str instance, dict found\n\n======================================================================\nERROR: test_versioned_token_pipeline (test_pipeline.PipelineTest.test_versioned_token_pipeline)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/worktrees/legacy-token-adapter/tests/test_pipeline.py\", line 12, in test_versioned_token_pipeline\n    self.assertTrue(all(token[\"kind\"] == \"word\" for token in tokens))\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/worktrees/legacy-token-adapter/tests/test_pipeline.py\", line 12, in <genexpr>\n    self.assertTrue(all(token[\"kind\"] == \"word\" for token in tokens))\n                        ~~~~~^^^^^^^^\nTypeError: string indices must be integers, not 'str'\n\n----------------------------------------------------------------------\nRan 2 tests in 0.001s\n\nFAILED (errors=2)\no (23) run command: /bin/bash -lc 'python3 -m unittest discover -s tests'\n{\"changed_files\":[\"src/token_compat.py\"],\"completed_scope\":[\"Implemented the legacy string-to-versioned word-token conversion in the declared write scope.\",\"Direct adapter assertion and Python compilation pass.\"],\"consumed_directive_ids\":[],\"findings\":[{\"affected_node_keys\":[\"pipeline-integration\"],\"evidence_refs\":[\"workspace:tests/test_pipeline.py:10\",\"workspace:src/token_parser.py:1\",\"workspace:src/token_renderer.py:1\"],\"finding_key\":\"integrated-suite-awaits-parser-renderer-contributions\",\"summary\":\"The isolated full suite still fails because the base parser returns strings and the base renderer joins strings; pipeline-integration must combine their frozen versioned-token contributions with this adapter.\",\"type\":\"integration_risk\"}],\"kind\":\"partial_contribution_ready\",\"next_intent\":\"Run one final fixture-backed adapter check and preserve the patch for Runtime freeze and integration.\",\"phase\":\"verification\",\"remaining_scope\":[\"Fixture-backed adapter verification\",\"Integrated full-suite verification after parser and renderer contributions are combined by pipeline-integration\"],\"responsibility_candidates\":[],\"schema\":\"runtime_worker_coordination_checkpoint_v1\",\"summary\":\"The bounded adapter implementation is ready; full pipeline success depends on the already-scoped parser and renderer integration work.\",\"worker_session_should_resume\":true}\n$ /bin/bash -lc 'nl -ba src/token_compat.py && git diff --check && git status --short'\nstatus=in_progress exit_code=None\nx (29) run command: /bin/bash -lc 'nl -ba src/token_compat.py && git diff --check && git status --short'\n$ /bin/bash -lc 'nl -ba src/token_compat.py && git diff --check && git status --short'\nstatus=completed exit_code=0\n     1\tdef adapt_legacy_tokens(tokens: list[str]) -> list[dict[str, str]]:\n     2\t    return [{\"kind\": \"word\", \"text\": token.lower()} for token in tokens]\n?? src/token_compat.py\no (29) run command: /bin/bash -lc 'nl -ba src/token_compat.py && git diff --check && git status --short'\n$ /bin/bash -lc \"python3 -c 'import json; from src.token_compat import adapt_legacy_tokens; legacy=json.load(open(\\\"fixtures/legacy_tokens.json\\\", encoding=\\\"utf-8\\\")); assert adapt_legacy_tokens(legacy) == [{\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"legacy\\\"}, {\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"value\\\"}]'\"\nstatus=in_progress exit_code=None\nx (30) run command: /bin/bash -lc \"python3 -c 'import json; from src.token_compat import adapt_legacy_tokens; legacy=json.load(open(\\\"fixtures/legacy_tokens.json\\\", encoding=\\\"utf-8\\\")); assert adapt_\n[truncated 114 chars]\n$ /bin/bash -lc \"python3 -c 'import json; from src.token_compat import adapt_legacy_tokens; legacy=json.load(open(\\\"fixtures/legacy_tokens.json\\\", encoding=\\\"utf-8\\\")); assert adapt_legacy_tokens(legacy) == [{\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"legacy\\\"}, {\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"value\\\"}]'\"\nstatus=completed exit_code=0\no (30) run command: /bin/bash -lc \"python3 -c 'import json; from src.token_compat import adapt_legacy_tokens; legacy=json.load(open(\\\"fixtures/legacy_tokens.json\\\", encoding=\\\"utf-8\\\")); assert adapt_\n[truncated 114 chars]\n{\"changed_files\":[\"src/token_compat.py\"],\"completed_scope\":[\"Implemented adapt_legacy_tokens to convert legacy strings into lowercase {'kind': 'word', 'text': value} objects.\",\"Verified the adapter against fixtures/legacy_tokens.json, compiled it successfully, and passed git diff --check.\"],\"consumed_directive_ids\":[],\"findings\":[{\"affected_node_keys\":[\"pipeline-integration\"],\"evidence_refs\":[\"workspace:tests/test_pipeline.py:10\",\"workspace:src/token_parser.py:1\",\"workspace:src/token_renderer.py:1\"],\"finding_key\":\"integrated-suite-awaits-parser-renderer-contributions\",\"summary\":\"python3 -m unittest discover -s tests still errors because the base parser returns strings and the base renderer only joins strings; pipeline-integration must combine their frozen versioned-token contributions with this adapter.\",\"type\":\"integration_risk\"}],\"kind\":\"partial_contribution_ready\",\"next_intent\":\"On Runtime resume, retain the adapter patch and address only adapter-specific integration feedback before the integration owner runs the combined suite.\",\"phase\":\"verification\",\"remaining_scope\":[\"Verify the adapter within the integrated parser and renderer pipeline after pipeline-integration combines frozen contributions.\"],\"responsibility_candidates\":[],\"schema\":\"runtime_worker_coordination_checkpoint_v1\",\"summary\":\"Succeeded in producing and locally verifying the bounded legacy-token adapter contribution; integrated suite success remains with pipeline-integration.\",\"worker_session_should_resume\":true}",
+            "receipt": {
+              "schema": "codex_cli_receipt_v1",
+              "sections": {}
+            },
+            "resume_status": "started",
+            "run_id": 3,
+            "task_id": "t_993b7e46",
+            "timed_out": false,
+            "verdict": null
+          },
+          "worker_receipt": {
+            "schema": "codex_cli_receipt_v1",
+            "sections": {}
+          },
+          "worker_session_should_resume": true,
+          "workspace_revision": "git:b7eb9eef76a247bc3625dc5ec25f2e582c254cc4:worktree:f03605e25a4ceed2871d560f1af8dd0dfc1c05f329a8a40fff80689be47b50f9"
+        },
+        "contract_revision": 1,
+        "created_at": 1784449073,
+        "event_id": 56,
+        "node_id": "rnode_53bcdcc27562",
+        "node_key": "legacy-token-adapter"
+      }
+    ],
+    "contract_revisions": {
+      "legacy-token-adapter": 1,
+      "parser-contract": 1,
+      "pipeline-integration": 1,
+      "renderer-contract": 1
+    },
+    "directive_count": 3,
+    "directive_status_counts": {
+      "acknowledged": 3,
+      "delivered": 0,
+      "queued": 0,
+      "superseded": 0
+    },
+    "directives": [
+      {
+        "acknowledged_at": 1784449073,
+        "acknowledged_materialization_id": "mat_618545aa399f",
+        "action": "continue",
+        "applied_contract_revision": 1,
+        "created_at": 1784448972,
+        "delivered_at": 1784448972,
+        "delivered_materialization_id": "mat_618545aa399f",
+        "directive_id": "rdir_69d39ee5e819",
+        "expected_contract_revision": 1,
+        "source_checkpoint_event_id": 22,
+        "status": "acknowledged",
+        "summary": "The parser token-object contract is now explicit and the omitted compatibility adapter has a separate integration-owned responsibility.",
+        "target_checkpoint_event_id": 24,
+        "target_node_id": "rnode_49280a44c774",
+        "target_node_key": "renderer-contract"
+      },
+      {
+        "acknowledged_at": 1784449073,
+        "acknowledged_materialization_id": "mat_5dd292511ba2",
+        "action": "continue",
+        "applied_contract_revision": 1,
+        "created_at": 1784448972,
+        "delivered_at": 1784448972,
+        "delivered_materialization_id": "mat_5dd292511ba2",
+        "directive_id": "rdir_6b978a9360fd",
+        "expected_contract_revision": 1,
+        "source_checkpoint_event_id": 22,
+        "status": "acknowledged",
+        "summary": "Keep the parser responsibility bounded while the exposed compatibility adapter is assigned separately.",
+        "target_checkpoint_event_id": 22,
+        "target_node_id": "rnode_a9a0c0cff2c5",
+        "target_node_key": "parser-contract"
+      },
+      {
+        "acknowledged_at": 1784449126,
+        "acknowledged_materialization_id": "mat_5348642f69aa",
+        "action": "continue",
+        "applied_contract_revision": 1,
+        "created_at": 1784449087,
+        "delivered_at": 1784449087,
+        "delivered_materialization_id": "mat_5348642f69aa",
+        "directive_id": "rdir_c6a23dfa30ac",
+        "expected_contract_revision": 1,
+        "source_checkpoint_event_id": 56,
+        "status": "acknowledged",
+        "summary": "Preserve the verified compatibility-adapter contribution while the existing pipeline integration owner combines it with the frozen parser and renderer contributions.",
+        "target_checkpoint_event_id": 56,
+        "target_node_id": "rnode_53bcdcc27562",
+        "target_node_key": "legacy-token-adapter"
+      }
+    ],
+    "dynamic_node_count": 1,
+    "dynamic_nodes": [
+      {
+        "integration_owner_node_key": "pipeline-integration",
+        "node_key": "legacy-token-adapter",
+        "source_responsibility_ref": "event:22#responsibility:legacy-token-adapter"
+      }
+    ],
+    "epoch_mode": "evidence_driven_expansion",
+    "responsibility_candidate_count": 1
+  },
+  "coordination_checkpoints": [
+    {
+      "checkpoint": {
+        "changed_files": [
+          "src/token_parser.py"
+        ],
+        "changed_files_source": "wrapper_git_attempt_delta",
+        "completed_scope": [
+          "Implemented an explicit WordToken contract with fixed kind='word' and text fields.",
+          "Updated parse_tokens to emit lowercase token objects and preserve empty-input behavior.",
+          "Verified parser behavior directly, compiled src/token_parser.py, and passed git diff --check."
+        ],
+        "consumed_directive_ids": [],
+        "findings": [
+          {
+            "affected_node_keys": [
+              "pipeline-integration"
+            ],
+            "evidence_refs": [
+              "workspace:path:tests/test_pipeline.py"
+            ],
+            "finding_key": "legacy-token-adapter-omitted",
+            "summary": "tests/test_pipeline.py imports the absent src.token_compat.adapt_legacy_tokens compatibility module; full unittest discovery fails during collection, and that durable responsibility is outside parser-contract scope.",
+            "type": "gap_discovered"
+          }
+        ],
+        "kind": "gap_discovered",
+        "next_intent": "Resume after Runtime coordination only for parser-contract refinements or integration feedback; leave compatibility and renderer work to pipeline-integration.",
+        "phase": "implementation",
+        "remaining_scope": [
+          "Runtime must coordinate the omitted compatibility adapter before the integrated pipeline suite can pass.",
+          "Parser contract may require follow-up after frozen contributions are integrated."
+        ],
+        "responsibility_candidates": [
+          {
+            "acceptance_criteria": [
+              "Legacy fixture values are converted into lowercase word-token objects.",
+              "Adapted tokens conform to the shared {'kind': 'word', 'text': value} contract."
+            ],
+            "candidate_key": "legacy-token-adapter",
+            "declared_write_scope": [
+              "src/token_compat.py"
+            ],
+            "evidence_refs": [
+              "workspace:path:tests/test_pipeline.py"
+            ],
+            "goal_item_keys": [
+              "versioned-token-pipeline"
+            ],
+            "integration_owner_node_key": "pipeline-integration",
+            "outcome": "Provide the single compatibility adapter that converts legacy fixture tokens to the versioned token-object contract.",
+            "reason_type": "execution_discovered_gap"
+          }
+        ],
+        "schema": "runtime_worker_coordination_checkpoint_v1",
+        "summary": "The parser now emits explicit lowercase word-token objects. Parser-focused checks pass; repository evidence exposes the omitted legacy adapter required for suite collection and integration.",
+        "worker_declared_changed_files": [
+          "src/token_parser.py"
+        ],
+        "worker_lane": {
+          "backend_session_id": "019f7970-5753-7921-a81f-6c12c5d4d443",
+          "binary_missing": false,
+          "execution_mode": "fresh",
+          "exit_code": 0,
+          "json_events": true,
+          "kind": "codex_cli",
+          "name": "phase4g12-codex",
+          "output_tail": "----------------------------------------------------------------------\nImportError: Failed to import test module: test_pipeline\nTraceback (most recent call last):\n  File \"/usr/lib/python3.12/unittest/loader.py\", line 394, in _find_test_path\n    module = self._get_module_from_name(name)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/unittest/loader.py\", line 337, in _get_module_from_name\n    __import__(name)\n  File \"/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/worktrees/parser-contract/tests/test_pipeline.py\", line 4, in <module>\n    from src.token_compat import adapt_legacy_tokens\nModuleNotFoundError: No module named 'src.token_compat'\n\n\n----------------------------------------------------------------------\nRan 1 test in 0.000s\n\nFAILED (errors=1)\no (22) run command: /bin/bash -lc 'python3 -m unittest discover -s tests'\n$ /bin/bash -lc 'python3 -m py_compile src/token_parser.py'\nstatus=in_progress exit_code=None\nx (23) run command: /bin/bash -lc 'python3 -m py_compile src/token_parser.py'\n$ /bin/bash -lc 'python3 -m py_compile src/token_parser.py'\nstatus=completed exit_code=0\no (23) run command: /bin/bash -lc 'python3 -m py_compile src/token_parser.py'\n{\"changed_files\":[\"src/token_parser.py\"],\"completed_scope\":[\"Implemented explicit WordToken objects and verified lowercase parser output plus empty-input behavior.\",\"Confirmed src/token_parser.py compiles under Python 3.12.\"],\"consumed_directive_ids\":[],\"findings\":[{\"affected_node_keys\":[\"pipeline-integration\"],\"evidence_refs\":[\"workspace:path:tests/test_pipeline.py\"],\"finding_key\":\"legacy-token-adapter-omitted\",\"summary\":\"Full unittest discovery cannot collect tests because tests/test_pipeline.py imports the absent src.token_compat module, which is outside this node's write scope.\",\"type\":\"gap_discovered\"}],\"kind\":\"partial_contribution_ready\",\"next_intent\":\"Review the final parser diff and workspace status, then checkpoint this bounded contribution for integration.\",\"phase\":\"verification\",\"remaining_scope\":[\"Compatibility adapter and renderer integration remain with pipeline-integration; this isolated node must not implement them.\"],\"responsibility_candidates\":[{\"acceptance_criteria\":[\"Legacy fixture values are adapted to the versioned token object contract\",\"Compatibility adapter integrates with the renderer through the shared token shape\"],\"candidate_key\":\"legacy-token-adapter\",\"declared_write_scope\":[\"src/token_compat.py\"],\"evidence_refs\":[\"workspace:path:tests/test_pipeline.py\"],\"goal_item_keys\":[\"versioned-token-pipeline\"],\"integration_owner_node_key\":\"pipeline-integration\",\"outcome\":\"Provide one compatibility adapter that converts legacy fixture tokens into lowercase {'kind': 'word', 'text': value} objects.\",\"reason_type\":\"execution_discovered_gap\"}],\"schema\":\"runtime_worker_coordination_checkpoint_v1\",\"summary\":\"The parser-focused checks pass; suite discovery remains blocked at the expected omitted compatibility import.\",\"worker_session_should_resume\":true}\n$ /bin/bash -lc 'git diff --check && git diff -- src/token_parser.py'\nstatus=in_progress exit_code=None\nx (26) run command: /bin/bash -lc 'git diff --check && git diff -- src/token_parser.py'\n$ /bin/bash -lc 'git diff --check && git diff -- src/token_parser.py'\nstatus=completed exit_code=0\ndiff --git a/src/token_parser.py b/src/token_parser.py\nindex 07a65aa..9e4c0b2 100644\n--- a/src/token_parser.py\n+++ b/src/token_parser.py\n@@ -1,2 +1,14 @@\n-def parse_tokens(text: str) -> list[str]:\n-    return [part.lower() for part in text.split() if part]\n+from typing import Literal, TypedDict\n+\n+\n+class WordToken(TypedDict):\n+    kind: Literal[\"word\"]\n+    text: str\n+\n+\n+def parse_tokens(text: str) -> list[WordToken]:\n+    return [\n+        {\"kind\": \"word\", \"text\": part.lower()}\n+        for part in text.split()\n+        if part\n+    ]\no (26) run command: /bin/bash -lc 'git diff --check && git diff -- src/token_parser.py'\n$ /bin/bash -lc 'git status --short --untracked-files=all'\nstatus=in_progress exit_code=None\nx (27) run command: /bin/bash -lc 'git status --short --untracked-files=all'\n$ /bin/bash -lc 'git status --short --untracked-files=all'\nstatus=completed exit_code=0\n M src/token_parser.py\no (27) run command: /bin/bash -lc 'git status --short --untracked-files=all'\n$ /bin/bash -lc 'nl -ba src/token_parser.py'\nstatus=in_progress exit_code=None\nx (28) run command: /bin/bash -lc 'nl -ba src/token_parser.py'\n$ /bin/bash -lc 'nl -ba src/token_parser.py'\nstatus=completed exit_code=0\n     1\tfrom typing import Literal, TypedDict\n     2\t\n     3\t\n     4\tclass WordToken(TypedDict):\n     5\t    kind: Literal[\"word\"]\n     6\t    text: str\n     7\t\n     8\t\n     9\tdef parse_tokens(text: str) -> list[WordToken]:\n    10\t    return [\n    11\t        {\"kind\": \"word\", \"text\": part.lower()}\n    12\t        for part in text.split()\n    13\t        if part\n    14\t    ]\no (28) run command: /bin/bash -lc 'nl -ba src/token_parser.py'\n{\"changed_files\":[\"src/token_parser.py\"],\"completed_scope\":[\"Implemented an explicit WordToken contract with fixed kind='word' and text fields.\",\"Updated parse_tokens to emit lowercase token objects and preserve empty-input behavior.\",\"Verified parser behavior directly, compiled src/token_parser.py, and passed git diff --check.\"],\"consumed_directive_ids\":[],\"findings\":[{\"affected_node_keys\":[\"pipeline-integration\"],\"evidence_refs\":[\"workspace:path:tests/test_pipeline.py\"],\"finding_key\":\"legacy-token-adapter-omitted\",\"summary\":\"tests/test_pipeline.py imports the absent src.token_compat.adapt_legacy_tokens compatibility module; full unittest discovery fails during collection, and that durable responsibility is outside parser-contract scope.\",\"type\":\"gap_discovered\"}],\"kind\":\"gap_discovered\",\"next_intent\":\"Resume after Runtime coordination only for parser-contract refinements or integration feedback; leave compatibility and renderer work to pipeline-integration.\",\"phase\":\"implementation\",\"remaining_scope\":[\"Runtime must coordinate the omitted compatibility adapter before the integrated pipeline suite can pass.\",\"Parser contract may require follow-up after frozen contributions are integrated.\"],\"responsibility_candidates\":[{\"acceptance_criteria\":[\"Legacy fixture values are converted into lowercase word-token objects.\",\"Adapted tokens conform to the shared {'kind': 'word', 'text': value} contract.\"],\"candidate_key\":\"legacy-token-adapter\",\"declared_write_scope\":[\"src/token_compat.py\"],\"evidence_refs\":[\"workspace:path:tests/test_pipeline.py\"],\"goal_item_keys\":[\"versioned-token-pipeline\"],\"integration_owner_node_key\":\"pipeline-integration\",\"outcome\":\"Provide the single compatibility adapter that converts legacy fixture tokens to the versioned token-object contract.\",\"reason_type\":\"execution_discovered_gap\"}],\"schema\":\"runtime_worker_coordination_checkpoint_v1\",\"summary\":\"The parser now emits explicit lowercase word-token objects. Parser-focused checks pass; repository evidence exposes the omitted legacy adapter required for suite collection and integration.\",\"worker_session_should_resume\":true}",
+          "receipt": {
+            "schema": "codex_cli_receipt_v1",
+            "sections": {}
+          },
+          "resume_status": "started",
+          "run_id": 1,
+          "task_id": "t_0ac11c13",
+          "timed_out": false,
+          "verdict": null
+        },
+        "worker_receipt": {
+          "schema": "codex_cli_receipt_v1",
+          "sections": {}
+        },
+        "worker_session_should_resume": true,
+        "workspace_revision": "git:b7eb9eef76a247bc3625dc5ec25f2e582c254cc4:worktree:ca26dd8f8b7304679babf42a99dc9b006dde85372f6613ad57aa3416e1861c0b"
+      },
+      "event_id": 22,
+      "node_key": "parser-contract"
+    },
+    {
+      "checkpoint": {
+        "changed_files": [],
+        "changed_files_source": "wrapper_git_attempt_delta",
+        "completed_scope": [
+          "Inspected src/token_renderer.py and tests/test_pipeline.py without modifying parser, renderer, or compatibility files.",
+          "Established the required pre-directive coordination safe point."
+        ],
+        "consumed_directive_ids": [],
+        "findings": [
+          {
+            "affected_node_keys": [
+              "renderer-contract",
+              "parser-contract",
+              "pipeline-integration"
+            ],
+            "evidence_refs": [
+              "workspace:src/token_renderer.py:1",
+              "workspace:tests/test_pipeline.py:10",
+              "workspace:tests/test_pipeline.py:15"
+            ],
+            "finding_key": "renderer-awaits-versioned-token-contract",
+            "summary": "The renderer currently accepts list[str] and joins raw values, while pipeline tests require rendering versioned token objects containing kind and text. Renderer implementation is blocked pending Runtime direction on the parser contract and omitted legacy-adapter responsibility.",
+            "type": "blocking_dependency"
+          }
+        ],
+        "kind": "blocking_dependency",
+        "next_intent": "After a Runtime directive freezes the upstream token-object contract and compatibility responsibility, update only src/token_renderer.py and run renderer-focused pipeline checks.",
+        "phase": "coordination",
+        "remaining_scope": [
+          "Consume the Runtime directive.",
+          "Implement the versioned token-object consumer in src/token_renderer.py.",
+          "Run renderer-focused verification and report the resulting partial contribution."
+        ],
+        "responsibility_candidates": [],
+        "schema": "runtime_worker_coordination_checkpoint_v1",
+        "summary": "Reached the mandated read-only safe point: renderer behavior depends on Runtime resolving the parser token-object contract and omitted compatibility-adapter responsibility before implementation begins.",
+        "worker_declared_changed_files": [],
+        "worker_lane": {
+          "backend_session_id": "019f7970-5753-7780-be1a-1b55e19765b4",
+          "binary_missing": false,
+          "execution_mode": "fresh",
+          "exit_code": 0,
+          "json_events": true,
+          "kind": "codex_cli",
+          "name": "phase4g12-codex",
+          "output_tail": "WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir \"/tmp\" (codex_home: AbsolutePathBuf(\"/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/codex-home\"))\n2026-07-19T08:13:55.084257Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedServerResponse(\"HTTP 403: {\\\"error\\\":{\\\"code\\\":\\\"403\\\",\\\"message\\\":\\\"Forbidden\\\",\\\"id\\\":\\\"sin1::rfglf-1784448835037-fc1de9af4e71\\\"}}\\n\")\n{\"changed_files\":[],\"completed_scope\":[],\"consumed_directive_ids\":[],\"findings\":[],\"kind\":\"blocking_dependency\",\"next_intent\":\"Inspect the renderer and pipeline test contract, then stop at the required pre-directive coordination point without editing files.\",\"phase\":\"inspection\",\"remaining_scope\":[\"Inspect the bounded files and identify the parser-contract dependency.\"],\"responsibility_candidates\":[],\"schema\":\"runtime_worker_coordination_checkpoint_v1\",\"summary\":\"Beginning the required read-only bounded slice.\",\"worker_session_should_resume\":true}\n$ /bin/bash -lc 'nl -ba src/token_renderer.py'\nstatus=in_progress exit_code=None\nx (4) run command: /bin/bash -lc 'nl -ba src/token_renderer.py'\n$ /bin/bash -lc 'nl -ba src/token_renderer.py'\nstatus=completed exit_code=0\n     1\tdef render_tokens(tokens: list[str]) -> str:\n     2\t    return \"|\".join(tokens)\no (4) run command: /bin/bash -lc 'nl -ba src/token_renderer.py'\n$ /bin/bash -lc 'git status --short'\nstatus=in_progress exit_code=None\nx (5) run command: /bin/bash -lc 'git status --short'\n$ /bin/bash -lc 'git status --short'\nstatus=completed exit_code=0\no (5) run command: /bin/bash -lc 'git status --short'\n$ /bin/bash -lc 'nl -ba tests/test_pipeline.py'\nstatus=in_progress exit_code=None\nx (6) run command: /bin/bash -lc 'nl -ba tests/test_pipeline.py'\n$ /bin/bash -lc 'nl -ba tests/test_pipeline.py'\nstatus=completed exit_code=0\n     1\timport json\n     2\timport unittest\n     3\t\n     4\tfrom src.token_compat import adapt_legacy_tokens\n     5\tfrom src.token_parser import parse_tokens\n     6\tfrom src.token_renderer import render_tokens\n     7\t\n     8\t\n     9\tclass PipelineTest(unittest.TestCase):\n    10\t    def test_versioned_token_pipeline(self):\n    11\t        tokens = parse_tokens(\"Hello WORLD\")\n    12\t        self.assertTrue(all(token[\"kind\"] == \"word\" for token in tokens))\n    13\t        self.assertEqual(render_tokens(tokens), \"word:hello|word:world\")\n    14\t\n    15\t    def test_legacy_tokens_use_the_same_contract(self):\n    16\t        with open(\"fixtures/legacy_tokens.json\", encoding=\"utf-8\") as handle:\n    17\t            legacy = json.load(handle)\n    18\t        tokens = adapt_legacy_tokens(legacy)\n    19\t        self.assertEqual(tokens, [\n    20\t            {\"kind\": \"word\", \"text\": \"legacy\"},\n    21\t            {\"kind\": \"word\", \"text\": \"value\"},\n    22\t        ])\n    23\t        self.assertEqual(render_tokens(tokens), \"word:legacy|word:value\")\n    24\t\n    25\t\n    26\tif __name__ == \"__main__\":\n    27\t    unittest.main()\no (6) run command: /bin/bash -lc 'nl -ba tests/test_pipeline.py'\n$ /bin/bash -lc \"pwd && rg --files -g 'AGENTS.md' -g '\"'!vendor'\"' -g '\"'!node_modules'\"'\"\nstatus=in_progress exit_code=None\nx (7) run command: /bin/bash -lc \"pwd && rg --files -g 'AGENTS.md' -g '\"'!vendor'\"' -g '\"'!node_modules'\"'\"\n$ /bin/bash -lc \"pwd && rg --files -g 'AGENTS.md' -g '\"'!vendor'\"' -g '\"'!node_modules'\"'\"\nstatus=failed exit_code=1\n/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/worktrees/renderer-contract\no (7) run command: /bin/bash -lc \"pwd && rg --files -g 'AGENTS.md' -g '\"'!vendor'\"' -g '\"'!node_modules'\"'\"\n{\"changed_files\":[],\"completed_scope\":[\"Inspected src/token_renderer.py and tests/test_pipeline.py without modifying parser, renderer, or compatibility files.\",\"Established the required pre-directive coordination safe point.\"],\"consumed_directive_ids\":[],\"findings\":[{\"affected_node_keys\":[\"renderer-contract\",\"parser-contract\",\"pipeline-integration\"],\"evidence_refs\":[\"workspace:src/token_renderer.py:1\",\"workspace:tests/test_pipeline.py:10\",\"workspace:tests/test_pipeline.py:15\"],\"finding_key\":\"renderer-awaits-versioned-token-contract\",\"summary\":\"The renderer currently accepts list[str] and joins raw values, while pipeline tests require rendering versioned token objects containing kind and text. Renderer implementation is blocked pending Runtime direction on the parser contract and omitted legacy-adapter responsibility.\",\"type\":\"blocking_dependency\"}],\"kind\":\"blocking_dependency\",\"next_intent\":\"After a Runtime directive freezes the upstream token-object contract and compatibility responsibility, update only src/token_renderer.py and run renderer-focused pipeline checks.\",\"phase\":\"coordination\",\"remaining_scope\":[\"Consume the Runtime directive.\",\"Implement the versioned token-object consumer in src/token_renderer.py.\",\"Run renderer-focused verification and report the resulting partial contribution.\"],\"responsibility_candidates\":[],\"schema\":\"runtime_worker_coordination_checkpoint_v1\",\"summary\":\"Reached the mandated read-only safe point: renderer behavior depends on Runtime resolving the parser token-object contract and omitted compatibility-adapter responsibility before implementation begins.\",\"worker_session_should_resume\":true}",
+          "receipt": {
+            "schema": "codex_cli_receipt_v1",
+            "sections": {}
+          },
+          "resume_status": "started",
+          "run_id": 2,
+          "task_id": "t_15797b69",
+          "timed_out": false,
+          "verdict": null
+        },
+        "worker_receipt": {
+          "schema": "codex_cli_receipt_v1",
+          "sections": {}
+        },
+        "worker_session_should_resume": true,
+        "workspace_revision": "git:b7eb9eef76a247bc3625dc5ec25f2e582c254cc4"
+      },
+      "event_id": 24,
+      "node_key": "renderer-contract"
+    },
+    {
+      "checkpoint": {
+        "changed_files": [
+          "src/token_compat.py"
+        ],
+        "changed_files_source": "wrapper_git_attempt_delta",
+        "completed_scope": [
+          "Implemented adapt_legacy_tokens to convert legacy strings into lowercase {'kind': 'word', 'text': value} objects.",
+          "Verified the adapter against fixtures/legacy_tokens.json, compiled it successfully, and passed git diff --check."
+        ],
+        "consumed_directive_ids": [],
+        "findings": [
+          {
+            "affected_node_keys": [
+              "pipeline-integration"
+            ],
+            "evidence_refs": [
+              "workspace:tests/test_pipeline.py:10",
+              "workspace:src/token_parser.py:1",
+              "workspace:src/token_renderer.py:1"
+            ],
+            "finding_key": "integrated-suite-awaits-parser-renderer-contributions",
+            "summary": "python3 -m unittest discover -s tests still errors because the base parser returns strings and the base renderer only joins strings; pipeline-integration must combine their frozen versioned-token contributions with this adapter.",
+            "type": "integration_risk"
+          }
+        ],
+        "kind": "partial_contribution_ready",
+        "next_intent": "On Runtime resume, retain the adapter patch and address only adapter-specific integration feedback before the integration owner runs the combined suite.",
+        "phase": "verification",
+        "remaining_scope": [
+          "Verify the adapter within the integrated parser and renderer pipeline after pipeline-integration combines frozen contributions."
+        ],
+        "responsibility_candidates": [],
+        "schema": "runtime_worker_coordination_checkpoint_v1",
+        "summary": "Succeeded in producing and locally verifying the bounded legacy-token adapter contribution; integrated suite success remains with pipeline-integration.",
+        "worker_declared_changed_files": [
+          "src/token_compat.py"
+        ],
+        "worker_lane": {
+          "backend_session_id": "019f7972-7817-7273-a829-fbddf9e5780e",
+          "binary_missing": false,
+          "execution_mode": "fresh",
+          "exit_code": 0,
+          "json_events": true,
+          "kind": "codex_cli",
+          "name": "phase4g12-codex",
+          "output_tail": "nittest discover -s tests'\nstatus=in_progress exit_code=None\nx (23) run command: /bin/bash -lc 'python3 -m unittest discover -s tests'\n$ /bin/bash -lc \"python3 -c 'from src.token_compat import adapt_legacy_tokens; assert adapt_legacy_tokens([\\\"Legacy\\\", \\\"VALUE\\\"]) == [{\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"legacy\\\"}, {\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"value\\\"}]'\"\nstatus=in_progress exit_code=None\nx (24) run command: /bin/bash -lc \"python3 -c 'from src.token_compat import adapt_legacy_tokens; assert adapt_legacy_tokens([\\\"Legacy\\\", \\\"VALUE\\\"]) == [{\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"legacy\\\"}, {\\\"\n[truncated 41 chars]\n$ /bin/bash -lc 'python3 -m py_compile src/token_compat.py'\nstatus=in_progress exit_code=None\nx (25) run command: /bin/bash -lc 'python3 -m py_compile src/token_compat.py'\n$ /bin/bash -lc \"python3 -c 'from src.token_compat import adapt_legacy_tokens; assert adapt_legacy_tokens([\\\"Legacy\\\", \\\"VALUE\\\"]) == [{\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"legacy\\\"}, {\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"value\\\"}]'\"\nstatus=completed exit_code=0\no (24) run command: /bin/bash -lc \"python3 -c 'from src.token_compat import adapt_legacy_tokens; assert adapt_legacy_tokens([\\\"Legacy\\\", \\\"VALUE\\\"]) == [{\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"legacy\\\"}, {\\\"\n[truncated 41 chars]\n$ /bin/bash -lc 'python3 -m py_compile src/token_compat.py'\nstatus=completed exit_code=0\no (25) run command: /bin/bash -lc 'python3 -m py_compile src/token_compat.py'\n$ /bin/bash -lc 'python3 -m unittest discover -s tests'\nstatus=failed exit_code=1\nEE\n======================================================================\nERROR: test_legacy_tokens_use_the_same_contract (test_pipeline.PipelineTest.test_legacy_tokens_use_the_same_contract)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/worktrees/legacy-token-adapter/tests/test_pipeline.py\", line 23, in test_legacy_tokens_use_the_same_contract\n    self.assertEqual(render_tokens(tokens), \"word:legacy|word:value\")\n                     ^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/worktrees/legacy-token-adapter/src/token_renderer.py\", line 2, in render_tokens\n    return \"|\".join(tokens)\n           ^^^^^^^^^^^^^^^^\nTypeError: sequence item 0: expected str instance, dict found\n\n======================================================================\nERROR: test_versioned_token_pipeline (test_pipeline.PipelineTest.test_versioned_token_pipeline)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/worktrees/legacy-token-adapter/tests/test_pipeline.py\", line 12, in test_versioned_token_pipeline\n    self.assertTrue(all(token[\"kind\"] == \"word\" for token in tokens))\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/worktrees/legacy-token-adapter/tests/test_pipeline.py\", line 12, in <genexpr>\n    self.assertTrue(all(token[\"kind\"] == \"word\" for token in tokens))\n                        ~~~~~^^^^^^^^\nTypeError: string indices must be integers, not 'str'\n\n----------------------------------------------------------------------\nRan 2 tests in 0.001s\n\nFAILED (errors=2)\no (23) run command: /bin/bash -lc 'python3 -m unittest discover -s tests'\n{\"changed_files\":[\"src/token_compat.py\"],\"completed_scope\":[\"Implemented the legacy string-to-versioned word-token conversion in the declared write scope.\",\"Direct adapter assertion and Python compilation pass.\"],\"consumed_directive_ids\":[],\"findings\":[{\"affected_node_keys\":[\"pipeline-integration\"],\"evidence_refs\":[\"workspace:tests/test_pipeline.py:10\",\"workspace:src/token_parser.py:1\",\"workspace:src/token_renderer.py:1\"],\"finding_key\":\"integrated-suite-awaits-parser-renderer-contributions\",\"summary\":\"The isolated full suite still fails because the base parser returns strings and the base renderer joins strings; pipeline-integration must combine their frozen versioned-token contributions with this adapter.\",\"type\":\"integration_risk\"}],\"kind\":\"partial_contribution_ready\",\"next_intent\":\"Run one final fixture-backed adapter check and preserve the patch for Runtime freeze and integration.\",\"phase\":\"verification\",\"remaining_scope\":[\"Fixture-backed adapter verification\",\"Integrated full-suite verification after parser and renderer contributions are combined by pipeline-integration\"],\"responsibility_candidates\":[],\"schema\":\"runtime_worker_coordination_checkpoint_v1\",\"summary\":\"The bounded adapter implementation is ready; full pipeline success depends on the already-scoped parser and renderer integration work.\",\"worker_session_should_resume\":true}\n$ /bin/bash -lc 'nl -ba src/token_compat.py && git diff --check && git status --short'\nstatus=in_progress exit_code=None\nx (29) run command: /bin/bash -lc 'nl -ba src/token_compat.py && git diff --check && git status --short'\n$ /bin/bash -lc 'nl -ba src/token_compat.py && git diff --check && git status --short'\nstatus=completed exit_code=0\n     1\tdef adapt_legacy_tokens(tokens: list[str]) -> list[dict[str, str]]:\n     2\t    return [{\"kind\": \"word\", \"text\": token.lower()} for token in tokens]\n?? src/token_compat.py\no (29) run command: /bin/bash -lc 'nl -ba src/token_compat.py && git diff --check && git status --short'\n$ /bin/bash -lc \"python3 -c 'import json; from src.token_compat import adapt_legacy_tokens; legacy=json.load(open(\\\"fixtures/legacy_tokens.json\\\", encoding=\\\"utf-8\\\")); assert adapt_legacy_tokens(legacy) == [{\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"legacy\\\"}, {\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"value\\\"}]'\"\nstatus=in_progress exit_code=None\nx (30) run command: /bin/bash -lc \"python3 -c 'import json; from src.token_compat import adapt_legacy_tokens; legacy=json.load(open(\\\"fixtures/legacy_tokens.json\\\", encoding=\\\"utf-8\\\")); assert adapt_\n[truncated 114 chars]\n$ /bin/bash -lc \"python3 -c 'import json; from src.token_compat import adapt_legacy_tokens; legacy=json.load(open(\\\"fixtures/legacy_tokens.json\\\", encoding=\\\"utf-8\\\")); assert adapt_legacy_tokens(legacy) == [{\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"legacy\\\"}, {\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"value\\\"}]'\"\nstatus=completed exit_code=0\no (30) run command: /bin/bash -lc \"python3 -c 'import json; from src.token_compat import adapt_legacy_tokens; legacy=json.load(open(\\\"fixtures/legacy_tokens.json\\\", encoding=\\\"utf-8\\\")); assert adapt_\n[truncated 114 chars]\n{\"changed_files\":[\"src/token_compat.py\"],\"completed_scope\":[\"Implemented adapt_legacy_tokens to convert legacy strings into lowercase {'kind': 'word', 'text': value} objects.\",\"Verified the adapter against fixtures/legacy_tokens.json, compiled it successfully, and passed git diff --check.\"],\"consumed_directive_ids\":[],\"findings\":[{\"affected_node_keys\":[\"pipeline-integration\"],\"evidence_refs\":[\"workspace:tests/test_pipeline.py:10\",\"workspace:src/token_parser.py:1\",\"workspace:src/token_renderer.py:1\"],\"finding_key\":\"integrated-suite-awaits-parser-renderer-contributions\",\"summary\":\"python3 -m unittest discover -s tests still errors because the base parser returns strings and the base renderer only joins strings; pipeline-integration must combine their frozen versioned-token contributions with this adapter.\",\"type\":\"integration_risk\"}],\"kind\":\"partial_contribution_ready\",\"next_intent\":\"On Runtime resume, retain the adapter patch and address only adapter-specific integration feedback before the integration owner runs the combined suite.\",\"phase\":\"verification\",\"remaining_scope\":[\"Verify the adapter within the integrated parser and renderer pipeline after pipeline-integration combines frozen contributions.\"],\"responsibility_candidates\":[],\"schema\":\"runtime_worker_coordination_checkpoint_v1\",\"summary\":\"Succeeded in producing and locally verifying the bounded legacy-token adapter contribution; integrated suite success remains with pipeline-integration.\",\"worker_session_should_resume\":true}",
+          "receipt": {
+            "schema": "codex_cli_receipt_v1",
+            "sections": {}
+          },
+          "resume_status": "started",
+          "run_id": 3,
+          "task_id": "t_993b7e46",
+          "timed_out": false,
+          "verdict": null
+        },
+        "worker_receipt": {
+          "schema": "codex_cli_receipt_v1",
+          "sections": {}
+        },
+        "worker_session_should_resume": true,
+        "workspace_revision": "git:b7eb9eef76a247bc3625dc5ec25f2e582c254cc4:worktree:f03605e25a4ceed2871d560f1af8dd0dfc1c05f329a8a40fff80689be47b50f9"
+      },
+      "event_id": 56,
+      "node_key": "legacy-token-adapter"
+    }
+  ],
+  "decision_history": [
+    {
+      "completed_at": 1784448972,
+      "created_at": 1784448934,
+      "error": null,
+      "id": "kdec_d8eb5dec974d",
+      "model": "gpt-5.6-sol",
+      "status": "completed"
+    },
+    {
+      "completed_at": 1784449087,
+      "created_at": 1784449073,
+      "error": null,
+      "id": "kdec_806b6d229ab7",
+      "model": "gpt-5.6-sol",
+      "status": "completed"
+    }
+  ],
+  "decision_results": [
+    {
+      "decision_requested": true,
+      "events": [
+        "job_created",
+        "goal_contract_created",
+        "node_created",
+        "goal_gap_detected",
+        "worker_structure_checkpointed",
+        "node_created",
+        "node_created",
+        "structure_checkpoint_expansion_applied",
+        "structure_checkpoint_expansion_applied",
+        "patch_applied",
+        "dependency_satisfied",
+        "dependency_satisfied",
+        "goal_gap_detected",
+        "capability_request_evaluated",
+        "node_materialized",
+        "capability_request_evaluated",
+        "node_materialized",
+        "worker_session_discovered",
+        "worker_session_discovered",
+        "goal_gap_detected",
+        "structure_audit_requested",
+        "worker_coordination_checkpointed",
+        "decision_requested",
+        "worker_coordination_checkpointed",
+        "decision_requested",
+        "node_created",
+        "structure_checkpoint_expansion_applied",
+        "runtime_directive_queued",
+        "runtime_directive_activated",
+        "runtime_directive_queued",
+        "runtime_directive_activated",
+        "patch_applied",
+        "dependency_satisfied",
+        "goal_gap_detected",
+        "goal_gap_detected",
+        "structure_audit_requested"
+      ],
+      "ingested_nodes": [],
+      "job_id": "rjob_8ef1528aa3e1",
+      "job_state": "active",
+      "materialized_nodes": [],
+      "patch_status": "applied",
+      "recovery": {
+        "checked_nodes": 0,
+        "evaluator_remediation": {
+          "budget_exhausted": false,
+          "decision_suppressed": false,
+          "enabled": false,
+          "failure_count": 0,
+          "latest_feedback_consumed": false,
+          "not_resumable": [],
+          "progress": {},
+          "scheduled": []
+        },
+        "events": [],
+        "failed_nodes": [],
+        "job_id": "rjob_8ef1528aa3e1",
+        "materializations_updated": [],
+        "policy": {
+          "infra_retry_limit": 1,
+          "receipt_recovery_limit": 1,
+          "run_stale_after_seconds": 900
+        },
+        "scheduled_retries": [],
+        "worker_sessions": {
+          "discovered": [],
+          "identity_conflicts": [],
+          "job_id": "rjob_8ef1528aa3e1",
+          "resume_failed": [],
+          "resumed": [],
+          "updated": [
+            "bws_8a5a36735425",
+            "bws_18b752d7433f"
+          ]
+        }
+      }
+    },
+    {
+      "decision_requested": true,
+      "events": [
+        "job_created",
+        "goal_contract_created",
+        "node_created",
+        "goal_gap_detected",
+        "worker_structure_checkpointed",
+        "node_created",
+        "node_created",
+        "structure_checkpoint_expansion_applied",
+        "structure_checkpoint_expansion_applied",
+        "patch_applied",
+        "dependency_satisfied",
+        "dependency_satisfied",
+        "goal_gap_detected",
+        "capability_request_evaluated",
+        "node_materialized",
+        "capability_request_evaluated",
+        "node_materialized",
+        "worker_session_discovered",
+        "worker_session_discovered",
+        "goal_gap_detected",
+        "structure_audit_requested",
+        "worker_coordination_checkpointed",
+        "decision_requested",
+        "worker_coordination_checkpointed",
+        "decision_requested",
+        "node_created",
+        "structure_checkpoint_expansion_applied",
+        "runtime_directive_queued",
+        "runtime_directive_activated",
+        "runtime_directive_queued",
+        "runtime_directive_activated",
+        "patch_applied",
+        "dependency_satisfied",
+        "goal_gap_detected",
+        "goal_gap_detected",
+        "structure_audit_requested",
+        "node_materialized",
+        "capability_request_evaluated",
+        "runtime_directive_delivered",
+        "worker_session_resume_scheduled",
+        "node_materialized",
+        "capability_request_evaluated",
+        "runtime_directive_delivered",
+        "worker_session_resume_scheduled",
+        "node_materialized",
+        "worker_session_discovered",
+        "worker_session_resumed",
+        "worker_session_resumed",
+        "runtime_directive_acknowledged",
+        "node_contribution_frozen",
+        "node_completed",
+        "goal_gap_detected",
+        "runtime_directive_acknowledged",
+        "node_contribution_frozen",
+        "node_completed",
+        "worker_coordination_checkpointed",
+        "goal_gap_detected",
+        "decision_requested",
+        "structure_audit_requested",
+        "runtime_directive_queued",
+        "runtime_directive_activated",
+        "patch_applied",
+        "goal_gap_detected",
+        "goal_gap_detected",
+        "structure_audit_requested"
+      ],
+      "ingested_nodes": [],
+      "job_id": "rjob_8ef1528aa3e1",
+      "job_state": "active",
+      "materialized_nodes": [],
+      "patch_status": "applied",
+      "recovery": {
+        "checked_nodes": 0,
+        "evaluator_remediation": {
+          "budget_exhausted": false,
+          "decision_suppressed": false,
+          "enabled": false,
+          "failure_count": 0,
+          "latest_feedback_consumed": false,
+          "not_resumable": [],
+          "progress": {},
+          "scheduled": []
+        },
+        "events": [],
+        "failed_nodes": [],
+        "job_id": "rjob_8ef1528aa3e1",
+        "materializations_updated": [],
+        "policy": {
+          "infra_retry_limit": 1,
+          "receipt_recovery_limit": 1,
+          "run_stale_after_seconds": 900
+        },
+        "scheduled_retries": [],
+        "worker_sessions": {
+          "discovered": [],
+          "identity_conflicts": [],
+          "job_id": "rjob_8ef1528aa3e1",
+          "resume_failed": [],
+          "resumed": [],
+          "updated": [
+            "bws_8a5a36735425",
+            "bws_18b752d7433f",
+            "bws_53c9ad2e4c38",
+            "bws_8a5a36735425",
+            "bws_18b752d7433f"
+          ]
+        }
+      }
+    }
+  ],
+  "dynamic_graph_patches": [
+    {
+      "applied_revision": 2,
+      "base_revision": 1,
+      "id": "gpatch_3a4f8abeb028",
+      "patch": {
+        "decomposition": {
+          "justifications": [
+            {
+              "declared_write_scopes": {
+                "legacy-token-adapter": [
+                  "src/token_compat.py"
+                ]
+              },
+              "evidence_refs": [
+                "event:22"
+              ],
+              "explanation": "Event 22 identifies the absent src.token_compat adapter as an independently recoverable responsibility outside the parser and renderer write scopes; its isolated contribution must be integrated by pipeline-integration.",
+              "integration_owner_node_key": "pipeline-integration",
+              "nodes": [
+                "legacy-token-adapter"
+              ],
+              "type": "execution_discovered_gap"
+            }
+          ],
+          "mode": "multiple_runtime_nodes",
+          "policy_version": "1"
+        },
+        "expected_revision": 1,
+        "ops": [
+          {
+            "contract": {
+              "acceptance_criteria": [
+                "Legacy fixture values are converted into lowercase word-token objects.",
+                "Adapted tokens conform to the shared {'kind': 'word', 'text': value} contract."
+              ],
+              "declared_write_scope": [
+                "src/token_compat.py"
+              ],
+              "outcome": "Provide the single compatibility adapter that converts legacy fixture tokens to the versioned token-object contract.",
+              "prohibited_actions": [
+                "production_deployment",
+                "modify_sibling_scope"
+              ],
+              "success_evidence": [
+                "changed_files",
+                "verification",
+                "worker_summary"
+              ],
+              "workspace_mode": "isolated_worktree"
+            },
+            "description": "Implement the single adapter exposed by parser checkpoint evidence so legacy fixture values conform to the versioned word-token contract.",
+            "goal_item_keys": [
+              "versioned-token-pipeline"
+            ],
+            "node_key": "legacy-token-adapter",
+            "node_type": "implementation",
+            "op": "create_node",
+            "source_responsibility_ref": "event:22#responsibility:legacy-token-adapter",
+            "title": "Implement the legacy token compatibility adapter"
+          },
+          {
+            "dependency_type": "depends_on",
+            "from_node_key": "legacy-token-adapter",
+            "op": "add_dependency",
+            "to_node_key": "pipeline-integration"
+          },
+          {
+            "action": "continue",
+            "evidence_refs": [
+              "event:22"
+            ],
+            "expected_contract_revision": 1,
+            "instructions": [
+              "Preserve the explicit lowercase {'kind': 'word', 'text': value} parser contract within src/token_parser.py.",
+              "Complete any parser-scoped verification or refinements needed for a frozen contribution, without implementing renderer or compatibility-adapter files.",
+              "Checkpoint the parser contribution for pipeline-integration with its verification evidence."
+            ],
+            "op": "issue_directive",
+            "source_checkpoint_event_id": 22,
+            "summary": "Keep the parser responsibility bounded while the exposed compatibility adapter is assigned separately.",
+            "target_checkpoint_event_id": 22,
+            "target_node_key": "parser-contract"
+          },
+          {
+            "action": "continue",
+            "evidence_refs": [
+              "event:22",
+              "event:24"
+            ],
+            "expected_contract_revision": 1,
+            "instructions": [
+              "Update only src/token_renderer.py so render_tokens consumes versioned token objects with kind and text fields.",
+              "Render each token in kind:text form and join rendered tokens with '|', consistent with the frozen parser contract.",
+              "Run renderer-focused verification and checkpoint the isolated contribution for pipeline-integration; do not implement the compatibility adapter."
+            ],
+            "op": "issue_directive",
+            "source_checkpoint_event_id": 22,
+            "summary": "The parser token-object contract is now explicit and the omitted compatibility adapter has a separate integration-owned responsibility.",
+            "target_checkpoint_event_id": 24,
+            "target_node_key": "renderer-contract"
+          }
+        ],
+        "rationale_summary": "Parser checkpoint event 22 exposes the previously omitted durable compatibility responsibility with an isolated write scope. Create that evidence-backed child under the existing integration owner and route one continuation directive to each waiting coordination node.",
+        "schema": "runtime_graph_patch_v1"
+      },
+      "status": "applied"
+    }
+  ],
+  "final_node_keys": [
+    "parser-contract",
+    "pipeline-integration",
+    "renderer-contract",
+    "legacy-token-adapter"
+  ],
+  "final_state": "done",
+  "first_task_ids": [
+    "t_0ac11c13",
+    "t_15797b69"
+  ],
+  "goal_items": [
+    {
+      "item_key": "versioned-token-pipeline",
+      "state": "satisfied"
+    }
+  ],
+  "graph_patches": [
+    {
+      "applied_revision": 1,
+      "base_revision": 0,
+      "id": "gpatch_080d6f1f6bb7",
+      "patch": {
+        "decomposition": {
+          "justifications": [
+            {
+              "declared_write_scopes": {
+                "parser-contract": [
+                  "src/token_parser.py"
+                ],
+                "renderer-contract": [
+                  "src/token_renderer.py"
+                ]
+              },
+              "evidence_refs": [
+                "event:5"
+              ],
+              "explanation": "Parser and renderer have disjoint initial write scopes.",
+              "integration_owner_node_key": "pipeline-integration",
+              "nodes": [
+                "parser-contract",
+                "renderer-contract"
+              ],
+              "type": "durable_parallelism"
+            }
+          ],
+          "mode": "multiple_runtime_nodes",
+          "policy_version": "1"
+        },
+        "expected_revision": 0,
+        "ops": [
+          {
+            "assignee": "phase4g12-codex",
+            "contract": {
+              "acceptance_criteria": [
+                "parser contract is explicit",
+                "parser-focused checks pass"
+              ],
+              "declared_write_scope": [
+                "src/token_parser.py"
+              ],
+              "outcome": "Parser emits lowercase {'kind': 'word', 'text': value} objects.",
+              "prohibited_actions": [
+                "production_deployment",
+                "modify_sibling_scope"
+              ],
+              "success_evidence": [
+                "changed_files",
+                "verification",
+                "worker_summary"
+              ],
+              "workspace_mode": "isolated_worktree"
+            },
+            "description": "Implement the versioned parser in src/token_parser.py. During the first bounded slice inspect tests/test_pipeline.py and repository evidence. The test imports an omitted compatibility module outside your write scope. Report a gap_discovered finding and one advisory responsibility candidate with candidate_key=legacy-token-adapter, reason_type=execution_discovered_gap, scope src/token_compat.py, goal item versioned-token-pipeline, integration owner pipeline-integration, and evidence workspace:path:tests/test_pipeline.py. Do not create that module.",
+            "goal_item_keys": [
+              "versioned-token-pipeline"
+            ],
+            "node_key": "parser-contract",
+            "node_type": "implementation",
+            "op": "create_node",
+            "requested_capabilities": [
+              "filesystem_read",
+              "workspace_write",
+              "git_read",
+              "process_spawn"
+            ],
+            "title": "Implement parser token contract"
+          },
+          {
+            "assignee": "phase4g12-codex",
+            "contract": {
+              "acceptance_criteria": [
+                "first slice reaches a coordination safe point",
+                "renderer-focused checks pass after directive"
+              ],
+              "declared_write_scope": [
+                "src/token_renderer.py"
+              ],
+              "outcome": "Renderer consumes versioned token objects.",
+              "prohibited_actions": [
+                "production_deployment",
+                "modify_sibling_scope"
+              ],
+              "success_evidence": [
+                "changed_files",
+                "verification",
+                "worker_summary"
+              ],
+              "workspace_mode": "isolated_worktree"
+            },
+            "description": "Inspect src/token_renderer.py and tests/test_pipeline.py in the first bounded slice. Do not modify parser or compatibility files. Report a blocking_dependency safe point affecting renderer-contract while Runtime decides how the parser contract and omitted adapter responsibility proceed. The parser-contract node is the sole candidate source in this controlled validation, so set responsibility_candidates=[] even if you observe the same gap. After a Runtime directive, implement the renderer token consumer.",
+            "goal_item_keys": [
+              "versioned-token-pipeline"
+            ],
+            "node_key": "renderer-contract",
+            "node_type": "implementation",
+            "op": "create_node",
+            "requested_capabilities": [
+              "filesystem_read",
+              "workspace_write",
+              "git_read",
+              "process_spawn"
+            ],
+            "title": "Implement renderer token consumer"
+          },
+          {
+            "from_node_key": "parser-contract",
+            "op": "add_dependency",
+            "to_node_key": "pipeline-integration"
+          },
+          {
+            "from_node_key": "renderer-contract",
+            "op": "add_dependency",
+            "to_node_key": "pipeline-integration"
+          }
+        ],
+        "rationale_summary": "Seed only the parser and renderer responsibilities.",
+        "schema": "runtime_graph_patch_v1"
+      },
+      "status": "applied"
+    },
+    {
+      "applied_revision": 2,
+      "base_revision": 1,
+      "id": "gpatch_3a4f8abeb028",
+      "patch": {
+        "decomposition": {
+          "justifications": [
+            {
+              "declared_write_scopes": {
+                "legacy-token-adapter": [
+                  "src/token_compat.py"
+                ]
+              },
+              "evidence_refs": [
+                "event:22"
+              ],
+              "explanation": "Event 22 identifies the absent src.token_compat adapter as an independently recoverable responsibility outside the parser and renderer write scopes; its isolated contribution must be integrated by pipeline-integration.",
+              "integration_owner_node_key": "pipeline-integration",
+              "nodes": [
+                "legacy-token-adapter"
+              ],
+              "type": "execution_discovered_gap"
+            }
+          ],
+          "mode": "multiple_runtime_nodes",
+          "policy_version": "1"
+        },
+        "expected_revision": 1,
+        "ops": [
+          {
+            "contract": {
+              "acceptance_criteria": [
+                "Legacy fixture values are converted into lowercase word-token objects.",
+                "Adapted tokens conform to the shared {'kind': 'word', 'text': value} contract."
+              ],
+              "declared_write_scope": [
+                "src/token_compat.py"
+              ],
+              "outcome": "Provide the single compatibility adapter that converts legacy fixture tokens to the versioned token-object contract.",
+              "prohibited_actions": [
+                "production_deployment",
+                "modify_sibling_scope"
+              ],
+              "success_evidence": [
+                "changed_files",
+                "verification",
+                "worker_summary"
+              ],
+              "workspace_mode": "isolated_worktree"
+            },
+            "description": "Implement the single adapter exposed by parser checkpoint evidence so legacy fixture values conform to the versioned word-token contract.",
+            "goal_item_keys": [
+              "versioned-token-pipeline"
+            ],
+            "node_key": "legacy-token-adapter",
+            "node_type": "implementation",
+            "op": "create_node",
+            "source_responsibility_ref": "event:22#responsibility:legacy-token-adapter",
+            "title": "Implement the legacy token compatibility adapter"
+          },
+          {
+            "dependency_type": "depends_on",
+            "from_node_key": "legacy-token-adapter",
+            "op": "add_dependency",
+            "to_node_key": "pipeline-integration"
+          },
+          {
+            "action": "continue",
+            "evidence_refs": [
+              "event:22"
+            ],
+            "expected_contract_revision": 1,
+            "instructions": [
+              "Preserve the explicit lowercase {'kind': 'word', 'text': value} parser contract within src/token_parser.py.",
+              "Complete any parser-scoped verification or refinements needed for a frozen contribution, without implementing renderer or compatibility-adapter files.",
+              "Checkpoint the parser contribution for pipeline-integration with its verification evidence."
+            ],
+            "op": "issue_directive",
+            "source_checkpoint_event_id": 22,
+            "summary": "Keep the parser responsibility bounded while the exposed compatibility adapter is assigned separately.",
+            "target_checkpoint_event_id": 22,
+            "target_node_key": "parser-contract"
+          },
+          {
+            "action": "continue",
+            "evidence_refs": [
+              "event:22",
+              "event:24"
+            ],
+            "expected_contract_revision": 1,
+            "instructions": [
+              "Update only src/token_renderer.py so render_tokens consumes versioned token objects with kind and text fields.",
+              "Render each token in kind:text form and join rendered tokens with '|', consistent with the frozen parser contract.",
+              "Run renderer-focused verification and checkpoint the isolated contribution for pipeline-integration; do not implement the compatibility adapter."
+            ],
+            "op": "issue_directive",
+            "source_checkpoint_event_id": 22,
+            "summary": "The parser token-object contract is now explicit and the omitted compatibility adapter has a separate integration-owned responsibility.",
+            "target_checkpoint_event_id": 24,
+            "target_node_key": "renderer-contract"
+          }
+        ],
+        "rationale_summary": "Parser checkpoint event 22 exposes the previously omitted durable compatibility responsibility with an isolated write scope. Create that evidence-backed child under the existing integration owner and route one continuation directive to each waiting coordination node.",
+        "schema": "runtime_graph_patch_v1"
+      },
+      "status": "applied"
+    },
+    {
+      "applied_revision": 3,
+      "base_revision": 2,
+      "id": "gpatch_7e6d4b675159",
+      "patch": {
+        "expected_revision": 2,
+        "ops": [
+          {
+            "action": "continue",
+            "evidence_refs": [
+              "event:56"
+            ],
+            "expected_contract_revision": 1,
+            "instructions": [
+              "Retain the current src/token_compat.py contribution without modifying parser or renderer scope.",
+              "Address only adapter-specific feedback if the pipeline integration owner identifies an incompatibility after combining the frozen contributions.",
+              "Do not treat isolated full-suite failures caused by absent parser and renderer contributions as adapter failures."
+            ],
+            "op": "issue_directive",
+            "source_checkpoint_event_id": 56,
+            "summary": "Preserve the verified compatibility-adapter contribution while the existing pipeline integration owner combines it with the frozen parser and renderer contributions.",
+            "target_checkpoint_event_id": 56,
+            "target_node_key": "legacy-token-adapter"
+          }
+        ],
+        "rationale_summary": "The compatibility adapter contribution is complete within its bounded scope; route its checkpoint without expanding the graph so the existing integration owner can combine all frozen contributions and run the integrated suite.",
+        "schema": "runtime_graph_patch_v1"
+      },
+      "status": "applied"
+    }
+  ],
+  "graph_revision_after_dynamic": 2,
+  "graph_revision_before_dynamic": 1,
+  "initial_node_keys": [
+    "parser-contract",
+    "pipeline-integration",
+    "renderer-contract"
+  ],
+  "integration_task_ids": [
+    "t_8fe21707"
+  ],
+  "job_id": "rjob_8ef1528aa3e1",
+  "nodes": [
+    {
+      "contract_revision": 1,
+      "node_key": "parser-contract",
+      "state": "succeeded"
+    },
+    {
+      "contract_revision": 1,
+      "node_key": "pipeline-integration",
+      "state": "succeeded"
+    },
+    {
+      "contract_revision": 1,
+      "node_key": "renderer-contract",
+      "state": "succeeded"
+    },
+    {
+      "contract_revision": 1,
+      "node_key": "legacy-token-adapter",
+      "state": "succeeded"
+    }
+  ],
+  "schema": "phase4g12_small_report_v1",
+  "structure_event_id": 5,
+  "worker_sessions": [
+    {
+      "backend_kind": "codex_cli",
+      "backend_session_key": "019f7970-5753-7780-be1a-1b55e19765b4",
+      "completed_at": 1784449073,
+      "created_at": 1784448834,
+      "initial_materialization_id": "mat_fbc359994295",
+      "latest_materialization_id": "mat_618545aa399f",
+      "node_id": "rnode_49280a44c774",
+      "node_key": "renderer-contract",
+      "record_id": "bws_18b752d7433f",
+      "resume_count": 1,
+      "status": "completed",
+      "updated_at": 1784449211,
+      "workspace_path": "/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/worktrees/renderer-contract"
+    },
+    {
+      "backend_kind": "codex_cli",
+      "backend_session_key": "019f7970-5753-7921-a81f-6c12c5d4d443",
+      "completed_at": 1784449073,
+      "created_at": 1784448834,
+      "initial_materialization_id": "mat_3dc59441c84e",
+      "latest_materialization_id": "mat_5dd292511ba2",
+      "node_id": "rnode_a9a0c0cff2c5",
+      "node_key": "parser-contract",
+      "record_id": "bws_8a5a36735425",
+      "resume_count": 1,
+      "status": "completed",
+      "updated_at": 1784449211,
+      "workspace_path": "/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/worktrees/parser-contract"
+    },
+    {
+      "backend_kind": "codex_cli",
+      "backend_session_key": "019f7972-7817-7273-a829-fbddf9e5780e",
+      "completed_at": 1784449126,
+      "created_at": 1784448974,
+      "initial_materialization_id": "mat_947875db8a37",
+      "latest_materialization_id": "mat_5348642f69aa",
+      "node_id": "rnode_53bcdcc27562",
+      "node_key": "legacy-token-adapter",
+      "record_id": "bws_53c9ad2e4c38",
+      "resume_count": 1,
+      "status": "completed",
+      "updated_at": 1784449211,
+      "workspace_path": "/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/runtime-artifacts/rjob_8ef1528aa3e1/worktrees/legacy-token-adapter"
+    },
+    {
+      "backend_kind": "codex_cli",
+      "backend_session_key": "019f7974-d047-7ff1-bfc0-06f31b7275e2",
+      "completed_at": 1784449211,
+      "created_at": 1784449127,
+      "initial_materialization_id": "mat_e10dc461a0e1",
+      "latest_materialization_id": "mat_e10dc461a0e1",
+      "node_id": "rnode_1b8a7c1b9f40",
+      "node_key": "pipeline-integration",
+      "record_id": "bws_f8c056ed7a5c",
+      "resume_count": 0,
+      "status": "completed",
+      "updated_at": 1784449211,
+      "workspace_path": "/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/workspace"
+    }
+  ],
+  "workspace": "/tmp/hermes-phase4g12-real/phase4g12-small-20260719-161352/run/workspace",
+  "workspace_tests": {
+    "output": "..\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK\n",
+    "returncode": 0
+  }
+}

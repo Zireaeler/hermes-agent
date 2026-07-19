@@ -1,4 +1,4 @@
-Profile-Version: 4
+Profile-Version: 5
 
 # Graph Patch 决策 Profile
 
@@ -73,13 +73,30 @@ primary 作为 `integration_owner_node_key`，并以 `event:<checkpoint_event_id
 checkpoint。不得替换或 supersede primary。
 
 当 `global_execution_snapshot.coordination_checkpoints` 非空时，把这些条目视为 active
-responsibility 的 cooperative safe point。使用 `issue_directive` 路由每个 checkpoint；不得
-只为转发发现而创建新的 durable node。Directive 可以指向 `waiting_coordination` node，也可
-先为仍在运行的 node 排队，并在目标 node 的下一个 safe point 交付。必须使用 snapshot 中
-精确的当前 `contract_revision`，并以 `event:<source_checkpoint_event_id>` 引用来源
+responsibility 的 cooperative safe point。默认使用 `issue_directive` 路由 checkpoint，不得
+只为转发普通发现而创建新的 durable node。Directive 可以指向 `waiting_coordination` node，
+也可先为仍在运行的 node 排队，并在目标 node 的下一个 safe point 交付。必须使用 snapshot
+中精确的当前 `contract_revision`，并以 `event:<source_checkpoint_event_id>` 引用来源
 checkpoint。目标为 `waiting_coordination` 时，还必须提供其 `target_checkpoint_event_id`。
 
-Coordination epoch 的 control patch 必须保持最小且确定：
+如果 checkpoint 的 `responsibility_candidates` 非空，允许选择 evidence-driven expansion。
+这不是强制扩图：已有 node 能完整吸收该 gap 时仍使用 routing-only directive。只有 candidate
+代表独立、可恢复、write scope 隔离且需要 integration owner 的 durable responsibility 时，
+并且 `reason_type=execution_discovered_gap` 时，才能在本路径创建 child。其他 reason type 必须
+使用既有 capability、verifier 或 human-gate 边界，不能按同 lane child 处理。每个新 child：
+
+- `node_key` 必须等于 candidate 的 `candidate_key`；
+- 必须提供精确的 `source_responsibility_ref`，格式为
+  `event:<event_id>#responsibility:<candidate_key>`；
+- `goal_item_keys` 和 contract scope 不得超出 candidate；
+- contract 必须保留 candidate 的全部 acceptance criteria，并设置
+  `workspace_mode=isolated_worktree`；
+- 必须通过 `add_dependency` 从 child 指向 candidate 的
+  `integration_owner_node_key`；
+- 必须使用 `execution_discovered_gap` decomposition，覆盖本 epoch 创建的全部 child，引用
+  每个 candidate event，并填写同一个 `integration_owner_node_key`。
+
+Routing-only coordination epoch 的 control patch 必须保持最小且确定：
 
 - 每个 `waiting_coordination` target node 恰好接收一条 `issue_directive`；
 - patch 的 target node 集合必须与 snapshot 中 `waiting_coordination` node 集合完全相等，
@@ -87,11 +104,16 @@ Coordination epoch 的 control patch 必须保持最小且确定：
 - 同一 patch 不得向同一个 target 重复发送 directive；
 - `target_checkpoint_event_id` 必须是该 target 自己的未消费 checkpoint event；
 - op 只能是 `issue_directive`，或在确有已排队旧 directive 时使用
-  `supersede_directive`；不得混入 `continue_node`、`create_node`、`add_dependency` 或
-  `insert_verifier`；
+  `supersede_directive`；不得混入其他 op；
 - `evidence_refs` 只使用 snapshot 中真实的 `event:<id>` checkpoint reference；不得添加
   `workspace:`、`verification:` 或其他未由 Runtime 注册的 reference；
 - graph 中已经存在的 dependency 不得重复添加。
+
+Evidence-driven coordination epoch 仍必须向每个 `waiting_coordination` node 恰好发送一条
+directive，但可以额外包含 `create_node` 和一一对应的 `add_dependency`。不得混入
+`continue_node`、`insert_verifier`、`strategy_update`、`request_human` 或
+`propose_blocked`。新 node 数不能超过 snapshot/policy 中剩余 child budget；没有合法 candidate
+reference 时必须退回 routing-only，不得猜测新责任。
 
 责任仍然有效、只需注入新上下文时使用 `continue`。只有在提供完整 typed replacement
 contract 时才能使用 `revise_contract` 或 `narrow_scope`。不得改变 goal linkage 或 requested
@@ -132,6 +154,8 @@ Patch op 必须使用以下精确字段名：
   `declared_write_scope` 和 `prohibited_actions` 的 `contract`。Write scope 是规范化的
   workspace-relative glob：整个 workspace 使用 `**`，也可使用 `src/**`、`tests/**` 等
   path。不得添加 `repository/` 或 `workspace/` 前缀，不得使用绝对路径或 `..` segment。
+  Coordination epoch 动态创建的 node 还必须提供 `source_responsibility_ref`，格式为
+  `event:<id>#responsibility:<candidate_key>`。
 - `add_dependency`：`from_node_key` 是 prerequisite node，`to_node_key` 是 dependent node；
   可选 `dependency_type` 默认为 `depends_on`。
 - `continue_node`：`node_key` 是 active `waiting_structure` primary，
