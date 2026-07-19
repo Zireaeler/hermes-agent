@@ -351,11 +351,18 @@ candidate key、write scope 或 node contract。
 6. problem statement 不直接给出 runtime node 划分答案；
 7. 未被本分支此前真实运行使用。
 
-当前首选候选是 FeatureBench fast split 的
-`fastapi__fastapi.02e108d1.test_compat.71e8518f.lv1`。其 reference change 涉及 9 个文件，
-同时包含共享兼容接口、Pydantic v1/v2 分支和调用方接入，规模处于 Medium 范围；正式冻结前
-仍必须完成镜像、base/test qualification 与磁盘预算检查。若 qualification 失败，按同一规则
-从 FeatureBench fast split 中选择替代实例，不为适配 Runtime 人工改题。
+FeatureBench fast split 的
+`fastapi__fastapi.02e108d1.test_compat.71e8518f.lv1` 曾作为初选候选，但 qualification 发现
+其 problem statement 直接给出目标文件、函数名和接口描述。它可以用于编码能力测试，却会把
+潜在责任边界提前暴露给 worker，因此不符合本阶段的 natural discovery 要求，不作为主实验。
+
+主实验从 SWE-EVO 中筛选一个此前未运行过的 Medium 实例。SWE-EVO 提供高层 SRS、固定
+base/reference revision 和隔离 acceptance oracle，但 SRS 不直接给出文件级实现拓扑。筛选时只用
+reference change 和 tests 做离线 qualification 与规模判断；选定后将这些材料隔离，不进入任一 arm
+的 worker、Decision Provider、memory、checkpoint 或 runtime context。
+
+若没有 SWE-EVO 实例同时满足上述条件，则本阶段应明确记录 qualification blocked，并更换公开
+benchmark；不得删改 SRS、根据 reference patch 编造 candidate，或为了观察扩图而人为增加责任边界。
 
 ---
 
