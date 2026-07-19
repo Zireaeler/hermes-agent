@@ -301,6 +301,11 @@ Observability 至少增加：
 coordination_checkpoint_count
 coordination_resume_count
 coordination_resume_without_new_evidence_count
+structure_assessment_count
+receipt_invalid_count
+receipt_recovery_retry_count
+context_reacquisition_count
+invalid_resume_count
 structural_decision_count
 effective_structural_decision_count
 effective_structural_decision_ratio
@@ -319,6 +324,11 @@ coordination_token_overhead
 
 - `coordination_resume_without_new_evidence`：因 coordination directive 恢复的 worker turn 只做
   ACK，没有新增 changed files、finding、candidate、verification 或 contribution evidence；
+- `invalid_resume_count`：receipt recovery 尝试复用已终止 session，最终只能
+  `fallback_fresh` 的次数；它与正常的 same-session resume 分开记录；
+- `receipt_invalid_count`、`receipt_recovery_retry_count` 和
+  `context_reacquisition_count`：分别记录协议无效终态、因此产生的恢复轮次和丢失原 session
+  后重新获取上下文的次数；
 - `effective_structural_decision`：accepted decision 至少产生 graph mutation、contract/scope
   change、被后续 ACK 的 directive，或消费 terminal candidate；
 - `coordination_token_overhead`：可归因于 checkpoint、结构 decision 和 directive resume 的
@@ -501,3 +511,27 @@ Runtime 能否及时改变全局结构；
 当没有结构边界时，
 Runtime 能否保持安静并避免额外成本。
 ```
+
+---
+
+## 16. 实际验证状态
+
+2026-07-19 已完成冻结 Dask Medium 的双臂真实运行：
+
+- [自然 Medium 执行报告](validation/phase4g13/natural-medium-execution-report.md)；
+- [双臂对照与架构结论](validation/phase4g13/natural-medium-comparison.md)；
+- [机器可读对照](validation/phase4g13/comparison-report.json)。
+
+实测确认 early structure assessment、evidence-backed graph expansion、三个 isolated child
+并行执行和全局 recovery 均真实发生；但 event-driven contribution receipt 协议缺陷导致 child
+成果未进入最终 candidate，Runtime 最终退化为 full-workspace recovery worker 重做。两臂
+official 结果均为 F2P `3/5`、P2P `707/707`，Runtime wall time 为 single worker 的
+`2.96x`。
+
+因此本阶段状态为：
+
+- 事件驱动动态 orchestra：已实现并实测；
+- 低开销 contribution handoff：首次实测失败，prompt/schema 修正已完成；
+- 相比 coherent single worker 的净正价值：未证明；
+- 下一门槛：先以轻量真实 contribution case 验证零 invalid resume 和真实 primary
+  integration，再运行自然 Medium clean replay。

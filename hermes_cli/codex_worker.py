@@ -90,10 +90,26 @@ _RUNTIME_WORKER_OUTPUT_SCHEMA: dict[str, Any] = {
             ],
         },
         "summary": {"type": "string"},
-        "claimed_goal_items": {"type": "array", "items": {"type": "string"}},
-        "partial_goal_items": {"type": "array", "items": {"type": "string"}},
-        "unmet_goal_items": {"type": "array", "items": {"type": "string"}},
-        "contradicted_goal_items": {"type": "array", "items": {"type": "string"}},
+        "claimed_goal_items": {
+            "type": "array",
+            "description": "Exact goal-item keys from the Runtime task context; never prose.",
+            "items": {"type": "string"},
+        },
+        "partial_goal_items": {
+            "type": "array",
+            "description": "Exact goal-item keys from the Runtime task context; never prose.",
+            "items": {"type": "string"},
+        },
+        "unmet_goal_items": {
+            "type": "array",
+            "description": "Exact goal-item keys from the Runtime task context; never prose.",
+            "items": {"type": "string"},
+        },
+        "contradicted_goal_items": {
+            "type": "array",
+            "description": "Exact goal-item keys from the Runtime task context; never prose.",
+            "items": {"type": "string"},
+        },
         "changed_files": {"type": "array", "items": {"type": "string"}},
         "verification": {
             "type": "object",
@@ -105,14 +121,27 @@ _RUNTIME_WORKER_OUTPUT_SCHEMA: dict[str, Any] = {
             "additionalProperties": False,
         },
         "artifacts": {"type": "array", "items": {"type": "string"}},
-        "accepted_contributions": {"type": "array", "items": {"type": "string"}},
-        "modified_contributions": {"type": "array", "items": {"type": "string"}},
-        "rejected_contributions": {"type": "array", "items": {"type": "string"}},
+        "accepted_contributions": {
+            "type": "array",
+            "description": "Frozen Runtime contribution artifact IDs only; never summaries or file paths.",
+            "items": {"type": "string"},
+        },
+        "modified_contributions": {
+            "type": "array",
+            "description": "Frozen Runtime contribution artifact IDs only; never summaries or file paths.",
+            "items": {"type": "string"},
+        },
+        "rejected_contributions": {
+            "type": "array",
+            "description": "Frozen Runtime contribution artifact IDs only; never summaries or file paths.",
+            "items": {"type": "string"},
+        },
         "active_assumptions": {"type": "array", "items": {"type": "string"}},
         "rejected_approaches": {"type": "array", "items": {"type": "string"}},
         "known_failure_boundaries": {"type": "array", "items": {"type": "string"}},
         "consumed_directive_ids": {
             "type": "array",
+            "description": "Exact delivered Runtime directive IDs only; empty when none were supplied.",
             "items": {"type": "string"},
         },
         "structure_request": {
@@ -2324,6 +2353,36 @@ must identify another existing affected node or a valid responsibility
 candidate. Ordinary inspection, local progress, a test result, child status,
 or the end of a first work slice is not a checkpoint reason. Never create or
 complete Runtime nodes yourself.
+"""
+        runtime_receipt_instructions += """
+
+For a terminal receipt, use only exact goal-item keys listed under `Goal
+items`; never put prose summaries in the four goal outcome arrays. Keep
+`claimed_goal_items`, `partial_goal_items`, `unmet_goal_items`, and
+`contradicted_goal_items` pairwise disjoint. Use exact workspace-relative paths
+in `changed_files`. `consumed_directive_ids` may contain only directive IDs
+listed under `Runtime coordination directives`; leave it empty when no such
+bundle was supplied. The three contribution-classification arrays contain only
+frozen artifact IDs from `Frozen dependency contributions`; they are not
+places for implementation summaries.
+"""
+        if is_runtime_integration:
+            runtime_receipt_instructions += """
+
+Integration receipt requirement: classify every artifact ID from the frozen
+dependency contribution bundle exactly once across `accepted_contributions`,
+`modified_contributions`, and `rejected_contributions`.
+"""
+        if is_runtime_contribution:
+            runtime_receipt_instructions += """
+
+Contribution exception: this isolated child is not the integrated candidate.
+After local verification use verdict `succeeded`, keep `claimed_goal_items`
+empty, and either place an exact linked goal key in `partial_goal_items` or
+leave all goal outcome arrays empty. Leave `accepted_contributions`,
+`modified_contributions`, and `rejected_contributions` empty because only the
+integration owner classifies frozen artifact IDs. Put implementation facts in
+`summary`, `verification`, and `artifacts`, not in protocol ID arrays.
 """
     elif "Runtime footer:" in task_context:
         runtime_receipt_instructions = """

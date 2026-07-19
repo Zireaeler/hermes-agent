@@ -394,9 +394,10 @@ def _runtime_evidence(run_root: Path, job_id: str) -> dict[str, Any]:
             "worker_structure_checkpointed",
             "worker_coordination_checkpointed",
             "worker_responsibility_candidates_recorded",
-            "worker_directive_issued",
-            "worker_directive_acknowledged",
-            "runtime_node_contribution_frozen",
+            "runtime_directive_queued",
+            "runtime_directive_activated",
+            "runtime_directive_acknowledged",
+            "node_contribution_frozen",
         }
         placeholders = ",".join("?" for _ in event_types)
         events = [
@@ -415,9 +416,13 @@ def _runtime_evidence(run_root: Path, job_id: str) -> dict[str, Any]:
             ).fetchall()
         ]
         attempts = p4g8_run._official_evaluator_attempts(conn, job_id)
+        orchestration = rk.summarize_runtime_orchestration(conn, job_id)
         return {
             "runtime_status": rk.status_runtime_job(conn, job_id),
-            "coordination_cost": rk.summarize_runtime_coordination_cost(conn, job_id),
+            "coordination_cost": (
+                (orchestration.get("coordination") or {}).get("cost") or {}
+            ),
+            "orchestration": orchestration,
             "nodes": nodes,
             "events": events,
             "worker_sessions": arm2._codex_session_metrics(
@@ -465,6 +470,7 @@ def run_runtime_arm(
         raise RuntimeError("Phase 4G13 evaluator feedback reached a worker")
     evaluator = evidence["evaluator_result"]
     candidate = payload.get("candidate_evidence") or {}
+    source_metrics = ((payload.get("run_report") or {}).get("metrics")) or {}
     non_evaluator_nodes = [
         item for item in evidence["nodes"] if item["node_type"] != "verification"
     ]
@@ -476,6 +482,7 @@ def run_runtime_arm(
         "instance_id": FROZEN_INSTANCE_ID,
         "runtime_kernel_used": True,
         "worker_count": len(non_evaluator_nodes),
+        "wall_time_seconds": source_metrics.get("wall_time_seconds"),
         "evaluator_invocation_count": evidence["evaluator_attempt_count"],
         "evaluator_feedback_consumed": evidence["evaluator_feedback_consumed"],
         "candidate": candidate,
@@ -526,6 +533,11 @@ def build_comparison_report(
         or {}
     )
     coordination = ((runtime.get("runtime") or {}).get("coordination_cost")) or {}
+    runtime_wall_time = runtime.get("wall_time_seconds")
+    if runtime_wall_time is None:
+        runtime_wall_time = (
+            (((runtime.get("source_report") or {}).get("run_report") or {}).get("metrics") or {})
+        ).get("wall_time_seconds")
     return {
         "schema": REPORT_SCHEMA,
         "instance_id": FROZEN_INSTANCE_ID,
@@ -542,6 +554,7 @@ def build_comparison_report(
                 "run_id": runtime.get("run_id"),
                 "quality": runtime.get("quality"),
                 "worker_count": runtime.get("worker_count"),
+                "wall_time_seconds": runtime_wall_time,
                 "token_usage": runtime_usage,
                 "coordination_cost": coordination,
             },

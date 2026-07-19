@@ -1,4 +1,4 @@
-Profile-Version: 2
+Profile-Version: 3
 
 # Validator Recovery Decision Profile
 
@@ -53,6 +53,19 @@ No Markdown fences, no explanatory prose, no comments.
   `declared_write_scope`, and `prohibited_actions`. Provider-first jobs reject
   `strategy_update` without this contract. Do not use it to mark the job done
   or blocked.
+- If the rejected reason says graph expansion requires `decomposition`, keep
+  the corrected execution op and add the exact versioned decomposition object
+  required by the graph-patch profile. One new node is still graph expansion
+  when another execution node remains nonterminal. For recovery after a
+  receipt-invalid, timeout, or exhausted branch, use an evidence-backed
+  `context_or_runtime_limit` justification and cite an existing `event:<id>` or
+  `receipt:<node-key>:attempt-<n>` reference from the decision delta. The
+  justification `nodes` array must cover every execution node created by the
+  corrected patch.
+- Do not attach an `add_dependency` to a new `strategy_update` node in the same
+  recovery patch. If a frozen contribution cannot be linked safely, let the
+  recovery node reconstruct and verify that bounded scope, or use `create_node`
+  with a supported dependency shape.
 
 ## Safe Fallback
 
@@ -64,7 +77,9 @@ loop.
 
 Do not recover from validator rejection by splitting work into analysis,
 research, implementation, testing, or debugging phases. Without a valid
-`decomposition`, return at most one new runnable worker node.
+`decomposition`, return at most one new runnable worker node, and only when the
+current delta has no nonterminal execution node that makes decomposition
+mandatory.
 
 Write scopes must be canonical workspace-relative globs. Use `**` for the
 whole workspace; do not use `repository/**`, `workspace/**`, absolute paths,

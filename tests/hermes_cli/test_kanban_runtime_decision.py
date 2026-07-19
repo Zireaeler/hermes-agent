@@ -612,6 +612,9 @@ def test_decision_profiles_require_typed_contract_for_strategy_update():
         assert "strategy_update" in content
         assert "typed `contract`" in content
         assert "declared_write_scope" in content
+    assert "graph expansion requires `decomposition`" in recovery_profile
+    assert "`context_or_runtime_limit`" in recovery_profile
+    assert "another execution node remains nonterminal" in recovery_profile
 
 
 def test_runtime_decision_provider_parse_retry_stays_schema_only(conn):

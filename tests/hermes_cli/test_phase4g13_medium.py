@@ -65,6 +65,7 @@ def test_comparison_keeps_quality_and_runtime_cost_separate():
         "instance_id": phase4g13.FROZEN_INSTANCE_ID,
         "run_id": "runtime",
         "worker_count": 3,
+        "wall_time_seconds": 18,
         "evaluator_invocation_count": 1,
         "evaluator_feedback_consumed": 0,
         "quality": {"resolved": False},
@@ -79,6 +80,7 @@ def test_comparison_keeps_quality_and_runtime_cost_separate():
 
     assert report["arms"]["coherent_single_worker"]["quality"]["resolved"] is True
     assert report["arms"]["runtime_orchestra"]["quality"]["resolved"] is False
+    assert report["arms"]["runtime_orchestra"]["wall_time_seconds"] == 18
     assert report["arms"]["runtime_orchestra"]["coordination_cost"] == {
         "invalid_resume_count": 0
     }

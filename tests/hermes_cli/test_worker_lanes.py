@@ -1197,6 +1197,16 @@ def test_codex_event_driven_coordination_schema_accepts_terminal_or_checkpoint(
     schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
     assert schema["properties"]["schema"]["enum"] == ["runtime_worker_event_v1"]
     assert len(schema["properties"]["event"]["anyOf"]) == 2
+    receipt_schema = schema["properties"]["event"]["anyOf"][0]
+    assert "never prose" in receipt_schema["properties"]["partial_goal_items"][
+        "description"
+    ]
+    assert "artifact IDs only" in receipt_schema["properties"][
+        "accepted_contributions"
+    ]["description"]
+    assert "directive IDs only" in receipt_schema["properties"][
+        "consumed_directive_ids"
+    ]["description"]
     terminal = {
         "schema": "runtime_worker_receipt_v1",
         "verdict": "succeeded",
@@ -1223,6 +1233,29 @@ def test_codex_prompt_keeps_runtime_contribution_outside_candidate_ready():
     assert "Do not put summaries, file paths, or other prose" in prompt
     assert "keep `claimed_goal_items` empty" in prompt
     assert "only in `partial_goal_items`" in prompt
+
+
+def test_event_driven_contribution_prompt_keeps_protocol_ids_out_of_prose():
+    from hermes_cli.codex_worker import build_codex_prompt
+
+    prompt = build_codex_prompt(
+        "# Runtime node\n\n"
+        "Goal items: official-evaluator-resolved\n\n"
+        "Runtime event-driven coordination mode: continue unless structure changes.\n\n"
+        "Runtime contribution boundary: child only.\n\n"
+        'Runtime footer: {"node_key":"child"}\n',
+        lane="codex-runtime",
+        model="gpt-5.6-sol",
+    )
+
+    assert "Contribution exception" in prompt
+    assert "use verdict `succeeded`" in prompt
+    assert "keep `claimed_goal_items`" in prompt
+    assert "leave all goal outcome arrays empty" in prompt
+    assert "only exact goal-item keys" in prompt
+    assert "may contain only directive IDs" in prompt
+    assert "only\nfrozen artifact IDs" in prompt
+    assert "Put implementation facts in" in prompt
 
 
 def test_codex_prompt_requires_complete_contribution_attribution_for_primary():

@@ -1,0 +1,124 @@
+{
+  "arms": {
+    "coherent_single_worker": {
+      "quality": {
+        "fail_to_pass": {
+          "failed": 2,
+          "failed_tests": [
+            "dask/dataframe/tests/test_dataframe.py::test_rename_series_method_2",
+            "dask/tests/test_cli.py::test_register_command_ep"
+          ],
+          "failed_tests_truncated": 0,
+          "passed": 3,
+          "total": 5
+        },
+        "feedback_coverage": {
+          "covered_official_test_count": 2,
+          "missing_test_ids": [],
+          "official_failed_test_count": 2,
+          "required_case_count": 2,
+          "status": "current_failure_complete",
+          "uncovered_due_to_budget_count": 0,
+          "unidentified_failed_test_count": 0
+        },
+        "pass_to_pass": {
+          "failed": 0,
+          "failed_tests": [],
+          "failed_tests_truncated": 0,
+          "passed": 707,
+          "total": 707
+        },
+        "resolved": false
+      },
+      "run_id": "phase4g13-single-c8e12d74670a",
+      "token_usage": {
+        "cached_input_tokens": 7355392,
+        "input_tokens": 7863864,
+        "output_tokens": 31966,
+        "reasoning_output_tokens": 17825
+      },
+      "wall_time_seconds": 1171.437,
+      "worker_count": 1
+    },
+    "runtime_orchestra": {
+      "coordination_cost": {
+        "candidate_expanded_count": 0,
+        "candidate_resolved_without_expansion_count": 0,
+        "context_reacquisition_count": 3,
+        "coordination_checkpoint_count": 0,
+        "coordination_provider_input_tokens_estimate": 61026,
+        "coordination_provider_output_tokens_estimate": 5600,
+        "coordination_resume_count": 0,
+        "coordination_resume_without_new_evidence_count": 0,
+        "coordination_token_overhead": {
+          "mixed_estimate_not_reported": true,
+          "provider_estimated_total": 66626,
+          "receipt_recovery_task_count": 3,
+          "structure_assessment_task_count": 1,
+          "worker_reported_total": 1279474,
+          "worker_task_count": 4
+        },
+        "coordination_worker_cached_input_tokens_reported": 1024000,
+        "coordination_worker_input_tokens_reported": 1250304,
+        "coordination_worker_output_tokens_reported": 29170,
+        "effective_structural_decision_count": 3,
+        "effective_structural_decision_ratio": 0.5,
+        "invalid_resume_count": 3,
+        "receipt_invalid_count": 5,
+        "receipt_recovery_retry_count": 3,
+        "structural_decision_count": 6,
+        "structure_assessment_count": 1,
+        "terminal_candidate_count": 0
+      },
+      "quality": {
+        "fail_to_pass": {
+          "failed": 2,
+          "failed_tests": [
+            "dask/dataframe/tests/test_dataframe.py::test_rename_series_method_2",
+            "dask/tests/test_cli.py::test_register_command_ep"
+          ],
+          "failed_tests_truncated": 0,
+          "passed": 3,
+          "total": 5
+        },
+        "feedback_coverage": {
+          "covered_official_test_count": 2,
+          "missing_test_ids": [],
+          "official_failed_test_count": 2,
+          "required_case_count": 2,
+          "status": "current_failure_complete",
+          "uncovered_due_to_budget_count": 0,
+          "unidentified_failed_test_count": 0
+        },
+        "pass_to_pass": {
+          "failed": 0,
+          "failed_tests": [],
+          "failed_tests_truncated": 0,
+          "passed": 707,
+          "total": 707
+        },
+        "resolved": false
+      },
+      "run_id": "phase4g13-runtime-medium-8f67fb1c7a",
+      "token_usage": {
+        "cache_ratio": 0.899515,
+        "cached_input_tokens": 6565888,
+        "input_tokens": 7299364,
+        "output_tokens": 120661,
+        "reasoning_output_tokens": 65366,
+        "total_tokens": 7420025
+      },
+      "wall_time_seconds": 3468.978,
+      "worker_count": 5
+    }
+  },
+  "generated_at": 1784472622,
+  "instance_id": "dask__dask_2023.6.1_2023.7.0",
+  "integrity": {
+    "one_evaluator_per_arm": true,
+    "same_instance": true,
+    "topology_answer_not_injected": true,
+    "zero_evaluator_feedback_consumed": true
+  },
+  "schema": "hermes_phase4g13_medium_comparison_v1"
+}

@@ -9704,27 +9704,52 @@ def summarize_runtime_orchestration(
     )
     coordination_materializations = []
     coordination_resume_materializations = []
-    for row in conn.execute(
+    structure_assessment_materializations = []
+    receipt_recovery_materializations = []
+    all_materializations = [
+        dict(row)
+        for row in conn.execute(
         """
         SELECT * FROM node_materializations
          WHERE job_id = ? ORDER BY created_at, attempt
         """,
         (job_id,),
-    ).fetchall():
-        materialization = dict(row)
+        ).fetchall()
+    ]
+    materialization_by_attempt = {
+        (str(item["node_id"]), int(item["attempt"])): item
+        for item in all_materializations
+    }
+    for materialization in all_materializations:
         continuity = _loads(materialization.get("metadata_json")).get(
             "execution_continuity"
         ) or {}
+        if materialization["status"] == "structure_checkpoint":
+            structure_assessment_materializations.append(materialization)
         if materialization["status"] == "coordination_checkpoint":
             coordination_materializations.append(materialization)
         if continuity.get("resume_reason") == "coordination_directive":
             coordination_resume_materializations.append(materialization)
+        previous = materialization_by_attempt.get(
+            (
+                str(materialization["node_id"]),
+                int(materialization["attempt"]) - 1,
+            )
+        )
+        if previous is not None and previous.get("status") in {
+            "receipt_missing",
+            "receipt_invalid",
+        }:
+            receipt_recovery_materializations.append(materialization)
     coordination_task_ids = {
         str(item["task_id"])
         for item in [
             *coordination_materializations,
             *coordination_resume_materializations,
+            *structure_assessment_materializations,
+            *receipt_recovery_materializations,
         ]
+        if item.get("task_id")
     }
     coordination_worker_usage = _reported_codex_usage_for_tasks(
         conn,
@@ -9746,12 +9771,6 @@ def summarize_runtime_orchestration(
         (job_id,),
     ).fetchall():
         decision = dict(row)
-        delta = _loads(decision.get("delta_json"))
-        if not (
-            delta.get("coordination_checkpoints")
-            or delta.get("terminal_responsibility_candidates")
-        ):
-            continue
         structural_decision_count += 1
         result = _loads(decision.get("decision_json"))
         try:
@@ -9777,12 +9796,7 @@ def summarize_runtime_orchestration(
             continue
         patch_ops = _loads(applied_patch["patch_json"]).get("ops") or []
         directly_effective = any(
-            op.get("op")
-            in {
-                "create_node",
-                "resolve_responsibility_candidate",
-                "continue_node",
-            }
+            op.get("op") != "issue_directive"
             for op in patch_ops
             if isinstance(op, dict)
         )
@@ -9805,12 +9819,51 @@ def summarize_runtime_orchestration(
         len(item["payload"].get("responsibility_candidates") or [])
         for item in terminal_candidate_events
     )
+    receipt_invalid_count = int(
+        conn.execute(
+            """
+            SELECT COUNT(*) FROM execution_events
+             WHERE job_id = ? AND event_type = 'receipt_invalid'
+            """,
+            (job_id,),
+        ).fetchone()[0]
+    )
+    receipt_recovery_retry_count = int(
+        conn.execute(
+            """
+            SELECT COUNT(*) FROM execution_events
+             WHERE job_id = ? AND event_type = 'node_recovery_retry_scheduled'
+            """,
+            (job_id,),
+        ).fetchone()[0]
+    )
+    context_reacquisition_count = sum(
+        bool(
+            (_loads(item.get("metadata_json")).get("execution_continuity") or {}).get(
+                "context_reacquisition"
+            )
+        )
+        for item in all_materializations
+    )
+    invalid_resume_count = sum(
+        1
+        for item in receipt_recovery_materializations
+        if (_loads(item.get("metadata_json")).get("execution_continuity") or {}).get(
+            "mode"
+        )
+        == "fallback_fresh"
+    )
     coordination_cost = {
+        "structure_assessment_count": len(structure_assessment_materializations),
         "coordination_checkpoint_count": len(coordination_checkpoints),
         "coordination_resume_count": len(coordination_resume_materializations),
         "coordination_resume_without_new_evidence_count": (
             resume_without_new_evidence_count
         ),
+        "receipt_invalid_count": receipt_invalid_count,
+        "receipt_recovery_retry_count": receipt_recovery_retry_count,
+        "context_reacquisition_count": context_reacquisition_count,
+        "invalid_resume_count": invalid_resume_count,
         "structural_decision_count": structural_decision_count,
         "effective_structural_decision_count": effective_structural_decision_count,
         "effective_structural_decision_ratio": round(
@@ -9842,6 +9895,13 @@ def summarize_runtime_orchestration(
             "worker_reported_total": (
                 coordination_worker_usage["input_tokens"]
                 + coordination_worker_usage["output_tokens"]
+            ),
+            "worker_task_count": len(coordination_task_ids),
+            "structure_assessment_task_count": len(
+                structure_assessment_materializations
+            ),
+            "receipt_recovery_task_count": len(
+                receipt_recovery_materializations
             ),
             "mixed_estimate_not_reported": True,
         },
