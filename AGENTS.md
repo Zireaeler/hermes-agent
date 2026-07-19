@@ -27,6 +27,7 @@ When working on branch `feature-kanban-runtime-kernel`, treat
 `docs/kanban-runtime-kernel-phase4g10.md` and
 `docs/kanban-runtime-kernel-phase4g10-clean-replay.md` and
 `docs/kanban-runtime-kernel-phase4g11.md` and
+`docs/kanban-runtime-kernel-phase4g12.md` and
 `docs/kanban-runtime-validation-artifact-retention.md` as binding design
 constraints, not background reading. If implementation details conflict with
 those documents, update the relevant design document first or stop and ask for
@@ -40,6 +41,14 @@ independent verification, capability boundary, workspace isolation, durable
 parallelism, context/runtime limit, distinct deliverables, or execution-
 discovered gap. Workers may not create durable runtime nodes, though a backend
 may use ephemeral internal subagents within its inherited capability envelope.
+
+Phase 4G12 evidence-driven graph mutation remains provider-proposed and
+validator-controlled. A coordination checkpoint may include non-authoritative
+responsibility candidates, but workers still cannot create durable nodes.
+Dynamic expansion requires an exact checkpoint candidate reference, goal
+linkage, isolated write scope, remaining child budget, an existing integration
+owner, and evidence-backed decomposition. Ordinary coordination checkpoints
+remain routing-only.
 
 Runtime Kernel 的设计、roadmap、phase、真实验证和证据保留文档必须以中文作为规范性
 叙述语言。函数名、类名、schema 字段、`event_type` 值、CLI 命令、API path、
@@ -213,6 +222,14 @@ heartbeats, tool calls, or test completion as coordination events. Do not claim
 that a directive changed execution until the target materialization has
 acknowledged it. Mid-turn message injection and forced interruption are not
 Phase 4G11 MVP requirements.
+
+Phase 4G12 is the evidence-driven dynamic graph mutation stage. It extends a
+coordination epoch only when a real worker checkpoint exposes a structured
+durable responsibility candidate. The worker candidate cannot create nodes,
+grant capabilities, update ledger facts, or mark goal completion. A valid
+expansion must atomically create isolated child work, attach it to an existing
+integration owner, and route all current `waiting_coordination`
+responsibilities. More nodes are not themselves a success condition.
 
 For this branch, do not routinely rebase `main`, and do not restore the old
 oversized session `019e497b-56e0-7bb0-a357-0db06954ae4d` as implementation

@@ -100,7 +100,8 @@ execution continuity、Phase 4G5 real compaction candidate quality、Phase 4G6 a
 long-run reliability soak、Phase 4G7 packaged daemon、Phase 4G8 real long-horizon validation、
 Phase 4G9 Native Ultra 对照、Phase 4G10 early structure assessment / isolated durable
 contribution，以及 Phase 4G11 coordination checkpoint / directive / ACK 闭环均已实现。
-下一阶段是 Phase 4H dashboard runtime UI。
+Phase 4G12 将进一步验证 execution-discovered responsibility 能否在 active coordination epoch
+中驱动受控 topology mutation；完成后再进入 Phase 4H dashboard runtime UI。
 
 隔离真实验证已经覆盖 decision execute/apply/reject、compaction fallback safety、3-tick
 real-provider loop，以及真实 provider -> validator -> Kanban dispatcher -> Codex worker ->
@@ -653,7 +654,8 @@ consistency checker。
 Phase 4G8 先用 SWE-EVO 三项长期任务验证真实 provider/worker/compaction/daemon/evaluator
 闭环。Phase 4G9/4G10 对比 native internal orchestra 与 Runtime durable orchestra；Phase 4G11
 补齐非终态 coordination checkpoint、全局 execution snapshot、active-node directive、contract
-revision、same-session resume 和 acknowledgment。Phase 4H 再做 dashboard runtime UI；UI 应消费已经经过真实长期任务证明的稳定
+revision、same-session resume 和 acknowledgment；Phase 4G12 再让运行中新发现的 durable
+responsibility candidate 能够驱动受控 graph topology mutation。Phase 4H 再做 dashboard runtime UI；UI 应消费已经经过真实长期任务证明的稳定
 observability API，而不是提前展示一个 recovery 和 consistency 尚未稳定的系统。
 
 ## 15. 当前实现优先级
@@ -704,6 +706,9 @@ Phase 4G9/4G10 native/runtime orchestra 对照与 durable orchestration
       |
       v
 Phase 4G11 coordination epochs and active graph control
+      |
+      v
+Phase 4G12 evidence-driven dynamic graph mutation
       |
       v
 Phase 4H dashboard runtime UI
