@@ -81,6 +81,7 @@ def run_phase4g8_real_case(
     operator_stop: Optional[dict[str, Any]] = None,
     evaluated_stop_policy: Optional[dict[str, Any]] = None,
     workspace_ownership_canary: bool = False,
+    worker_multi_agent_enabled: Optional[bool] = None,
 ) -> dict[str, Any]:
     """Run one qualified SWE-EVO case through production runtime boundaries."""
 
@@ -89,8 +90,8 @@ def run_phase4g8_real_case(
     if case_size not in {"small", "medium", "large"}:
         raise ValueError("case_size must be small, medium, or large")
     selected_fault_profile = str(fault_profile or case_size)
-    if selected_fault_profile not in {"small", "medium", "large"}:
-        raise ValueError("fault_profile must be small, medium, or large")
+    if selected_fault_profile not in {"none", "small", "medium", "large"}:
+        raise ValueError("fault_profile must be none, small, medium, or large")
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", run_id_prefix):
         raise ValueError("run_id_prefix must be a lowercase slug")
     if int(max_unresolved_evaluator_attempts) < 1:
@@ -146,7 +147,6 @@ def run_phase4g8_real_case(
     worker_environment_audit = _load_worker_toolchain_manifest(paths["worker_toolchain"])
     boundaries = {
         "daemon_process_started": False,
-        "daemon_restarted": False,
         "worker_process_started": False,
         "independent_evaluator_process": False,
         "fixed_revision_evaluated": False,
@@ -154,6 +154,8 @@ def run_phase4g8_real_case(
         "worker_evaluator_environment_parity_preflight": False,
         "worker_auto_review_preflight": False,
     }
+    if selected_fault_profile != "none":
+        boundaries["daemon_restarted"] = False
     if workspace_ownership_canary:
         boundaries["workspace_ownership_canary"] = False
     if selected_fault_profile in {"medium", "large"}:
@@ -206,6 +208,7 @@ def run_phase4g8_real_case(
             worker_uid=worker_uid,
             worker_gid=worker_gid,
             reasoning_effort_override=reasoning_effort_override,
+            multi_agent_enabled=worker_multi_agent_enabled,
         )
         boundaries["worker_auto_review_preflight"] = bool(
             codex_home_audit.get("approval", {}).get("configured")
@@ -488,7 +491,7 @@ def run_phase4g8_real_case(
                 worker
                 and worker.get("worker_pid")
                 and not daemon_restarted
-                and selected_fault_profile != "large"
+                and selected_fault_profile in {"small", "medium"}
             ):
                 _stop_daemon(daemon_process, hard=False)
                 with kb.connect() as conn:

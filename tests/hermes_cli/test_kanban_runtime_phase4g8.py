@@ -3004,6 +3004,20 @@ def test_isolated_codex_home_copies_only_model_source_and_preserves_source(tmp_p
     assert "protected benchmark oracle material" not in json.dumps(report["approval"])
     assert p4g8.verify_codex_source_unchanged(source, report["source_hashes"]) is True
 
+    disabled_target = tmp_path / "isolated-codex-no-subagents"
+    disabled_report = p4g8.prepare_isolated_codex_home(
+        source,
+        disabled_target,
+        proxy_base_url="http://10.203.20.1:43210/v1",
+        multi_agent_enabled=False,
+    )
+    disabled_config = tomllib.loads(
+        (disabled_target / "config.toml").read_text(encoding="utf-8")
+    )
+    assert disabled_config["features"]["multi_agent"] is False
+    assert disabled_config["features"]["multi_agent_v2"] is False
+    assert disabled_report["multi_agent_enabled"] is False
+
     model_source = p4g8.load_codex_model_source(source)
     assert model_source["model"] == "gpt-5.4"
     assert model_source["reasoning_effort"] == "high"

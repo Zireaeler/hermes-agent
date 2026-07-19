@@ -361,6 +361,22 @@ base/reference revision 和隔离 acceptance oracle，但 SRS 不直接给出文
 reference change 和 tests 做离线 qualification 与规模判断；选定后将这些材料隔离，不进入任一 arm
 的 worker、Decision Provider、memory、checkpoint 或 runtime context。
 
+当前已经 qualification 并冻结的实例是：
+
+```text
+instance: dask__dask_2023.6.1_2023.7.0
+base: 85c99bc20abc382774cfb6e5bf5f2db76ac09378
+reference changed files: 9
+FAIL_TO_PASS: 5
+PASS_TO_PASS: 707
+image digest: sha256:e0ee1e98546c7599146b341c40503c109b69bddc740802ef8d287b388f8cd29f
+```
+
+Qualification 已确认 base 的 FAIL_TO_PASS 失败且 PASS_TO_PASS 全过，gold 的两组测试均全过，
+base/gold 环境指纹一致。公开冻结值见
+`docs/validation/phase4g13/qualification-manifest.json`；gold patch、test patch 和 official test ids
+仍只保留在受保护运行目录，不提交到 worker 可见输入。
+
 若没有 SWE-EVO 实例同时满足上述条件，则本阶段应明确记录 qualification blocked，并更换公开
 benchmark；不得删改 SRS、根据 reference patch 编造 candidate，或为了观察扩图而人为增加责任边界。
 
@@ -394,9 +410,11 @@ Runtime-level durable orchestration，而不是混合两种 orchestra。
 两个 arm 结束后各对固定 candidate revision 运行一次隔离 acceptance suite：
 
 - evaluator 不向 worker 回流失败；
-- 不创建 durable evaluator node；
+- Arm A 直接在 worker session 结束后运行隔离 evaluator process；
+- Arm B 可以复用正常 evaluator task/run/receipt lane 固定 revision 和 provenance，但只运行一次，
+  不把 evaluator node 计入 orchestra worker 数，也不允许启动 remediation worker；
 - 只用于最终任务质量评分；
-- 结果不能回写为新的 graph decision evidence。
+- 结果可以成为 terminal acceptance fact，但不能成为新的结构扩展输入。
 
 ---
 

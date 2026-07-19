@@ -1,0 +1,35 @@
+{
+  "schema": "hermes_phase4g13_qualification_manifest_v1",
+  "dataset": "SWE-EVO",
+  "dataset_revision": "9b83d5af943ba7a17567336f5b18239f73960219",
+  "dataset_arrow_sha256": "74e7c63160ada4ceba71d5d89a9bb7c9794f4574b384458d546eb65cdb730520",
+  "instance_id": "dask__dask_2023.6.1_2023.7.0",
+  "repository": "dask/dask",
+  "base_commit": "85c99bc20abc382774cfb6e5bf5f2db76ac09378",
+  "srs_sha256": "89faba26da7f2c25b9892200e24c4d35adc056934fa19a4f57424fb012d98695",
+  "gold_patch_sha256": "c77f1cccb78abe7b1bfc5913aa3129df2b905591eb550a0475a552c1b337a657",
+  "test_patch_sha256": "67df087cf3a6057e637e78bb349dec6461b697112faa1a40f8f49542c3d59628",
+  "official_image": "xingyaoww/sweb.eval.x86_64.dask_s_dask-10380",
+  "official_image_digest": "sha256:e0ee1e98546c7599146b341c40503c109b69bddc740802ef8d287b388f8cd29f",
+  "fail_to_pass_count": 5,
+  "pass_to_pass_count": 707,
+  "reference_changed_file_count": 9,
+  "oracle_status": "qualified",
+  "oracle_checks": {
+    "base_fail_to_pass_fails": true,
+    "base_pass_to_pass_passes": true,
+    "gold_fail_to_pass_passes": true,
+    "gold_pass_to_pass_passes": true,
+    "gold_resolved": true,
+    "base_gold_environment_match": true
+  },
+  "worker_visibility": {
+    "srs": true,
+    "repository_base": true,
+    "candidate_keys": false,
+    "file_partition": false,
+    "gold_patch": false,
+    "test_patch": false,
+    "official_test_ids": false
+  }
+}

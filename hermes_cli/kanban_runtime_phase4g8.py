@@ -514,6 +514,7 @@ def prepare_isolated_codex_home(
     worker_uid: int = 65534,
     worker_gid: int = 65534,
     reasoning_effort_override: Optional[str] = None,
+    multi_agent_enabled: Optional[bool] = None,
 ) -> dict[str, Any]:
     """Copy only the active base URL/model/API key into an isolated CODEX_HOME."""
 
@@ -580,8 +581,15 @@ def prepare_isolated_codex_home(
         "",
         "[features]",
         "guardian_approval = true",
-        "",
     ])
+    if multi_agent_enabled is not None:
+        lines.extend(
+            [
+                f"multi_agent = {str(bool(multi_agent_enabled)).lower()}",
+                f"multi_agent_v2 = {str(bool(multi_agent_enabled)).lower()}",
+            ]
+        )
+    lines.append("")
     target_config = target_home / "config.toml"
     target_auth = target_home / "auth.json"
     target_rules = target_home / "rules"
@@ -615,6 +623,7 @@ def prepare_isolated_codex_home(
         "isolated_provider": isolated_provider,
         "model": selected_model,
         "reasoning_effort": reasoning_effort,
+        "multi_agent_enabled": multi_agent_enabled,
         "context_window_tokens": PHASE4G8_CODEX_CONTEXT_WINDOW_TOKENS,
         "auto_compact_token_limit": PHASE4G8_CODEX_AUTO_COMPACT_TOKEN_LIMIT,
         "provider_transport": transport_settings,

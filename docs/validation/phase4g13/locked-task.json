@@ -1,0 +1,10 @@
+{
+  "schema": "hermes_phase4g8_locked_task_v1",
+  "instance_id": "dask__dask_2023.6.1_2023.7.0",
+  "dataset_revision": "9b83d5af943ba7a17567336f5b18239f73960219",
+  "repository": "dask/dask",
+  "base_commit": "85c99bc20abc382774cfb6e5bf5f2db76ac09378",
+  "srs": "2023.7.0\n--------\n\nReleased on July 7, 2023\n\nEnhancements\n^^^^^^^^^^^^\n- Catch exceptions when attempting to load CLI entry points (:pr:`10380`) `Jacob Tomlinson`_\n\nBug Fixes\n^^^^^^^^^\n- Fix typo in ``_clean_ipython_traceback`` (:pr:`10385`) `Alexander Clausen`_\n- Ensure that ``df`` is immutable after ``from_pandas`` (:pr:`10383`) `Patrick Hoefler`_\n- Warn consistently for ``inplace`` in ``Series.rename`` (:pr:`10313`) `Patrick Hoefler`_\n\nDocumentation\n^^^^^^^^^^^^^\n- Add clarification about output shape and reshaping in rechunk documentation (:pr:`10377`) `Swayam Patil`_\n\nMaintenance\n^^^^^^^^^^^\n- Simplify ``astype`` implementation (:pr:`10393`) `Patrick Hoefler`_\n- Fix ``test_first_and_last`` to accommodate deprecated ``last`` (:pr:`10373`) `James Bourbeau`_\n- Add ``level`` to ``create_merge_tree`` (:pr:`10391`) `Patrick Hoefler`_\n- Do not derive from ``scipy.stats.chisquare`` docstring (:pr:`10382`) `Doug Davis`_\n",
+  "public_requirements": [],
+  "manifest_sha256": "e89cb9b891ccddc73b15f3d62a03cc6ecf6782137bc20f3a08289e1e390b4939"
+}
