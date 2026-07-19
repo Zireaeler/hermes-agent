@@ -5316,6 +5316,35 @@ def _complete_codex_checkpoint(conn, node, checkpoint):
     )
 
 
+def _terminal_codex_receipt(
+    *,
+    summary: str,
+    changed_files: list[str],
+    candidates: list[dict] | None = None,
+):
+    return {
+        "schema": "runtime_worker_receipt_v1",
+        "verdict": "succeeded",
+        "summary": summary,
+        "claimed_goal_items": [],
+        "partial_goal_items": ["coordinated-result"],
+        "unmet_goal_items": [],
+        "contradicted_goal_items": [],
+        "changed_files": changed_files,
+        "verification": {"passed": True, "summary": "focused tests passed"},
+        "artifacts": [],
+        "accepted_contributions": [],
+        "modified_contributions": [],
+        "rejected_contributions": [],
+        "active_assumptions": [],
+        "rejected_approaches": [],
+        "known_failure_boundaries": [],
+        "consumed_directive_ids": [],
+        "structure_request": None,
+        "responsibility_candidates": candidates or [],
+    }
+
+
 def test_coordination_checkpoint_controls_other_active_node_and_acks_resume(conn):
     job_id = _closed_loop_coordination_job(conn)
     parser = _node(conn, job_id, "understand-scope")
@@ -6135,3 +6164,296 @@ def test_coordination_expansion_rejects_unreferenced_candidate(conn, tmp_path):
         "SELECT 1 FROM execution_nodes WHERE job_id = ? AND node_key = ?",
         (job_id, "speculative-child"),
     ).fetchone() is None
+
+
+def _finish_dynamic_child_with_terminal_receipt(
+    conn,
+    job_id: str,
+    node_key: str,
+    relative_path: str,
+    *,
+    candidates: list[dict] | None = None,
+):
+    node = _node(conn, job_id, node_key)
+    workspace = Path(json.loads(node["metadata_json"])["runtime_workspace"]["path"])
+    target = workspace / relative_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(target.read_text(encoding="utf-8") + "# terminal evidence\n", encoding="utf-8")
+    _complete_codex_checkpoint(
+        conn,
+        node,
+        _terminal_codex_receipt(
+            summary=f"{node_key} completed its full responsibility.",
+            changed_files=[relative_path],
+            candidates=candidates,
+        ),
+    )
+    assert rk.ingest_runtime_node_evidence(conn, node["id"])
+
+
+def test_closed_loop_child_defaults_to_event_driven_terminal_execution(conn, tmp_path):
+    job_id = _dynamic_coordination_job(conn, tmp_path)
+    parser = _node(conn, job_id, "parser")
+    metadata = json.loads(parser["metadata_json"])
+    metadata.pop("coordination_checkpoint_required", None)
+    conn.execute(
+        "UPDATE execution_nodes SET metadata_json = ? WHERE id = ?",
+        (json.dumps(metadata), parser["id"]),
+    )
+
+    context = rk._worker_context(
+        conn,
+        dict(conn.execute("SELECT * FROM runtime_jobs WHERE id = ?", (job_id,)).fetchone()),
+        dict(_node(conn, job_id, "parser")),
+        "mat-event-driven-test",
+    )
+
+    assert "Runtime event-driven coordination mode:" in context
+    assert "Runtime coordination checkpoint mode:" not in context
+    assert "normally continue until a terminal receipt" in context
+
+    local_only = _coordination_checkpoint(
+        kind="milestone_completed",
+        summary="Parser finished a local implementation slice.",
+        finding_key="local-parser-progress",
+        affected_node_keys=["parser"],
+        changed_files=["src/parser/token.py"],
+    )
+    error = rk._coordination_checkpoint_validation_error(
+        local_only,
+        conn=conn,
+        node=dict(_node(conn, job_id, "parser")),
+    )
+    assert "cross-node structural effect" in error
+
+
+def test_terminal_children_without_structure_advance_locally_without_provider(
+    conn,
+    tmp_path,
+):
+    job_id = _dynamic_coordination_job(conn, tmp_path)
+    _finish_dynamic_child_with_terminal_receipt(
+        conn,
+        job_id,
+        "parser",
+        "src/parser/token.py",
+    )
+    _finish_dynamic_child_with_terminal_receipt(
+        conn,
+        job_id,
+        "renderer",
+        "src/renderer/render.py",
+    )
+    calls = []
+
+    def provider(_delta, _session):
+        calls.append(True)
+        raise AssertionError("local dependency reduction must not call provider")
+
+    advanced = rk.advance_runtime_job(
+        conn,
+        job_id,
+        create_tasks=False,
+        decision_provider=provider,
+    )
+
+    assert calls == []
+    assert advanced.job_state == "active"
+    assert _node(conn, job_id, "integration-owner")["state"] == "ready"
+
+
+def test_terminal_candidate_rejects_terminal_source_as_integration_owner(
+    conn,
+    tmp_path,
+):
+    job_id = _dynamic_coordination_job(conn, tmp_path)
+    parser = dict(_node(conn, job_id, "parser"))
+    invalid = {
+        "candidate_key": "invalid-self-owned-gap",
+        "outcome": "Invalid self-owned follow-up.",
+        "reason_type": "execution_discovered_gap",
+        "acceptance_criteria": ["Invalid candidate must be rejected"],
+        "declared_write_scope": ["src/compat/**"],
+        "goal_item_keys": ["coordinated-result"],
+        "integration_owner_node_key": "parser",
+        "evidence_refs": ["workspace:path:src/parser/token.py"],
+    }
+    receipt = _terminal_codex_receipt(
+        summary="Parser claims completion with an invalid self-owned candidate.",
+        changed_files=["src/parser/token.py"],
+        candidates=[invalid],
+    )
+
+    assert rk._runtime_receipt_from_evidence(
+        {
+            "worker_lane": {"kind": "codex_cli"},
+            "runtime_receipt": receipt,
+        },
+        parser,
+        conn=conn,
+    ) is None
+
+
+def test_terminal_candidate_holds_owner_until_explicit_no_expansion_resolution(
+    conn,
+    tmp_path,
+):
+    job_id = _dynamic_coordination_job(conn, tmp_path)
+    candidate = {
+        "candidate_key": "legacy-adapter-terminal",
+        "outcome": "Convert legacy records into the current parser contract.",
+        "reason_type": "execution_discovered_gap",
+        "acceptance_criteria": ["Legacy records use the current token contract"],
+        "declared_write_scope": ["src/compat/**"],
+        "goal_item_keys": ["coordinated-result"],
+        "integration_owner_node_key": "integration-owner",
+        "evidence_refs": ["workspace:path:src/parser/token.py"],
+    }
+    _finish_dynamic_child_with_terminal_receipt(
+        conn,
+        job_id,
+        "parser",
+        "src/parser/token.py",
+        candidates=[candidate],
+    )
+    _finish_dynamic_child_with_terminal_receipt(
+        conn,
+        job_id,
+        "renderer",
+        "src/renderer/render.py",
+    )
+
+    reduced = rk.reduce_runtime_job(conn, job_id)
+    assert reduced["state"] == "waiting_decision"
+    assert _node(conn, job_id, "integration-owner")["state"] == "waiting_dependency"
+    pending = rk._pending_terminal_responsibility_candidates(conn, job_id)
+    assert len(pending) == 1
+    source_ref = pending[0]["source_responsibility_ref"]
+    event_id = pending[0]["event_id"]
+    delta = rk.build_decision_delta(conn, job_id)
+    assert delta["terminal_responsibility_candidates"][0][
+        "source_responsibility_ref"
+    ] == source_ref
+
+    patch = _patch(
+        job_id,
+        _revision(conn, job_id),
+        {
+            "op": "resolve_responsibility_candidate",
+            "source_responsibility_ref": source_ref,
+            "resolution": "absorbed_by_existing",
+            "existing_node_key": "integration-owner",
+            "rationale": "The shared integration owner already covers this compatibility scope.",
+            "evidence_refs": [f"event:{event_id}"],
+        },
+    )
+    result = rk.apply_graph_patch(conn, job_id, patch, decision_id="terminal-resolve")
+
+    assert result["status"] == "applied"
+    assert rk._pending_terminal_responsibility_candidates(conn, job_id) == []
+    assert _node(conn, job_id, "integration-owner")["state"] == "ready"
+    summary = rk.summarize_runtime_orchestration(conn, job_id)
+    terminal = summary["coordination"]["terminal_responsibility_candidates"]
+    assert terminal["candidate_count"] == 1
+    assert terminal["pending_count"] == 0
+    assert terminal["resolved_without_expansion_count"] == 1
+    cost = summary["coordination"]["cost"]
+    assert cost["coordination_resume_count"] == 0
+    assert cost["coordination_resume_without_new_evidence_count"] == 0
+    assert cost["terminal_candidate_count"] == 1
+    assert cost["candidate_resolved_without_expansion_count"] == 1
+    assert cost["coordination_token_overhead"]["mixed_estimate_not_reported"] is True
+    duplicate = {
+        **patch,
+        "expected_revision": _revision(conn, job_id),
+    }
+    assert rk.apply_graph_patch(conn, job_id, duplicate)["status"] == "rejected"
+
+
+def test_terminal_candidate_can_expand_before_owner_materialization(conn, tmp_path):
+    job_id = _dynamic_coordination_job(conn, tmp_path)
+    candidate = {
+        "candidate_key": "legacy-adapter-terminal",
+        "outcome": "Convert legacy records into the current parser contract.",
+        "reason_type": "execution_discovered_gap",
+        "acceptance_criteria": ["Legacy records use the current token contract"],
+        "declared_write_scope": ["src/compat/**"],
+        "goal_item_keys": ["coordinated-result"],
+        "integration_owner_node_key": "integration-owner",
+        "evidence_refs": ["workspace:path:src/parser/token.py"],
+    }
+    _finish_dynamic_child_with_terminal_receipt(
+        conn,
+        job_id,
+        "parser",
+        "src/parser/token.py",
+        candidates=[candidate],
+    )
+    _finish_dynamic_child_with_terminal_receipt(
+        conn,
+        job_id,
+        "renderer",
+        "src/renderer/render.py",
+    )
+    pending = rk._pending_terminal_responsibility_candidates(conn, job_id)
+    source_ref = pending[0]["source_responsibility_ref"]
+    event_id = pending[0]["event_id"]
+    patch = {
+        "schema": rk.PATCH_SCHEMA,
+        "expected_revision": _revision(conn, job_id),
+        "rationale_summary": "Expand the terminal execution-discovered compatibility gap.",
+        "ops": [
+            {
+                "op": "create_node",
+                "node_key": "legacy-adapter-terminal",
+                "node_type": "implementation",
+                "title": "Implement terminal legacy adapter",
+                "description": "Implement and test legacy record conversion.",
+                "assignee": "codex-runtime",
+                "goal_item_keys": ["coordinated-result"],
+                "source_responsibility_ref": source_ref,
+                "requested_capabilities": [
+                    "filesystem_read",
+                    "workspace_write",
+                    "git_read",
+                    "process_spawn",
+                ],
+                "contract": {
+                    "outcome": candidate["outcome"],
+                    "acceptance_criteria": candidate["acceptance_criteria"],
+                    "success_evidence": ["changed_files", "verification"],
+                    "declared_write_scope": candidate["declared_write_scope"],
+                    "prohibited_actions": ["modify_sibling_scope"],
+                    "workspace_mode": "isolated_worktree",
+                },
+            },
+            {
+                "op": "add_dependency",
+                "from_node_key": "legacy-adapter-terminal",
+                "to_node_key": "integration-owner",
+            },
+        ],
+        "decomposition": {
+            "policy_version": "1",
+            "mode": "multiple_runtime_nodes",
+            "justifications": [{
+                "type": "execution_discovered_gap",
+                "nodes": ["legacy-adapter-terminal"],
+                "explanation": "Terminal repository evidence exposed isolated compatibility work.",
+                "evidence_refs": [f"event:{event_id}"],
+                "integration_owner_node_key": "integration-owner",
+            }],
+        },
+    }
+
+    result = rk.apply_graph_patch(conn, job_id, patch, decision_id="terminal-expand")
+
+    assert result["status"] == "applied"
+    child = _node(conn, job_id, "legacy-adapter-terminal")
+    assert child["state"] == "ready"
+    assert _node(conn, job_id, "integration-owner")["state"] == "waiting_dependency"
+    assert rk._pending_terminal_responsibility_candidates(conn, job_id) == []
+    summary = rk.summarize_runtime_orchestration(conn, job_id)
+    assert summary["coordination"]["terminal_responsibility_candidates"][
+        "expanded_count"
+    ] == 1

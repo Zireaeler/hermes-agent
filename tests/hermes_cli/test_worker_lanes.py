@@ -769,6 +769,7 @@ def test_prepare_runtime_output_schema_uses_codex_home_not_workspace(tmp_path):
     assert Path(schema_path).is_relative_to(codex_home)
     schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
     assert schema["properties"]["schema"]["enum"] == ["runtime_worker_receipt_v1"]
+    assert "responsibility_candidates" in schema["required"]
     assert not any(workspace.iterdir())
 
 
@@ -1171,6 +1172,39 @@ def test_codex_coordination_checkpoint_schema_and_prompt(tmp_path):
         })
     )
     assert receipt["kind"] == "milestone_completed"
+
+
+def test_codex_event_driven_coordination_schema_accepts_terminal_or_checkpoint(
+    tmp_path,
+):
+    context = (
+        "# Runtime node\n\n"
+        "Runtime event-driven coordination mode: continue unless structure changes.\n\n"
+        'Runtime footer: {"node_key":"parser"}\n'
+    )
+
+    prompt = cw.build_codex_prompt(
+        context,
+        lane="codex-runtime",
+        model="gpt-5.6-sol",
+    )
+    assert "normally continue through" in prompt
+    assert "runtime_worker_event_v1" in prompt
+    schema_path = cw._prepare_runtime_output_schema(
+        context,
+        {"CODEX_HOME": str(tmp_path / "codex-home")},
+    )
+    schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
+    assert schema["properties"]["schema"]["enum"] == ["runtime_worker_event_v1"]
+    assert len(schema["properties"]["event"]["anyOf"]) == 2
+    terminal = {
+        "schema": "runtime_worker_receipt_v1",
+        "verdict": "succeeded",
+        "summary": "complete",
+    }
+    assert cw._extract_runtime_receipt(
+        json.dumps({"schema": "runtime_worker_event_v1", "event": terminal})
+    ) == terminal
 
 
 def test_codex_prompt_keeps_runtime_contribution_outside_candidate_ready():

@@ -182,6 +182,53 @@ _RUNTIME_WORKER_OUTPUT_SCHEMA: dict[str, Any] = {
                 },
             ]
         },
+        "responsibility_candidates": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "candidate_key": {"type": "string"},
+                    "outcome": {"type": "string"},
+                    "reason_type": {
+                        "type": "string",
+                        "enum": [
+                            "execution_discovered_gap",
+                            "workspace_isolation",
+                            "capability_boundary",
+                            "independent_verification",
+                        ],
+                    },
+                    "acceptance_criteria": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "declared_write_scope": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "goal_item_keys": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "integration_owner_node_key": {"type": "string"},
+                    "evidence_refs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                },
+                "required": [
+                    "candidate_key",
+                    "outcome",
+                    "reason_type",
+                    "acceptance_criteria",
+                    "declared_write_scope",
+                    "goal_item_keys",
+                    "integration_owner_node_key",
+                    "evidence_refs",
+                ],
+                "additionalProperties": False,
+            },
+        },
     },
     "required": [
         "schema",
@@ -202,6 +249,7 @@ _RUNTIME_WORKER_OUTPUT_SCHEMA: dict[str, Any] = {
         "known_failure_boundaries",
         "consumed_directive_ids",
         "structure_request",
+        "responsibility_candidates",
     ],
     "additionalProperties": False,
 }
@@ -420,6 +468,21 @@ _RUNTIME_COORDINATION_OUTPUT_SCHEMA: dict[str, Any] = {
         "consumed_directive_ids",
         "worker_session_should_resume",
     ],
+    "additionalProperties": False,
+}
+
+_RUNTIME_EVENT_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "schema": {"type": "string", "enum": ["runtime_worker_event_v1"]},
+        "event": {
+            "anyOf": [
+                _RUNTIME_WORKER_OUTPUT_SCHEMA,
+                _RUNTIME_COORDINATION_OUTPUT_SCHEMA,
+            ]
+        },
+    },
+    "required": ["schema", "event"],
     "additionalProperties": False,
 }
 
@@ -869,9 +932,13 @@ def _prepare_runtime_output_schema(
     is_coordination_checkpoint = (
         "Runtime coordination checkpoint mode:" in task_context
     )
+    is_event_driven_coordination = (
+        "Runtime event-driven coordination mode:" in task_context
+    )
     if (
         not is_structure_assessment
         and not is_coordination_checkpoint
+        and not is_event_driven_coordination
         and "Runtime footer:" not in task_context
     ):
         return None
@@ -887,7 +954,11 @@ def _prepare_runtime_output_schema(
         else (
             "runtime-coordination-checkpoint-v1.schema.json"
             if is_coordination_checkpoint
-            else "runtime-worker-receipt-v1.schema.json"
+            else (
+                "runtime-worker-event-v1.schema.json"
+                if is_event_driven_coordination
+                else "runtime-worker-receipt-v1.schema.json"
+            )
         )
     )
     schema = (
@@ -896,7 +967,11 @@ def _prepare_runtime_output_schema(
         else (
             _RUNTIME_COORDINATION_OUTPUT_SCHEMA
             if is_coordination_checkpoint
-            else _RUNTIME_WORKER_OUTPUT_SCHEMA
+            else (
+                _RUNTIME_EVENT_OUTPUT_SCHEMA
+                if is_event_driven_coordination
+                else _RUNTIME_WORKER_OUTPUT_SCHEMA
+            )
         )
     )
     schema_dir = Path(codex_home_value).expanduser() / "hermes-schemas"
@@ -1762,29 +1837,37 @@ def _extract_worker_receipt(output: str) -> dict[str, Any]:
 
 def _extract_runtime_receipt(output: str) -> Optional[dict[str, Any]]:
     """Extract the final explicit runtime receipt envelope from worker output."""
-    for match in reversed(list(_JSON_FENCE_RE.finditer(output or ""))):
-        try:
-            candidate = json.loads(match.group(1))
-        except json.JSONDecodeError:
-            continue
+
+    def canonical(candidate: Any) -> Optional[dict[str, Any]]:
+        if not isinstance(candidate, dict):
+            return None
+        if candidate.get("schema") == "runtime_worker_event_v1":
+            candidate = candidate.get("event")
         if isinstance(candidate, dict) and candidate.get("schema") in {
             "runtime_worker_receipt_v1",
             "runtime_worker_structure_checkpoint_v1",
             "runtime_worker_coordination_checkpoint_v1",
         }:
             return candidate
+        return None
+
+    for match in reversed(list(_JSON_FENCE_RE.finditer(output or ""))):
+        try:
+            candidate = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            continue
+        normalized = canonical(candidate)
+        if normalized is not None:
+            return normalized
     stripped = (output or "").strip()
     if stripped:
         try:
             candidate = json.loads(stripped)
         except json.JSONDecodeError:
             candidate = None
-        if isinstance(candidate, dict) and candidate.get("schema") in {
-            "runtime_worker_receipt_v1",
-            "runtime_worker_structure_checkpoint_v1",
-            "runtime_worker_coordination_checkpoint_v1",
-        }:
-            return candidate
+        normalized = canonical(candidate)
+        if normalized is not None:
+            return normalized
     return None
 
 
@@ -2092,6 +2175,9 @@ def build_codex_prompt(task_context: str, *, lane: str, model: Optional[str]) ->
     is_coordination_checkpoint = (
         "Runtime coordination checkpoint mode:" in task_context
     )
+    is_event_driven_coordination = (
+        "Runtime event-driven coordination mode:" in task_context
+    )
     is_runtime_contribution = "Runtime contribution boundary:" in task_context
     is_runtime_integration = "Frozen dependency contributions:" in task_context
     if is_structure_assessment:
@@ -2108,6 +2194,14 @@ def build_codex_prompt(task_context: str, *, lane: str, model: Optional[str]) ->
             "Own the assigned responsibility, but execute only one bounded implementation "
             "slice in this materialization. Stop at a semantic safe point and return the "
             "required coordination checkpoint. Do not claim node or goal completion."
+        )
+    elif is_event_driven_coordination:
+        role_lines = (
+            f"You are Codex CLI running as Hermes Kanban worker lane `{lane}`.\n"
+            "Own the complete assigned responsibility and normally continue through "
+            "implementation, testing, debugging, and terminal verification. Stop early only "
+            "when concrete repository evidence exposes a structural event that can change "
+            "another active responsibility or the durable Runtime graph."
         )
     elif is_review_followup:
         role_lines = (
@@ -2211,6 +2305,26 @@ reason, acceptance criteria, declared write scope, goal linkage, existing
 integration owner, and evidence refs copied from a finding. Preserve the
 current workspace for same-session resume.
 """
+    elif is_event_driven_coordination:
+        runtime_receipt_instructions = """
+
+This node uses event-driven Runtime coordination. Your final response must be
+one `runtime_worker_event_v1` JSON object matching the supplied output schema.
+Do not wrap it in a Markdown fence and do not add prose before or after it.
+
+Normally finish the complete responsibility and put a canonical
+`runtime_worker_receipt_v1` object in `event`. Keep
+`responsibility_candidates` empty unless terminal evidence exposes a genuinely
+separate durable responsibility owned by another nonterminal integration node.
+
+Only when the current node is not terminal and a real cross-node structural
+event requires Runtime action, put a canonical
+`runtime_worker_coordination_checkpoint_v1` object in `event`. A checkpoint
+must identify another existing affected node or a valid responsibility
+candidate. Ordinary inspection, local progress, a test result, child status,
+or the end of a first work slice is not a checkpoint reason. Never create or
+complete Runtime nodes yourself.
+"""
     elif "Runtime footer:" in task_context:
         runtime_receipt_instructions = """
 
@@ -2238,7 +2352,8 @@ summary and verification fields:
   "rejected_approaches": [],
   "known_failure_boundaries": [],
   "consumed_directive_ids": [],
-  "structure_request": null
+  "structure_request": null,
+  "responsibility_candidates": []
 }
 ```
 

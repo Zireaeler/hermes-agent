@@ -29,6 +29,7 @@ PATCH_OPS = {
     "continue_node",
     "issue_directive",
     "supersede_directive",
+    "resolve_responsibility_candidate",
 }
 DEFAULT_COMPACTION_POLICY = {
     "mode": "auto",

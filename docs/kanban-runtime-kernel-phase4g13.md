@@ -142,6 +142,12 @@ worker 已完成自身责任时，不应为了上报新 gap 再进入一次非�
 "responsibility_candidates": []
 ```
 
+Closed-loop Codex lane 的 structured-output transport 使用
+`runtime_worker_event_v1` envelope，其 `event` 在 terminal receipt 与 coordination checkpoint
+之间二选一。Wrapper 只解决单次 materialization 的输出 schema 选择；Runtime ingest 后仍保存
+canonical `runtime_worker_receipt_v1` 或 `runtime_worker_coordination_checkpoint_v1`，wrapper
+本身不是新的 DB 事实类型。
+
 普通 child 完成时直接返回 terminal receipt。Runtime 不再通过
 `non_authoritative_contribution` 或 child 身份自动要求其第一轮输出 coordination checkpoint。
 

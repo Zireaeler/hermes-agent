@@ -85,6 +85,7 @@ PATCH_OPS = {
     "continue_node",
     "issue_directive",
     "supersede_directive",
+    "resolve_responsibility_candidate",
 }
 DECOMPOSITION_REASON_TYPES = {
     "independent_verification",
@@ -142,6 +143,11 @@ COORDINATION_DIRECTIVE_STATES = {
     "delivered",
     "acknowledged",
     "superseded",
+}
+RESPONSIBILITY_CANDIDATE_RESOLUTIONS = {
+    "absorbed_by_existing",
+    "rejected_not_durable",
+    "deferred",
 }
 RUNTIME_INITIALIZATION_MODES = {"provider_first", "fixture"}
 VERIFIER_TARGET_FIELDS = {
@@ -2131,7 +2137,7 @@ def _responsibility_candidate_from_ref(
     conn: sqlite3.Connection,
     job_id: str,
     source_ref: Any,
-) -> tuple[int, dict[str, Any]]:
+) -> tuple[int, dict[str, Any], str]:
     value = str(source_ref or "").strip()
     match = re.fullmatch(
         r"event:(\d+)#responsibility:([A-Za-z0-9][A-Za-z0-9._-]{0,127})",
@@ -2146,18 +2152,25 @@ def _responsibility_candidate_from_ref(
     candidate_key = match.group(2)
     row = conn.execute(
         """
-        SELECT payload_json FROM execution_events
+        SELECT event_type, payload_json FROM execution_events
          WHERE id = ? AND job_id = ?
-           AND event_type = 'worker_coordination_checkpointed'
+           AND event_type IN (
+               'worker_coordination_checkpointed',
+               'worker_responsibility_candidates_recorded'
+           )
         """,
         (event_id, job_id),
     ).fetchone()
     if row is None:
         raise PatchValidationError(
-            "source_responsibility_ref references an unknown coordination event"
+            "source_responsibility_ref references an unknown responsibility event"
         )
-    checkpoint = _loads(row["payload_json"]).get("checkpoint") or {}
-    candidates = checkpoint.get("responsibility_candidates") or []
+    payload = _loads(row["payload_json"])
+    candidates = (
+        (payload.get("checkpoint") or {}).get("responsibility_candidates") or []
+        if row["event_type"] == "worker_coordination_checkpointed"
+        else payload.get("responsibility_candidates") or []
+    )
     matches = [
         candidate
         for candidate in candidates
@@ -2168,7 +2181,64 @@ def _responsibility_candidate_from_ref(
         raise PatchValidationError(
             "source_responsibility_ref does not identify exactly one candidate"
         )
-    return event_id, dict(matches[0])
+    return event_id, dict(matches[0]), str(row["event_type"])
+
+
+def _pending_terminal_responsibility_candidates(
+    conn: sqlite3.Connection,
+    job_id: str,
+) -> list[dict[str, Any]]:
+    consumed_refs = {
+        str(_loads(row["metadata_json"]).get("source_responsibility_ref") or "")
+        for row in conn.execute(
+            "SELECT metadata_json FROM execution_nodes WHERE job_id = ?",
+            (job_id,),
+        ).fetchall()
+    }
+    consumed_refs.update(
+        str(_loads(row["payload_json"]).get("source_responsibility_ref") or "")
+        for row in conn.execute(
+            """
+            SELECT payload_json FROM execution_events
+             WHERE job_id = ?
+               AND event_type = 'responsibility_candidate_resolved'
+            """,
+            (job_id,),
+        ).fetchall()
+    )
+    pending: list[dict[str, Any]] = []
+    for row in conn.execute(
+        """
+        SELECT event.id, event.node_id, event.task_id, event.payload_json,
+               node.node_key AS source_node_key
+          FROM execution_events event
+          LEFT JOIN execution_nodes node ON node.id = event.node_id
+         WHERE event.job_id = ?
+           AND event.event_type = 'worker_responsibility_candidates_recorded'
+         ORDER BY event.id
+        """,
+        (job_id,),
+    ).fetchall():
+        payload = _loads(row["payload_json"])
+        for candidate in payload.get("responsibility_candidates") or []:
+            if not isinstance(candidate, dict):
+                continue
+            candidate_key = str(candidate.get("candidate_key") or "").strip()
+            source_ref = f"event:{int(row['id'])}#responsibility:{candidate_key}"
+            if source_ref in consumed_refs:
+                continue
+            pending.append(
+                {
+                    "event_id": int(row["id"]),
+                    "source_node_id": row["node_id"],
+                    "source_node_key": row["source_node_key"],
+                    "task_id": row["task_id"],
+                    "materialization_id": payload.get("materialization_id"),
+                    "source_responsibility_ref": source_ref,
+                    "candidate": dict(candidate),
+                }
+            )
+    return pending
 
 
 def _scope_is_within(candidate_scope: str, allowed_scope: str) -> bool:
@@ -2232,15 +2302,38 @@ def _validate_coordination_epoch_decision(
         )
 
     create_ops = [op for op in ops if op.get("op") == "create_node"]
-    if not create_ops:
+    coordination_create_ops: list[dict[str, Any]] = []
+    terminal_create_ops: list[dict[str, Any]] = []
+    for op in create_ops:
+        _event_id, _candidate, source_event_type = _responsibility_candidate_from_ref(
+            conn,
+            job_id,
+            op.get("source_responsibility_ref"),
+        )
+        if source_event_type == "worker_coordination_checkpointed":
+            coordination_create_ops.append(op)
+        else:
+            terminal_create_ops.append(op)
+    if coordination_create_ops and terminal_create_ops:
+        raise PatchValidationError(
+            "one patch may not mix checkpoint and terminal candidate expansion"
+        )
+    if not coordination_create_ops:
+        allowed_routing_ops = {
+            "issue_directive",
+            "supersede_directive",
+            "resolve_responsibility_candidate",
+        }
+        if terminal_create_ops:
+            allowed_routing_ops.update({"create_node", "add_dependency"})
         disallowed = {
             str(op.get("op"))
             for op in ops
-            if op.get("op") not in {"issue_directive", "supersede_directive"}
+            if op.get("op") not in allowed_routing_ops
         }
         if disallowed:
             raise PatchValidationError(
-                "routing-only coordination epoch may only issue or supersede directives"
+                "routing-only coordination epoch contains unsupported operations"
             )
         return
 
@@ -2249,6 +2342,7 @@ def _validate_coordination_epoch_decision(
         "add_dependency",
         "issue_directive",
         "supersede_directive",
+        "resolve_responsibility_candidate",
     }
     disallowed = {
         str(op.get("op")) for op in ops if op.get("op") not in allowed_ops
@@ -2277,7 +2371,7 @@ def _validate_coordination_epoch_decision(
         contract = _loads(row["constraints_json"]).get("contract") or {}
         if contract.get("workspace_mode") == "isolated_worktree":
             current_children += 1
-    if current_children + len(create_ops) > max_children:
+    if current_children + len(coordination_create_ops) > max_children:
         raise PatchValidationError(
             "coordination expansion exceeds remaining orchestration child budget"
         )
@@ -2286,13 +2380,17 @@ def _validate_coordination_epoch_decision(
     allowed_capabilities = set(policy.get("required_child_capabilities") or [])
     candidate_events: set[int] = set()
     candidate_owners: dict[str, str] = {}
-    for op in create_ops:
+    for op in coordination_create_ops:
         node_key = str(op.get("node_key") or "").strip()
-        event_id, candidate = _responsibility_candidate_from_ref(
+        event_id, candidate, source_event_type = _responsibility_candidate_from_ref(
             conn,
             job_id,
             op.get("source_responsibility_ref"),
         )
+        if source_event_type != "worker_coordination_checkpointed":
+            raise PatchValidationError(
+                "coordination expansion requires a coordination checkpoint candidate"
+            )
         if event_id not in active_checkpoint_event_ids:
             raise PatchValidationError(
                 "source_responsibility_ref must cite the active coordination epoch"
@@ -2358,7 +2456,9 @@ def _validate_coordination_epoch_decision(
 
     decomposition = patch.get("decomposition") or {}
     justifications = decomposition.get("justifications") or []
-    new_keys = {str(op.get("node_key") or "") for op in create_ops}
+    new_keys = {
+        str(op.get("node_key") or "") for op in coordination_create_ops
+    }
     matching = [
         item
         for item in justifications
@@ -2380,6 +2480,255 @@ def _validate_coordination_epoch_decision(
         raise PatchValidationError(
             "coordination expansion decomposition must name the candidate integration owner"
         )
+
+
+def _validate_terminal_responsibility_candidate_decision(
+    conn: sqlite3.Connection,
+    job_id: str,
+    patch: dict[str, Any],
+    ops: list[dict[str, Any]],
+) -> None:
+    pending = _pending_terminal_responsibility_candidates(conn, job_id)
+    pending_by_ref = {
+        str(item["source_responsibility_ref"]): item for item in pending
+    }
+    resolution_ops = [
+        op for op in ops if op.get("op") == "resolve_responsibility_candidate"
+    ]
+    terminal_create_ops: list[tuple[dict[str, Any], dict[str, Any], int]] = []
+    for op in ops:
+        if op.get("op") != "create_node" or not op.get("source_responsibility_ref"):
+            continue
+        event_id, candidate, source_event_type = _responsibility_candidate_from_ref(
+            conn,
+            job_id,
+            op.get("source_responsibility_ref"),
+        )
+        if source_event_type == "worker_responsibility_candidates_recorded":
+            terminal_create_ops.append((op, candidate, event_id))
+    if not pending_by_ref:
+        if resolution_ops or terminal_create_ops:
+            raise PatchValidationError(
+                "terminal responsibility candidate is already consumed or unavailable"
+            )
+        return
+
+    consumed_refs: set[str] = set()
+    for op in resolution_ops:
+        source_ref = str(op.get("source_responsibility_ref") or "").strip()
+        item = pending_by_ref.get(source_ref)
+        if item is None:
+            raise PatchValidationError(
+                "resolve_responsibility_candidate requires a pending terminal candidate"
+            )
+        if source_ref in consumed_refs:
+            raise PatchValidationError(
+                "terminal responsibility candidate may be consumed only once"
+            )
+        consumed_refs.add(source_ref)
+        resolution = str(op.get("resolution") or "").strip()
+        if resolution not in RESPONSIBILITY_CANDIDATE_RESOLUTIONS:
+            raise PatchValidationError(
+                "resolve_responsibility_candidate has unsupported resolution"
+            )
+        if not str(op.get("rationale") or "").strip():
+            raise PatchValidationError(
+                "resolve_responsibility_candidate requires rationale"
+            )
+        event_id = int(item["event_id"])
+        refs = op.get("evidence_refs")
+        if (
+            not isinstance(refs, list)
+            or f"event:{event_id}" not in refs
+            or any(not isinstance(ref, str) or not ref.strip() for ref in refs)
+        ):
+            raise PatchValidationError(
+                "resolve_responsibility_candidate must cite its candidate event"
+            )
+        for ref in refs:
+            _validate_evidence_ref(conn, job_id, ref)
+        candidate = item["candidate"]
+        owner_key = str(candidate.get("integration_owner_node_key") or "")
+        owner = _node_by_key(conn, job_id, owner_key)
+        if owner["state"] in TERMINAL_NODE_STATES:
+            raise PatchValidationError(
+                "terminal responsibility candidate resolution requires a nonterminal owner"
+            )
+        existing_key = str(op.get("existing_node_key") or "").strip()
+        if resolution == "absorbed_by_existing":
+            if not existing_key:
+                raise PatchValidationError(
+                    "absorbed_by_existing requires existing_node_key"
+                )
+            existing = _node_by_key(conn, job_id, existing_key)
+            if existing["state"] in TERMINAL_NODE_STATES:
+                raise PatchValidationError(
+                    "absorbed_by_existing requires a nonterminal node"
+                )
+            if not set(candidate.get("goal_item_keys") or []).issubset(
+                _node_linked_goal_item_keys(conn, existing)
+            ):
+                raise PatchValidationError(
+                    "absorbing node does not cover candidate goal linkage"
+                )
+            contract = _loads(existing.get("constraints_json")).get("contract") or {}
+            allowed_scopes = contract.get("declared_write_scope") or []
+            if any(
+                not any(_scope_is_within(scope, allowed) for allowed in allowed_scopes)
+                for scope in candidate.get("declared_write_scope") or []
+            ):
+                raise PatchValidationError(
+                    "absorbing node write scope does not cover candidate scope"
+                )
+        elif existing_key:
+            raise PatchValidationError(
+                f"{resolution} must not set existing_node_key"
+            )
+        if resolution == "deferred" and not set(
+            candidate.get("goal_item_keys") or []
+        ).issubset(_node_linked_goal_item_keys(conn, owner)):
+            raise PatchValidationError(
+                "deferred candidate requires active owner coverage"
+            )
+
+    job = _job(conn, job_id)
+    policy = _loads(job.get("metadata_json")).get("orchestration_policy") or {}
+    if (
+        policy.get("schema") != RUNTIME_ORCHESTRATION_POLICY_SCHEMA
+        or policy.get("mode") != "closed_loop_coordination"
+    ):
+        raise PatchValidationError(
+            "terminal responsibility candidates require closed_loop_coordination"
+        )
+    current_children = 0
+    for row in conn.execute(
+        "SELECT constraints_json FROM execution_nodes WHERE job_id = ?",
+        (job_id,),
+    ).fetchall():
+        contract = _loads(row["constraints_json"]).get("contract") or {}
+        if contract.get("workspace_mode") == "isolated_worktree":
+            current_children += 1
+    if current_children + len(terminal_create_ops) > int(
+        policy.get("max_child_nodes") or 3
+    ):
+        raise PatchValidationError(
+            "terminal responsibility expansion exceeds remaining child budget"
+        )
+    configured_lane = str(policy.get("worker_lane") or "")
+    allowed_capabilities = set(policy.get("required_child_capabilities") or [])
+    candidate_owners: set[str] = set()
+    candidate_event_ids: set[int] = set()
+    terminal_create_keys: set[str] = set()
+    for op, candidate, event_id in terminal_create_ops:
+        source_ref = str(op.get("source_responsibility_ref") or "").strip()
+        if source_ref not in pending_by_ref:
+            raise PatchValidationError(
+                "terminal candidate create_node requires a pending candidate"
+            )
+        if source_ref in consumed_refs:
+            raise PatchValidationError(
+                "terminal responsibility candidate may be consumed only once"
+            )
+        consumed_refs.add(source_ref)
+        node_key = str(op.get("node_key") or "").strip()
+        if node_key != str(candidate.get("candidate_key") or "").strip():
+            raise PatchValidationError(
+                "terminal candidate child node_key must match candidate_key"
+            )
+        if candidate.get("reason_type") != "execution_discovered_gap":
+            raise PatchValidationError(
+                "terminal same-lane child requires execution_discovered_gap"
+            )
+        candidate_goals = set(candidate.get("goal_item_keys") or [])
+        node_goals = set(op.get("goal_item_keys") or [])
+        if not node_goals or not node_goals.issubset(candidate_goals):
+            raise PatchValidationError(
+                "terminal candidate child goal linkage exceeds candidate"
+            )
+        contract = op.get("contract") or {}
+        if contract.get("workspace_mode") != "isolated_worktree":
+            raise PatchValidationError(
+                "terminal candidate child requires workspace_mode=isolated_worktree"
+            )
+        candidate_scopes = candidate.get("declared_write_scope") or []
+        child_scopes = contract.get("declared_write_scope") or []
+        if any(
+            not any(_scope_is_within(scope, allowed) for allowed in candidate_scopes)
+            for scope in child_scopes
+        ):
+            raise PatchValidationError(
+                "terminal candidate child write scope exceeds candidate"
+            )
+        if not set(candidate.get("acceptance_criteria") or []).issubset(
+            set(contract.get("acceptance_criteria") or [])
+        ):
+            raise PatchValidationError(
+                "terminal candidate child must preserve acceptance criteria"
+            )
+        if op.get("assignee") not in {None, "", configured_lane}:
+            raise PatchValidationError(
+                "terminal candidate child assignee must use configured worker lane"
+            )
+        if not set(op.get("requested_capabilities") or []).issubset(
+            allowed_capabilities
+        ):
+            raise PatchValidationError(
+                "terminal candidate child capabilities exceed orchestration policy"
+            )
+        owner_key = str(candidate.get("integration_owner_node_key") or "")
+        owner = _node_by_key(conn, job_id, owner_key)
+        if owner["state"] not in {"planned", "waiting_dependency"}:
+            raise PatchValidationError(
+                "terminal candidate expansion requires an unmaterialized integration owner"
+            )
+        dependencies = [
+            dep
+            for dep in ops
+            if dep.get("op") == "add_dependency"
+            and dep.get("from_node_key") == node_key
+            and dep.get("to_node_key") == owner_key
+        ]
+        if len(dependencies) != 1:
+            raise PatchValidationError(
+                "terminal candidate child requires exactly one dependency to its owner"
+            )
+        candidate_owners.add(owner_key)
+        candidate_event_ids.add(event_id)
+        terminal_create_keys.add(node_key)
+
+    missing = set(pending_by_ref) - consumed_refs
+    if missing:
+        raise PatchValidationError(
+            "patch must expand or explicitly resolve every pending terminal candidate: "
+            + ", ".join(sorted(missing))
+        )
+    if terminal_create_keys:
+        decomposition = patch.get("decomposition") or {}
+        matches = [
+            item
+            for item in decomposition.get("justifications") or []
+            if item.get("type") == "execution_discovered_gap"
+            and set(item.get("nodes") or []) == terminal_create_keys
+        ]
+        if len(matches) != 1:
+            raise PatchValidationError(
+                "terminal candidate expansion requires one execution_discovered_gap justification"
+            )
+        justification = matches[0]
+        if not {
+            f"event:{event_id}" for event_id in candidate_event_ids
+        }.issubset(set(justification.get("evidence_refs") or [])):
+            raise PatchValidationError(
+                "terminal candidate decomposition must cite every candidate event"
+            )
+        if (
+            len(candidate_owners) != 1
+            or justification.get("integration_owner_node_key")
+            not in candidate_owners
+        ):
+            raise PatchValidationError(
+                "terminal candidate decomposition must name its integration owner"
+            )
 
 
 def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]) -> None:
@@ -2404,6 +2753,12 @@ def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]
         name = op.get("op")
         if name not in PATCH_OPS:
             raise PatchValidationError(f"unsupported patch op {name!r}")
+        if name == "resolve_responsibility_candidate":
+            if not str(op.get("source_responsibility_ref") or "").strip():
+                raise PatchValidationError(
+                    "resolve_responsibility_candidate requires source_responsibility_ref"
+                )
+            continue
         if name == "continue_node":
             node = _node_by_key(conn, job_id, str(op.get("node_key") or ""))
             if node["state"] != "waiting_structure":
@@ -2787,6 +3142,12 @@ def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]
     _validate_decomposition(conn, job_id, patch, ops)
     _validate_early_structure_decision(conn, job_id, patch, ops)
     _validate_coordination_epoch_decision(conn, job_id, patch, ops)
+    _validate_terminal_responsibility_candidate_decision(
+        conn,
+        job_id,
+        patch,
+        ops,
+    )
 
 
 def _would_create_dependency_cycle(conn: sqlite3.Connection, job_id: str, from_id: str, to_id: str) -> bool:
@@ -2918,6 +3279,30 @@ def _apply_op(
             ),
         )
         _event(conn, job_id, "node_created", {"node_key": op["node_key"], "node_type": op["node_type"]}, node_id=node_id)
+        source_responsibility_ref = str(
+            op.get("source_responsibility_ref") or ""
+        ).strip()
+        if source_responsibility_ref:
+            source_event_id, candidate, _source_event_type = (
+                _responsibility_candidate_from_ref(
+                    conn,
+                    job_id,
+                    source_responsibility_ref,
+                )
+            )
+            _event(
+                conn,
+                job_id,
+                "responsibility_candidate_expanded",
+                {
+                    "source_responsibility_ref": source_responsibility_ref,
+                    "candidate_key": candidate.get("candidate_key"),
+                    "created_node_key": op["node_key"],
+                    "decision_id": decision_id,
+                },
+                node_id=node_id,
+                source_event_id=source_event_id,
+            )
         for dep_key in depends_on:
             from_node = _node_by_key(conn, job_id, dep_key)
             _insert_dependency(conn, job_id, from_node["id"], node_id, "depends_on")
@@ -3059,6 +3444,26 @@ def _apply_op(
             ),
         )
         _event(conn, job_id, "strategy_update_requested", metadata, node_id=node_id)
+    elif name == "resolve_responsibility_candidate":
+        source_ref = str(op["source_responsibility_ref"]).strip()
+        source_event_id, candidate, _source_event_type = (
+            _responsibility_candidate_from_ref(conn, job_id, source_ref)
+        )
+        _event(
+            conn,
+            job_id,
+            "responsibility_candidate_resolved",
+            {
+                "source_responsibility_ref": source_ref,
+                "candidate_key": candidate.get("candidate_key"),
+                "resolution": op["resolution"],
+                "existing_node_key": op.get("existing_node_key"),
+                "rationale": op["rationale"],
+                "evidence_refs": op.get("evidence_refs") or [],
+                "decision_id": decision_id,
+            },
+            source_event_id=source_event_id,
+        )
     elif name == "continue_node":
         node = _node_by_key(conn, job_id, str(op["node_key"]))
         event_id = int(op["checkpoint_event_id"])
@@ -4750,6 +5155,21 @@ def _coordination_checkpoint_validation_error(
                         f"overlap active node {other_key!r}: "
                         f"{overlap[0]!r} vs {overlap[1]!r}"
                     )
+    if conn is not None and node is not None:
+        node_metadata = _loads(node.get("metadata_json"))
+        fixture_forced = node_metadata.get("coordination_checkpoint_required") is True
+        cross_node_effect = any(
+            any(
+                str(key).strip() != str(node.get("node_key") or "")
+                for key in finding.get("affected_node_keys") or []
+            )
+            for finding in findings
+        )
+        if not fixture_forced and not candidates and not cross_node_effect:
+            return (
+                "coordination checkpoint requires a cross-node structural effect "
+                "or responsibility candidate"
+            )
     if checkpoint.get("worker_session_should_resume") is not True:
         return "coordination checkpoint must resume the original worker session"
     if conn is not None and node is not None:
@@ -4812,6 +5232,137 @@ def _runtime_coordination_checkpoint_from_evidence(
     result["worker_lane"] = evidence.get("worker_lane")
     result["worker_receipt"] = evidence.get("worker_receipt")
     return result
+
+
+def _terminal_responsibility_candidates_validation_error(
+    candidates: Any,
+    *,
+    conn: Optional[sqlite3.Connection],
+    node: Optional[dict[str, Any]],
+) -> Optional[str]:
+    if candidates is None:
+        candidates = []
+    if not isinstance(candidates, list):
+        return "terminal responsibility_candidates must be a list"
+    candidate_keys: set[str] = set()
+    existing: dict[str, dict[str, Any]] = {}
+    known_goal_keys: set[str] = set()
+    if conn is not None and node is not None:
+        existing = {
+            str(row["node_key"]): dict(row)
+            for row in conn.execute(
+                "SELECT * FROM execution_nodes WHERE job_id = ?",
+                (node["job_id"],),
+            ).fetchall()
+        }
+        known_goal_keys = {
+            str(row["item_key"])
+            for row in conn.execute(
+                """
+                SELECT item_key FROM goal_items
+                 WHERE contract_id IN (
+                     SELECT id FROM goal_contracts WHERE job_id = ?
+                 )
+                """,
+                (node["job_id"],),
+            ).fetchall()
+        }
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            return "terminal responsibility candidate must be an object"
+        candidate_key = str(candidate.get("candidate_key") or "").strip()
+        if (
+            not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", candidate_key)
+            or candidate_key in candidate_keys
+        ):
+            return "terminal responsibility candidate_key must be valid and unique"
+        candidate_keys.add(candidate_key)
+        if candidate.get("reason_type") not in RESPONSIBILITY_CANDIDATE_REASON_TYPES:
+            return (
+                f"terminal responsibility candidate {candidate_key!r} "
+                "has unsupported reason_type"
+            )
+        if not str(candidate.get("outcome") or "").strip():
+            return f"terminal responsibility candidate {candidate_key!r} requires outcome"
+        for field in (
+            "acceptance_criteria",
+            "declared_write_scope",
+            "goal_item_keys",
+            "evidence_refs",
+        ):
+            values = candidate.get(field)
+            if (
+                not isinstance(values, list)
+                or not values
+                or any(not isinstance(value, str) or not value.strip() for value in values)
+                or len(values) != len(set(values))
+            ):
+                return (
+                    f"terminal responsibility candidate {candidate_key!r} "
+                    f"requires a unique non-empty {field} list"
+                )
+        try:
+            _validate_declared_write_scopes(
+                candidate.get("declared_write_scope") or [],
+                field_name="terminal responsibility candidate declared_write_scope",
+            )
+        except PatchValidationError as exc:
+            return str(exc)
+        owner_key = str(candidate.get("integration_owner_node_key") or "").strip()
+        if not owner_key:
+            return (
+                f"terminal responsibility candidate {candidate_key!r} "
+                "requires integration_owner_node_key"
+            )
+        if conn is None or node is None:
+            continue
+        if candidate_key in existing:
+            return (
+                f"terminal responsibility candidate {candidate_key!r} "
+                "already exists as a node"
+            )
+        if owner_key == str(node.get("node_key") or ""):
+            return (
+                f"terminal responsibility candidate {candidate_key!r} "
+                "cannot use its terminal source node as integration owner"
+            )
+        owner = existing.get(owner_key)
+        if owner is None or owner["state"] in TERMINAL_NODE_STATES:
+            return (
+                f"terminal responsibility candidate {candidate_key!r} "
+                "requires a nonterminal integration owner"
+            )
+        owner_contract = _loads(owner.get("constraints_json")).get("contract") or {}
+        if owner_contract.get("workspace_mode") != "shared_job_workspace":
+            return (
+                f"terminal responsibility candidate {candidate_key!r} "
+                "integration owner must use shared_job_workspace"
+            )
+        unknown_goals = set(candidate.get("goal_item_keys") or []) - known_goal_keys
+        if unknown_goals:
+            return (
+                f"terminal responsibility candidate {candidate_key!r} references "
+                f"unknown goal items {sorted(unknown_goals)!r}"
+            )
+        candidate_scopes = candidate.get("declared_write_scope") or []
+        for other_key, other in existing.items():
+            if other_key in {node["node_key"], owner_key}:
+                continue
+            if other["state"] not in NONTERMINAL_EXECUTION_STATES:
+                continue
+            other_contract = _loads(other.get("constraints_json")).get("contract") or {}
+            if other_contract.get("workspace_mode") != "isolated_worktree":
+                continue
+            overlap = _obvious_scope_overlap(
+                candidate_scopes,
+                other_contract.get("declared_write_scope") or [],
+            )
+            if overlap is not None:
+                return (
+                    "terminal responsibility candidate write scopes overlap active node "
+                    f"{other_key!r}: {overlap[0]!r} vs {overlap[1]!r}"
+                )
+    return None
 
 
 def _node_directives(
@@ -5220,6 +5771,19 @@ def _runtime_receipt_from_evidence(
     structure_request = result.get("structure_request")
     if structure_request is not None and not _structure_request_valid(structure_request):
         return None
+    candidates = result.get("responsibility_candidates", [])
+    if candidates and _normalize_verdict(verdict) != "succeeded":
+        return None
+    if (
+        _terminal_responsibility_candidates_validation_error(
+            candidates,
+            conn=conn,
+            node=node,
+        )
+        is not None
+    ):
+        return None
+    result["responsibility_candidates"] = [dict(value) for value in candidates]
     if node is not None:
         allowed = _node_linked_goal_item_keys(conn, node)
         referenced = set().union(*(set(result[key]) for key in keys))
@@ -6363,6 +6927,19 @@ def reduce_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
     ensure_runtime_schema(conn)
     now = _now()
     changed_ready: list[str] = []
+    pending_terminal_candidates = _pending_terminal_responsibility_candidates(
+        conn,
+        job_id,
+    )
+    held_candidate_refs_by_owner: dict[str, list[str]] = {}
+    for item in pending_terminal_candidates:
+        owner_key = str(
+            (item.get("candidate") or {}).get("integration_owner_node_key") or ""
+        ).strip()
+        if owner_key:
+            held_candidate_refs_by_owner.setdefault(owner_key, []).append(
+                str(item["source_responsibility_ref"])
+            )
     for node in conn.execute(
         "SELECT * FROM execution_nodes WHERE job_id = ? AND state IN ('planned', 'waiting_dependency')",
         (job_id,),
@@ -6376,6 +6953,20 @@ def reduce_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
             """,
             (job_id, node["id"]),
         ).fetchall()
+        held_refs = held_candidate_refs_by_owner.get(str(node["node_key"])) or []
+        if held_refs:
+            _event_once(
+                conn,
+                job_id,
+                "integration_owner_held_for_responsibility_candidate",
+                "candidate-hold:" + str(node["id"]) + ":" + ",".join(held_refs),
+                {
+                    "node_key": node["node_key"],
+                    "source_responsibility_refs": held_refs,
+                },
+                node_id=node["id"],
+            )
+            continue
         if all(dep["state"] == "succeeded" for dep in deps):
             conn.execute(
                 "UPDATE execution_nodes SET state = 'ready', updated_at = ? WHERE id = ?",
@@ -6401,7 +6992,9 @@ def reduce_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
     has_waiting_coordination = counts.get("waiting_coordination", 0) > 0
     has_ready = counts.get("ready", 0) > 0
     has_candidate_ready = counts.get("candidate_ready", 0) > 0
-    complete = _completion_satisfied(conn, job_id)
+    complete = bool(
+        not pending_terminal_candidates and _completion_satisfied(conn, job_id)
+    )
     capability_summary = summarize_runtime_capabilities(conn, job_id, limit=5)
     has_pending_capability_authorization = bool(capability_summary["pending_authorizations"])
     has_policy_block = any(
@@ -6448,6 +7041,22 @@ def reduce_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
                 "checkpoint_event_ids": checkpoint_ids,
             },
         )
+    elif pending_terminal_candidates:
+        state = "waiting_decision"
+        pending_refs = [
+            str(item["source_responsibility_ref"])
+            for item in pending_terminal_candidates
+        ]
+        _event_once(
+            conn,
+            job_id,
+            "decision_requested",
+            "terminal_responsibility_candidates:" + ",".join(pending_refs),
+            {
+                "reason": "terminal receipts exposed unresolved durable responsibilities",
+                "source_responsibility_refs": pending_refs,
+            },
+        )
     elif has_running:
         state = "waiting_worker"
     elif has_ready:
@@ -6472,7 +7081,14 @@ def reduce_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
     for event in stagnation_events:
         _event_once(conn, job_id, event["event_type"], event["key"], event["payload"])
     _touch_job(conn, job_id, state=state)
-    return {"state": state, "ready": changed_ready, "gaps": gaps, "complete": complete, "frontier": frontier}
+    return {
+        "state": state,
+        "ready": changed_ready,
+        "gaps": gaps,
+        "complete": complete,
+        "frontier": frontier,
+        "pending_terminal_responsibility_candidates": pending_terminal_candidates,
+    }
 
 
 def _completion_satisfied(conn: sqlite3.Connection, job_id: str) -> bool:
@@ -6674,6 +7290,10 @@ def build_decision_delta(conn: sqlite3.Connection, job_id: str, trigger_event_id
             (job_id,),
         ).fetchall()
     ]
+    terminal_responsibility_candidates = _pending_terminal_responsibility_candidates(
+        conn,
+        job_id,
+    )
     active_responsibilities = []
     for node in status["nodes"]:
         if node["state"] not in NONTERMINAL_EXECUTION_STATES:
@@ -6765,10 +7385,12 @@ def build_decision_delta(conn: sqlite3.Connection, job_id: str, trigger_event_id
         "structure_requests": structure_requests,
         "structure_checkpoints": structure_checkpoints,
         "coordination_checkpoints": coordination_checkpoints,
+        "terminal_responsibility_candidates": terminal_responsibility_candidates,
         "global_execution_snapshot": {
             "graph_revision": int(status["job"]["graph_revision"]),
             "active_responsibilities": active_responsibilities,
             "coordination_checkpoints": coordination_checkpoints,
+            "terminal_responsibility_candidates": terminal_responsibility_candidates,
             "directives": directives,
             "available_worker_capacity": None,
         },
@@ -8747,6 +9369,84 @@ def resolve_runtime_orchestration_policy(
     }
 
 
+def _reported_codex_usage_for_tasks(
+    conn: sqlite3.Connection,
+    task_ids: Iterable[str],
+) -> dict[str, int]:
+    selected = sorted({str(value) for value in task_ids if str(value).strip()})
+    totals = {
+        "input_tokens": 0,
+        "cached_input_tokens": 0,
+        "output_tokens": 0,
+        "reasoning_output_tokens": 0,
+    }
+    if not selected:
+        return totals
+    placeholders = ",".join("?" for _ in selected)
+    for row in conn.execute(
+        f"""
+        SELECT payload FROM task_events
+         WHERE task_id IN ({placeholders})
+           AND kind = 'worker_codex_event'
+         ORDER BY id
+        """,
+        tuple(selected),
+    ).fetchall():
+        payload = _loads(row["payload"])
+        if payload.get("event_type") != "turn.completed":
+            continue
+        usage = payload.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        for key in totals:
+            try:
+                totals[key] += max(0, int(usage.get(key) or 0))
+            except (TypeError, ValueError):
+                continue
+    return totals
+
+
+def _runtime_receipt_for_task(
+    conn: sqlite3.Connection,
+    task_id: str,
+) -> Optional[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT payload FROM task_events
+         WHERE task_id = ? AND kind = 'blocked'
+         ORDER BY id DESC
+        """,
+        (task_id,),
+    ).fetchall()
+    for row in rows:
+        metadata = (_loads(row["payload"]).get("metadata") or {})
+        receipt = metadata.get("runtime_receipt")
+        if isinstance(receipt, dict):
+            return receipt
+    return None
+
+
+def _receipt_has_new_coordination_evidence(receipt: Optional[dict[str, Any]]) -> bool:
+    if not isinstance(receipt, dict):
+        return False
+    if receipt.get("schema") == COORDINATION_CHECKPOINT_SCHEMA:
+        return bool(
+            receipt.get("changed_files")
+            or receipt.get("findings")
+            or receipt.get("responsibility_candidates")
+        )
+    verification = receipt.get("verification")
+    return bool(
+        receipt.get("changed_files")
+        or receipt.get("responsibility_candidates")
+        or receipt.get("artifacts")
+        or receipt.get("accepted_contributions")
+        or receipt.get("modified_contributions")
+        or receipt.get("rejected_contributions")
+        or (isinstance(verification, dict) and verification.get("passed") is True)
+    )
+
+
 def summarize_runtime_orchestration(
     conn: sqlite3.Connection,
     job_id: str,
@@ -8948,6 +9648,204 @@ def summarize_runtime_orchestration(
         for item in children
         if item.get("source_responsibility_ref")
     ]
+    terminal_candidate_events = [
+        {
+            "event_id": int(row["id"]),
+            "node_id": row["node_id"],
+            "created_at": row["created_at"],
+            "payload": _loads(row["payload_json"]),
+        }
+        for row in conn.execute(
+            """
+            SELECT id, node_id, payload_json, created_at FROM execution_events
+             WHERE job_id = ?
+               AND event_type = 'worker_responsibility_candidates_recorded'
+             ORDER BY id
+            """,
+            (job_id,),
+        ).fetchall()
+    ]
+    pending_terminal_candidates = _pending_terminal_responsibility_candidates(
+        conn,
+        job_id,
+    )
+    expanded_candidate_count = int(
+        conn.execute(
+            """
+            SELECT COUNT(*) FROM execution_events
+             WHERE job_id = ?
+               AND event_type = 'responsibility_candidate_expanded'
+            """,
+            (job_id,),
+        ).fetchone()[0]
+    )
+    terminal_expanded_candidate_count = int(
+        conn.execute(
+            """
+            SELECT COUNT(*)
+              FROM execution_events expanded
+              JOIN execution_events source ON source.id = expanded.source_event_id
+             WHERE expanded.job_id = ?
+               AND expanded.event_type = 'responsibility_candidate_expanded'
+               AND source.event_type = 'worker_responsibility_candidates_recorded'
+            """,
+            (job_id,),
+        ).fetchone()[0]
+    )
+    resolved_candidate_count = int(
+        conn.execute(
+            """
+            SELECT COUNT(*) FROM execution_events
+             WHERE job_id = ?
+               AND event_type = 'responsibility_candidate_resolved'
+            """,
+            (job_id,),
+        ).fetchone()[0]
+    )
+    coordination_materializations = []
+    coordination_resume_materializations = []
+    for row in conn.execute(
+        """
+        SELECT * FROM node_materializations
+         WHERE job_id = ? ORDER BY created_at, attempt
+        """,
+        (job_id,),
+    ).fetchall():
+        materialization = dict(row)
+        continuity = _loads(materialization.get("metadata_json")).get(
+            "execution_continuity"
+        ) or {}
+        if materialization["status"] == "coordination_checkpoint":
+            coordination_materializations.append(materialization)
+        if continuity.get("resume_reason") == "coordination_directive":
+            coordination_resume_materializations.append(materialization)
+    coordination_task_ids = {
+        str(item["task_id"])
+        for item in [
+            *coordination_materializations,
+            *coordination_resume_materializations,
+        ]
+    }
+    coordination_worker_usage = _reported_codex_usage_for_tasks(
+        conn,
+        coordination_task_ids,
+    )
+    resume_without_new_evidence_count = sum(
+        1
+        for item in coordination_resume_materializations
+        if not _receipt_has_new_coordination_evidence(
+            _runtime_receipt_for_task(conn, str(item["task_id"]))
+        )
+    )
+    structural_decision_count = 0
+    effective_structural_decision_count = 0
+    provider_input_token_estimate = 0
+    provider_output_token_estimate = 0
+    for row in conn.execute(
+        "SELECT * FROM kernel_decisions WHERE job_id = ? ORDER BY created_at, id",
+        (job_id,),
+    ).fetchall():
+        decision = dict(row)
+        delta = _loads(decision.get("delta_json"))
+        if not (
+            delta.get("coordination_checkpoints")
+            or delta.get("terminal_responsibility_candidates")
+        ):
+            continue
+        structural_decision_count += 1
+        result = _loads(decision.get("decision_json"))
+        try:
+            provider_input_token_estimate += max(
+                0,
+                int(result.get("input_token_estimate") or 0),
+            )
+            provider_output_token_estimate += max(
+                0,
+                int(result.get("output_token_estimate") or 0),
+            )
+        except (TypeError, ValueError):
+            pass
+        applied_patch = conn.execute(
+            """
+            SELECT patch_json FROM graph_patches
+             WHERE job_id = ? AND decision_id = ? AND status = 'applied'
+             ORDER BY applied_at DESC LIMIT 1
+            """,
+            (job_id, decision["id"]),
+        ).fetchone()
+        if applied_patch is None:
+            continue
+        patch_ops = _loads(applied_patch["patch_json"]).get("ops") or []
+        directly_effective = any(
+            op.get("op")
+            in {
+                "create_node",
+                "resolve_responsibility_candidate",
+                "continue_node",
+            }
+            for op in patch_ops
+            if isinstance(op, dict)
+        )
+        acknowledged_directive = conn.execute(
+            """
+            SELECT 1 FROM runtime_node_directives
+             WHERE job_id = ? AND decision_id = ? AND status = 'acknowledged'
+             LIMIT 1
+            """,
+            (job_id, decision["id"]),
+        ).fetchone()
+        if directly_effective or acknowledged_directive is not None:
+            effective_structural_decision_count += 1
+    effective_structural_decision_ratio = (
+        effective_structural_decision_count / structural_decision_count
+        if structural_decision_count
+        else 0.0
+    )
+    terminal_candidate_count = sum(
+        len(item["payload"].get("responsibility_candidates") or [])
+        for item in terminal_candidate_events
+    )
+    coordination_cost = {
+        "coordination_checkpoint_count": len(coordination_checkpoints),
+        "coordination_resume_count": len(coordination_resume_materializations),
+        "coordination_resume_without_new_evidence_count": (
+            resume_without_new_evidence_count
+        ),
+        "structural_decision_count": structural_decision_count,
+        "effective_structural_decision_count": effective_structural_decision_count,
+        "effective_structural_decision_ratio": round(
+            effective_structural_decision_ratio,
+            6,
+        ),
+        "terminal_candidate_count": terminal_candidate_count,
+        "candidate_expanded_count": expanded_candidate_count,
+        "candidate_resolved_without_expansion_count": resolved_candidate_count,
+        "coordination_provider_input_tokens_estimate": (
+            provider_input_token_estimate
+        ),
+        "coordination_provider_output_tokens_estimate": (
+            provider_output_token_estimate
+        ),
+        "coordination_worker_input_tokens_reported": coordination_worker_usage[
+            "input_tokens"
+        ],
+        "coordination_worker_cached_input_tokens_reported": (
+            coordination_worker_usage["cached_input_tokens"]
+        ),
+        "coordination_worker_output_tokens_reported": coordination_worker_usage[
+            "output_tokens"
+        ],
+        "coordination_token_overhead": {
+            "provider_estimated_total": (
+                provider_input_token_estimate + provider_output_token_estimate
+            ),
+            "worker_reported_total": (
+                coordination_worker_usage["input_tokens"]
+                + coordination_worker_usage["output_tokens"]
+            ),
+            "mixed_estimate_not_reported": True,
+        },
+    }
     return {
         "schema": policy.get("schema"),
         "mode": policy.get("mode") or "coherent_single_primary",
@@ -9001,6 +9899,15 @@ def summarize_runtime_orchestration(
                     (job_id,),
                 ).fetchall()
             },
+            "terminal_responsibility_candidates": {
+                "event_count": len(terminal_candidate_events),
+                "candidate_count": terminal_candidate_count,
+                "pending_count": len(pending_terminal_candidates),
+                "pending": pending_terminal_candidates,
+                "expanded_count": terminal_expanded_candidate_count,
+                "resolved_without_expansion_count": resolved_candidate_count,
+            },
+            "cost": coordination_cost,
         },
         "children": children,
         "child_count": len(children),
@@ -9907,10 +10814,7 @@ def _worker_context(
         and node.get("node_type") != "verification"
         and prior_coordination_checkpoint is None
         and not directive_bundle
-        and (
-            metadata.get("non_authoritative_contribution")
-            or metadata.get("coordination_checkpoint_required")
-        )
+        and metadata.get("coordination_checkpoint_required")
     ):
         coordination_checkpoint_boundary = (
             "Runtime coordination checkpoint mode: execute one bounded, meaningful "
@@ -9933,6 +10837,25 @@ def _worker_context(
             "execution_discovered_gap, workspace_isolation, capability_boundary, or "
             "independent_verification. A candidate is advisory: do not claim that you "
             "created a node or changed the graph.\n\n"
+        )
+    event_driven_coordination_boundary = ""
+    if (
+        isinstance(orchestration_policy, dict)
+        and orchestration_policy.get("mode") == "closed_loop_coordination"
+        and node.get("node_type") != "verification"
+        and not structure_assessment_boundary
+        and not coordination_checkpoint_boundary
+    ):
+        event_driven_coordination_boundary = (
+            "Runtime event-driven coordination mode: own the complete node responsibility and "
+            "normally continue until a terminal receipt. A child node is not required to stop "
+            "after its first implementation slice. Submit a nonterminal coordination checkpoint "
+            "only when concrete evidence changes another active responsibility or exposes a "
+            "genuinely separate durable responsibility. Ordinary inspection, local progress, "
+            "test results, and completion of this node are not structural events. A terminal "
+            "receipt may carry non-authoritative responsibility_candidates when this node is "
+            "complete but evidence exposes a separate responsibility owned by another "
+            "nonterminal integration node.\n\n"
         )
     receipt_recovery_instruction = ""
     resume_from_materialization_id = (continuity or {}).get(
@@ -10016,6 +10939,7 @@ def _worker_context(
         f"{directive_context}"
         f"{structure_assessment_boundary}"
         f"{coordination_checkpoint_boundary}"
+        f"{event_driven_coordination_boundary}"
         f"{contribution_worker_boundary}"
         f"{phase4g8_worker_boundary}"
         f"{receipt_recovery_instruction}"
@@ -10028,13 +10952,20 @@ def _worker_context(
                 "checkpoint is non-terminal for the execution node and does not update "
                 "the progress ledger.\n\n"
                 if coordination_checkpoint_boundary
-                else
+                else (
+                    "Expected output: runtime_worker_event_v1 containing either one terminal "
+                    "runtime_worker_receipt_v1 or one structurally relevant nonterminal "
+                    "runtime_worker_coordination_checkpoint_v1.\n\n"
+                    if event_driven_coordination_boundary
+                    else
                 "Expected receipt fields: verdict, summary, claimed_goal_items, partial_goal_items, "
                 "unmet_goal_items, verification, artifacts, active_assumptions, rejected_approaches, "
                 "known_failure_boundaries, consumed_directive_ids, optional structure_request, and "
+                "responsibility_candidates, and "
                 "verification_provenance for verification nodes. structure_request is terminal-only, "
                 "orthogonal to verdict, requires an allowed reason_type and evidence_refs for every "
                 "discovered gap, and cannot mutate the runtime graph.\n\n"
+                )
             )
         )
         +
@@ -10825,6 +11756,25 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
             task_id=node["latest_task_id"],
             run_id=snapshot_run_id,
             source="runtime_kernel",
+        )
+    if metadata.get("responsibility_candidates"):
+        _event(
+            conn,
+            node["job_id"],
+            "worker_responsibility_candidates_recorded",
+            {
+                "node_key": node["node_key"],
+                "verdict": verdict,
+                "materialization_id": materialization["id"],
+                "materialization_attempt": int(materialization["attempt"]),
+                "responsibility_candidates": metadata[
+                    "responsibility_candidates"
+                ],
+            },
+            node_id=node_id,
+            task_id=node["latest_task_id"],
+            run_id=snapshot_run_id,
+            source="kanban_task",
         )
     if metadata.get("structure_request") is not None:
         _event(

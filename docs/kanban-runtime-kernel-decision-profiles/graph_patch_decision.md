@@ -1,4 +1,4 @@
-Profile-Version: 5
+Profile-Version: 6
 
 # Graph Patch 决策 Profile
 
@@ -40,6 +40,7 @@ primary worker node 中。只有存在持久结构边界时才创建独立 resea
 - `continue_node`
 - `issue_directive`
 - `supersede_directive`
+- `resolve_responsibility_candidate`
 
 ## 禁止的操作
 
@@ -96,6 +97,21 @@ checkpoint。目标为 `waiting_coordination` 时，还必须提供其 `target_c
 - 必须使用 `execution_discovered_gap` decomposition，覆盖本 epoch 创建的全部 child，引用
   每个 candidate event，并填写同一个 `integration_owner_node_key`。
 
+当 `global_execution_snapshot.terminal_responsibility_candidates` 非空时，必须对其中每个 pending
+candidate 做出且只做出一个结论：
+
+- 需要独立、可恢复的同 lane child 时，使用带精确 `source_responsibility_ref` 的
+  `create_node`，并添加 child 到既有 integration owner 的 dependency；
+- 已有 active node 可以完整吸收时，使用 `resolve_responsibility_candidate`，resolution 为
+  `absorbed_by_existing`；
+- candidate 不是 durable responsibility 时，resolution 为 `rejected_not_durable`；
+- 当前 active owner 已覆盖且延后不会产生无 owner goal gap 时，才可使用 `deferred`。
+
+不得静默忽略 terminal candidate。Terminal candidate expansion 只能指向尚未 materialize 的
+`planned` 或 `waiting_dependency` integration owner；若 owner 已运行，应选择合法 resolution，
+必要时通过后续 coordination checkpoint 调整 active node。Terminal candidate 与当前 source
+node 的 verdict 正交，不能重写 source node 的 terminal 事实。
+
 Routing-only coordination epoch 的 control patch 必须保持最小且确定：
 
 - 每个 `waiting_coordination` target node 恰好接收一条 `issue_directive`；
@@ -104,16 +120,17 @@ Routing-only coordination epoch 的 control patch 必须保持最小且确定：
 - 同一 patch 不得向同一个 target 重复发送 directive；
 - `target_checkpoint_event_id` 必须是该 target 自己的未消费 checkpoint event；
 - op 只能是 `issue_directive`，或在确有已排队旧 directive 时使用
-  `supersede_directive`；不得混入其他 op；
+  `supersede_directive`；若同一 delta 还含 pending terminal candidate，可以同时使用
+  `resolve_responsibility_candidate`，不得混入其他 op；
 - `evidence_refs` 只使用 snapshot 中真实的 `event:<id>` checkpoint reference；不得添加
   `workspace:`、`verification:` 或其他未由 Runtime 注册的 reference；
 - graph 中已经存在的 dependency 不得重复添加。
 
 Evidence-driven coordination epoch 仍必须向每个 `waiting_coordination` node 恰好发送一条
-directive，但可以额外包含 `create_node` 和一一对应的 `add_dependency`。不得混入
-`continue_node`、`insert_verifier`、`strategy_update`、`request_human` 或
-`propose_blocked`。新 node 数不能超过 snapshot/policy 中剩余 child budget；没有合法 candidate
-reference 时必须退回 routing-only，不得猜测新责任。
+directive，但可以额外包含 `create_node` 和一一对应的 `add_dependency`，以及同步消费 terminal
+candidate 的 `resolve_responsibility_candidate`。不得混入 `continue_node`、`insert_verifier`、
+`strategy_update`、`request_human` 或 `propose_blocked`。新 node 数不能超过 snapshot/policy 中
+剩余 child budget；没有合法 candidate reference 时必须退回 routing-only，不得猜测新责任。
 
 责任仍然有效、只需注入新上下文时使用 `continue`。只有在提供完整 typed replacement
 contract 时才能使用 `revise_contract` 或 `narrow_scope`。不得改变 goal linkage 或 requested
@@ -167,6 +184,10 @@ Patch op 必须使用以下精确字段名：
   `narrow_scope` 时必须提供完整 typed replacement `contract`。
 - `supersede_directive`：`directive_id` 和非空 `reason`。只能 supersede 尚未交付的 queued
   directive。
+- `resolve_responsibility_candidate`：`source_responsibility_ref`、`resolution`、非空
+  `rationale` 和包含 candidate event 的 `evidence_refs`。`absorbed_by_existing` 还必须提供
+  `existing_node_key`；`rejected_not_durable` 与 `deferred` 不得提供该字段。该操作只消费
+  non-authoritative candidate，不完成 goal、node 或 job。
 - `insert_verifier`：`verifier_node_key`、`title`、`target_node_key` 或
   `target_goal_item_key` 之一，以及 verifier node 自身 linkage 所需的 `goal_item_keys` 或
   `gap_keys`。还必须固定至少一个 immutable target reference：`target_evidence_ref`、
