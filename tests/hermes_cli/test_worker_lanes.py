@@ -1127,6 +1127,42 @@ def test_extract_runtime_receipt_accepts_structure_checkpoint():
     assert _extract_runtime_receipt(output) == checkpoint
 
 
+def test_codex_coordination_checkpoint_schema_and_prompt(tmp_path):
+    from hermes_cli.codex_worker import (
+        _extract_runtime_receipt,
+        _prepare_runtime_output_schema,
+        build_codex_prompt,
+    )
+
+    context = (
+        "# Runtime node\n\n"
+        "Runtime coordination checkpoint mode: execute one bounded implementation slice.\n\n"
+        'Runtime footer: {"node_key":"renderer"}\n'
+    )
+    prompt = build_codex_prompt(
+        context,
+        lane="codex-runtime",
+        model="gpt-5.6-sol",
+    )
+    assert "runtime_worker_coordination_checkpoint_v1" in prompt
+    assert "Do not claim node or goal completion" in prompt
+    schema_path = _prepare_runtime_output_schema(
+        context,
+        {"CODEX_HOME": str(tmp_path / "codex-home")},
+    )
+    schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
+    assert schema["properties"]["schema"]["enum"] == [
+        "runtime_worker_coordination_checkpoint_v1"
+    ]
+    receipt = _extract_runtime_receipt(
+        json.dumps({
+            "schema": "runtime_worker_coordination_checkpoint_v1",
+            "kind": "milestone_completed",
+        })
+    )
+    assert receipt["kind"] == "milestone_completed"
+
+
 def test_codex_prompt_keeps_runtime_contribution_outside_candidate_ready():
     from hermes_cli.codex_worker import build_codex_prompt
 
@@ -1139,6 +1175,10 @@ def test_codex_prompt_keeps_runtime_contribution_outside_candidate_ready():
 
     assert "Contribution exception" in prompt
     assert "Use verdict `succeeded`, not `candidate_ready`" in prompt
+    assert "leave all three as empty arrays" in prompt
+    assert "Do not put summaries, file paths, or other prose" in prompt
+    assert "keep `claimed_goal_items` empty" in prompt
+    assert "only in `partial_goal_items`" in prompt
 
 
 def test_codex_prompt_requires_complete_contribution_attribution_for_primary():

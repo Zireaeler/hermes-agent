@@ -5178,3 +5178,552 @@ def test_ordinary_runtime_orchestration_enforces_lane_and_capabilities(
 
     assert result["status"] == "rejected"
     assert error in result["reason"]
+
+
+def _closed_loop_coordination_job(conn):
+    job_id = rk.create_runtime_job(
+        conn,
+        _root_task(conn),
+        "coordinate parser and renderer through Runtime",
+        goal_items=[{
+            "item_key": "coordinated-result",
+            "description": "parser and renderer share one token contract",
+            "required": True,
+            "verifier_required": False,
+        }],
+        initial_assignee="codex-runtime",
+        initialization_mode="fixture",
+        runtime_metadata={
+            "orchestration_policy": {
+                "schema": rk.RUNTIME_ORCHESTRATION_POLICY_SCHEMA,
+                "mode": "closed_loop_coordination",
+                "enabled": True,
+            },
+        },
+    )
+    parser = _node(conn, job_id, "understand-scope")
+    constraints = json.loads(parser["constraints_json"])
+    constraints["contract"] = _contract("src/parser/**")
+    metadata = json.loads(parser["metadata_json"])
+    metadata["coordination_checkpoint_required"] = True
+    conn.execute(
+        """
+        UPDATE execution_nodes
+           SET title = 'Implement parser', description = 'Implement parser token model.',
+               constraints_json = ?, metadata_json = ?
+         WHERE id = ?
+        """,
+        (json.dumps(constraints), json.dumps(metadata), parser["id"]),
+    )
+    result = rk.apply_graph_patch(
+        conn,
+        job_id,
+        _patch(
+            job_id,
+            _revision(conn, job_id),
+            {
+                "op": "create_node",
+                "node_key": "renderer",
+                "node_type": "implementation",
+                "title": "Implement renderer",
+                "description": "Implement rendering for parser tokens.",
+                "assignee": "codex-runtime",
+                "goal_item_keys": ["coordinated-result"],
+                "contract": _contract("src/renderer/**"),
+            },
+        ),
+    )
+    assert result["status"] == "applied"
+    renderer = _node(conn, job_id, "renderer")
+    renderer_metadata = json.loads(renderer["metadata_json"])
+    renderer_metadata["coordination_checkpoint_required"] = True
+    conn.execute(
+        "UPDATE execution_nodes SET metadata_json = ? WHERE id = ?",
+        (json.dumps(renderer_metadata), renderer["id"]),
+    )
+    rk.reduce_runtime_job(conn, job_id)
+    for key, session_id in (
+        ("understand-scope", "019f0000-0000-7000-8000-0000000000a1"),
+        ("renderer", "019f0000-0000-7000-8000-0000000000b2"),
+    ):
+        node = _node(conn, job_id, key)
+        assert rk.materialize_runtime_node(conn, dict(node))
+        node = _node(conn, job_id, key)
+        task = conn.execute(
+            "SELECT body FROM tasks WHERE id = ?",
+            (node["latest_task_id"],),
+        ).fetchone()
+        assert "Runtime coordination checkpoint mode:" in task["body"]
+        kb.record_task_event(
+            conn,
+            node["latest_task_id"],
+            "worker_backend_session_started",
+            {
+                "worker_lane": "codex-runtime",
+                "worker_kind": "codex_cli",
+                "backend_session_id": session_id,
+                "execution_mode": "fresh",
+            },
+        )
+    rk.sync_runtime_backend_sessions(conn, job_id)
+    return job_id
+
+
+def _coordination_checkpoint(
+    *,
+    kind: str,
+    summary: str,
+    finding_key: str,
+    affected_node_keys: list[str],
+    changed_files: list[str],
+    consumed_directive_ids: list[str] | None = None,
+):
+    return {
+        "schema": rk.COORDINATION_CHECKPOINT_SCHEMA,
+        "kind": kind,
+        "summary": summary,
+        "phase": "implementation",
+        "completed_scope": [summary],
+        "remaining_scope": ["finish focused tests"],
+        "findings": [{
+            "finding_key": finding_key,
+            "type": kind,
+            "summary": summary,
+            "affected_node_keys": affected_node_keys,
+            "evidence_refs": [f"workspace:path:{changed_files[0]}"],
+        }],
+        "next_intent": "consume Runtime coordination and finish the responsibility",
+        "changed_files": changed_files,
+        "consumed_directive_ids": consumed_directive_ids or [],
+        "worker_session_should_resume": True,
+    }
+
+
+def _complete_codex_checkpoint(conn, node, checkpoint):
+    _complete_node(
+        conn,
+        node,
+        {
+            "worker_lane": {
+                "name": "codex-runtime",
+                "kind": "codex_cli",
+                "exit_code": 0,
+            },
+            "runtime_receipt": checkpoint,
+        },
+    )
+
+
+def test_coordination_checkpoint_controls_other_active_node_and_acks_resume(conn):
+    job_id = _closed_loop_coordination_job(conn)
+    parser = _node(conn, job_id, "understand-scope")
+    renderer = _node(conn, job_id, "renderer")
+    _complete_codex_checkpoint(
+        conn,
+        parser,
+        _coordination_checkpoint(
+            kind="shared_contract_changed",
+            summary="Parser introduced token-model-v2.",
+            finding_key="token-model-v2",
+            affected_node_keys=["understand-scope", "renderer"],
+            changed_files=["src/parser/token.py"],
+        ),
+    )
+    _complete_codex_checkpoint(
+        conn,
+        renderer,
+        _coordination_checkpoint(
+            kind="milestone_completed",
+            summary="Renderer completed the v1 adapter slice.",
+            finding_key="renderer-v1-slice",
+            affected_node_keys=["renderer"],
+            changed_files=["src/renderer/render.py"],
+        ),
+    )
+    advanced = rk.advance_runtime_job(conn, job_id, create_tasks=False)
+    assert set(advanced.ingested_nodes) == {"understand-scope", "renderer"}
+    assert _node(conn, job_id, "understand-scope")["state"] == "waiting_coordination"
+    assert _node(conn, job_id, "renderer")["state"] == "waiting_coordination"
+    assert conn.execute(
+        "SELECT COUNT(*) FROM progress_ledger WHERE job_id = ?",
+        (job_id,),
+    ).fetchone()[0] == 0
+    checkpoints = conn.execute(
+        """
+        SELECT id, node_id FROM execution_events
+         WHERE job_id = ? AND event_type = 'worker_coordination_checkpointed'
+         ORDER BY id
+        """,
+        (job_id,),
+    ).fetchall()
+    checkpoint_by_node = {row["node_id"]: int(row["id"]) for row in checkpoints}
+    delta = rk.build_decision_delta(conn, job_id)
+    snapshot = delta["global_execution_snapshot"]
+    assert {item["node_key"] for item in snapshot["active_responsibilities"]} == {
+        "understand-scope",
+        "renderer",
+    }
+    assert len(snapshot["coordination_checkpoints"]) == 2
+
+    parser_event = checkpoint_by_node[parser["id"]]
+    renderer_event = checkpoint_by_node[renderer["id"]]
+    renderer_contract = {
+        **_contract("src/renderer/**"),
+        "acceptance_criteria": [
+            "Renderer consumes token-model-v2",
+            "Renderer focused tests pass",
+        ],
+    }
+    applied = rk.apply_graph_patch(
+        conn,
+        job_id,
+        _patch(
+            job_id,
+            _revision(conn, job_id),
+            {
+                "op": "issue_directive",
+                "target_node_key": "understand-scope",
+                "source_checkpoint_event_id": parser_event,
+                "target_checkpoint_event_id": parser_event,
+                "action": "continue",
+                "expected_contract_revision": 1,
+                "summary": "Finish parser tests and publish token-model-v2 evidence.",
+                "instructions": ["Finish parser tests without entering renderer scope."],
+                "evidence_refs": [f"event:{parser_event}"],
+            },
+            {
+                "op": "issue_directive",
+                "target_node_key": "renderer",
+                "source_checkpoint_event_id": parser_event,
+                "target_checkpoint_event_id": renderer_event,
+                "action": "revise_contract",
+                "expected_contract_revision": 1,
+                "summary": "Consume token-model-v2 in renderer.",
+                "instructions": [
+                    "Replace the v1 adapter with token-model-v2 before final verification."
+                ],
+                "evidence_refs": [f"event:{parser_event}"],
+                "contract": renderer_contract,
+            },
+        ),
+        decision_id="decision-test",
+    )
+    assert applied["status"] == "applied"
+    assert _node(conn, job_id, "understand-scope")["state"] == "ready"
+    assert _node(conn, job_id, "renderer")["state"] == "ready"
+    assert _node(conn, job_id, "renderer")["contract_revision"] == 2
+
+    for key in ("understand-scope", "renderer"):
+        resumed_task = rk.materialize_runtime_node(
+            conn,
+            dict(_node(conn, job_id, key)),
+        )
+        materialization = conn.execute(
+            """
+            SELECT * FROM node_materializations
+             WHERE node_id = ? ORDER BY attempt DESC LIMIT 1
+            """,
+            (_node(conn, job_id, key)["id"],),
+        ).fetchone()
+        continuity = json.loads(materialization["metadata_json"])[
+            "execution_continuity"
+        ]
+        assert continuity["mode"] == "resume"
+        assert continuity["resume_reason"] == "coordination_directive"
+        task_body = conn.execute(
+            "SELECT body FROM tasks WHERE id = ?",
+            (resumed_task,),
+        ).fetchone()[0]
+        assert "Runtime coordination directives:" in task_body
+        assert "consumed_directive_ids" in task_body
+
+    renderer_directive = conn.execute(
+        "SELECT * FROM runtime_node_directives WHERE target_node_id = ?",
+        (renderer["id"],),
+    ).fetchone()
+    assert renderer_directive["status"] == "delivered"
+    resumed_renderer = _node(conn, job_id, "renderer")
+    invalid_receipt = {
+        "schema": "runtime_worker_receipt_v1",
+        "verdict": "succeeded",
+        "summary": "Renderer ignored its delivered directive.",
+        "claimed_goal_items": [],
+        "partial_goal_items": ["coordinated-result"],
+        "unmet_goal_items": [],
+        "contradicted_goal_items": [],
+        "changed_files": ["src/renderer/render.py"],
+        "verification": {"passed": True, "summary": "renderer tests passed"},
+        "artifacts": [],
+        "accepted_contributions": [],
+        "modified_contributions": [],
+        "rejected_contributions": [],
+        "active_assumptions": [],
+        "rejected_approaches": [],
+        "known_failure_boundaries": [],
+        "consumed_directive_ids": [],
+        "structure_request": None,
+    }
+    assert rk._runtime_receipt_from_evidence(
+        {
+            "worker_lane": {"kind": "codex_cli"},
+            "runtime_receipt": invalid_receipt,
+        },
+        dict(resumed_renderer),
+        conn=conn,
+    ) is None
+    kb.record_task_event(
+        conn,
+        resumed_renderer["latest_task_id"],
+        "worker_backend_session_resumed",
+        {
+            "worker_lane": "codex-runtime",
+            "worker_kind": "codex_cli",
+            "backend_session_id": "019f0000-0000-7000-8000-000000000031",
+            "execution_mode": "resume",
+        },
+        run_id=resumed_renderer["latest_run_id"],
+    )
+    _complete_node(
+        conn,
+        resumed_renderer,
+        {
+            "worker_lane": {
+                "name": "codex-runtime",
+                "kind": "codex_cli",
+                "exit_code": 0,
+            },
+            "runtime_receipt": {
+                "schema": "runtime_worker_receipt_v1",
+                "verdict": "succeeded",
+                "summary": "Renderer now consumes token-model-v2.",
+                "claimed_goal_items": [],
+                "partial_goal_items": ["coordinated-result"],
+                "unmet_goal_items": [],
+                "contradicted_goal_items": [],
+                "changed_files": ["src/renderer/render.py"],
+                "verification": {
+                    "passed": True,
+                    "summary": "renderer tests passed",
+                },
+                "artifacts": [],
+                "accepted_contributions": [],
+                "modified_contributions": [],
+                "rejected_contributions": [],
+                "active_assumptions": [],
+                "rejected_approaches": [],
+                "known_failure_boundaries": [],
+                "consumed_directive_ids": [renderer_directive["id"]],
+                "structure_request": None,
+            },
+        },
+    )
+    assert rk.ingest_runtime_node_evidence(conn, resumed_renderer["id"])
+    acknowledged = conn.execute(
+        "SELECT * FROM runtime_node_directives WHERE id = ?",
+        (renderer_directive["id"],),
+    ).fetchone()
+    assert acknowledged["status"] == "acknowledged"
+    assert acknowledged["acknowledged_materialization_id"] is not None
+    rk.sync_runtime_backend_sessions(conn, job_id)
+    orchestration = rk.summarize_runtime_orchestration(conn, job_id)
+    assert orchestration["coordination"]["checkpoint_count"] == 2
+    assert orchestration["coordination"]["directive_status_counts"][
+        "acknowledged"
+    ] == 1
+    assert orchestration["coordination"]["contract_revisions"]["renderer"] == 2
+    assert rk.check_runtime_consistency(conn, job_id, write_events=False)[
+        "violations"
+    ] == []
+
+
+def test_running_target_queues_directive_until_its_coordination_safe_point(conn):
+    job_id = _closed_loop_coordination_job(conn)
+    parser = _node(conn, job_id, "understand-scope")
+    renderer = _node(conn, job_id, "renderer")
+    _complete_codex_checkpoint(
+        conn,
+        parser,
+        _coordination_checkpoint(
+            kind="shared_contract_changed",
+            summary="Parser introduced token-model-v2.",
+            finding_key="token-model-v2",
+            affected_node_keys=["renderer"],
+            changed_files=["src/parser/token.py"],
+        ),
+    )
+    assert rk.ingest_runtime_node_evidence(conn, parser["id"])
+    parser_event = conn.execute(
+        """
+        SELECT id FROM execution_events
+         WHERE job_id = ? AND node_id = ?
+           AND event_type = 'worker_coordination_checkpointed'
+        """,
+        (job_id, parser["id"]),
+    ).fetchone()[0]
+    assert _node(conn, job_id, "renderer")["state"] == "running"
+    patch = _patch(
+        job_id,
+        _revision(conn, job_id),
+        {
+            "op": "issue_directive",
+            "target_node_key": "understand-scope",
+            "source_checkpoint_event_id": parser_event,
+            "target_checkpoint_event_id": parser_event,
+            "action": "continue",
+            "expected_contract_revision": 1,
+            "summary": "Finish parser tests.",
+            "instructions": ["Finish parser tests."],
+            "evidence_refs": [f"event:{parser_event}"],
+        },
+        {
+            "op": "issue_directive",
+            "target_node_key": "renderer",
+            "source_checkpoint_event_id": parser_event,
+            "action": "revise_contract",
+            "expected_contract_revision": 1,
+            "summary": "Consume token-model-v2 at the next safe point.",
+            "instructions": ["Replace the v1 adapter with token-model-v2."],
+            "evidence_refs": [f"event:{parser_event}"],
+            "contract": {
+                **_contract("src/renderer/**"),
+                "acceptance_criteria": ["Renderer consumes token-model-v2"],
+            },
+        },
+    )
+    assert rk.apply_graph_patch(conn, job_id, patch)["status"] == "applied"
+    queued = conn.execute(
+        "SELECT * FROM runtime_node_directives WHERE target_node_id = ?",
+        (renderer["id"],),
+    ).fetchone()
+    assert queued["status"] == "queued"
+    assert _node(conn, job_id, "renderer")["contract_revision"] == 1
+
+    _complete_codex_checkpoint(
+        conn,
+        _node(conn, job_id, "renderer"),
+        _coordination_checkpoint(
+            kind="milestone_completed",
+            summary="Renderer reached its safe point under contract v1.",
+            finding_key="renderer-safe-point",
+            affected_node_keys=["renderer"],
+            changed_files=["src/renderer/render.py"],
+        ),
+    )
+    assert rk.ingest_runtime_node_evidence(conn, renderer["id"])
+    activated = conn.execute(
+        "SELECT * FROM runtime_node_directives WHERE id = ?",
+        (queued["id"],),
+    ).fetchone()
+    assert activated["status"] == "queued"
+    assert activated["target_checkpoint_event_id"] is not None
+    assert _node(conn, job_id, "renderer")["state"] == "ready"
+    assert _node(conn, job_id, "renderer")["contract_revision"] == 2
+
+    resumed_task = rk.materialize_runtime_node(
+        conn,
+        dict(_node(conn, job_id, "renderer")),
+    )
+    delivered = conn.execute(
+        "SELECT * FROM runtime_node_directives WHERE id = ?",
+        (queued["id"],),
+    ).fetchone()
+    assert delivered["status"] == "delivered"
+    body = conn.execute(
+        "SELECT body FROM tasks WHERE id = ?",
+        (resumed_task,),
+    ).fetchone()[0]
+    assert queued["id"] in body
+    recovery_body = rk._worker_context(
+        conn,
+        dict(conn.execute("SELECT * FROM runtime_jobs WHERE id = ?", (job_id,)).fetchone()),
+        dict(_node(conn, job_id, "renderer")),
+        "mat-recovery-test",
+    )
+    assert queued["id"] in recovery_body
+    assert "Runtime coordination directives:" in recovery_body
+
+
+def test_coordination_directive_rejects_stale_revision_and_scope_overlap(conn):
+    job_id = _closed_loop_coordination_job(conn)
+    parser = _node(conn, job_id, "understand-scope")
+    renderer = _node(conn, job_id, "renderer")
+    for node, checkpoint in (
+        (
+            parser,
+            _coordination_checkpoint(
+                kind="shared_contract_changed",
+                summary="Parser changed token contract.",
+                finding_key="token-contract",
+                affected_node_keys=["renderer"],
+                changed_files=["src/parser/token.py"],
+            ),
+        ),
+        (
+            renderer,
+            _coordination_checkpoint(
+                kind="milestone_completed",
+                summary="Renderer reached safe point.",
+                finding_key="renderer-safe-point",
+                affected_node_keys=["renderer"],
+                changed_files=["src/renderer/render.py"],
+            ),
+        ),
+    ):
+        _complete_codex_checkpoint(conn, node, checkpoint)
+    rk.advance_runtime_job(conn, job_id, create_tasks=False)
+    events = {
+        row["node_id"]: int(row["id"])
+        for row in conn.execute(
+            """
+            SELECT id, node_id FROM execution_events
+             WHERE job_id = ? AND event_type = 'worker_coordination_checkpointed'
+            """,
+            (job_id,),
+        ).fetchall()
+    }
+    source_event = events[parser["id"]]
+    target_event = events[renderer["id"]]
+    stale = rk.apply_graph_patch(
+        conn,
+        job_id,
+        _patch(
+            job_id,
+            _revision(conn, job_id),
+            {
+                "op": "issue_directive",
+                "target_node_key": "renderer",
+                "source_checkpoint_event_id": source_event,
+                "target_checkpoint_event_id": target_event,
+                "action": "continue",
+                "expected_contract_revision": 2,
+                "summary": "stale contract directive",
+                "instructions": ["continue"],
+                "evidence_refs": [f"event:{source_event}"],
+            },
+        ),
+    )
+    assert stale["status"] == "rejected"
+    assert "expected_contract_revision" in stale["reason"]
+
+    overlap = rk.apply_graph_patch(
+        conn,
+        job_id,
+        _patch(
+            job_id,
+            _revision(conn, job_id),
+            {
+                "op": "issue_directive",
+                "target_node_key": "renderer",
+                "source_checkpoint_event_id": source_event,
+                "target_checkpoint_event_id": target_event,
+                "action": "revise_contract",
+                "expected_contract_revision": 1,
+                "summary": "invalid overlapping scope",
+                "instructions": ["enter parser scope"],
+                "evidence_refs": [f"event:{source_event}"],
+                "contract": _contract("src/parser/**"),
+            },
+        ),
+    )
+    assert overlap["status"] == "rejected"
+    assert "write scopes overlap" in overlap["reason"]

@@ -542,3 +542,42 @@ Phase 4G11 MVP 完成需要：
 
 Phase 4G11 不以“节点更多”作为成功。若 small task 在结构评估后保持单 node，不能验证本阶段；受控
 case 必须确实包含两个 active responsibility 和一次跨节点 directive/ACK 闭环。
+
+## 18. 实现与验证状态
+
+截至 2026-07-19，Phase 4G11 MVP 已完成实现：
+
+- 增加 `closed_loop_coordination` orchestration mode；
+- 增加 coordination checkpoint canonical parser/validator；
+- 增加 `waiting_coordination` 与不写 progress ledger 的 checkpoint ingest；
+- 增加 `runtime_node_directives` durable mailbox 和 node `contract_revision`；
+- 增加 `issue_directive` / `supersede_directive` validator 与 apply path；
+- 增加 global execution snapshot、same-session resume、directive delivery 与 ACK；
+- 增加未 ACK delivered directive 在 protocol recovery materialization 中的再次注入；
+- 增加 status/consistency/orchestration observability；
+- 增加 deterministic control tests 和可恢复的真实 Small runner。
+
+真实 Small 验证使用两个 isolated child responsibility 和一个 shared-workspace integration
+owner。最终 run 证明：
+
+```text
+parser shared contract checkpoint
+    + renderer blocking checkpoint
+    -> real Decision Provider control patch
+    -> two same-session resumes
+    -> two directive ACKs
+    -> two frozen contributions
+    -> primary attribution and integration
+    -> goal satisfied / consistency passed
+```
+
+最终成功 run 使用与生产配置相同的 base URL、API key 和 `gpt-5.6-sol` 模型，但由于该模型源
+WebSocket transport 在验证窗口内反复断流，使用隔离 Codex home 将
+`supports_websockets=false`，通过 HTTP transport 完成。WebSocket 配置、20 次重连和
+same-session resume 路径已在此前 attempt 中实际触发；transport 可用性不作为 Runtime
+correctness 的替代证据。
+
+完整过程与证据见：
+
+- `docs/validation/phase4g11/phase4g11-small-20260719-151215/execution-summary.md`；
+- `docs/validation/phase4g11/phase4g11-small-20260719-151215/run-report.json`。

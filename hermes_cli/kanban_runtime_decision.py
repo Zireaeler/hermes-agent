@@ -27,6 +27,8 @@ PATCH_OPS = {
     "propose_blocked",
     "strategy_update",
     "continue_node",
+    "issue_directive",
+    "supersede_directive",
 }
 DEFAULT_COMPACTION_POLICY = {
     "mode": "auto",
@@ -2559,6 +2561,8 @@ def build_decision_provider_request(
             "expected_revision_required": True,
             "new_node_requires_goal_gap_or_human_linkage": True,
             "no_direct_db_writes": True,
+            "directive_delivery_and_ack_are_local_facts": True,
+            "provider_cannot_acknowledge_directives": True,
         },
         "delegation_policy": {
             "role": "structure_upgrade_controller_not_task_decomposer",
@@ -2609,6 +2613,14 @@ def build_decision_provider_request(
             )
             if orchestration_policy.get(key) is not None
         }
+        if orchestration_policy.get("mode") == "closed_loop_coordination":
+            stable_prefix["runtime_coordination_policy"] = {
+                "worker_peer_to_peer_messages": False,
+                "semantic_checkpoints_only": True,
+                "active_turn_midflight_injection": False,
+                "directive_mailbox_is_db_backed": True,
+                "directive_ack_requires_target_materialization_evidence": True,
+            }
     memory = rm.select_runtime_memory_hints(conn, job_id, delta)
     if memory.get("guidance", {}).get("loaded"):
         stable_prefix["runtime_guidance"] = {

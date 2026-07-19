@@ -111,6 +111,10 @@ _RUNTIME_WORKER_OUTPUT_SCHEMA: dict[str, Any] = {
         "active_assumptions": {"type": "array", "items": {"type": "string"}},
         "rejected_approaches": {"type": "array", "items": {"type": "string"}},
         "known_failure_boundaries": {"type": "array", "items": {"type": "string"}},
+        "consumed_directive_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
         "structure_request": {
             "anyOf": [
                 {"type": "null"},
@@ -196,6 +200,7 @@ _RUNTIME_WORKER_OUTPUT_SCHEMA: dict[str, Any] = {
         "active_assumptions",
         "rejected_approaches",
         "known_failure_boundaries",
+        "consumed_directive_ids",
         "structure_request",
     ],
     "additionalProperties": False,
@@ -279,6 +284,93 @@ _RUNTIME_STRUCTURE_OUTPUT_SCHEMA: dict[str, Any] = {
         "risks",
         "worker_session_should_resume",
         "changed_files",
+    ],
+    "additionalProperties": False,
+}
+
+_RUNTIME_COORDINATION_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "schema": {
+            "type": "string",
+            "enum": ["runtime_worker_coordination_checkpoint_v1"],
+        },
+        "kind": {
+            "type": "string",
+            "enum": [
+                "milestone_completed",
+                "shared_contract_changed",
+                "scope_overlap_detected",
+                "gap_discovered",
+                "assumption_invalidated",
+                "blocking_dependency",
+                "partial_contribution_ready",
+                "integration_risk",
+            ],
+        },
+        "summary": {"type": "string"},
+        "phase": {"type": "string"},
+        "completed_scope": {"type": "array", "items": {"type": "string"}},
+        "remaining_scope": {"type": "array", "items": {"type": "string"}},
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "finding_key": {"type": "string"},
+                    "type": {
+                        "type": "string",
+                        "enum": [
+                            "milestone_completed",
+                            "shared_contract_changed",
+                            "scope_overlap_detected",
+                            "gap_discovered",
+                            "assumption_invalidated",
+                            "blocking_dependency",
+                            "partial_contribution_ready",
+                            "integration_risk",
+                        ],
+                    },
+                    "summary": {"type": "string"},
+                    "affected_node_keys": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "evidence_refs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                },
+                "required": [
+                    "finding_key",
+                    "type",
+                    "summary",
+                    "affected_node_keys",
+                    "evidence_refs",
+                ],
+                "additionalProperties": False,
+            },
+        },
+        "next_intent": {"type": "string"},
+        "changed_files": {"type": "array", "items": {"type": "string"}},
+        "consumed_directive_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "worker_session_should_resume": {"type": "boolean"},
+    },
+    "required": [
+        "schema",
+        "kind",
+        "summary",
+        "phase",
+        "completed_scope",
+        "remaining_scope",
+        "findings",
+        "next_intent",
+        "changed_files",
+        "consumed_directive_ids",
+        "worker_session_should_resume",
     ],
     "additionalProperties": False,
 }
@@ -726,7 +818,14 @@ def _prepare_runtime_output_schema(
     """Persist the structured final-response contract outside the workspace."""
 
     is_structure_assessment = "Early structure assessment mode:" in task_context
-    if not is_structure_assessment and "Runtime footer:" not in task_context:
+    is_coordination_checkpoint = (
+        "Runtime coordination checkpoint mode:" in task_context
+    )
+    if (
+        not is_structure_assessment
+        and not is_coordination_checkpoint
+        and "Runtime footer:" not in task_context
+    ):
         return None
     codex_home_value = str(worker_env.get("CODEX_HOME") or "").strip()
     if not codex_home_value:
@@ -737,12 +836,20 @@ def _prepare_runtime_output_schema(
     schema_name = (
         "runtime-structure-checkpoint-v1.schema.json"
         if is_structure_assessment
-        else "runtime-worker-receipt-v1.schema.json"
+        else (
+            "runtime-coordination-checkpoint-v1.schema.json"
+            if is_coordination_checkpoint
+            else "runtime-worker-receipt-v1.schema.json"
+        )
     )
     schema = (
         _RUNTIME_STRUCTURE_OUTPUT_SCHEMA
         if is_structure_assessment
-        else _RUNTIME_WORKER_OUTPUT_SCHEMA
+        else (
+            _RUNTIME_COORDINATION_OUTPUT_SCHEMA
+            if is_coordination_checkpoint
+            else _RUNTIME_WORKER_OUTPUT_SCHEMA
+        )
     )
     schema_dir = Path(codex_home_value).expanduser() / "hermes-schemas"
     schema_dir.mkdir(parents=True, exist_ok=True)
@@ -1615,6 +1722,7 @@ def _extract_runtime_receipt(output: str) -> Optional[dict[str, Any]]:
         if isinstance(candidate, dict) and candidate.get("schema") in {
             "runtime_worker_receipt_v1",
             "runtime_worker_structure_checkpoint_v1",
+            "runtime_worker_coordination_checkpoint_v1",
         }:
             return candidate
     stripped = (output or "").strip()
@@ -1626,6 +1734,7 @@ def _extract_runtime_receipt(output: str) -> Optional[dict[str, Any]]:
         if isinstance(candidate, dict) and candidate.get("schema") in {
             "runtime_worker_receipt_v1",
             "runtime_worker_structure_checkpoint_v1",
+            "runtime_worker_coordination_checkpoint_v1",
         }:
             return candidate
     return None
@@ -1932,6 +2041,9 @@ def build_codex_prompt(task_context: str, *, lane: str, model: Optional[str]) ->
     is_review_followup = "## Required review output" in task_context
     is_test_followup = "## Required test output" in task_context
     is_structure_assessment = "Early structure assessment mode:" in task_context
+    is_coordination_checkpoint = (
+        "Runtime coordination checkpoint mode:" in task_context
+    )
     is_runtime_contribution = "Runtime contribution boundary:" in task_context
     is_runtime_integration = "Frozen dependency contributions:" in task_context
     if is_structure_assessment:
@@ -1941,6 +2053,13 @@ def build_codex_prompt(task_context: str, *, lane: str, model: Optional[str]) ->
             "Your only responsibility in this attempt is to decide whether durable Runtime "
             "decomposition has evidence-backed value. Return the required structure checkpoint; "
             "do not claim implementation completion."
+        )
+    elif is_coordination_checkpoint:
+        role_lines = (
+            f"You are Codex CLI running as Hermes Kanban coordination lane `{lane}`.\n"
+            "Own the assigned responsibility, but execute only one bounded implementation "
+            "slice in this materialization. Stop at a semantic safe point and return the "
+            "required coordination checkpoint. Do not claim node or goal completion."
         )
     elif is_review_followup:
         role_lines = (
@@ -2003,6 +2122,42 @@ context; typical local implementation capabilities are `filesystem_read`,
 `workspace_write`, `git_read`, and `process_spawn`. Otherwise use
 `continue_single_node` and leave `proposed_nodes` empty.
 """
+    elif is_coordination_checkpoint:
+        runtime_receipt_instructions = """
+
+This is a Runtime coordination slice. Your final response must be one JSON
+object matching the supplied output schema. Do not wrap it in a Markdown fence
+and do not add prose before or after it:
+
+```json
+{
+  "schema": "runtime_worker_coordination_checkpoint_v1",
+  "kind": "shared_contract_changed",
+  "summary": "short evidence-backed semantic checkpoint",
+  "phase": "implementation",
+  "completed_scope": ["bounded responsibility completed in this slice"],
+  "remaining_scope": ["work that remains in this same node"],
+  "findings": [
+    {
+      "finding_key": "stable-finding-key",
+      "type": "shared_contract_changed",
+      "summary": "cross-node effect",
+      "affected_node_keys": ["an existing node key from Runtime context"],
+      "evidence_refs": ["workspace:path:relative/path"]
+    }
+  ],
+  "next_intent": "what this same worker will do after Runtime coordination",
+  "changed_files": ["workspace-relative/path"],
+  "consumed_directive_ids": [],
+  "worker_session_should_resume": true
+}
+```
+
+Use a checkpoint kind from the supplied schema. Report only real cross-node or
+responsibility-level findings. Ordinary tool progress and test completion are
+not coordination findings. Preserve the current workspace for same-session
+resume.
+"""
     elif "Runtime footer:" in task_context:
         runtime_receipt_instructions = """
 
@@ -2029,6 +2184,7 @@ summary and verification fields:
   "active_assumptions": [],
   "rejected_approaches": [],
   "known_failure_boundaries": [],
+  "consumed_directive_ids": [],
   "structure_request": null
 }
 ```
@@ -2036,7 +2192,9 @@ summary and verification fields:
 Use only goal keys listed in the task context. Do not claim success merely
 because the process exits successfully. If verification did not pass, use an
 appropriate non-pass verdict and list unmet goal items. `changed_files` must be
-a JSON array of workspace-relative paths. If terminal evidence reveals a
+a JSON array of workspace-relative paths. Each goal key may appear in at most
+one of `claimed_goal_items`, `partial_goal_items`, `unmet_goal_items`, and
+`contradicted_goal_items`; these four arrays must be disjoint. If terminal evidence reveals a
 durable structural boundary, keep the normal verdict and add a separate
 `structure_request`; do not use it as a new verdict or create runtime nodes.
 For a Runtime node with a required independent evaluator, use verdict
@@ -2059,7 +2217,13 @@ the receipt's goal claim.
 Contribution exception: this isolated child is not the integrated candidate.
 Use verdict `succeeded`, not `candidate_ready`, after local verification. Any
 goal-item claim is non-authoritative partial evidence until the primary
-integration owner consumes the frozen contribution.
+integration owner consumes the frozen contribution. The fields
+`accepted_contributions`, `modified_contributions`, and
+`rejected_contributions` are reserved for the integration owner to classify
+frozen artifact IDs; leave all three as empty arrays in a child receipt.
+Do not put summaries, file paths, or other prose in those arrays. An isolated child
+must not claim the integrated goal as complete: keep `claimed_goal_items` empty
+and place any linked goal key only in `partial_goal_items`.
 """
     if is_structure_assessment:
         return f"""{task_context.rstrip()}

@@ -1,0 +1,1095 @@
+{
+  "base_revision": "45c8e392c240859f6fc8db1af22d400dbfd92008",
+  "child_advances": [
+    {
+      "decision_requested": false,
+      "events": [
+        "job_created",
+        "goal_contract_created",
+        "node_created",
+        "goal_gap_detected",
+        "worker_structure_checkpointed",
+        "node_created",
+        "node_created",
+        "structure_checkpoint_expansion_applied",
+        "structure_checkpoint_expansion_applied",
+        "patch_applied",
+        "dependency_satisfied",
+        "dependency_satisfied",
+        "goal_gap_detected",
+        "capability_request_evaluated",
+        "node_materialized",
+        "capability_request_evaluated",
+        "node_materialized",
+        "worker_session_discovered",
+        "worker_session_discovered",
+        "goal_gap_detected",
+        "structure_audit_requested",
+        "worker_coordination_checkpointed",
+        "decision_requested",
+        "worker_coordination_checkpointed",
+        "decision_requested",
+        "patch_rejected",
+        "decision_patch_rejected",
+        "runtime_directive_queued",
+        "runtime_directive_activated",
+        "runtime_directive_queued",
+        "runtime_directive_activated",
+        "patch_applied",
+        "goal_gap_detected",
+        "goal_gap_detected",
+        "structure_audit_requested",
+        "capability_request_evaluated",
+        "runtime_directive_delivered",
+        "worker_session_resume_scheduled",
+        "node_materialized",
+        "capability_request_evaluated",
+        "runtime_directive_delivered",
+        "worker_session_resume_scheduled",
+        "node_materialized",
+        "worker_session_resumed",
+        "worker_session_resumed",
+        "runtime_directive_acknowledged",
+        "node_contribution_frozen",
+        "node_completed",
+        "goal_gap_detected",
+        "runtime_directive_acknowledged",
+        "node_contribution_frozen",
+        "node_completed",
+        "dependency_satisfied",
+        "goal_gap_detected",
+        "structure_audit_requested"
+      ],
+      "ingested_nodes": [
+        "parser-contract",
+        "renderer-contract"
+      ],
+      "job_id": "rjob_77f46b628f72",
+      "job_state": "active",
+      "materialized_nodes": [],
+      "patch_status": null,
+      "recovery": {
+        "checked_nodes": 2,
+        "evaluator_remediation": {
+          "budget_exhausted": false,
+          "decision_suppressed": false,
+          "enabled": false,
+          "failure_count": 0,
+          "latest_feedback_consumed": false,
+          "not_resumable": [],
+          "progress": {},
+          "scheduled": []
+        },
+        "events": [],
+        "failed_nodes": [],
+        "job_id": "rjob_77f46b628f72",
+        "materializations_updated": [],
+        "policy": {
+          "infra_retry_limit": 1,
+          "receipt_recovery_limit": 1,
+          "run_stale_after_seconds": 900
+        },
+        "scheduled_retries": [],
+        "worker_sessions": {
+          "discovered": [],
+          "identity_conflicts": [],
+          "job_id": "rjob_77f46b628f72",
+          "resume_failed": [],
+          "resumed": [
+            "bws_a1319bce8985",
+            "bws_b838739d6ff2"
+          ],
+          "updated": [
+            "bws_a1319bce8985",
+            "bws_b838739d6ff2",
+            "bws_a1319bce8985",
+            "bws_b838739d6ff2"
+          ]
+        },
+        "worker_sessions_post_ingest": {
+          "discovered": [],
+          "identity_conflicts": [],
+          "job_id": "rjob_77f46b628f72",
+          "resume_failed": [],
+          "resumed": [],
+          "updated": [
+            "bws_a1319bce8985",
+            "bws_b838739d6ff2",
+            "bws_a1319bce8985",
+            "bws_b838739d6ff2"
+          ]
+        }
+      }
+    }
+  ],
+  "children": [
+    {
+      "assignee": "phase4g11-codex",
+      "backend_session": {
+        "backend_kind": "codex_cli",
+        "backend_session_key": "019f7937-fb41-7362-b89a-85b8cb075136",
+        "completed_at": 1784445426,
+        "created_at": 1784445140,
+        "initial_materialization_id": "mat_3c1f102ac116",
+        "latest_materialization_id": "mat_98bd5b4ed628",
+        "node_id": "rnode_f718ddf975f8",
+        "node_key": "parser-contract",
+        "record_id": "bws_a1319bce8985",
+        "resume_count": 1,
+        "status": "completed",
+        "updated_at": 1784445507,
+        "workspace_path": "/tmp/hermes-phase4g11-small/run-20260719-151215/runtime-artifacts/rjob_77f46b628f72/worktrees/parser-contract"
+      },
+      "integration_owner_node_key": "pipeline-integration",
+      "node_id": "rnode_f718ddf975f8",
+      "node_key": "parser-contract",
+      "state": "succeeded",
+      "workspace": {
+        "base_revision": "45c8e392c240859f6fc8db1af22d400dbfd92008",
+        "mode": "isolated_worktree",
+        "path": "/tmp/hermes-phase4g11-small/run-20260719-151215/runtime-artifacts/rjob_77f46b628f72/worktrees/parser-contract"
+      }
+    },
+    {
+      "assignee": "phase4g11-codex",
+      "backend_session": {
+        "backend_kind": "codex_cli",
+        "backend_session_key": "019f7937-fb43-7bf0-8f80-2b1abda6f24e",
+        "completed_at": 1784445426,
+        "created_at": 1784445140,
+        "initial_materialization_id": "mat_d6ddc29841a1",
+        "latest_materialization_id": "mat_8515e1555155",
+        "node_id": "rnode_efbd7df9f8cb",
+        "node_key": "renderer-contract",
+        "record_id": "bws_b838739d6ff2",
+        "resume_count": 1,
+        "status": "completed",
+        "updated_at": 1784445507,
+        "workspace_path": "/tmp/hermes-phase4g11-small/run-20260719-151215/runtime-artifacts/rjob_77f46b628f72/worktrees/renderer-contract"
+      },
+      "integration_owner_node_key": "pipeline-integration",
+      "node_id": "rnode_efbd7df9f8cb",
+      "node_key": "renderer-contract",
+      "state": "succeeded",
+      "workspace": {
+        "base_revision": "45c8e392c240859f6fc8db1af22d400dbfd92008",
+        "mode": "isolated_worktree",
+        "path": "/tmp/hermes-phase4g11-small/run-20260719-151215/runtime-artifacts/rjob_77f46b628f72/worktrees/renderer-contract"
+      }
+    }
+  ],
+  "consistency": {
+    "status": "passed",
+    "violation_count": 0,
+    "warning_count": 0
+  },
+  "contributions": [
+    {
+      "artifact_id": "art_0e43516ec94b",
+      "integration_owner_node_key": "pipeline-integration",
+      "materialization_id": "mat_8515e1555155",
+      "node_id": "rnode_efbd7df9f8cb",
+      "node_key": "renderer-contract",
+      "patch_bytes": 371,
+      "patch_sha256": "908a151ed474eb6de86d4d8d6f520df7b235b39d618bcd2a7ac6daea81c98009",
+      "path": "/tmp/hermes-phase4g11-small/run-20260719-151215/runtime-artifacts/rjob_77f46b628f72/contributions/renderer-contract/attempt-2.patch",
+      "scope_status": "verified"
+    },
+    {
+      "artifact_id": "art_de086f0c8fe8",
+      "integration_owner_node_key": "pipeline-integration",
+      "materialization_id": "mat_98bd5b4ed628",
+      "node_id": "rnode_f718ddf975f8",
+      "node_key": "parser-contract",
+      "patch_bytes": 541,
+      "patch_sha256": "d4a7848d18929bcb2766285193f1c1557e751f257950c1b444742a6102cd939e",
+      "path": "/tmp/hermes-phase4g11-small/run-20260719-151215/runtime-artifacts/rjob_77f46b628f72/contributions/parser-contract/attempt-2.patch",
+      "scope_status": "verified"
+    }
+  ],
+  "coordination": {
+    "checkpoint_count": 2,
+    "checkpoints": [
+      {
+        "checkpoint": {
+          "changed_files": [
+            "src/token_parser.py"
+          ],
+          "changed_files_source": "wrapper_git_attempt_delta",
+          "completed_scope": [
+            "Defined the explicit TokenV1 contract with kind Literal['word'] and text fields.",
+            "Updated parse_tokens to emit exact lowercase {'kind': 'word', 'text': value} objects.",
+            "Passed Python compilation, two focused parser contract tests, and git diff validation."
+          ],
+          "consumed_directive_ids": [],
+          "findings": [
+            {
+              "affected_node_keys": [
+                "renderer-contract",
+                "pipeline-integration"
+              ],
+              "evidence_refs": [
+                "workspace:src/token_parser.py",
+                "verification:python3 -m py_compile src/token_parser.py",
+                "verification:inline ParserContractTest: 2 tests passed"
+              ],
+              "finding_key": "token-v1-word-object-contract",
+              "summary": "The shared parser output changed from list[str] to list[TokenV1], where each runtime token is exactly {'kind': 'word', 'text': lowercase_value}; renderer and pipeline integration must consume this mapping contract.",
+              "type": "shared_contract_changed"
+            }
+          ],
+          "kind": "shared_contract_changed",
+          "next_intent": "Resume after Runtime coordinates the TokenV1 contract with renderer-contract and pipeline-integration; address any parser feedback without modifying sibling-owned files.",
+          "phase": "implementation",
+          "remaining_scope": [
+            "Await Runtime coordination of the shared contract.",
+            "On resume, handle parser-owned feedback or provide integration support; renderer changes and full pipeline verification remain sibling responsibilities."
+          ],
+          "schema": "runtime_worker_coordination_checkpoint_v1",
+          "summary": "Implemented and locally verified the parser-owned TokenV1 word-object contract in src/token_parser.py without modifying renderer files.",
+          "worker_declared_changed_files": [
+            "src/token_parser.py"
+          ],
+          "worker_lane": {
+            "backend_session_id": "019f7937-fb41-7362-b89a-85b8cb075136",
+            "binary_missing": false,
+            "execution_mode": "fresh",
+            "exit_code": 0,
+            "json_events": true,
+            "kind": "codex_cli",
+            "name": "phase4g11-codex",
+            "output_tail": "+\n+\n+def parse_tokens(text: str) -> list[TokenV1]:\n+    return [\n+        {\"kind\": \"word\", \"text\": part.lower()}\n+        for part in text.split()\n+        if part\n+    ]\n M src/token_parser.py\no (19) run command: /bin/bash -lc 'git diff --check && git diff -- src/token_parser.py && git status --short'\n$ /bin/bash -lc 'python3 -m py_compile src/token_parser.py'\nstatus=in_progress exit_code=None\nx (20) run command: /bin/bash -lc 'python3 -m py_compile src/token_parser.py'\n$ /bin/bash -lc 'python3 -m py_compile src/token_parser.py'\nstatus=completed exit_code=0\no (20) run command: /bin/bash -lc 'python3 -m py_compile src/token_parser.py'\n$ /bin/bash -lc \"python3 - <<'PY'\nimport unittest\n\nfrom src.token_parser import parse_tokens\n\n\nclass ParserContractTest(unittest.TestCase):\n    def test_v1_word_tokens_are_exact_and_lowercase(self):\n        self.assertEqual(\n            parse_tokens(\\\"Hello WORLD\\\"),\n            [\n                {\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"hello\\\"},\n                {\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"world\\\"},\n            ],\n        )\n\n    def test_whitespace_and_empty_input(self):\n        self.assertEqual(parse_tokens(\\\"  ONE\\\\tTwo\\\\n\\\"), [\n            {\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"one\\\"},\n            {\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"two\\\"},\n        ])\n        self.assertEqual(parse_tokens(\\\"\\\"), [])\n\n\nunittest.main()\nPY\"\nstatus=in_progress exit_code=None\nx (21) run command: /bin/bash -lc \"python3 - <<'PY' import unittest  from src.token_parser import parse_tokens   class ParserContractTest(unittest.TestCase):     def test_v1_word_tokens_are_exact_and_\n[truncated 539 chars]\n$ /bin/bash -lc \"python3 - <<'PY'\nimport unittest\n\nfrom src.token_parser import parse_tokens\n\n\nclass ParserContractTest(unittest.TestCase):\n    def test_v1_word_tokens_are_exact_and_lowercase(self):\n        self.assertEqual(\n            parse_tokens(\\\"Hello WORLD\\\"),\n            [\n                {\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"hello\\\"},\n                {\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"world\\\"},\n            ],\n        )\n\n    def test_whitespace_and_empty_input(self):\n        self.assertEqual(parse_tokens(\\\"  ONE\\\\tTwo\\\\n\\\"), [\n            {\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"one\\\"},\n            {\\\"kind\\\": \\\"word\\\", \\\"text\\\": \\\"two\\\"},\n        ])\n        self.assertEqual(parse_tokens(\\\"\\\"), [])\n\n\nunittest.main()\nPY\"\nstatus=completed exit_code=0\n..\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK\no (21) run command: /bin/bash -lc \"python3 - <<'PY' import unittest  from src.token_parser import parse_tokens   class ParserContractTest(unittest.TestCase):     def test_v1_word_tokens_are_exact_and_\n[truncated 539 chars]\n{\"changed_files\":[\"src/token_parser.py\"],\"completed_scope\":[\"Defined the explicit TokenV1 contract with kind Literal['word'] and text fields.\",\"Updated parse_tokens to emit exact lowercase {'kind': 'word', 'text': value} objects.\",\"Passed Python compilation, two focused parser contract tests, and git diff validation.\"],\"consumed_directive_ids\":[],\"findings\":[{\"affected_node_keys\":[\"renderer-contract\",\"pipeline-integration\"],\"evidence_refs\":[\"workspace:src/token_parser.py\",\"verification:python3 -m py_compile src/token_parser.py\",\"verification:inline ParserContractTest: 2 tests passed\"],\"finding_key\":\"token-v1-word-object-contract\",\"summary\":\"The shared parser output changed from list[str] to list[TokenV1], where each runtime token is exactly {'kind': 'word', 'text': lowercase_value}; renderer and pipeline integration must consume this mapping contract.\",\"type\":\"shared_contract_changed\"}],\"kind\":\"shared_contract_changed\",\"next_intent\":\"Resume after Runtime coordinates the TokenV1 contract with renderer-contract and pipeline-integration; address any parser feedback without modifying sibling-owned files.\",\"phase\":\"implementation\",\"remaining_scope\":[\"Await Runtime coordination of the shared contract.\",\"On resume, handle parser-owned feedback or provide integration support; renderer changes and full pipeline verification remain sibling responsibilities.\"],\"schema\":\"runtime_worker_coordination_checkpoint_v1\",\"summary\":\"Implemented and locally verified the parser-owned TokenV1 word-object contract in src/token_parser.py without modifying renderer files.\",\"worker_session_should_resume\":true}",
+            "receipt": {
+              "schema": "codex_cli_receipt_v1",
+              "sections": {}
+            },
+            "resume_status": "started",
+            "run_id": 1,
+            "task_id": "t_88764921",
+            "timed_out": false,
+            "verdict": null
+          },
+          "worker_receipt": {
+            "schema": "codex_cli_receipt_v1",
+            "sections": {}
+          },
+          "worker_session_should_resume": true,
+          "workspace_revision": "git:45c8e392c240859f6fc8db1af22d400dbfd92008:worktree:c7de889ddb216676f3de0cbacdc8a87994b7d2bad25f16fd89a52b876bdb7b9e"
+        },
+        "contract_revision": 1,
+        "created_at": 1784445321,
+        "event_id": 22,
+        "node_id": "rnode_f718ddf975f8",
+        "node_key": "parser-contract"
+      },
+      {
+        "checkpoint": {
+          "changed_files": [],
+          "changed_files_source": "wrapper_git_attempt_delta",
+          "completed_scope": [
+            "Inspected src/token_renderer.py and confirmed the renderer currently accepts list[str] and joins values with |.",
+            "Stopped before selecting or implementing the versioned token shape."
+          ],
+          "consumed_directive_ids": [],
+          "findings": [
+            {
+              "affected_node_keys": [
+                "renderer-contract"
+              ],
+              "evidence_refs": [
+                "workspace:src/token_renderer.py:1"
+              ],
+              "finding_key": "renderer-awaits-parser-contract",
+              "summary": "Renderer implementation depends on the parser checkpoint directive defining the shared versioned token contract; choosing a replacement for the current list[str] input now would guess across the contract boundary.",
+              "type": "blocking_dependency"
+            }
+          ],
+          "kind": "blocking_dependency",
+          "next_intent": "Resume after Runtime supplies the parser checkpoint directive, update only src/token_renderer.py to consume that contract, and run renderer-focused verification.",
+          "phase": "inspection",
+          "remaining_scope": [
+            "Consume the parser checkpoint directive.",
+            "Implement the renderer token consumer in src/token_renderer.py without modifying parser files.",
+            "Run renderer-focused checks."
+          ],
+          "schema": "runtime_worker_coordination_checkpoint_v1",
+          "summary": "Reached the required pre-implementation safe point: the existing renderer contract is list[str], and implementation is waiting for Runtime's parser-selected token contract directive.",
+          "worker_declared_changed_files": [],
+          "worker_lane": {
+            "backend_session_id": "019f7937-fb43-7bf0-8f80-2b1abda6f24e",
+            "binary_missing": false,
+            "execution_mode": "fresh",
+            "exit_code": 0,
+            "json_events": true,
+            "kind": "codex_cli",
+            "name": "phase4g11-codex",
+            "output_tail": "WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir \"/tmp\" (codex_home: AbsolutePathBuf(\"/tmp/hermes-phase4g11-small/codex-home-http-20260719\"))\n2026-07-19T07:12:21.299695Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedServerResponse(\"HTTP 403: {\\\"error\\\":{\\\"code\\\":\\\"403\\\",\\\"message\\\":\\\"Forbidden\\\",\\\"id\\\":\\\"sin1::xggdz-1784445141259-5ad082165bb7\\\"}}\\n\")\n{\"changed_files\":[],\"completed_scope\":[],\"consumed_directive_ids\":[],\"findings\":[],\"kind\":\"blocking_dependency\",\"next_intent\":\"Inspect repository guidance and renderer-facing code only, then stop before choosing a token shape.\",\"phase\":\"inspection\",\"remaining_scope\":[\"Inspect renderer contract and identify the parser checkpoint dependency.\"],\"schema\":\"runtime_worker_coordination_checkpoint_v1\",\"summary\":\"Beginning the required first slice without implementing or inferring the shared token contract.\",\"worker_session_should_resume\":true}\n$ /bin/bash -lc 'git status --short'\nstatus=in_progress exit_code=None\nx (4) run command: /bin/bash -lc 'git status --short'\n$ /bin/bash -lc 'git status --short'\nstatus=completed exit_code=0\no (4) run command: /bin/bash -lc 'git status --short'\n$ /bin/bash -lc \"pwd && rg --files -g 'AGENTS.md' -g '\"'!**/.git/**'\"' -g 'src/token_renderer.py' -g 'src/token_parser.py' -g 'tests/**'\"\nstatus=in_progress exit_code=None\nx (5) run command: /bin/bash -lc \"pwd && rg --files -g 'AGENTS.md' -g '\"'!**/.git/**'\"' -g 'src/token_renderer.py' -g 'src/token_parser.py' -g 'tests/**'\"\n$ /bin/bash -lc \"pwd && rg --files -g 'AGENTS.md' -g '\"'!**/.git/**'\"' -g 'src/token_renderer.py' -g 'src/token_parser.py' -g 'tests/**'\"\nstatus=completed exit_code=0\n/tmp/hermes-phase4g11-small/run-20260719-151215/runtime-artifacts/rjob_77f46b628f72/worktrees/renderer-contract\ntests/test_pipeline.py\nsrc/token_parser.py\nsrc/token_renderer.py\no (5) run command: /bin/bash -lc \"pwd && rg --files -g 'AGENTS.md' -g '\"'!**/.git/**'\"' -g 'src/token_renderer.py' -g 'src/token_parser.py' -g 'tests/**'\"\n$ /bin/bash -lc 'nl -ba src/token_renderer.py'\nstatus=in_progress exit_code=None\nx (7) run command: /bin/bash -lc 'nl -ba src/token_renderer.py'\n$ /bin/bash -lc 'nl -ba src/token_renderer.py'\nstatus=completed exit_code=0\n     1\tdef render_tokens(tokens: list[str]) -> str:\n     2\t    return \"|\".join(tokens)\no (7) run command: /bin/bash -lc 'nl -ba src/token_renderer.py'\n$ /bin/bash -lc 'git log -5 --oneline -- src/token_renderer.py'\nstatus=in_progress exit_code=None\nx (8) run command: /bin/bash -lc 'git log -5 --oneline -- src/token_renderer.py'\n$ /bin/bash -lc 'git log -5 --oneline -- src/token_renderer.py'\nstatus=completed exit_code=0\n45c8e39 small base\no (8) run command: /bin/bash -lc 'git log -5 --oneline -- src/token_renderer.py'\n{\"changed_files\":[],\"completed_scope\":[\"Inspected src/token_renderer.py and confirmed the renderer currently accepts list[str] and joins values with |.\",\"Stopped before selecting or implementing the versioned token shape.\"],\"consumed_directive_ids\":[],\"findings\":[{\"affected_node_keys\":[\"renderer-contract\"],\"evidence_refs\":[\"workspace:src/token_renderer.py:1\"],\"finding_key\":\"renderer-awaits-parser-contract\",\"summary\":\"Renderer implementation depends on the parser checkpoint directive defining the shared versioned token contract; choosing a replacement for the current list[str] input now would guess across the contract boundary.\",\"type\":\"blocking_dependency\"}],\"kind\":\"blocking_dependency\",\"next_intent\":\"Resume after Runtime supplies the parser checkpoint directive, update only src/token_renderer.py to consume that contract, and run renderer-focused verification.\",\"phase\":\"inspection\",\"remaining_scope\":[\"Consume the parser checkpoint directive.\",\"Implement the renderer token consumer in src/token_renderer.py without modifying parser files.\",\"Run renderer-focused checks.\"],\"schema\":\"runtime_worker_coordination_checkpoint_v1\",\"summary\":\"Reached the required pre-implementation safe point: the existing renderer contract is list[str], and implementation is waiting for Runtime's parser-selected token contract directive.\",\"worker_session_should_resume\":true}",
+            "receipt": {
+              "schema": "codex_cli_receipt_v1",
+              "sections": {}
+            },
+            "resume_status": "started",
+            "run_id": 2,
+            "task_id": "t_a67ad762",
+            "timed_out": false,
+            "verdict": null
+          },
+          "worker_receipt": {
+            "schema": "codex_cli_receipt_v1",
+            "sections": {}
+          },
+          "worker_session_should_resume": true,
+          "workspace_revision": "git:45c8e392c240859f6fc8db1af22d400dbfd92008"
+        },
+        "contract_revision": 1,
+        "created_at": 1784445321,
+        "event_id": 24,
+        "node_id": "rnode_efbd7df9f8cb",
+        "node_key": "renderer-contract"
+      }
+    ],
+    "contract_revisions": {
+      "parser-contract": 1,
+      "pipeline-integration": 1,
+      "renderer-contract": 1
+    },
+    "directive_count": 2,
+    "directive_status_counts": {
+      "acknowledged": 2,
+      "delivered": 0,
+      "queued": 0,
+      "superseded": 0
+    },
+    "directives": [
+      {
+        "acknowledged_at": 1784445426,
+        "acknowledged_materialization_id": "mat_98bd5b4ed628",
+        "action": "continue",
+        "applied_contract_revision": 1,
+        "created_at": 1784445362,
+        "delivered_at": 1784445362,
+        "delivered_materialization_id": "mat_98bd5b4ed628",
+        "directive_id": "rdir_ca64e9894212",
+        "expected_contract_revision": 1,
+        "source_checkpoint_event_id": 22,
+        "status": "acknowledged",
+        "summary": "The parser TokenV1 contribution is accepted for coordination and remains within its existing parser-owned responsibility.",
+        "target_checkpoint_event_id": 22,
+        "target_node_id": "rnode_f718ddf975f8",
+        "target_node_key": "parser-contract"
+      },
+      {
+        "acknowledged_at": 1784445426,
+        "acknowledged_materialization_id": "mat_8515e1555155",
+        "action": "continue",
+        "applied_contract_revision": 1,
+        "created_at": 1784445362,
+        "delivered_at": 1784445362,
+        "delivered_materialization_id": "mat_8515e1555155",
+        "directive_id": "rdir_d5a9fd515a0a",
+        "expected_contract_revision": 1,
+        "source_checkpoint_event_id": 22,
+        "status": "acknowledged",
+        "summary": "Consume the coordinated parser-selected TokenV1 mapping contract and implement the renderer against it.",
+        "target_checkpoint_event_id": 24,
+        "target_node_id": "rnode_efbd7df9f8cb",
+        "target_node_key": "renderer-contract"
+      }
+    ]
+  },
+  "decision_history": [
+    {
+      "completed_at": 1784445349,
+      "created_at": 1784445321,
+      "error": null,
+      "id": "kdec_c5529dc9bf35",
+      "model": "gpt-5.6-sol",
+      "status": "completed"
+    },
+    {
+      "completed_at": 1784445362,
+      "created_at": 1784445350,
+      "error": null,
+      "id": "kdec_faee4c99a282",
+      "model": "gpt-5.6-sol",
+      "status": "completed"
+    }
+  ],
+  "decision_results": [
+    {
+      "decision_requested": true,
+      "events": [
+        "job_created",
+        "goal_contract_created",
+        "node_created",
+        "goal_gap_detected",
+        "worker_structure_checkpointed",
+        "node_created",
+        "node_created",
+        "structure_checkpoint_expansion_applied",
+        "structure_checkpoint_expansion_applied",
+        "patch_applied",
+        "dependency_satisfied",
+        "dependency_satisfied",
+        "goal_gap_detected",
+        "capability_request_evaluated",
+        "node_materialized",
+        "capability_request_evaluated",
+        "node_materialized",
+        "worker_session_discovered",
+        "worker_session_discovered",
+        "goal_gap_detected",
+        "structure_audit_requested",
+        "worker_coordination_checkpointed",
+        "decision_requested",
+        "worker_coordination_checkpointed",
+        "decision_requested",
+        "patch_rejected",
+        "decision_patch_rejected"
+      ],
+      "ingested_nodes": [],
+      "job_id": "rjob_77f46b628f72",
+      "job_state": "waiting_decision",
+      "materialized_nodes": [],
+      "patch_status": "rejected",
+      "recovery": {
+        "checked_nodes": 0,
+        "evaluator_remediation": {
+          "budget_exhausted": false,
+          "decision_suppressed": false,
+          "enabled": false,
+          "failure_count": 0,
+          "latest_feedback_consumed": false,
+          "not_resumable": [],
+          "progress": {},
+          "scheduled": []
+        },
+        "events": [],
+        "failed_nodes": [],
+        "job_id": "rjob_77f46b628f72",
+        "materializations_updated": [],
+        "policy": {
+          "infra_retry_limit": 1,
+          "receipt_recovery_limit": 1,
+          "run_stale_after_seconds": 900
+        },
+        "scheduled_retries": [],
+        "worker_sessions": {
+          "discovered": [],
+          "identity_conflicts": [],
+          "job_id": "rjob_77f46b628f72",
+          "resume_failed": [],
+          "resumed": [],
+          "updated": [
+            "bws_a1319bce8985",
+            "bws_b838739d6ff2"
+          ]
+        }
+      }
+    },
+    {
+      "decision_requested": true,
+      "events": [
+        "job_created",
+        "goal_contract_created",
+        "node_created",
+        "goal_gap_detected",
+        "worker_structure_checkpointed",
+        "node_created",
+        "node_created",
+        "structure_checkpoint_expansion_applied",
+        "structure_checkpoint_expansion_applied",
+        "patch_applied",
+        "dependency_satisfied",
+        "dependency_satisfied",
+        "goal_gap_detected",
+        "capability_request_evaluated",
+        "node_materialized",
+        "capability_request_evaluated",
+        "node_materialized",
+        "worker_session_discovered",
+        "worker_session_discovered",
+        "goal_gap_detected",
+        "structure_audit_requested",
+        "worker_coordination_checkpointed",
+        "decision_requested",
+        "worker_coordination_checkpointed",
+        "decision_requested",
+        "patch_rejected",
+        "decision_patch_rejected",
+        "runtime_directive_queued",
+        "runtime_directive_activated",
+        "runtime_directive_queued",
+        "runtime_directive_activated",
+        "patch_applied",
+        "goal_gap_detected",
+        "goal_gap_detected",
+        "structure_audit_requested"
+      ],
+      "ingested_nodes": [],
+      "job_id": "rjob_77f46b628f72",
+      "job_state": "active",
+      "materialized_nodes": [],
+      "patch_status": "applied",
+      "recovery": {
+        "checked_nodes": 0,
+        "evaluator_remediation": {
+          "budget_exhausted": false,
+          "decision_suppressed": false,
+          "enabled": false,
+          "failure_count": 0,
+          "latest_feedback_consumed": false,
+          "not_resumable": [],
+          "progress": {},
+          "scheduled": []
+        },
+        "events": [],
+        "failed_nodes": [],
+        "job_id": "rjob_77f46b628f72",
+        "materializations_updated": [],
+        "policy": {
+          "infra_retry_limit": 1,
+          "receipt_recovery_limit": 1,
+          "run_stale_after_seconds": 900
+        },
+        "scheduled_retries": [],
+        "worker_sessions": {
+          "discovered": [],
+          "identity_conflicts": [],
+          "job_id": "rjob_77f46b628f72",
+          "resume_failed": [],
+          "resumed": [],
+          "updated": [
+            "bws_a1319bce8985",
+            "bws_b838739d6ff2"
+          ]
+        }
+      }
+    }
+  ],
+  "final_advance": {
+    "decision_requested": false,
+    "events": [
+      "job_created",
+      "goal_contract_created",
+      "node_created",
+      "goal_gap_detected",
+      "worker_structure_checkpointed",
+      "node_created",
+      "node_created",
+      "structure_checkpoint_expansion_applied",
+      "structure_checkpoint_expansion_applied",
+      "patch_applied",
+      "dependency_satisfied",
+      "dependency_satisfied",
+      "goal_gap_detected",
+      "capability_request_evaluated",
+      "node_materialized",
+      "capability_request_evaluated",
+      "node_materialized",
+      "worker_session_discovered",
+      "worker_session_discovered",
+      "goal_gap_detected",
+      "structure_audit_requested",
+      "worker_coordination_checkpointed",
+      "decision_requested",
+      "worker_coordination_checkpointed",
+      "decision_requested",
+      "patch_rejected",
+      "decision_patch_rejected",
+      "runtime_directive_queued",
+      "runtime_directive_activated",
+      "runtime_directive_queued",
+      "runtime_directive_activated",
+      "patch_applied",
+      "goal_gap_detected",
+      "goal_gap_detected",
+      "structure_audit_requested",
+      "capability_request_evaluated",
+      "runtime_directive_delivered",
+      "worker_session_resume_scheduled",
+      "node_materialized",
+      "capability_request_evaluated",
+      "runtime_directive_delivered",
+      "worker_session_resume_scheduled",
+      "node_materialized",
+      "worker_session_resumed",
+      "worker_session_resumed",
+      "runtime_directive_acknowledged",
+      "node_contribution_frozen",
+      "node_completed",
+      "goal_gap_detected",
+      "runtime_directive_acknowledged",
+      "node_contribution_frozen",
+      "node_completed",
+      "dependency_satisfied",
+      "goal_gap_detected",
+      "structure_audit_requested",
+      "node_materialized",
+      "worker_session_discovered",
+      "contribution_attribution_verified",
+      "node_completed"
+    ],
+    "ingested_nodes": [
+      "pipeline-integration"
+    ],
+    "job_id": "rjob_77f46b628f72",
+    "job_state": "done",
+    "materialized_nodes": [],
+    "patch_status": null,
+    "recovery": {
+      "checked_nodes": 1,
+      "evaluator_remediation": {
+        "budget_exhausted": false,
+        "decision_suppressed": false,
+        "enabled": false,
+        "failure_count": 0,
+        "latest_feedback_consumed": false,
+        "not_resumable": [],
+        "progress": {},
+        "scheduled": []
+      },
+      "events": [],
+      "failed_nodes": [],
+      "job_id": "rjob_77f46b628f72",
+      "materializations_updated": [],
+      "policy": {
+        "infra_retry_limit": 1,
+        "receipt_recovery_limit": 1,
+        "run_stale_after_seconds": 900
+      },
+      "scheduled_retries": [],
+      "worker_sessions": {
+        "discovered": [
+          "bws_4358f408b173"
+        ],
+        "identity_conflicts": [],
+        "job_id": "rjob_77f46b628f72",
+        "resume_failed": [],
+        "resumed": [],
+        "updated": [
+          "bws_a1319bce8985",
+          "bws_b838739d6ff2",
+          "bws_a1319bce8985",
+          "bws_b838739d6ff2"
+        ]
+      },
+      "worker_sessions_post_ingest": {
+        "discovered": [],
+        "identity_conflicts": [],
+        "job_id": "rjob_77f46b628f72",
+        "resume_failed": [],
+        "resumed": [],
+        "updated": [
+          "bws_a1319bce8985",
+          "bws_b838739d6ff2",
+          "bws_4358f408b173",
+          "bws_a1319bce8985",
+          "bws_b838739d6ff2"
+        ]
+      }
+    }
+  },
+  "final_advances": [
+    {
+      "decision_requested": false,
+      "events": [
+        "job_created",
+        "goal_contract_created",
+        "node_created",
+        "goal_gap_detected",
+        "worker_structure_checkpointed",
+        "node_created",
+        "node_created",
+        "structure_checkpoint_expansion_applied",
+        "structure_checkpoint_expansion_applied",
+        "patch_applied",
+        "dependency_satisfied",
+        "dependency_satisfied",
+        "goal_gap_detected",
+        "capability_request_evaluated",
+        "node_materialized",
+        "capability_request_evaluated",
+        "node_materialized",
+        "worker_session_discovered",
+        "worker_session_discovered",
+        "goal_gap_detected",
+        "structure_audit_requested",
+        "worker_coordination_checkpointed",
+        "decision_requested",
+        "worker_coordination_checkpointed",
+        "decision_requested",
+        "patch_rejected",
+        "decision_patch_rejected",
+        "runtime_directive_queued",
+        "runtime_directive_activated",
+        "runtime_directive_queued",
+        "runtime_directive_activated",
+        "patch_applied",
+        "goal_gap_detected",
+        "goal_gap_detected",
+        "structure_audit_requested",
+        "capability_request_evaluated",
+        "runtime_directive_delivered",
+        "worker_session_resume_scheduled",
+        "node_materialized",
+        "capability_request_evaluated",
+        "runtime_directive_delivered",
+        "worker_session_resume_scheduled",
+        "node_materialized",
+        "worker_session_resumed",
+        "worker_session_resumed",
+        "runtime_directive_acknowledged",
+        "node_contribution_frozen",
+        "node_completed",
+        "goal_gap_detected",
+        "runtime_directive_acknowledged",
+        "node_contribution_frozen",
+        "node_completed",
+        "dependency_satisfied",
+        "goal_gap_detected",
+        "structure_audit_requested",
+        "node_materialized",
+        "worker_session_discovered",
+        "contribution_attribution_verified",
+        "node_completed"
+      ],
+      "ingested_nodes": [
+        "pipeline-integration"
+      ],
+      "job_id": "rjob_77f46b628f72",
+      "job_state": "done",
+      "materialized_nodes": [],
+      "patch_status": null,
+      "recovery": {
+        "checked_nodes": 1,
+        "evaluator_remediation": {
+          "budget_exhausted": false,
+          "decision_suppressed": false,
+          "enabled": false,
+          "failure_count": 0,
+          "latest_feedback_consumed": false,
+          "not_resumable": [],
+          "progress": {},
+          "scheduled": []
+        },
+        "events": [],
+        "failed_nodes": [],
+        "job_id": "rjob_77f46b628f72",
+        "materializations_updated": [],
+        "policy": {
+          "infra_retry_limit": 1,
+          "receipt_recovery_limit": 1,
+          "run_stale_after_seconds": 900
+        },
+        "scheduled_retries": [],
+        "worker_sessions": {
+          "discovered": [
+            "bws_4358f408b173"
+          ],
+          "identity_conflicts": [],
+          "job_id": "rjob_77f46b628f72",
+          "resume_failed": [],
+          "resumed": [],
+          "updated": [
+            "bws_a1319bce8985",
+            "bws_b838739d6ff2",
+            "bws_a1319bce8985",
+            "bws_b838739d6ff2"
+          ]
+        },
+        "worker_sessions_post_ingest": {
+          "discovered": [],
+          "identity_conflicts": [],
+          "job_id": "rjob_77f46b628f72",
+          "resume_failed": [],
+          "resumed": [],
+          "updated": [
+            "bws_a1319bce8985",
+            "bws_b838739d6ff2",
+            "bws_4358f408b173",
+            "bws_a1319bce8985",
+            "bws_b838739d6ff2"
+          ]
+        }
+      }
+    }
+  ],
+  "final_state": "done",
+  "first_advance": {
+    "decision_requested": true,
+    "events": [
+      "job_created",
+      "goal_contract_created",
+      "node_created",
+      "goal_gap_detected",
+      "worker_structure_checkpointed",
+      "node_created",
+      "node_created",
+      "structure_checkpoint_expansion_applied",
+      "structure_checkpoint_expansion_applied",
+      "patch_applied",
+      "dependency_satisfied",
+      "dependency_satisfied",
+      "goal_gap_detected",
+      "capability_request_evaluated",
+      "node_materialized",
+      "capability_request_evaluated",
+      "node_materialized",
+      "worker_session_discovered",
+      "worker_session_discovered",
+      "goal_gap_detected",
+      "structure_audit_requested",
+      "worker_coordination_checkpointed",
+      "decision_requested",
+      "worker_coordination_checkpointed",
+      "decision_requested"
+    ],
+    "ingested_nodes": [
+      "parser-contract",
+      "renderer-contract"
+    ],
+    "job_id": "rjob_77f46b628f72",
+    "job_state": "waiting_decision",
+    "materialized_nodes": [],
+    "patch_status": null,
+    "recovery": {
+      "checked_nodes": 2,
+      "evaluator_remediation": {
+        "budget_exhausted": false,
+        "decision_suppressed": false,
+        "enabled": false,
+        "failure_count": 0,
+        "latest_feedback_consumed": false,
+        "not_resumable": [],
+        "progress": {},
+        "scheduled": []
+      },
+      "events": [],
+      "failed_nodes": [],
+      "job_id": "rjob_77f46b628f72",
+      "materializations_updated": [],
+      "policy": {
+        "infra_retry_limit": 1,
+        "receipt_recovery_limit": 1,
+        "run_stale_after_seconds": 900
+      },
+      "scheduled_retries": [],
+      "worker_sessions": {
+        "discovered": [
+          "bws_a1319bce8985",
+          "bws_b838739d6ff2"
+        ],
+        "identity_conflicts": [],
+        "job_id": "rjob_77f46b628f72",
+        "resume_failed": [],
+        "resumed": [],
+        "updated": []
+      },
+      "worker_sessions_post_ingest": {
+        "discovered": [],
+        "identity_conflicts": [],
+        "job_id": "rjob_77f46b628f72",
+        "resume_failed": [],
+        "resumed": [],
+        "updated": [
+          "bws_a1319bce8985",
+          "bws_b838739d6ff2"
+        ]
+      }
+    }
+  },
+  "first_task_ids": [
+    "t_88764921",
+    "t_a67ad762"
+  ],
+  "goal_items": [
+    {
+      "item_key": "versioned-token-pipeline",
+      "state": "satisfied"
+    }
+  ],
+  "integration_task_ids": [
+    "t_eaac1243"
+  ],
+  "job_id": "rjob_77f46b628f72",
+  "resumed_existing": false,
+  "schema": "phase4g11_small_report_v1",
+  "second_advance": {
+    "decision_requested": false,
+    "events": [
+      "job_created",
+      "goal_contract_created",
+      "node_created",
+      "goal_gap_detected",
+      "worker_structure_checkpointed",
+      "node_created",
+      "node_created",
+      "structure_checkpoint_expansion_applied",
+      "structure_checkpoint_expansion_applied",
+      "patch_applied",
+      "dependency_satisfied",
+      "dependency_satisfied",
+      "goal_gap_detected",
+      "capability_request_evaluated",
+      "node_materialized",
+      "capability_request_evaluated",
+      "node_materialized",
+      "worker_session_discovered",
+      "worker_session_discovered",
+      "goal_gap_detected",
+      "structure_audit_requested",
+      "worker_coordination_checkpointed",
+      "decision_requested",
+      "worker_coordination_checkpointed",
+      "decision_requested",
+      "patch_rejected",
+      "decision_patch_rejected",
+      "runtime_directive_queued",
+      "runtime_directive_activated",
+      "runtime_directive_queued",
+      "runtime_directive_activated",
+      "patch_applied",
+      "goal_gap_detected",
+      "goal_gap_detected",
+      "structure_audit_requested",
+      "capability_request_evaluated",
+      "runtime_directive_delivered",
+      "worker_session_resume_scheduled",
+      "node_materialized",
+      "capability_request_evaluated",
+      "runtime_directive_delivered",
+      "worker_session_resume_scheduled",
+      "node_materialized",
+      "worker_session_resumed",
+      "worker_session_resumed",
+      "runtime_directive_acknowledged",
+      "node_contribution_frozen",
+      "node_completed",
+      "goal_gap_detected",
+      "runtime_directive_acknowledged",
+      "node_contribution_frozen",
+      "node_completed",
+      "dependency_satisfied",
+      "goal_gap_detected",
+      "structure_audit_requested"
+    ],
+    "ingested_nodes": [
+      "parser-contract",
+      "renderer-contract"
+    ],
+    "job_id": "rjob_77f46b628f72",
+    "job_state": "active",
+    "materialized_nodes": [],
+    "patch_status": null,
+    "recovery": {
+      "checked_nodes": 2,
+      "evaluator_remediation": {
+        "budget_exhausted": false,
+        "decision_suppressed": false,
+        "enabled": false,
+        "failure_count": 0,
+        "latest_feedback_consumed": false,
+        "not_resumable": [],
+        "progress": {},
+        "scheduled": []
+      },
+      "events": [],
+      "failed_nodes": [],
+      "job_id": "rjob_77f46b628f72",
+      "materializations_updated": [],
+      "policy": {
+        "infra_retry_limit": 1,
+        "receipt_recovery_limit": 1,
+        "run_stale_after_seconds": 900
+      },
+      "scheduled_retries": [],
+      "worker_sessions": {
+        "discovered": [],
+        "identity_conflicts": [],
+        "job_id": "rjob_77f46b628f72",
+        "resume_failed": [],
+        "resumed": [
+          "bws_a1319bce8985",
+          "bws_b838739d6ff2"
+        ],
+        "updated": [
+          "bws_a1319bce8985",
+          "bws_b838739d6ff2",
+          "bws_a1319bce8985",
+          "bws_b838739d6ff2"
+        ]
+      },
+      "worker_sessions_post_ingest": {
+        "discovered": [],
+        "identity_conflicts": [],
+        "job_id": "rjob_77f46b628f72",
+        "resume_failed": [],
+        "resumed": [],
+        "updated": [
+          "bws_a1319bce8985",
+          "bws_b838739d6ff2",
+          "bws_a1319bce8985",
+          "bws_b838739d6ff2"
+        ]
+      }
+    }
+  },
+  "second_task_ids": [
+    "t_a9af2704",
+    "t_5ab4968d"
+  ],
+  "structure_event_id": 5,
+  "worker_sessions": [
+    {
+      "backend_kind": "codex_cli",
+      "backend_session_key": "019f7937-fb41-7362-b89a-85b8cb075136",
+      "completed_at": 1784445426,
+      "created_at": 1784445140,
+      "initial_materialization_id": "mat_3c1f102ac116",
+      "latest_materialization_id": "mat_98bd5b4ed628",
+      "node_id": "rnode_f718ddf975f8",
+      "node_key": "parser-contract",
+      "record_id": "bws_a1319bce8985",
+      "resume_count": 1,
+      "status": "completed",
+      "updated_at": 1784445507,
+      "workspace_path": "/tmp/hermes-phase4g11-small/run-20260719-151215/runtime-artifacts/rjob_77f46b628f72/worktrees/parser-contract"
+    },
+    {
+      "backend_kind": "codex_cli",
+      "backend_session_key": "019f7937-fb43-7bf0-8f80-2b1abda6f24e",
+      "completed_at": 1784445426,
+      "created_at": 1784445140,
+      "initial_materialization_id": "mat_d6ddc29841a1",
+      "latest_materialization_id": "mat_8515e1555155",
+      "node_id": "rnode_efbd7df9f8cb",
+      "node_key": "renderer-contract",
+      "record_id": "bws_b838739d6ff2",
+      "resume_count": 1,
+      "status": "completed",
+      "updated_at": 1784445507,
+      "workspace_path": "/tmp/hermes-phase4g11-small/run-20260719-151215/runtime-artifacts/rjob_77f46b628f72/worktrees/renderer-contract"
+    },
+    {
+      "backend_kind": "codex_cli",
+      "backend_session_key": "019f793c-5ddf-7b93-b313-20eeebf61a18",
+      "completed_at": 1784445507,
+      "created_at": 1784445428,
+      "initial_materialization_id": "mat_1ea4e2786874",
+      "latest_materialization_id": "mat_1ea4e2786874",
+      "node_id": "rnode_6de8268b7bc4",
+      "node_key": "pipeline-integration",
+      "record_id": "bws_4358f408b173",
+      "resume_count": 0,
+      "status": "completed",
+      "updated_at": 1784445507,
+      "workspace_path": "/tmp/hermes-phase4g11-small/run-20260719-151215/workspace"
+    }
+  ],
+  "workspace": "/tmp/hermes-phase4g11-small/run-20260719-151215/workspace",
+  "workspace_tests": {
+    "output": ".\n----------------------------------------------------------------------\nRan 1 test in 0.000s\n\nOK\n",
+    "returncode": 0
+  }
+}

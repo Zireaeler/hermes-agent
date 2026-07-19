@@ -1,40 +1,35 @@
-Profile-Version: 3
+Profile-Version: 4
 
-# Graph Patch Decision Profile
+# Graph Patch 决策 Profile
 
-## Purpose
+## 用途
 
-Use this profile when the runtime kernel has detected that the execution graph
-needs structural work to keep moving toward the goal contract.
+当 Runtime Kernel 判断执行图需要结构性调整才能继续推进 Goal Contract 时，使用本 Profile。
 
-## Input
+## 输入
 
-The provider receives only the runtime-rendered decision request:
+Provider 只接收 Runtime 渲染后的 decision request：
 
-- stable runtime contract;
-- current goal contract;
-- latest validated checkpoint;
-- strict short tail;
-- current decision delta.
+- 稳定 Runtime Contract；
+- 当前 Goal Contract；
+- 最新 validated checkpoint；
+- 严格受限的 short tail；
+- 当前 decision delta。
 
-The provider must not request hidden context, read worker logs, call tools, or
-perform web search.
+Provider 不得请求隐藏上下文、读取 worker 日志、调用工具或执行网络搜索。
 
-External research does not by itself justify a separate runtime node. When
-research, implementation, testing, and debugging share the same workspace,
-capability envelope, accountable outcome, and feedback loop, include them in
-one coherent primary worker node. Create a separate research node only when a
-durable structural boundary exists, such as capability isolation, independent
-deliverable ownership, workspace isolation, or execution-discovered inability
-of the primary worker to continue.
+外部调研本身不构成独立 Runtime node 的理由。当调研、实现、测试和调试共享同一
+workspace、capability envelope、完整结果责任和反馈循环时，应将它们放在一个 coherent
+primary worker node 中。只有存在持久结构边界时才创建独立 research node，例如 capability
+隔离、独立交付责任、workspace 隔离，或 primary worker 已通过执行证据证明无法继续。
 
-## Output
+## 输出
 
-Return exactly one JSON object matching `runtime_graph_patch_v1`.
+只返回一个符合 `runtime_graph_patch_v1` 的 JSON 对象。
 
-No Markdown fences, no explanatory prose, no comments.
+不得输出 Markdown fence、解释性文字或注释。
 
-## Allowed Ops
+## 允许的操作
 
 - `create_node`
 - `add_dependency`
@@ -43,45 +38,69 @@ No Markdown fences, no explanatory prose, no comments.
 - `propose_blocked`
 - `strategy_update`
 - `continue_node`
+- `issue_directive`
+- `supersede_directive`
 
-## Forbidden Ops
+## 禁止的操作
 
 - `release_node`
 - `complete_job`
-- direct database writes
-- Kanban task creation
-- worker execution
-- web search or tool calls
+- 直接写数据库
+- 创建 Kanban task
+- 执行 worker
+- 网络搜索或工具调用
 
-## Required Semantics
+## 必须遵守的语义
 
-Every new node must link to at least one goal item, gap, or human gate reason.
-If the current graph is exhausted while goals remain unmet, create nodes that
-address the unmet goal gaps instead of returning blocked.
+每个新 node 必须关联至少一个 goal item、gap 或 human gate reason。如果当前 graph 已耗尽但
+goal 仍未满足，应创建覆盖未满足 goal gap 的 node，而不是直接返回 blocked。
 
-Use the minimum number of runtime nodes necessary. Prefer one primary node that
-owns a complete outcome and may inspect, plan, modify, test, debug, and verify
-within one continuous worker session. Do not split by phase, role, file, tool
-call, or technical discipline. When uncertain, do not split initially.
+使用满足目标所需的最少 Runtime node。优先创建一个对完整结果负责的 primary node；它可以在
+一个连续 worker session 中完成检查、规划、修改、测试、调试和验证。不得仅按阶段、角色、
+文件、工具调用或技术领域拆分。无法确定是否需要拆分时，初始不拆分。
 
-Without a valid `decomposition`, create at most one new runnable worker node.
-Multiple durable nodes, an independent verifier, parallel writers, or different
-capability envelopes require a versioned `decomposition` with an allowed
-structural reason and evidence where required.
+没有合法 `decomposition` 时，最多创建一个新的 runnable worker node。多个 durable node、
+独立 verifier、并行 writer 或不同 capability envelope 必须提供带版本的 `decomposition`，
+其中包含允许的结构性理由，并在规则要求时引用 evidence。
 
-When the decision delta contains one active `structure_checkpoints` entry,
-make exactly one structural choice. Use `continue_node` with the matching node
-key and checkpoint event ID when the responsibility should remain coherent.
-When the checkpoint recommends `expand` and repository evidence supports
-durable parallelism, create two or three child implementation nodes, then add
-one dependency from every child to the existing primary integration owner.
-Every child contract must set `workspace_mode` to `isolated_worktree`. The
-`durable_parallelism` decomposition must cover all child keys, use the existing
-primary as `integration_owner_node_key`, and cite the checkpoint as
-`event:<checkpoint_event_id>`. Do not replace or supersede the primary.
+当 decision delta 只包含一个 active `structure_checkpoints` 条目时，必须做出且只做出一个
+结构选择。如果该责任仍应保持 coherent，使用 `continue_node` 并提供匹配的 node key 与
+checkpoint event ID。当 checkpoint 建议 `expand` 且 repository evidence 支持 durable
+parallelism 时，创建两个或三个 child implementation node，再从每个 child 向现有 primary
+integration owner 添加一条 dependency。每个 child contract 的 `workspace_mode` 必须为
+`isolated_worktree`。`durable_parallelism` decomposition 必须覆盖全部 child key，使用现有
+primary 作为 `integration_owner_node_key`，并以 `event:<checkpoint_event_id>` 引用该
+checkpoint。不得替换或 supersede primary。
 
-For this expansion, use exactly this decomposition shape. Do not use
-`schema`, `reason`, `node_keys`, or top-level `evidence_refs` aliases:
+当 `global_execution_snapshot.coordination_checkpoints` 非空时，把这些条目视为 active
+responsibility 的 cooperative safe point。使用 `issue_directive` 路由每个 checkpoint；不得
+只为转发发现而创建新的 durable node。Directive 可以指向 `waiting_coordination` node，也可
+先为仍在运行的 node 排队，并在目标 node 的下一个 safe point 交付。必须使用 snapshot 中
+精确的当前 `contract_revision`，并以 `event:<source_checkpoint_event_id>` 引用来源
+checkpoint。目标为 `waiting_coordination` 时，还必须提供其 `target_checkpoint_event_id`。
+
+Coordination epoch 的 control patch 必须保持最小且确定：
+
+- 每个 `waiting_coordination` target node 恰好接收一条 `issue_directive`；
+- patch 的 target node 集合必须与 snapshot 中 `waiting_coordination` node 集合完全相等，
+  不得向 `waiting_dependency`、`ready`、terminal 或其他额外 node 发送 directive；
+- 同一 patch 不得向同一个 target 重复发送 directive；
+- `target_checkpoint_event_id` 必须是该 target 自己的未消费 checkpoint event；
+- op 只能是 `issue_directive`，或在确有已排队旧 directive 时使用
+  `supersede_directive`；不得混入 `continue_node`、`create_node`、`add_dependency` 或
+  `insert_verifier`；
+- `evidence_refs` 只使用 snapshot 中真实的 `event:<id>` checkpoint reference；不得添加
+  `workspace:`、`verification:` 或其他未由 Runtime 注册的 reference；
+- graph 中已经存在的 dependency 不得重复添加。
+
+责任仍然有效、只需注入新上下文时使用 `continue`。只有在提供完整 typed replacement
+contract 时才能使用 `revise_contract` 或 `narrow_scope`。不得改变 goal linkage 或 requested
+capabilities。每个 directive 必须包含非空 summary、可执行 instructions 和 evidence refs。
+Provider 可以排队或 supersede directive，但不能声称 directive 已交付或已 ACK；后两者只能
+由本地 Runtime 事实确认。
+
+结构扩展必须使用以下精确的 decomposition 结构。不得使用 `schema`、`reason`、
+`node_keys` 或顶层 `evidence_refs` 等别名：
 
 ```json
 {
@@ -92,7 +111,7 @@ For this expansion, use exactly this decomposition shape. Do not use
       {
         "type": "durable_parallelism",
         "nodes": ["child-a", "child-b"],
-        "explanation": "Concrete repository evidence and integration boundary",
+        "explanation": "具体的 repository evidence 与 integration boundary",
         "evidence_refs": ["event:123"],
         "declared_write_scopes": {
           "child-a": ["src/a/**", "tests/a/**"],
@@ -105,77 +124,74 @@ For this expansion, use exactly this decomposition shape. Do not use
 }
 ```
 
-Use exactly these field names for patch ops:
+Patch op 必须使用以下精确字段名：
 
-- `create_node`: `node_key`, `node_type`, `title`, `description`, and
-  `goal_item_keys` or `gap_keys` or `human_gate_reason`; optional
-  `depends_on` may list existing node keys. Include `contract` with `outcome`,
-  `acceptance_criteria`, `success_evidence`, `declared_write_scope`, and
-  `prohibited_actions`. Write scopes are canonical workspace-relative globs:
-  use `**` for the whole workspace or paths such as `src/**` and `tests/**`.
-  Never prefix them with `repository/` or `workspace/`, and never use absolute
-  paths or `..` segments.
-- `add_dependency`: `from_node_key` is the prerequisite node and `to_node_key`
-  is the dependent node; optional `dependency_type` defaults to `depends_on`.
-- `continue_node`: `node_key` is the active `waiting_structure` primary and
-  `checkpoint_event_id` is its matching structure checkpoint event. Do not
-  combine this op with node creation.
-- `insert_verifier`: `verifier_node_key`, `title`, either
-  `target_node_key` or `target_goal_item_key`, and `goal_item_keys` or
-  `gap_keys` for the verifier node's own goal/gap linkage. Also fix at least
-  one immutable target reference: `target_evidence_ref`,
-  `target_materialization_attempt`, `target_artifact_ref`, or
-  `target_workspace_revision`. A `target_evidence_ref` must use a validator
-  supported immutable format: `receipt:<node_key>:attempt-<n>`,
-  `event:<event_id>`, or `artifact:<artifact_id_or_ref>`. Do not copy a
-  mutable `node:<id>` ledger reference into this field. Every verifier must
-  link to a goal item whose contract explicitly has `verifier_required=true`.
-- `request_human`: include `decision_type`, `question`,
-  `default_recommendation`, `why_user_required`, and affected goal/gap keys.
-- `strategy_update`: include `node_key`, `title`, `description`,
-  `goal_item_keys` or `gap_keys`, `strategy_summary`, and
-  `changes_from_previous_attempts`. Also include the same typed `contract`
-  required by `create_node`: `outcome`, `acceptance_criteria`,
-  `success_evidence`, `declared_write_scope`, and `prohibited_actions`.
-  Provider-first jobs reject every `strategy_update` without this contract.
+- `create_node`：`node_key`、`node_type`、`title`、`description`，以及
+  `goal_item_keys`、`gap_keys` 或 `human_gate_reason` 之一；可选 `depends_on` 可以列出现有
+  node key。必须提供包含 `outcome`、`acceptance_criteria`、`success_evidence`、
+  `declared_write_scope` 和 `prohibited_actions` 的 `contract`。Write scope 是规范化的
+  workspace-relative glob：整个 workspace 使用 `**`，也可使用 `src/**`、`tests/**` 等
+  path。不得添加 `repository/` 或 `workspace/` 前缀，不得使用绝对路径或 `..` segment。
+- `add_dependency`：`from_node_key` 是 prerequisite node，`to_node_key` 是 dependent node；
+  可选 `dependency_type` 默认为 `depends_on`。
+- `continue_node`：`node_key` 是 active `waiting_structure` primary，
+  `checkpoint_event_id` 是匹配的 structure checkpoint event。不得与创建 node 的 op 组合。
+- `issue_directive`：`target_node_key`、`source_checkpoint_event_id`、`action`、
+  `expected_contract_revision`、`summary`、`instructions` 和 `evidence_refs`。其中
+  `instructions` 必须是至少包含一个非空字符串的 JSON array，不得输出为单个字符串。目标为
+  `waiting_coordination` 时还需提供 `target_checkpoint_event_id`。使用 `revise_contract` 或
+  `narrow_scope` 时必须提供完整 typed replacement `contract`。
+- `supersede_directive`：`directive_id` 和非空 `reason`。只能 supersede 尚未交付的 queued
+  directive。
+- `insert_verifier`：`verifier_node_key`、`title`、`target_node_key` 或
+  `target_goal_item_key` 之一，以及 verifier node 自身 linkage 所需的 `goal_item_keys` 或
+  `gap_keys`。还必须固定至少一个 immutable target reference：`target_evidence_ref`、
+  `target_materialization_attempt`、`target_artifact_ref` 或 `target_workspace_revision`。
+  `target_evidence_ref` 必须使用 validator 支持的 immutable 格式：
+  `receipt:<node_key>:attempt-<n>`、`event:<event_id>` 或 `artifact:<artifact_id_or_ref>`。
+  不得把 mutable `node:<id>` ledger reference 复制到该字段。每个 verifier 必须关联 contract
+  中明确设置 `verifier_required=true` 的 goal item。
+- `request_human`：必须包含 `decision_type`、`question`、`default_recommendation`、
+  `why_user_required`，以及受影响的 goal/gap key。
+- `strategy_update`：必须包含 `node_key`、`title`、`description`、`goal_item_keys` 或
+  `gap_keys`、`strategy_summary` 和 `changes_from_previous_attempts`。还必须提供与
+  `create_node` 相同的 typed `contract`：`outcome`、`acceptance_criteria`、
+  `success_evidence`、`declared_write_scope` 和 `prohibited_actions`。Provider-first job 会拒绝
+  所有没有该 contract 的 `strategy_update`。
 
-Use `insert_verifier` only when you can name an existing `target_node_key` from
-the graph frontier or a real `target_goal_item_key` from the goal contract, and
-you can also provide `goal_item_keys` or `gap_keys` for the verifier node. The
-linked goal must explicitly require independent verification and the runtime
-must have an independent verification source. Task complexity, model
-uncertainty, or rerunning worker-authored tests do not justify a verifier. If
-the goal does not require a verifier, keep implementation, testing, debugging,
-and local verification in one coherent worker node.
+只有同时满足以下条件时才能使用 `insert_verifier`：可以从 graph frontier 指出现有
+`target_node_key`，或从 Goal Contract 指出真实 `target_goal_item_key`；同时可以为 verifier
+node 提供 `goal_item_keys` 或 `gap_keys`。关联 goal 必须明确要求 independent verification，
+且 Runtime 必须存在独立 verification source。任务复杂、模型不确定，或仅重新运行 worker
+自己编写的测试，都不能成为创建 verifier 的理由。Goal 不要求 verifier 时，应在同一个
+coherent worker node 中完成实现、测试、调试和本地验证。
 
-Never invent empty node keys, empty target fields, unknown goal keys, or
-dependencies on nodes that are not present in the request.
+不得虚构空 node key、空 target field、未知 goal key，或依赖 request 中不存在的 node。
 
-Never use alias fields such as `node_key` / `depends_on_node_key` for
-`add_dependency`; they are invalid. Use `from_node_key` / `to_node_key`.
+`add_dependency` 不得使用 `node_key` / `depends_on_node_key` 等 alias；它们无效。必须使用
+`from_node_key` / `to_node_key`。
 
-Use `strategy_update` when anti-stuck signals, repeated failed attempts, or
-stale gaps require a changed approach. It creates a materialized
-`strategy_update` node; it does not complete or block the job.
+当 anti-stuck signal、重复失败 attempt 或 stale gap 要求改变方法时，使用
+`strategy_update`。它会创建 materialized `strategy_update` node；不会直接完成或阻塞 job。
 
-## Example
+## 示例
 
 ```json
 {
   "schema": "runtime_graph_patch_v1",
   "expected_revision": 7,
-  "rationale_summary": "The runtime has no ready nodes and the usage documentation goal is still unmet.",
+  "rationale_summary": "当前没有 ready node，但 usage documentation goal 仍未满足。",
   "ops": [
     {
       "op": "create_node",
       "node_key": "write-usage-doc",
       "node_type": "implementation",
-      "title": "Write usage documentation",
-      "description": "Document how to run and verify the implemented feature.",
+      "title": "编写使用文档",
+      "description": "说明如何运行并验证已经实现的功能。",
       "goal_item_keys": ["usage_doc"],
       "contract": {
-        "outcome": "Deliver verified usage documentation for the implemented feature.",
-        "acceptance_criteria": ["Run instructions are complete", "Verification steps are executable"],
+        "outcome": "交付经过验证的功能使用文档。",
+        "acceptance_criteria": ["运行说明完整", "验证步骤可执行"],
         "success_evidence": ["changed_files", "verification", "worker_summary"],
         "declared_write_scope": ["docs/**"],
         "prohibited_actions": ["production_deployment"]

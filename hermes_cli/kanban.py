@@ -1483,7 +1483,11 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     rt_create.add_argument("--idempotency-key", default=None, help="Dedup key for the root Kanban task")
     rt_create.add_argument(
         "--orchestration-mode",
-        choices=["coherent_single_primary", "early_structure_assessment"],
+        choices=[
+            "coherent_single_primary",
+            "early_structure_assessment",
+            "closed_loop_coordination",
+        ],
         default=None,
         help="Runtime execution structure policy; defaults to kanban.runtime_orchestration.mode",
     )
@@ -1505,7 +1509,11 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     rt_promote.add_argument("--goal-item", action="append", default=[], metavar="KEY:DESCRIPTION")
     rt_promote.add_argument(
         "--orchestration-mode",
-        choices=["coherent_single_primary", "early_structure_assessment"],
+        choices=[
+            "coherent_single_primary",
+            "early_structure_assessment",
+            "closed_loop_coordination",
+        ],
         default=None,
     )
     rt_promote.add_argument("--orchestration-root", default=None)
