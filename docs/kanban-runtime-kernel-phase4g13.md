@@ -534,4 +534,5 @@ official 结果均为 F2P `3/5`、P2P `707/707`，Runtime wall time 为 single w
 - 低开销 contribution handoff：首次实测失败，prompt/schema 修正已完成；
 - 相比 coherent single worker 的净正价值：未证明；
 - 下一门槛：先以轻量真实 contribution case 验证零 invalid resume 和真实 primary
-  integration，再运行自然 Medium clean replay。
+  integration；该修复由 [Phase 4G14 Durable Contribution Handoff](kanban-runtime-kernel-phase4g14.md)
+  规范。完成轻量 handoff 验证前不运行自然 Medium clean replay。

@@ -92,7 +92,7 @@ Phase 3D Long Running Autonomous Task Runtime
 Phase 4  Production Hardening
 ```
 
-当前代码已经推进到 Phase 4G13 natural discovery and coordination cost control 的设计阶段：Phase 2D 本地 compaction 闭环、Phase 3 real
+当前代码已经推进到 Phase 4G14 durable contribution handoff 的设计阶段：Phase 2D 本地 compaction 闭环、Phase 3 real
 decision provider、Phase 4 production hardening、Phase 4E recovery、Phase 4F capability
 policy、Phase 4G deterministic soak、Phase 4G0 memory lifecycle、Phase 4G1 real-smoke、
 Phase 4G2 real-provider bounded loop、Phase 4G3 real worker lane smoke、Phase 4G4 worker
@@ -101,7 +101,9 @@ long-run reliability soak、Phase 4G7 packaged daemon、Phase 4G8 real long-hori
 Phase 4G9 Native Ultra 对照、Phase 4G10 early structure assessment / isolated durable
 contribution、Phase 4G11 coordination checkpoint / directive / ACK 闭环，以及 Phase 4G12
 execution-discovered responsibility 驱动的受控 topology mutation 均已实现。当前阶段先完成
-Phase 4G13 的自然发现、终态 candidate 和 coordination 成本控制，再进入 Phase 4H dashboard。
+Phase 4G13 的自然发现、终态 candidate 和 coordination 成本控制已经完成真实 Medium 验证；当前先
+补齐 Phase 4G14 的 attempt patch quarantine、receipt promotion 和低损耗 contribution handoff，
+再进入 Phase 4H dashboard。
 
 隔离真实验证已经覆盖 decision execute/apply/reject、compaction fallback safety、3-tick
 real-provider loop，以及真实 provider -> validator -> Kanban dispatcher -> Codex worker ->
@@ -657,7 +659,9 @@ Phase 4G8 先用 SWE-EVO 三项长期任务验证真实 provider/worker/compacti
 revision、same-session resume 和 acknowledgment；Phase 4G12 再让运行中新发现的 durable
 responsibility candidate 能够驱动受控 graph topology mutation；Phase 4G13 收缩无效
 checkpoint、resume 和 decision，并用不泄露拓扑答案的自然 Medium 比较 coherent single worker
-与 Runtime orchestra。Phase 4H 再做 dashboard runtime UI；UI 应消费已经经过真实长期任务证明的稳定
+与 Runtime orchestra；Phase 4G14 将 isolated attempt patch 捕获与 receipt 语义验收解耦，确保
+协议错误不会丢失已完成的 child 工程成果，并建立可验证的 promotion 和 integration lineage。
+Phase 4H 再做 dashboard runtime UI；UI 应消费已经经过真实长期任务证明的稳定
 observability API，而不是提前展示一个 recovery 和 consistency 尚未稳定的系统。
 
 ## 15. 当前实现优先级
@@ -714,6 +718,9 @@ Phase 4G12 evidence-driven dynamic graph mutation
       |
       v
 Phase 4G13 natural discovery and coordination cost control
+      |
+      v
+Phase 4G14 durable contribution handoff
       |
       v
 Phase 4H dashboard runtime UI
