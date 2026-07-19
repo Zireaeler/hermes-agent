@@ -1,4 +1,4 @@
-Profile-Version: 3
+Profile-Version: 4
 
 # Validator Recovery Decision Profile
 
@@ -63,9 +63,12 @@ No Markdown fences, no explanatory prose, no comments.
   justification `nodes` array must cover every execution node created by the
   corrected patch.
 - Do not attach an `add_dependency` to a new `strategy_update` node in the same
-  recovery patch. If a frozen contribution cannot be linked safely, let the
-  recovery node reconstruct and verify that bounded scope, or use `create_node`
-  with a supported dependency shape.
+  recovery patch. If the new strategy node replaces an integration owner that
+  already has promoted contributions, set `replaces_node_key` to that owner and
+  `inherit_promoted_contributions=true`; Runtime will copy only validated
+  promoted artifact dependencies. Never ask the replacement worker to
+  reconstruct promoted work from summaries, and never inherit quarantined
+  attempt patches.
 
 ## Safe Fallback
 

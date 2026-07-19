@@ -4469,6 +4469,200 @@ def test_isolated_children_freeze_contributions_for_primary_integration(
     assert ledger[-1]["satisfaction"] == "full"
 
 
+def test_invalid_child_receipt_preserves_attempt_patch_and_repairs_without_reimplementation(
+    conn,
+    tmp_path,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "feature.py").write_text("value = 1\n", encoding="utf-8")
+    _git(workspace, "init")
+    _git(workspace, "config", "user.email", "runtime@example.invalid")
+    _git(workspace, "config", "user.name", "Runtime Test")
+    _git(workspace, "add", ".")
+    _git(workspace, "commit", "-m", "base")
+    base_revision = _git(workspace, "rev-parse", "HEAD")
+    job_id = rk.create_runtime_job(
+        conn,
+        _root_task(conn),
+        "preserve a child patch across receipt protocol repair",
+        workspace_path=str(workspace),
+        goal_items=[{
+            "item_key": "runtime-result",
+            "description": "integrated result",
+            "required": True,
+            "verifier_required": False,
+        }],
+        initialization_mode="fixture",
+        runtime_metadata={
+            "orchestration_policy": {
+                "mode": "early_structure_assessment",
+                "base_revision": base_revision,
+                "worktree_root": str(tmp_path / "worktrees"),
+                "contribution_root": str(tmp_path / "contributions"),
+            },
+        },
+    )
+    child = dict(_node(conn, job_id, "understand-scope"))
+    constraints = json.loads(child["constraints_json"])
+    constraints["contract"] = {
+        **_contract("feature.py"),
+        "workspace_mode": "isolated_worktree",
+    }
+    metadata = json.loads(child["metadata_json"])
+    metadata.update({
+        "non_authoritative_contribution": True,
+        "contribution_to_node_key": "integration-owner",
+    })
+    conn.execute(
+        "UPDATE execution_nodes SET constraints_json = ?, metadata_json = ? WHERE id = ?",
+        (json.dumps(constraints), json.dumps(metadata), child["id"]),
+    )
+    task_id = rk.materialize_runtime_node(
+        conn,
+        dict(_node(conn, job_id, child["node_key"])),
+    )
+    task = kb.get_task(conn, task_id)
+    child_workspace = Path(task.workspace_path)
+    (child_workspace / "feature.py").write_text("value = 2\n", encoding="utf-8")
+    child = dict(_node(conn, job_id, child["node_key"]))
+    invalid_receipt = {
+        "schema": "runtime_contribution_receipt_v1",
+        "verdict": "succeeded",
+        "summary": "implementation and focused verification completed",
+        "claimed_goal_items": [],
+        "partial_goal_items": ["Natural language is not a goal key"],
+        "unmet_goal_items": [],
+        "contradicted_goal_items": [],
+        "changed_files": [],
+        "verification": {"passed": True, "summary": "focused test passed"},
+        "artifacts": [],
+        "accepted_contributions": ["Implemented the feature"],
+        "modified_contributions": [],
+        "rejected_contributions": [],
+        "active_assumptions": [],
+        "rejected_approaches": [],
+        "known_failure_boundaries": [],
+        "consumed_directive_ids": [],
+        "structure_request": None,
+        "responsibility_candidates": [],
+    }
+    _complete_node(
+        conn,
+        child,
+        {
+            "summary": invalid_receipt["summary"],
+            "worker_lane": {"kind": "codex_cli"},
+            "runtime_receipt": invalid_receipt,
+        },
+    )
+
+    reconciled = rk.reconcile_runtime_materializations(conn, job_id)
+
+    assert reconciled["events"] == ["receipt_invalid"]
+    attempt = conn.execute(
+        """
+        SELECT * FROM node_artifacts
+         WHERE node_id = ? AND artifact_type = 'runtime_attempt_patch'
+        """,
+        (child["id"],),
+    ).fetchone()
+    assert attempt is not None
+    attempt_payload = json.loads(attempt["metadata_json"])
+    assert attempt_payload["changed_files"] == ["feature.py"]
+    assert Path(attempt["path_or_ref"]).read_text(encoding="utf-8")
+    assert conn.execute(
+        "SELECT 1 FROM node_artifacts WHERE node_id = ? "
+        "AND artifact_type = 'runtime_node_contribution'",
+        (child["id"],),
+    ).fetchone() is None
+    original_materialization = dict(
+        conn.execute(
+            "SELECT * FROM node_materializations WHERE id = ?",
+            (attempt_payload["materialization_id"],),
+        ).fetchone()
+    )
+    recaptured = rk._capture_runtime_attempt_patch(
+        conn,
+        dict(conn.execute(
+            "SELECT * FROM runtime_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()),
+        dict(_node(conn, job_id, child["node_key"])),
+        original_materialization,
+    )
+    assert recaptured["artifact_id"] == attempt["id"]
+    assert conn.execute(
+        "SELECT COUNT(*) FROM execution_events WHERE node_id = ? "
+        "AND event_type = 'runtime_attempt_patch_captured'",
+        (child["id"],),
+    ).fetchone()[0] == 1
+    invalid_event = conn.execute(
+        """
+        SELECT payload_json FROM execution_events
+         WHERE node_id = ? AND event_type = 'receipt_invalid'
+         ORDER BY id DESC LIMIT 1
+        """,
+        (child["id"],),
+    ).fetchone()
+    diagnostics = json.loads(invalid_event["payload_json"])["validation_errors"]
+    assert {item["code"] for item in diagnostics} >= {
+        "unknown_goal_item_key",
+        "child_contribution_classification_forbidden",
+    }
+
+    repair_task_id = rk.materialize_runtime_node(
+        conn,
+        dict(_node(conn, job_id, child["node_key"])),
+    )
+    repair_task = kb.get_task(conn, repair_task_id)
+    assert str(attempt["id"]) in repair_task.body
+    assert "Do not inspect files, run shell commands" in repair_task.body
+    repaired_receipt = {
+        **invalid_receipt,
+        "partial_goal_items": ["runtime-result"],
+        "accepted_contributions": [],
+    }
+    repaired_child = dict(_node(conn, job_id, child["node_key"]))
+    _complete_node(
+        conn,
+        repaired_child,
+        {
+            "summary": repaired_receipt["summary"],
+            "worker_lane": {"kind": "codex_cli"},
+            "runtime_receipt": repaired_receipt,
+        },
+    )
+    assert rk.ingest_runtime_node_evidence(conn, repaired_child["id"])
+
+    promoted = conn.execute(
+        """
+        SELECT * FROM node_artifacts
+         WHERE node_id = ? AND artifact_type = 'runtime_node_contribution'
+        """,
+        (child["id"],),
+    ).fetchone()
+    assert promoted is not None
+    promoted_payload = json.loads(promoted["metadata_json"])
+    assert promoted_payload["source_attempt_artifact_id"] == attempt["id"]
+    assert promoted_payload["patch_sha256"] == attempt_payload["patch_sha256"]
+    assert promoted["path_or_ref"] == attempt["path_or_ref"]
+    assert conn.execute(
+        "SELECT COUNT(*) FROM node_artifacts WHERE node_id = ? "
+        "AND artifact_type = 'runtime_attempt_patch'",
+        (child["id"],),
+    ).fetchone()[0] == 1
+    summary = rk.summarize_runtime_orchestration(conn, job_id)
+    assert summary["contribution_handoff"] == {
+        **summary["contribution_handoff"],
+        "attempt_patch_captured_count": 1,
+        "quarantined_attempt_count": 0,
+        "promoted_contribution_count": 1,
+        "receipt_repair_count": 1,
+        "implementation_reexecution_due_to_receipt_count": 0,
+    }
+
+
 def test_primary_integration_rejects_unknown_or_unclassified_contributions(
     conn,
     tmp_path,
@@ -4682,6 +4876,141 @@ def test_primary_integration_preserves_modified_lineage_across_remediation_attem
         "artifact-lineage-1": f"event:{prior_event_id}",
         "artifact-lineage-2": f"event:{prior_event_id}",
     }
+
+
+def test_replacement_integration_owner_inherits_promoted_contribution_lineage(
+    conn,
+    tmp_path,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "feature.py").write_text("value = 1\n", encoding="utf-8")
+    _git(workspace, "init")
+    _git(workspace, "config", "user.email", "runtime@example.invalid")
+    _git(workspace, "config", "user.name", "Runtime Test")
+    _git(workspace, "add", ".")
+    _git(workspace, "commit", "-m", "base")
+    job_id = rk.create_runtime_job(
+        conn,
+        _root_task(conn),
+        "replace an integration owner without losing promoted work",
+        workspace_path=str(workspace),
+        goal_items=[{
+            "item_key": "runtime-result",
+            "description": "integrated result",
+            "required": True,
+            "verifier_required": False,
+        }],
+        initialization_mode="fixture",
+    )
+    owner = dict(_node(conn, job_id, "understand-scope"))
+    conn.execute(
+        "UPDATE execution_nodes SET state = 'running' WHERE id = ?",
+        (owner["id"],),
+    )
+    child_id = "rnode_promoted_child"
+    conn.execute(
+        """
+        INSERT INTO execution_nodes (
+            id, job_id, node_key, node_type, state, title, description,
+            assumptions_json, constraints_json, metadata_json,
+            created_at, updated_at, completed_at
+        ) VALUES (?, ?, 'promoted-child', 'implementation', 'succeeded',
+                  'Promoted child', 'Promoted child', '{}', '{}',
+                  '{"non_authoritative_contribution":true}', 1, 1, 1)
+        """,
+        (child_id, job_id),
+    )
+    rk._insert_dependency(
+        conn,
+        job_id,
+        child_id,
+        owner["id"],
+        "depends_on",
+    )
+    patch_path = tmp_path / "promoted.patch"
+    patch_path.write_text("diff --git a/feature.py b/feature.py\n", encoding="utf-8")
+    conn.execute(
+        """
+        INSERT INTO node_artifacts (
+            id, job_id, node_id, artifact_type, path_or_ref, summary,
+            metadata_json, created_at
+        ) VALUES ('artifact-promoted', ?, ?, 'runtime_node_contribution', ?,
+                  'promoted contribution', ?, 1)
+        """,
+        (
+            job_id,
+            child_id,
+            str(patch_path),
+            json.dumps({
+                "schema": rk.RUNTIME_CONTRIBUTION_SCHEMA,
+                "artifact_id": "artifact-promoted",
+                "changed_files": ["feature.py"],
+                "file_sha256": {},
+                "patch_sha256": hashlib.sha256(patch_path.read_bytes()).hexdigest(),
+            }),
+        ),
+    )
+    evidence_event_id = rk._event(
+        conn,
+        job_id,
+        "receipt_invalid",
+        {"node_key": owner["node_key"], "reason": "integration owner exhausted"},
+        node_id=owner["id"],
+    )
+    replacement = {
+        "op": "strategy_update",
+        "node_key": "replacement-owner",
+        "title": "Replace the exhausted integration owner",
+        "description": "Integrate the already promoted child contribution.",
+        "goal_item_keys": ["runtime-result"],
+        "strategy_summary": "Preserve promoted contribution lineage.",
+        "changes_from_previous_attempts": [
+            "Use the promoted artifact instead of reconstructing child work."
+        ],
+        "replaces_node_key": owner["node_key"],
+        "inherit_promoted_contributions": True,
+        "contract": _contract("**"),
+    }
+    patch = _patch(job_id, _revision(conn, job_id), replacement)
+    patch["decomposition"] = {
+        "policy_version": "1",
+        "mode": "multiple_runtime_nodes",
+        "justifications": [{
+            "type": "context_or_runtime_limit",
+            "nodes": ["replacement-owner"],
+            "explanation": "The old owner is exhausted and promoted work must survive.",
+            "evidence_refs": [f"event:{evidence_event_id}"],
+        }],
+    }
+
+    assert rk.apply_graph_patch(conn, job_id, patch)["status"] == "applied"
+
+    replacement_node = dict(_node(conn, job_id, "replacement-owner"))
+    assert _node(conn, job_id, owner["node_key"])["state"] == "superseded"
+    dependency = conn.execute(
+        """
+        SELECT dependency_type FROM execution_dependencies
+         WHERE from_node_id = ? AND to_node_id = ?
+        """,
+        (child_id, replacement_node["id"]),
+    ).fetchone()
+    assert dependency["dependency_type"] == "artifact_input"
+    inherited = conn.execute(
+        """
+        SELECT payload_json FROM execution_events
+         WHERE node_id = ?
+           AND event_type = 'integration_contribution_lineage_inherited'
+        """,
+        (replacement_node["id"],),
+    ).fetchone()
+    assert json.loads(inherited["payload_json"])["artifact_ids"] == [
+        "artifact-promoted"
+    ]
+    replacement_node = dict(_node(conn, job_id, "replacement-owner"))
+    assert replacement_node["state"] == "ready"
+    task_id = rk.materialize_runtime_node(conn, replacement_node)
+    assert "artifact-promoted" in kb.get_task(conn, task_id).body
 
 
 def test_declared_write_scope_violation_prevents_goal_satisfaction(conn):
@@ -4956,6 +5285,40 @@ def _runtime_orchestration_cleanup_job(conn, tmp_path):
         INSERT INTO node_artifacts (
             id, job_id, node_id, artifact_type, path_or_ref, summary,
             metadata_json, created_at
+        ) VALUES ('artifact-cleanup-attempt', ?, ?, 'runtime_attempt_patch',
+                  ?, 'captured attempt patch', ?, ?)
+        """,
+        (
+            job_id,
+            child_id,
+            str(contribution),
+            json.dumps({
+                "schema": rk.RUNTIME_ATTEMPT_PATCH_SCHEMA,
+                "artifact_id": "artifact-cleanup-attempt",
+                "patch_sha256": digest,
+                "patch_bytes": contribution.stat().st_size,
+                "declared_scope_status": "verified",
+                "materialization_id": "mat-cleanup-child",
+            }),
+            now,
+        ),
+    )
+    rk._event(
+        conn,
+        job_id,
+        "runtime_attempt_patch_captured",
+        {
+            "artifact_id": "artifact-cleanup-attempt",
+            "materialization_id": "mat-cleanup-child",
+            "patch_sha256": digest,
+        },
+        node_id=child_id,
+    )
+    conn.execute(
+        """
+        INSERT INTO node_artifacts (
+            id, job_id, node_id, artifact_type, path_or_ref, summary,
+            metadata_json, created_at
         ) VALUES ('artifact-cleanup-child', ?, ?, 'runtime_node_contribution',
                   ?, 'frozen contribution', ?, ?)
         """,
@@ -4968,6 +5331,7 @@ def _runtime_orchestration_cleanup_job(conn, tmp_path):
                 "patch_bytes": contribution.stat().st_size,
                 "scope_status": "verified",
                 "integration_owner_node_key": "understand-scope",
+                "source_attempt_artifact_id": "artifact-cleanup-attempt",
             }),
             now,
         ),
@@ -5006,6 +5370,25 @@ def test_runtime_orchestration_terminal_cleanup_retains_contribution(conn, tmp_p
     assert summary["latest_cleanup"]["event_type"] == (
         "runtime_orchestration_worktrees_cleaned"
     )
+
+
+def test_runtime_orchestration_cleanup_requires_attempt_capture_event(conn, tmp_path):
+    job_id, worktree, _contribution = _runtime_orchestration_cleanup_job(
+        conn,
+        tmp_path,
+    )
+    conn.execute("UPDATE runtime_jobs SET state = 'done' WHERE id = ?", (job_id,))
+    conn.execute(
+        "DELETE FROM execution_events WHERE job_id = ? "
+        "AND event_type = 'runtime_attempt_patch_captured'",
+        (job_id,),
+    )
+
+    refused = rk.cleanup_runtime_orchestration_worktrees(conn, job_id)
+
+    assert refused["status"] == "refused"
+    assert "capture event is missing" in refused["reason"]
+    assert worktree.is_dir()
 
 
 def test_runtime_orchestration_advance_applies_terminal_retention(conn, tmp_path):

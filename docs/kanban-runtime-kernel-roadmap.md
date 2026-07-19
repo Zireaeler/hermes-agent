@@ -92,7 +92,7 @@ Phase 3D Long Running Autonomous Task Runtime
 Phase 4  Production Hardening
 ```
 
-当前代码已经推进到 Phase 4G14 durable contribution handoff 的设计阶段：Phase 2D 本地 compaction 闭环、Phase 3 real
+当前代码已经完成 Phase 4G14 durable contribution handoff：Phase 2D 本地 compaction 闭环、Phase 3 real
 decision provider、Phase 4 production hardening、Phase 4E recovery、Phase 4F capability
 policy、Phase 4G deterministic soak、Phase 4G0 memory lifecycle、Phase 4G1 real-smoke、
 Phase 4G2 real-provider bounded loop、Phase 4G3 real worker lane smoke、Phase 4G4 worker
@@ -100,10 +100,11 @@ execution continuity、Phase 4G5 real compaction candidate quality、Phase 4G6 a
 long-run reliability soak、Phase 4G7 packaged daemon、Phase 4G8 real long-horizon validation、
 Phase 4G9 Native Ultra 对照、Phase 4G10 early structure assessment / isolated durable
 contribution、Phase 4G11 coordination checkpoint / directive / ACK 闭环，以及 Phase 4G12
-execution-discovered responsibility 驱动的受控 topology mutation 均已实现。当前阶段先完成
-Phase 4G13 的自然发现、终态 candidate 和 coordination 成本控制已经完成真实 Medium 验证；当前先
-补齐 Phase 4G14 的 attempt patch quarantine、receipt promotion 和低损耗 contribution handoff，
-再进入 Phase 4H dashboard。
+execution-discovered responsibility 驱动的受控 topology mutation 均已实现。Phase 4G13 的
+自然发现、终态 candidate 和 coordination 成本控制已经完成真实 Medium 验证；Phase 4G14
+进一步完成 attempt patch quarantine、receipt promotion 和低损耗 contribution handoff，
+并由真实双 child controlled case 证明 malformed receipt 不再丢失工程成果。下一阶段进入
+Phase 4H dashboard。
 
 隔离真实验证已经覆盖 decision execute/apply/reject、compaction fallback safety、3-tick
 real-provider loop，以及真实 provider -> validator -> Kanban dispatcher -> Codex worker ->

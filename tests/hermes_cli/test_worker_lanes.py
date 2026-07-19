@@ -1217,6 +1217,82 @@ def test_codex_event_driven_coordination_schema_accepts_terminal_or_checkpoint(
     ) == terminal
 
 
+def test_runtime_output_schema_constrains_role_specific_database_ids(tmp_path):
+    footer = {
+        "runtime_receipt_contract": {
+            "schema": "runtime_contribution_receipt_v1",
+            "role": "contribution_child",
+            "allowed_goal_item_keys": ["runtime-result"],
+            "required_directive_ids": ["ndir-1"],
+            "allowed_contribution_artifact_ids": [],
+        }
+    }
+    context = (
+        "# Runtime node\n\n"
+        "Runtime event-driven coordination mode: continue unless structure changes.\n\n"
+        "Runtime contribution boundary: child only.\n\n"
+        f"Runtime footer: {json.dumps(footer)}\n"
+    )
+
+    schema_path = cw._prepare_runtime_output_schema(
+        context,
+        {"CODEX_HOME": str(tmp_path / "codex-home")},
+    )
+    schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
+    receipt = schema["properties"]["event"]["anyOf"][0]
+
+    assert receipt["properties"]["schema"]["enum"] == [
+        "runtime_contribution_receipt_v1"
+    ]
+    assert receipt["properties"]["claimed_goal_items"]["maxItems"] == 0
+    assert receipt["properties"]["partial_goal_items"]["items"]["enum"] == [
+        "runtime-result"
+    ]
+    directives = receipt["properties"]["consumed_directive_ids"]
+    assert directives["items"]["enum"] == ["ndir-1"]
+    assert directives["minItems"] == directives["maxItems"] == 1
+    for field_name in (
+        "accepted_contributions",
+        "modified_contributions",
+        "rejected_contributions",
+    ):
+        assert receipt["properties"][field_name]["maxItems"] == 0
+    extracted = cw._extract_runtime_receipt(
+        json.dumps({
+            "schema": "runtime_worker_event_v1",
+            "event": {
+                "schema": "runtime_contribution_receipt_v1",
+                "verdict": "succeeded",
+            },
+        })
+    )
+    assert extracted["schema"] == "runtime_contribution_receipt_v1"
+
+    integration_footer = {
+        "runtime_receipt_contract": {
+            "schema": "runtime_integration_receipt_v1",
+            "role": "integration_owner",
+            "allowed_goal_item_keys": ["runtime-result"],
+            "required_directive_ids": [],
+            "allowed_contribution_artifact_ids": ["art-a", "art-b"],
+        }
+    }
+    integration_path = cw._prepare_runtime_output_schema(
+        "# Runtime node\n\nFrozen dependency contributions: []\n\n"
+        f"Runtime footer: {json.dumps(integration_footer)}\n",
+        {"CODEX_HOME": str(tmp_path / "integration-codex-home")},
+    )
+    integration = json.loads(
+        Path(integration_path).read_text(encoding="utf-8")
+    )
+    assert integration["properties"]["schema"]["enum"] == [
+        "runtime_integration_receipt_v1"
+    ]
+    assert integration["properties"]["accepted_contributions"]["items"][
+        "enum"
+    ] == ["art-a", "art-b"]
+
+
 def test_codex_prompt_keeps_runtime_contribution_outside_candidate_ready():
     from hermes_cli.codex_worker import build_codex_prompt
 

@@ -46,3 +46,12 @@ Phase 4G10 Arm 2 历史对照：
 - 最终 F2P `63/68`、P2P `242/242`；
 - 7 次 evaluator，总 wall time `14,830s`；
 - 355 个原始 evidence 文件已进入 verified stable archive。
+
+## Phase 4G14
+
+- [Phase 4G14 验证索引](phase4g14/README.md)
+- Controlled two-child handoff：`hermes-phase4g14-handoff-20260719-234235`；
+- 两个 isolated child attempt patch 均在 receipt 验收前完成不可变捕获；
+- 一份 malformed receipt 只触发 metadata repair，未重新执行实现；
+- 两份 contribution 均被 Primary 集成，完整测试与 consistency 通过；
+- contribution preservation ratio 为 `1.0`，receipt 导致的实现重做为 `0`。

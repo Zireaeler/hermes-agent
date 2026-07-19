@@ -1,4 +1,4 @@
-Profile-Version: 6
+Profile-Version: 7
 
 # Graph Patch 决策 Profile
 
@@ -203,6 +203,10 @@ Patch op 必须使用以下精确字段名：
   `create_node` 相同的 typed `contract`：`outcome`、`acceptance_criteria`、
   `success_evidence`、`declared_write_scope` 和 `prohibited_actions`。Provider-first job 会拒绝
   所有没有该 contract 的 `strategy_update`。
+  当该 node 明确替换旧 integration owner，且旧 owner 已拥有 promoted contribution 时，必须
+  同时提供 `replaces_node_key` 和 `inherit_promoted_contributions=true`。Runtime 会确定性继承
+  已晋升 artifact dependency；不得要求 replacement worker 从摘要重新实现已有 contribution。
+  不得继承 quarantined attempt patch。
 
 只有同时满足以下条件时才能使用 `insert_verifier`：可以从 graph frontier 指出现有
 `target_node_key`，或从 Goal Contract 指出真实 `target_goal_item_key`；同时可以为 verifier

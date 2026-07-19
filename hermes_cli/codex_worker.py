@@ -1003,6 +1003,7 @@ def _prepare_runtime_output_schema(
             )
         )
     )
+    schema = _runtime_output_schema_for_context(schema, task_context)
     schema_dir = Path(codex_home_value).expanduser() / "hermes-schemas"
     schema_dir.mkdir(parents=True, exist_ok=True)
     schema_path = schema_dir / schema_name
@@ -1015,6 +1016,115 @@ def _prepare_runtime_output_schema(
         schema_path.write_text(content, encoding="utf-8")
     schema_path.chmod(0o644)
     return str(schema_path.resolve())
+
+
+def _runtime_footer(task_context: str) -> dict[str, Any]:
+    if "Runtime footer:" not in task_context:
+        return {}
+    candidate = task_context.rsplit("Runtime footer:", 1)[1].strip()
+    try:
+        parsed, _end = json.JSONDecoder().raw_decode(candidate)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _set_runtime_id_array_constraint(
+    receipt_schema: dict[str, Any],
+    field_name: str,
+    allowed_values: list[str],
+    *,
+    require_all: bool = False,
+) -> None:
+    field = receipt_schema["properties"][field_name]
+    field["uniqueItems"] = True
+    if allowed_values:
+        field["items"] = {"type": "string", "enum": allowed_values}
+        field["maxItems"] = len(allowed_values)
+        if require_all:
+            field["minItems"] = len(allowed_values)
+    else:
+        field["items"] = {"type": "string"}
+        field["maxItems"] = 0
+
+
+def _runtime_output_schema_for_context(
+    base_schema: dict[str, Any],
+    task_context: str,
+) -> dict[str, Any]:
+    schema = json.loads(json.dumps(base_schema))
+    contract = _runtime_footer(task_context).get("runtime_receipt_contract")
+    if not isinstance(contract, dict):
+        return schema
+    receipt_schema = (
+        schema["properties"]["event"]["anyOf"][0]
+        if schema.get("properties", {}).get("event")
+        else schema
+    )
+    receipt_name = str(contract.get("schema") or "runtime_worker_receipt_v1")
+    receipt_schema["properties"]["schema"]["enum"] = [receipt_name]
+    role = str(contract.get("role") or "standard_worker")
+    goal_keys = sorted(
+        {
+            str(value)
+            for value in contract.get("allowed_goal_item_keys") or []
+            if str(value)
+        }
+    )
+    directive_ids = sorted(
+        {
+            str(value)
+            for value in contract.get("required_directive_ids") or []
+            if str(value)
+        }
+    )
+    contribution_ids = sorted(
+        {
+            str(value)
+            for value in contract.get("allowed_contribution_artifact_ids") or []
+            if str(value)
+        }
+    )
+    for field_name in (
+        "claimed_goal_items",
+        "partial_goal_items",
+        "unmet_goal_items",
+        "contradicted_goal_items",
+    ):
+        _set_runtime_id_array_constraint(receipt_schema, field_name, goal_keys)
+    _set_runtime_id_array_constraint(
+        receipt_schema,
+        "consumed_directive_ids",
+        directive_ids,
+        require_all=True,
+    )
+    if role == "contribution_child":
+        receipt_schema["properties"]["claimed_goal_items"]["maxItems"] = 0
+        for field_name in (
+            "accepted_contributions",
+            "modified_contributions",
+            "rejected_contributions",
+        ):
+            _set_runtime_id_array_constraint(receipt_schema, field_name, [])
+        receipt_schema["properties"]["verdict"]["enum"] = [
+            "succeeded",
+            "failed",
+            "blocked",
+            "human_required",
+            "uncertain",
+        ]
+    else:
+        for field_name in (
+            "accepted_contributions",
+            "modified_contributions",
+            "rejected_contributions",
+        ):
+            _set_runtime_id_array_constraint(
+                receipt_schema,
+                field_name,
+                contribution_ids,
+            )
+    return schema
 
 
 def wrap_codex_network_argv(
@@ -1874,6 +1984,8 @@ def _extract_runtime_receipt(output: str) -> Optional[dict[str, Any]]:
             candidate = candidate.get("event")
         if isinstance(candidate, dict) and candidate.get("schema") in {
             "runtime_worker_receipt_v1",
+            "runtime_contribution_receipt_v1",
+            "runtime_integration_receipt_v1",
             "runtime_worker_structure_checkpoint_v1",
             "runtime_worker_coordination_checkpoint_v1",
         }:
@@ -2209,6 +2321,13 @@ def build_codex_prompt(task_context: str, *, lane: str, model: Optional[str]) ->
     )
     is_runtime_contribution = "Runtime contribution boundary:" in task_context
     is_runtime_integration = "Frozen dependency contributions:" in task_context
+    runtime_terminal_receipt_schema = (
+        "runtime_contribution_receipt_v1"
+        if is_runtime_contribution
+        else "runtime_integration_receipt_v1"
+        if is_runtime_integration
+        else "runtime_worker_receipt_v1"
+    )
     if is_structure_assessment:
         role_lines = (
             f"You are Codex CLI running as Hermes Kanban assessment lane `{lane}`.\n"
@@ -2335,14 +2454,14 @@ integration owner, and evidence refs copied from a finding. Preserve the
 current workspace for same-session resume.
 """
     elif is_event_driven_coordination:
-        runtime_receipt_instructions = """
+        runtime_receipt_instructions = f"""
 
 This node uses event-driven Runtime coordination. Your final response must be
 one `runtime_worker_event_v1` JSON object matching the supplied output schema.
 Do not wrap it in a Markdown fence and do not add prose before or after it.
 
 Normally finish the complete responsibility and put a canonical
-`runtime_worker_receipt_v1` object in `event`. Keep
+`{runtime_terminal_receipt_schema}` object in `event`. Keep
 `responsibility_candidates` empty unless terminal evidence exposes a genuinely
 separate durable responsibility owned by another nonterminal integration node.
 
@@ -2428,6 +2547,11 @@ For a Runtime node with a required independent evaluator, use verdict
 `candidate_ready` after local verification. This means the fixed revision is
 ready for external evaluation; it is not final goal completion.
 """
+        runtime_receipt_instructions = runtime_receipt_instructions.replace(
+            '"runtime_worker_receipt_v1"',
+            f'"{runtime_terminal_receipt_schema}"',
+            1,
+        )
         if is_runtime_integration:
             runtime_receipt_instructions += """
 

@@ -31,6 +31,16 @@ RUNTIME_NODE_DIRECTIVE_SCHEMA = "runtime_node_directive_v1"
 EVALUATOR_FAILURE_BUNDLE_SCHEMA = "runtime_evaluator_failure_bundle_v1"
 OFFICIAL_EVALUATOR_RESULT_SCHEMA = "hermes_phase4g8_evaluator_result_v1"
 RUNTIME_ORCHESTRATION_POLICY_SCHEMA = "runtime_orchestration_policy_v1"
+RUNTIME_ATTEMPT_PATCH_SCHEMA = "runtime_attempt_patch_v1"
+RUNTIME_CONTRIBUTION_SCHEMA = "runtime_node_contribution_v2"
+RUNTIME_CONTRIBUTION_RECEIPT_SCHEMA = "runtime_contribution_receipt_v1"
+RUNTIME_INTEGRATION_RECEIPT_SCHEMA = "runtime_integration_receipt_v1"
+RUNTIME_STANDARD_RECEIPT_SCHEMA = "runtime_worker_receipt_v1"
+RUNTIME_RECEIPT_SCHEMAS = {
+    RUNTIME_STANDARD_RECEIPT_SCHEMA,
+    RUNTIME_CONTRIBUTION_RECEIPT_SCHEMA,
+    RUNTIME_INTEGRATION_RECEIPT_SCHEMA,
+}
 RUNTIME_ORCHESTRATION_MODES = {
     "coherent_single_primary",
     "early_structure_assessment",
@@ -217,6 +227,7 @@ RECOVERY_EVENT_TYPES = {
     "receipt_missing",
     "receipt_invalid",
     "receipt_recovery_requested",
+    "runtime_attempt_patch_capture_failed",
     "node_recovery_retry_scheduled",
     "node_recovery_rerun_scheduled",
     "node_recovery_not_retryable",
@@ -297,6 +308,7 @@ INFRA_RECOVERY_FAILURE_STATUSES = {
     "stale",
     "timed_out",
     "crashed",
+    "artifact_capture_failed",
 }
 
 RECEIPT_RECOVERY_FAILURE_STATUSES = {
@@ -321,6 +333,7 @@ DEFAULT_RUNTIME_RECOVERY_POLICY = {
         "materialization_lost",
         "receipt_missing",
         "receipt_invalid",
+        "artifact_capture_failed",
     ],
     "non_retryable_failure_types": [
         "business_failed",
@@ -3138,6 +3151,43 @@ def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]
                 raise PatchValidationError("strategy_update requires changes_from_previous_attempts")
             for key in op.get("goal_item_keys") or []:
                 _goal_item_by_key(conn, job_id, key)
+            replaces_node_key = str(op.get("replaces_node_key") or "").strip()
+            inherit_contributions = (
+                op.get("inherit_promoted_contributions") is True
+            )
+            if bool(replaces_node_key) != inherit_contributions:
+                raise PatchValidationError(
+                    "strategy_update contribution inheritance requires both "
+                    "replaces_node_key and inherit_promoted_contributions=true"
+                )
+            if replaces_node_key:
+                replaced = _node_by_key(conn, job_id, replaces_node_key)
+                replaced_goals = _node_linked_goal_item_keys(conn, replaced)
+                replacement_goals = {
+                    str(value) for value in op.get("goal_item_keys") or []
+                }
+                if not replaced_goals & replacement_goals:
+                    raise PatchValidationError(
+                        "replacement integration owner must share a goal item with "
+                        "the replaced node"
+                    )
+                promoted = conn.execute(
+                    """
+                    SELECT 1
+                      FROM execution_dependencies dep
+                      JOIN node_artifacts artifact
+                        ON artifact.node_id = dep.from_node_id
+                     WHERE dep.to_node_id = ?
+                       AND artifact.artifact_type = 'runtime_node_contribution'
+                     LIMIT 1
+                    """,
+                    (replaced["id"],),
+                ).fetchone()
+                if promoted is None:
+                    raise PatchValidationError(
+                        "replacement integration owner has no promoted contribution "
+                        "lineage to inherit"
+                    )
 
     _validate_decomposition(conn, job_id, patch, ops)
     _validate_early_structure_decision(conn, job_id, patch, ops)
@@ -3416,6 +3466,10 @@ def _apply_op(
             "human_gate_reason": op.get("human_gate_reason"),
             "strategy_summary": op.get("strategy_summary"),
             "changes_from_previous_attempts": op.get("changes_from_previous_attempts") or [],
+            "replaces_node_key": op.get("replaces_node_key"),
+            "inherit_promoted_contributions": bool(
+                op.get("inherit_promoted_contributions")
+            ),
             **_node_capability_metadata(op),
         }
         constraints = dict(op.get("constraints") or {})
@@ -3444,6 +3498,64 @@ def _apply_op(
             ),
         )
         _event(conn, job_id, "strategy_update_requested", metadata, node_id=node_id)
+        replaces_node_key = str(op.get("replaces_node_key") or "").strip()
+        if replaces_node_key and op.get("inherit_promoted_contributions") is True:
+            replaced = _node_by_key(conn, job_id, replaces_node_key)
+            inherited_rows = conn.execute(
+                """
+                SELECT DISTINCT dep.from_node_id, source.node_key,
+                       artifact.id AS artifact_id
+                  FROM execution_dependencies dep
+                  JOIN execution_nodes source ON source.id = dep.from_node_id
+                  JOIN node_artifacts artifact ON artifact.node_id = dep.from_node_id
+                 WHERE dep.to_node_id = ?
+                   AND artifact.artifact_type = 'runtime_node_contribution'
+                 ORDER BY source.node_key, artifact.id
+                """,
+                (replaced["id"],),
+            ).fetchall()
+            for inherited in inherited_rows:
+                _insert_dependency(
+                    conn,
+                    job_id,
+                    inherited["from_node_id"],
+                    node_id,
+                    "artifact_input",
+                )
+            _insert_relation(
+                conn,
+                job_id,
+                node_id,
+                replaced["id"],
+                "replaces_attempt",
+                metadata={
+                    "inherit_promoted_contributions": True,
+                    "artifact_ids": [row["artifact_id"] for row in inherited_rows],
+                },
+            )
+            if replaced["state"] not in TERMINAL_NODE_STATES:
+                conn.execute(
+                    """
+                    UPDATE execution_nodes
+                       SET state = 'superseded', updated_at = ?, completed_at = ?
+                     WHERE id = ?
+                    """,
+                    (now, now, replaced["id"]),
+                )
+            _event(
+                conn,
+                job_id,
+                "integration_contribution_lineage_inherited",
+                {
+                    "replacement_node_key": op["node_key"],
+                    "replaced_node_key": replaces_node_key,
+                    "source_node_keys": sorted(
+                        {str(row["node_key"]) for row in inherited_rows}
+                    ),
+                    "artifact_ids": [str(row["artifact_id"]) for row in inherited_rows],
+                },
+                node_id=node_id,
+            )
     elif name == "resolve_responsibility_candidate":
         source_ref = str(op["source_responsibility_ref"]).strip()
         source_event_id, candidate, _source_event_type = (
@@ -5682,7 +5794,10 @@ def _runtime_receipt_from_evidence(
     if not isinstance(evidence, dict):
         return None
     receipt = evidence.get("runtime_receipt")
-    if not isinstance(receipt, dict) or receipt.get("schema") != "runtime_worker_receipt_v1":
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get("schema") not in RUNTIME_RECEIPT_SCHEMAS
+    ):
         return None
     adapted_receipt = _adapt_phase4g8_structure_request_receipt(
         conn,
@@ -5785,6 +5900,21 @@ def _runtime_receipt_from_evidence(
         return None
     result["responsibility_candidates"] = [dict(value) for value in candidates]
     if node is not None:
+        node_metadata = _loads(node.get("metadata_json"))
+        is_contribution_child = bool(
+            node_metadata.get("non_authoritative_contribution")
+        )
+        if is_contribution_child:
+            if receipt.get("schema") == RUNTIME_INTEGRATION_RECEIPT_SCHEMA:
+                return None
+            if verdict in {
+                "candidate_ready",
+                "ready_for_evaluation",
+                "ready_for_independent_evaluation",
+            }:
+                return None
+            if set().union(*contribution_sets):
+                return None
         allowed = _node_linked_goal_item_keys(conn, node)
         referenced = set().union(*(set(result[key]) for key in keys))
         if not referenced.issubset(allowed):
@@ -5814,6 +5944,11 @@ def _runtime_receipt_from_evidence(
                 (node["id"],),
             ).fetchall()
             known_contributions = {str(row["id"]) for row in contribution_rows}
+            if (
+                known_contributions
+                and receipt.get("schema") == RUNTIME_CONTRIBUTION_RECEIPT_SCHEMA
+            ):
+                return None
             classified = set().union(*contribution_sets)
             if not classified.issubset(known_contributions):
                 return None
@@ -5875,6 +6010,217 @@ def _receipt_evidence_valid(
     )
 
 
+def _receipt_diagnostic_value(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return redact_sensitive_text(str(value))[:500]
+    rendered = redact_sensitive_text(_json(value))[:1000]
+    try:
+        return json.loads(rendered)
+    except (TypeError, ValueError):
+        return rendered
+
+
+def _receipt_evidence_validation_diagnostics(
+    evidence: Any,
+    *,
+    node: dict[str, Any],
+    conn: sqlite3.Connection,
+) -> list[dict[str, Any]]:
+    errors: list[dict[str, Any]] = []
+
+    def add(
+        code: str,
+        field_name: str,
+        *,
+        received: Any = None,
+        allowed: Optional[list[str]] = None,
+    ) -> None:
+        item: dict[str, Any] = {"code": code, "field": field_name}
+        if received is not None:
+            item["received"] = _receipt_diagnostic_value(received)
+        if allowed is not None:
+            item["allowed"] = allowed
+        errors.append(item)
+
+    if not isinstance(evidence, dict):
+        add("receipt_evidence_not_object", "receipt", received=evidence)
+        return errors
+    receipt = evidence.get("runtime_receipt")
+    if not isinstance(receipt, dict):
+        add("runtime_receipt_missing", "runtime_receipt")
+        return errors
+    schema = str(receipt.get("schema") or "")
+    if schema not in RUNTIME_RECEIPT_SCHEMAS:
+        add(
+            "unknown_receipt_schema",
+            "schema",
+            received=schema,
+            allowed=sorted(RUNTIME_RECEIPT_SCHEMAS),
+        )
+    node_metadata = _loads(node.get("metadata_json"))
+    is_child = bool(node_metadata.get("non_authoritative_contribution"))
+    if is_child and schema == RUNTIME_INTEGRATION_RECEIPT_SCHEMA:
+        add(
+            "invalid_receipt_role",
+            "schema",
+            received=schema,
+            allowed=[RUNTIME_CONTRIBUTION_RECEIPT_SCHEMA],
+        )
+    allowed_goals = sorted(_node_linked_goal_item_keys(conn, node))
+    outcome_fields = (
+        "claimed_goal_items",
+        "partial_goal_items",
+        "unmet_goal_items",
+        "contradicted_goal_items",
+    )
+    outcome_sets: dict[str, set[str]] = {}
+    for field_name in outcome_fields:
+        values = receipt.get(field_name, [])
+        if not isinstance(values, list) or any(
+            not isinstance(value, str) or not value.strip() for value in values
+        ):
+            add("invalid_string_array", field_name, received=values)
+            continue
+        normalized = [value.strip() for value in values]
+        outcome_sets[field_name] = set(normalized)
+        for index, value in enumerate(normalized):
+            if value not in allowed_goals:
+                add(
+                    "unknown_goal_item_key",
+                    f"{field_name}[{index}]",
+                    received=value,
+                    allowed=allowed_goals,
+                )
+    for left_index, left in enumerate(outcome_fields):
+        for right in outcome_fields[left_index + 1 :]:
+            overlap = sorted(outcome_sets.get(left, set()) & outcome_sets.get(right, set()))
+            if overlap:
+                add(
+                    "goal_item_outcome_overlap",
+                    f"{left},{right}",
+                    received=overlap,
+                )
+    raw_verdict = str(receipt.get("verdict") or "").strip().lower()
+    if is_child and raw_verdict in {
+        "candidate_ready",
+        "ready_for_evaluation",
+        "ready_for_independent_evaluation",
+    }:
+        add(
+            "invalid_child_verdict",
+            "verdict",
+            received=raw_verdict,
+            allowed=["succeeded", "failed", "blocked", "human_required", "uncertain"],
+        )
+    delivered_directives = sorted(
+        str(row["id"])
+        for row in conn.execute(
+            """
+            SELECT id FROM runtime_node_directives
+             WHERE job_id = ? AND target_node_id = ? AND status = 'delivered'
+            """,
+            (node["job_id"], node["id"]),
+        ).fetchall()
+    )
+    received_directives = receipt.get("consumed_directive_ids", [])
+    if not isinstance(received_directives, list) or any(
+        not isinstance(value, str) or not value.strip()
+        for value in received_directives
+    ):
+        add(
+            "invalid_string_array",
+            "consumed_directive_ids",
+            received=received_directives,
+        )
+    elif sorted(value.strip() for value in received_directives) != delivered_directives:
+        unknown = sorted(set(received_directives) - set(delivered_directives))
+        add(
+            "unknown_directive_id" if unknown else "directive_ack_set_mismatch",
+            "consumed_directive_ids",
+            received=received_directives,
+            allowed=delivered_directives,
+        )
+    contribution_fields = (
+        "accepted_contributions",
+        "modified_contributions",
+        "rejected_contributions",
+    )
+    contribution_sets: dict[str, set[str]] = {}
+    for field_name in contribution_fields:
+        values = receipt.get(field_name, [])
+        if not isinstance(values, list):
+            add("invalid_string_array", field_name, received=values)
+            continue
+        contribution_sets[field_name] = {
+            str(value).strip() for value in values if str(value).strip()
+        }
+    classified = set().union(*contribution_sets.values()) if contribution_sets else set()
+    if is_child and classified:
+        add(
+            "child_contribution_classification_forbidden",
+            "accepted_contributions,modified_contributions,rejected_contributions",
+            received=sorted(classified),
+            allowed=[],
+        )
+    known_contributions = {
+        str(row["id"])
+        for row in conn.execute(
+            """
+            SELECT artifact.id
+              FROM execution_dependencies dep
+              JOIN node_artifacts artifact ON artifact.node_id = dep.from_node_id
+             WHERE dep.to_node_id = ?
+               AND artifact.artifact_type = 'runtime_node_contribution'
+            """,
+            (node["id"],),
+        ).fetchall()
+    }
+    if known_contributions and schema == RUNTIME_CONTRIBUTION_RECEIPT_SCHEMA:
+        add(
+            "invalid_receipt_role",
+            "schema",
+            received=schema,
+            allowed=[RUNTIME_INTEGRATION_RECEIPT_SCHEMA],
+        )
+    for artifact_id in sorted(classified - known_contributions):
+        add(
+            "unknown_contribution_id",
+            "contribution_classification",
+            received=artifact_id,
+            allowed=sorted(known_contributions),
+        )
+    for left_index, left in enumerate(contribution_fields):
+        for right in contribution_fields[left_index + 1 :]:
+            overlap = sorted(
+                contribution_sets.get(left, set())
+                & contribution_sets.get(right, set())
+            )
+            for artifact_id in overlap:
+                add(
+                    "contribution_classification_overlap",
+                    f"{left},{right}",
+                    received=artifact_id,
+                )
+    policy = _loads(_job(conn, node["job_id"]).get("metadata_json")).get(
+        "orchestration_policy"
+    )
+    if (
+        known_contributions
+        and isinstance(policy, dict)
+        and policy.get("require_contribution_attribution") is True
+    ):
+        for artifact_id in sorted(known_contributions - classified):
+            add(
+                "contribution_not_classified",
+                "contribution_classification",
+                received=artifact_id,
+                allowed=sorted(known_contributions),
+            )
+    if not errors and _runtime_receipt_from_evidence(evidence, node, conn=conn) is None:
+        add("canonical_receipt_validation_failed", "runtime_receipt")
+    return errors
+
+
 def _receipt_evidence_validation_error(
     evidence: Any,
     *,
@@ -5901,7 +6247,16 @@ def _receipt_evidence_validation_error(
                 conn=conn,
                 node=node,
             )
-        return "runtime_worker_receipt_v1 failed canonical receipt validation"
+        diagnostics = _receipt_evidence_validation_diagnostics(
+            evidence,
+            node=node,
+            conn=conn,
+        )
+        if diagnostics:
+            return "; ".join(
+                f"{item['code']}:{item['field']}" for item in diagnostics
+            )
+        return "runtime receipt failed canonical validation"
     return "runtime receipt evidence does not contain a recognized completion field"
 
 
@@ -6047,6 +6402,7 @@ def _recovery_status_for_failure(failure_type: str) -> str:
         "worker_run_crashed": "crashed",
         "receipt_missing": "receipt_missing",
         "receipt_invalid": "receipt_invalid",
+        "artifact_capture_failed": "artifact_capture_failed",
     }.get(failure_type, "failed")
 
 
@@ -6071,6 +6427,8 @@ def reconcile_runtime_materializations(
         "scheduled_retries": [],
         "failed_nodes": [],
         "materializations_updated": [],
+        "attempt_patches_captured": [],
+        "attempt_patch_capture_failures": [],
         "worker_sessions": worker_sessions,
         "policy": {
             "infra_retry_limit": effective_policy["infra_retry_limit"],
@@ -6230,6 +6588,91 @@ def reconcile_runtime_materializations(
                 run_id=snapshot_run_id,
             )
             continue
+        is_runtime_checkpoint = False
+        if snapshot.task.status in {"done", "blocked"} and _is_codex_lane_evidence(
+            snapshot.evidence
+        ):
+            is_runtime_checkpoint = bool(
+                _runtime_structure_checkpoint_from_evidence(
+                    snapshot.evidence,
+                    node,
+                )
+                or _runtime_coordination_checkpoint_from_evidence(
+                    snapshot.evidence,
+                    node,
+                    conn=conn,
+                )
+            )
+        if (
+            materialization
+            and snapshot.task.status in {"done", "blocked"}
+            and not is_runtime_checkpoint
+            and _loads(node.get("metadata_json")).get(
+                "non_authoritative_contribution"
+            )
+        ):
+            try:
+                attempt_patch = _capture_runtime_attempt_patch(
+                    conn,
+                    _job(conn, job_id),
+                    node,
+                    materialization,
+                )
+            except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+                failure_type = "artifact_capture_failed"
+                detail = redact_sensitive_text(str(exc))[:2000]
+                _update_materialization_recovery_status(
+                    conn,
+                    materialization,
+                    _recovery_status_for_failure(failure_type),
+                    now=current,
+                    recovery_reason=failure_type,
+                    payload={
+                        "task_id": task_id,
+                        "run_id": snapshot_run_id,
+                        "capture_error": detail,
+                    },
+                )
+                _, created = _recovery_event_once(
+                    conn,
+                    job_id,
+                    "runtime_attempt_patch_capture_failed",
+                    f"attempt-patch-capture:{node['id']}:{materialization['id']}",
+                    {
+                        "node_key": node["node_key"],
+                        "materialization_id": materialization["id"],
+                        "attempt": materialization["attempt"],
+                        "task_id": task_id,
+                        "run_id": snapshot_run_id,
+                        "capture_error": detail,
+                    },
+                    node_id=node["id"],
+                    task_id=str(task_id),
+                    run_id=snapshot_run_id,
+                )
+                if created:
+                    summary["events"].append(
+                        "runtime_attempt_patch_capture_failed"
+                    )
+                summary["attempt_patch_capture_failures"].append(
+                    materialization["id"]
+                )
+                _schedule_recovery_retry_or_fail(
+                    conn,
+                    node,
+                    materialization,
+                    failure_type,
+                    now=current,
+                    policy=effective_policy,
+                    summary=summary,
+                    task_id=str(task_id),
+                    run_id=snapshot_run_id,
+                )
+                continue
+            if attempt_patch is not None:
+                summary["attempt_patches_captured"].append(
+                    attempt_patch["artifact_id"]
+                )
         if snapshot.task.status in {"done", "blocked"} and not _receipt_evidence_valid(
             snapshot.evidence,
             node=node,
@@ -6237,6 +6680,11 @@ def reconcile_runtime_materializations(
         ):
             failure_type = "receipt_missing" if not snapshot.evidence else "receipt_invalid"
             validation_error = _receipt_evidence_validation_error(
+                snapshot.evidence,
+                node=node,
+                conn=conn,
+            )
+            validation_errors = _receipt_evidence_validation_diagnostics(
                 snapshot.evidence,
                 node=node,
                 conn=conn,
@@ -6251,6 +6699,7 @@ def reconcile_runtime_materializations(
                     "task_id": task_id,
                     "run_id": snapshot_run_id,
                     "validation_error": validation_error,
+                    "validation_errors": validation_errors,
                 },
             )
             if materialization:
@@ -6271,6 +6720,7 @@ def reconcile_runtime_materializations(
                     "policy_decision": "evaluate_retry",
                     "task_status": snapshot.task.status,
                     "validation_error": validation_error,
+                    "validation_errors": validation_errors,
                 },
                 node_id=node["id"],
                 task_id=str(task_id),
@@ -9543,6 +9993,38 @@ def summarize_runtime_orchestration(
                     "integration_owner_node_key"
                 ),
                 "materialization_id": payload.get("materialization_id"),
+                "source_attempt_artifact_id": payload.get(
+                    "source_attempt_artifact_id"
+                ),
+            }
+        )
+    attempt_patches: list[dict[str, Any]] = []
+    for row in conn.execute(
+        """
+        SELECT artifact.id, artifact.node_id, artifact.path_or_ref,
+               artifact.metadata_json, node.node_key
+          FROM node_artifacts artifact
+          JOIN execution_nodes node ON node.id = artifact.node_id
+         WHERE artifact.job_id = ?
+           AND artifact.artifact_type = 'runtime_attempt_patch'
+         ORDER BY artifact.created_at, artifact.id
+        """,
+        (job_id,),
+    ).fetchall():
+        payload = _loads(row["metadata_json"])
+        attempt_patches.append(
+            {
+                "artifact_id": row["id"],
+                "node_id": row["node_id"],
+                "node_key": row["node_key"],
+                "path": row["path_or_ref"],
+                "materialization_id": payload.get("materialization_id"),
+                "patch_sha256": payload.get("patch_sha256"),
+                "patch_bytes": payload.get("patch_bytes"),
+                "declared_scope_status": payload.get(
+                    "declared_scope_status"
+                ),
+                "capture_status": payload.get("capture_status"),
             }
         )
     checkpoint = conn.execute(
@@ -9561,6 +10043,46 @@ def summarize_runtime_orchestration(
         """,
         (job_id,),
     ).fetchone()
+    promoted_attempt_ids = {
+        str(item["source_attempt_artifact_id"])
+        for item in contributions
+        if item.get("source_attempt_artifact_id")
+    }
+    integrated_contribution_ids: set[str] = set()
+    for row in conn.execute(
+        """
+        SELECT payload_json FROM execution_events
+         WHERE job_id = ? AND event_type = 'contribution_attribution_verified'
+         ORDER BY id
+        """,
+        (job_id,),
+    ).fetchall():
+        payload = _loads(row["payload_json"])
+        integrated_contribution_ids.update(
+            str(value)
+            for value in [
+                *(payload.get("accepted_contributions") or []),
+                *(payload.get("modified_contributions") or []),
+            ]
+        )
+    handoff_event_counts = {
+        str(row["event_type"]): int(row["count"])
+        for row in conn.execute(
+            """
+            SELECT event_type, COUNT(*) AS count FROM execution_events
+             WHERE job_id = ? AND event_type IN (
+                 'runtime_attempt_patch_captured',
+                 'runtime_attempt_patch_capture_failed',
+                 'receipt_protocol_repair_requested',
+                 'receipt_protocol_repaired',
+                 'implementation_reexecution_due_to_receipt',
+                 'integration_contribution_lineage_inherited'
+             )
+             GROUP BY event_type
+            """,
+            (job_id,),
+        ).fetchall()
+    }
     cleanup = conn.execute(
         """
         SELECT id, event_type, payload_json, created_at FROM execution_events
@@ -9978,6 +10500,44 @@ def summarize_runtime_orchestration(
         "contribution_bytes": sum(
             int(item.get("patch_bytes") or 0) for item in contributions
         ),
+        "attempt_patches": attempt_patches,
+        "attempt_patch_count": len(attempt_patches),
+        "contribution_handoff": {
+            "terminal_contribution_attempt_count": len(attempt_patches),
+            "attempt_patch_captured_count": handoff_event_counts.get(
+                "runtime_attempt_patch_captured", 0
+            ),
+            "attempt_patch_capture_failure_count": handoff_event_counts.get(
+                "runtime_attempt_patch_capture_failed", 0
+            ),
+            "quarantined_attempt_count": sum(
+                1
+                for item in attempt_patches
+                if str(item["artifact_id"]) not in promoted_attempt_ids
+            ),
+            "promoted_contribution_count": len(contributions),
+            "receipt_repair_count": handoff_event_counts.get(
+                "receipt_protocol_repaired", 0
+            ),
+            "receipt_repair_requested_count": handoff_event_counts.get(
+                "receipt_protocol_repair_requested", 0
+            ),
+            "implementation_reexecution_due_to_receipt_count": handoff_event_counts.get(
+                "implementation_reexecution_due_to_receipt", 0
+            ),
+            "inherited_lineage_event_count": handoff_event_counts.get(
+                "integration_contribution_lineage_inherited", 0
+            ),
+            "integrated_contribution_count": len(
+                integrated_contribution_ids
+            ),
+            "contribution_preservation_ratio": round(
+                len(integrated_contribution_ids) / len(contributions),
+                6,
+            )
+            if contributions
+            else 0.0,
+        },
         "latest_attribution": (
             {
                 "event_id": int(attribution["id"]),
@@ -10094,26 +10654,63 @@ def cleanup_runtime_orchestration_worktrees(
         (job_id,),
     ).fetchall():
         artifacts_by_node.setdefault(str(row["node_id"]), []).append(dict(row))
+    attempts_by_node: dict[str, list[dict[str, Any]]] = {}
+    for row in conn.execute(
+        """
+        SELECT * FROM node_artifacts
+         WHERE job_id = ? AND artifact_type = 'runtime_attempt_patch'
+         ORDER BY created_at, id
+        """,
+        (job_id,),
+    ).fetchall():
+        artifact = dict(row)
+        artifact["payload"] = _loads(artifact.get("metadata_json"))
+        attempts_by_node.setdefault(str(row["node_id"]), []).append(artifact)
+    captured_attempt_artifact_ids = {
+        str(payload.get("artifact_id"))
+        for payload in (
+            _loads(row["payload_json"])
+            for row in conn.execute(
+                """
+                SELECT payload_json FROM execution_events
+                 WHERE job_id = ?
+                   AND event_type = 'runtime_attempt_patch_captured'
+                """,
+                (job_id,),
+            ).fetchall()
+        )
+        if payload.get("artifact_id")
+    }
     errors: list[str] = []
     for node, _node_metadata in children:
+        attempt_artifacts = attempts_by_node.get(str(node["id"]), [])
+        if not attempt_artifacts:
+            errors.append(
+                f"child {node['node_key']} requires a captured attempt patch"
+            )
+        for artifact in attempt_artifacts:
+            try:
+                payload = _verify_runtime_attempt_patch_artifact(artifact)
+            except RuntimeError as exc:
+                errors.append(f"child {node['node_key']} {exc}")
+                continue
+            if payload["artifact_id"] not in captured_attempt_artifact_ids:
+                errors.append(
+                    f"child {node['node_key']} attempt patch capture event is missing"
+                )
         artifacts = artifacts_by_node.get(str(node["id"]), [])
-        if len(artifacts) != 1:
-            errors.append(
-                f"child {node['node_key']} requires exactly one frozen contribution"
-            )
-            continue
-        artifact = artifacts[0]
-        artifact_metadata = _loads(artifact.get("metadata_json"))
-        patch_path = Path(str(artifact.get("path_or_ref") or "")).resolve()
-        expected = str(artifact_metadata.get("patch_sha256") or "")
-        if not patch_path.is_file() or not expected:
-            errors.append(f"child {node['node_key']} contribution is missing")
-            continue
-        observed = hashlib.sha256(patch_path.read_bytes()).hexdigest()
-        if observed != expected:
-            errors.append(
-                f"child {node['node_key']} contribution hash mismatch"
-            )
+        for artifact in artifacts:
+            artifact_metadata = _loads(artifact.get("metadata_json"))
+            patch_path = Path(str(artifact.get("path_or_ref") or "")).resolve()
+            expected = str(artifact_metadata.get("patch_sha256") or "")
+            if not patch_path.is_file() or not expected:
+                errors.append(f"child {node['node_key']} contribution is missing")
+                continue
+            observed = hashlib.sha256(patch_path.read_bytes()).hexdigest()
+            if observed != expected:
+                errors.append(
+                    f"child {node['node_key']} contribution hash mismatch"
+                )
     if errors:
         result = {
             "status": "refused",
@@ -10167,6 +10764,9 @@ def cleanup_runtime_orchestration_worktrees(
         "reason": reason,
         "removed_worktrees": removed,
         "contributions_retained": sum(len(value) for value in artifacts_by_node.values()),
+        "attempt_patches_retained": sum(
+            len(value) for value in attempts_by_node.values()
+        ),
     }
     _event_once(
         conn,
@@ -10307,6 +10907,52 @@ def _prepare_runtime_node_workspace(
     }
 
 
+def _pending_receipt_protocol_repair(
+    conn: sqlite3.Connection,
+    node: dict[str, Any],
+    *,
+    board: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    if not _loads(node.get("metadata_json")).get(
+        "non_authoritative_contribution"
+    ):
+        return None
+    prior = conn.execute(
+        """
+        SELECT * FROM node_materializations
+         WHERE node_id = ? AND status IN ('receipt_missing', 'receipt_invalid')
+         ORDER BY attempt DESC, created_at DESC LIMIT 1
+        """,
+        (node["id"],),
+    ).fetchone()
+    if prior is None:
+        return None
+    artifact = _attempt_patch_artifact_for_materialization(conn, str(prior["id"]))
+    if artifact is None:
+        return None
+    payload = _verify_runtime_attempt_patch_artifact(artifact)
+    prior_metadata = _loads(prior["metadata_json"])
+    recovery = prior_metadata.get("recovery")
+    recovery = recovery if isinstance(recovery, dict) else {}
+    snapshot = kb.task_progress_snapshot(conn, str(prior["task_id"]), board=board)
+    original_receipt = (
+        (snapshot.evidence or {}).get("runtime_receipt")
+        if snapshot is not None and isinstance(snapshot.evidence, dict)
+        else None
+    )
+    return {
+        "schema": "runtime_receipt_protocol_repair_v1",
+        "source_materialization_id": prior["id"],
+        "source_materialization_attempt": int(prior["attempt"]),
+        "source_attempt_artifact_id": artifact["id"],
+        "source_patch_sha256": payload["patch_sha256"],
+        "validation_errors": recovery.get("validation_errors") or [],
+        "validation_error": recovery.get("validation_error"),
+        "original_receipt": original_receipt,
+        "implementation_is_immutable": True,
+    }
+
+
 def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], board: Optional[str] = None) -> Optional[str]:
     if node["state"] != "ready":
         return None
@@ -10418,7 +11064,19 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
         assignee=assignee,
         workspace_path=workspace["path"],
     )
-    body = _worker_context(conn, job, node, materialization_id, continuity=continuity)
+    receipt_protocol_repair = _pending_receipt_protocol_repair(
+        conn,
+        node,
+        board=board,
+    )
+    body = _worker_context(
+        conn,
+        job,
+        node,
+        materialization_id,
+        continuity=continuity,
+        receipt_protocol_repair=receipt_protocol_repair,
+    )
     task_id = kb.create_task(
         conn,
         title=f"[runtime] {node['title']}",
@@ -10456,10 +11114,39 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
                 {
                     "execution_continuity": continuity,
                     "runtime_workspace": workspace,
+                    **(
+                        {"receipt_protocol_repair": receipt_protocol_repair}
+                        if receipt_protocol_repair is not None
+                        else {}
+                    ),
                 }
             ),
         ),
     )
+    if receipt_protocol_repair is not None:
+        _event(
+            conn,
+            job["id"],
+            "receipt_protocol_repair_requested",
+            {
+                "node_key": node["node_key"],
+                "materialization_id": materialization_id,
+                "attempt": attempt,
+                "source_materialization_id": receipt_protocol_repair[
+                    "source_materialization_id"
+                ],
+                "source_attempt_artifact_id": receipt_protocol_repair[
+                    "source_attempt_artifact_id"
+                ],
+                "validation_errors": receipt_protocol_repair.get(
+                    "validation_errors"
+                )
+                or [],
+            },
+            node_id=node["id"],
+            task_id=task_id,
+            run_id=run_id,
+        )
     delivered_directive_ids: list[str] = []
     for directive in _node_directives(
         conn,
@@ -10600,6 +11287,7 @@ def _worker_context(
     materialization_id: str,
     *,
     continuity: Optional[dict[str, Any]] = None,
+    receipt_protocol_repair: Optional[dict[str, Any]] = None,
 ) -> str:
     metadata = _loads(node.get("metadata_json"))
     job_metadata = _loads(job.get("metadata_json"))
@@ -10717,6 +11405,31 @@ def _worker_context(
             "resume_from_materialization_id": (continuity or {}).get("resume_from_materialization_id"),
             "context_reacquisition": bool((continuity or {}).get("context_reacquisition")),
         },
+        "runtime_receipt_contract": {
+            "schema": (
+                RUNTIME_CONTRIBUTION_RECEIPT_SCHEMA
+                if metadata.get("non_authoritative_contribution")
+                else RUNTIME_INTEGRATION_RECEIPT_SCHEMA
+                if contribution_bundle
+                else RUNTIME_STANDARD_RECEIPT_SCHEMA
+            ),
+            "role": (
+                "contribution_child"
+                if metadata.get("non_authoritative_contribution")
+                else "integration_owner"
+                if contribution_bundle
+                else "standard_worker"
+            ),
+            "allowed_goal_item_keys": sorted(
+                _node_linked_goal_item_keys(conn, node)
+            ),
+            "required_directive_ids": sorted(
+                str(item["directive_id"]) for item in directive_bundle
+            ),
+            "allowed_contribution_artifact_ids": sorted(
+                str(item["artifact_id"]) for item in contribution_bundle
+            ),
+        },
     }
     if contribution_bundle:
         footer["runtime_contribution_bundle"] = contribution_bundle
@@ -10726,6 +11439,12 @@ def _worker_context(
         )
     if directive_bundle:
         footer["runtime_coordination_directives"] = directive_bundle
+    if receipt_protocol_repair is not None:
+        footer["runtime_receipt_protocol_repair"] = {
+            key: value
+            for key, value in receipt_protocol_repair.items()
+            if key != "original_receipt"
+        }
     if node.get("node_type") == "verification":
         try:
             target = _independent_verification_target(conn, node)
@@ -10986,6 +11705,25 @@ def _worker_context(
             f"{verdict_instruction}do not substitute "
             "status/outcome fields or a verification list.\n\n"
         )
+    if receipt_protocol_repair is not None:
+        receipt_schema = (
+            RUNTIME_CONTRIBUTION_RECEIPT_SCHEMA
+            if metadata.get("non_authoritative_contribution")
+            else RUNTIME_INTEGRATION_RECEIPT_SCHEMA
+            if contribution_bundle
+            else RUNTIME_STANDARD_RECEIPT_SCHEMA
+        )
+        receipt_recovery_instruction = (
+            "Receipt protocol repair only: Runtime already captured the completed "
+            "implementation as immutable attempt artifact "
+            f"{receipt_protocol_repair['source_attempt_artifact_id']} with patch SHA-256 "
+            f"{receipt_protocol_repair['source_patch_sha256']}. Do not inspect files, run "
+            "shell commands, modify the workspace, rerun tests, or redo implementation. "
+            f"Return only one corrected {receipt_schema} for the preserved result. "
+            "Use the field-level validation errors and allowed IDs below.\n"
+            f"Validation errors: {json.dumps(receipt_protocol_repair.get('validation_errors') or [], sort_keys=True)}\n"
+            f"Original receipt: {json.dumps(receipt_protocol_repair.get('original_receipt'), sort_keys=True)}\n\n"
+        )
     return (
         f"# Runtime node\n\n"
         f"Objective: {job['objective']}\n\n"
@@ -11123,19 +11861,173 @@ def _contribution_file_hashes(
     return hashes
 
 
-def _freeze_runtime_node_contribution(
+def _runtime_workspace_changed_files(
+    workspace: Path,
+    base_revision: str,
+    *,
+    owner_policy: Optional[dict[str, Any]] = None,
+) -> list[str]:
+    tracked = _run_git_command(
+        workspace,
+        ["diff", "--name-only", "-z", base_revision],
+        owner_policy=owner_policy,
+    )
+    untracked = _run_git_command(
+        workspace,
+        ["ls-files", "--others", "--exclude-standard", "-z"],
+        owner_policy=owner_policy,
+    )
+    return sorted(
+        {
+            value.replace("\\", "/")
+            for value in [*tracked.split("\0"), *untracked.split("\0")]
+            if value
+        }
+    )
+
+
+def _write_runtime_artifact_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    temporary.write_text(content, encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def _attempt_patch_artifact_for_materialization(
+    conn: sqlite3.Connection,
+    materialization_id: str,
+) -> Optional[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT * FROM node_artifacts
+         WHERE artifact_type = 'runtime_attempt_patch'
+         ORDER BY created_at, id
+        """
+    ).fetchall()
+    for row in rows:
+        artifact = dict(row)
+        payload = _loads(artifact.get("metadata_json"))
+        if str(payload.get("materialization_id") or "") != materialization_id:
+            continue
+        return {**artifact, "payload": payload}
+    return None
+
+
+def _runtime_artifact_by_id(
+    conn: sqlite3.Connection,
+    artifact_id: str,
+    *,
+    artifact_type: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    row = conn.execute(
+        "SELECT * FROM node_artifacts WHERE id = ?",
+        (artifact_id,),
+    ).fetchone()
+    if row is None or (
+        artifact_type is not None and row["artifact_type"] != artifact_type
+    ):
+        return None
+    artifact = dict(row)
+    artifact["payload"] = _loads(artifact.get("metadata_json"))
+    return artifact
+
+
+def _verify_runtime_attempt_patch_artifact(
+    artifact: dict[str, Any],
+) -> dict[str, Any]:
+    payload = dict(artifact.get("payload") or _loads(artifact.get("metadata_json")))
+    path = Path(str(artifact.get("path_or_ref") or payload.get("patch_ref") or ""))
+    expected = str(payload.get("patch_sha256") or "")
+    if not path.is_file() or not expected:
+        raise RuntimeError("runtime attempt patch artifact is incomplete")
+    observed = hashlib.sha256(path.read_bytes()).hexdigest()
+    if observed != expected:
+        raise RuntimeError("runtime attempt patch artifact hash mismatch")
+    payload["artifact_id"] = str(artifact["id"])
+    return payload
+
+
+def _capture_runtime_attempt_patch(
     conn: sqlite3.Connection,
     job: dict[str, Any],
     node: dict[str, Any],
     materialization: dict[str, Any],
-    evidence: dict[str, Any],
 ) -> Optional[dict[str, Any]]:
-    node_metadata = _loads(node["metadata_json"])
+    node_metadata = _loads(node.get("metadata_json"))
     if not node_metadata.get("non_authoritative_contribution"):
         return None
+    existing = _attempt_patch_artifact_for_materialization(
+        conn,
+        str(materialization["id"]),
+    )
+    if existing is not None:
+        return _verify_runtime_attempt_patch_artifact(existing)
+
     materialization_metadata = _loads(materialization.get("metadata_json"))
+    protocol_repair = materialization_metadata.get("receipt_protocol_repair")
+    if isinstance(protocol_repair, dict) and protocol_repair.get(
+        "source_attempt_artifact_id"
+    ):
+        source_artifact = _runtime_artifact_by_id(
+            conn,
+            str(protocol_repair["source_attempt_artifact_id"]),
+            artifact_type="runtime_attempt_patch",
+        )
+        if source_artifact is None:
+            raise RuntimeError("receipt protocol repair source attempt is missing")
+        source_payload = _verify_runtime_attempt_patch_artifact(source_artifact)
+        workspace_info = materialization_metadata.get("runtime_workspace")
+        if not isinstance(workspace_info, dict):
+            raise RuntimeError("receipt protocol repair workspace metadata is missing")
+        workspace = Path(str(workspace_info.get("path") or "")).resolve()
+        base_revision = str(workspace_info.get("base_revision") or "")
+        policy = _loads(job.get("metadata_json")).get("orchestration_policy")
+        policy = policy if isinstance(policy, dict) else {}
+        current_patch = _collect_runtime_workspace_patch(
+            workspace,
+            base_revision,
+            owner_policy=policy,
+        )
+        current_sha = hashlib.sha256(current_patch.encode("utf-8")).hexdigest()
+        if current_sha != source_payload["patch_sha256"]:
+            _event(
+                conn,
+                job["id"],
+                "implementation_reexecution_due_to_receipt",
+                {
+                    "node_key": node["node_key"],
+                    "materialization_id": materialization["id"],
+                    "source_attempt_artifact_id": source_artifact["id"],
+                    "expected_patch_sha256": source_payload["patch_sha256"],
+                    "observed_patch_sha256": current_sha,
+                },
+                node_id=node["id"],
+                task_id=materialization.get("task_id"),
+                run_id=materialization.get("run_id"),
+            )
+            raise RuntimeError(
+                "receipt protocol repair modified the captured implementation"
+            )
+        protocol_repair["verified_no_workspace_change"] = True
+        protocol_repair["verified_patch_sha256"] = current_sha
+        materialization_metadata["receipt_protocol_repair"] = protocol_repair
+        materialization_metadata["attempt_patch_artifact"] = {
+            "artifact_id": source_artifact["id"],
+            "patch_sha256": current_sha,
+            "capture_status": "quarantined",
+            "reused_for_protocol_repair": True,
+        }
+        conn.execute(
+            "UPDATE node_materializations SET metadata_json = ? WHERE id = ?",
+            (_json(materialization_metadata), materialization["id"]),
+        )
+        return source_payload
+
     workspace_info = materialization_metadata.get("runtime_workspace")
-    if not isinstance(workspace_info, dict) or workspace_info.get("mode") != "isolated_worktree":
+    if (
+        not isinstance(workspace_info, dict)
+        or workspace_info.get("mode") != "isolated_worktree"
+    ):
         raise RuntimeError("durable contribution node did not use an isolated worktree")
     workspace = Path(str(workspace_info.get("path") or "")).resolve()
     base_revision = str(workspace_info.get("base_revision") or "")
@@ -11149,6 +12041,22 @@ def _freeze_runtime_node_contribution(
         base_revision,
         owner_policy=policy,
     )
+    changed_files = _runtime_workspace_changed_files(
+        workspace,
+        base_revision,
+        owner_policy=policy,
+    )
+    _, scope_violations, scope_unverified = _apply_declared_write_scope_check(
+        node,
+        {"changed_files": changed_files},
+    )
+    scope_status = (
+        "unverified"
+        if scope_unverified
+        else "violated"
+        if scope_violations
+        else "verified"
+    )
     patch_sha = hashlib.sha256(patch.encode("utf-8")).hexdigest()
     root = Path(
         str(
@@ -11157,30 +12065,141 @@ def _freeze_runtime_node_contribution(
         )
     ).expanduser().resolve()
     node_root = root / _safe_workspace_component(str(node["node_key"]))
-    node_root.mkdir(parents=True, exist_ok=True)
     attempt = int(materialization["attempt"])
     patch_path = node_root / f"attempt-{attempt}.patch"
     metadata_path = node_root / f"attempt-{attempt}.json"
-    patch_path.write_text(patch, encoding="utf-8")
-    changed_files = [str(value) for value in evidence.get("changed_files") or []]
     artifact_id = _id("art")
     payload = {
-        "schema": "runtime_node_contribution_v1",
+        "schema": RUNTIME_ATTEMPT_PATCH_SCHEMA,
         "artifact_id": artifact_id,
+        "job_id": job["id"],
+        "node_id": node["id"],
         "node_key": node["node_key"],
-        "integration_owner_node_key": node_metadata.get("contribution_to_node_key"),
-        "base_revision": base_revision,
-        "patch_sha256": patch_sha,
-        "patch_bytes": len(patch.encode("utf-8")),
-        "patch_ref": str(patch_path),
-        "changed_files": changed_files,
-        "file_sha256": _contribution_file_hashes(workspace, changed_files),
-        "scope_status": "verified",
+        "integration_owner_node_key": node_metadata.get(
+            "contribution_to_node_key"
+        ),
         "materialization_id": materialization["id"],
         "materialization_attempt": attempt,
+        "base_revision": base_revision,
+        "workspace_revision": _workspace_revision(str(workspace)),
+        "patch_ref": str(patch_path),
+        "patch_sha256": patch_sha,
+        "patch_bytes": len(patch.encode("utf-8")),
+        "changed_files": changed_files,
+        "file_sha256": _contribution_file_hashes(workspace, changed_files),
+        "declared_scope_status": scope_status,
+        "scope_violations": scope_violations,
+        "capture_status": "quarantined",
         "workspace_path": str(workspace),
     }
-    metadata_path.write_text(_json(payload) + "\n", encoding="utf-8")
+    _write_runtime_artifact_text(patch_path, patch)
+    _write_runtime_artifact_text(metadata_path, _json(payload) + "\n")
+    conn.execute(
+        """
+        INSERT INTO node_artifacts (
+            id, job_id, node_id, artifact_type, path_or_ref, summary,
+            metadata_json, created_at
+        ) VALUES (?, ?, ?, 'runtime_attempt_patch', ?, ?, ?, ?)
+        """,
+        (
+            artifact_id,
+            job["id"],
+            node["id"],
+            str(patch_path),
+            f"Quarantined attempt patch from {node['node_key']}",
+            _json(payload),
+            _now(),
+        ),
+    )
+    event_id = _event(
+        conn,
+        job["id"],
+        "runtime_attempt_patch_captured",
+        payload,
+        node_id=node["id"],
+        task_id=materialization.get("task_id"),
+        run_id=materialization.get("run_id"),
+        source="runtime_kernel",
+    )
+    materialization_metadata["attempt_patch_artifact"] = {
+        "artifact_id": artifact_id,
+        "event_id": event_id,
+        "patch_sha256": patch_sha,
+        "capture_status": "quarantined",
+    }
+    conn.execute(
+        "UPDATE node_materializations SET metadata_json = ? WHERE id = ?",
+        (_json(materialization_metadata), materialization["id"]),
+    )
+    return payload
+
+
+def _freeze_runtime_node_contribution(
+    conn: sqlite3.Connection,
+    job: dict[str, Any],
+    node: dict[str, Any],
+    materialization: dict[str, Any],
+    evidence: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    node_metadata = _loads(node["metadata_json"])
+    if not node_metadata.get("non_authoritative_contribution"):
+        return None
+    existing_rows = conn.execute(
+        """
+        SELECT * FROM node_artifacts
+         WHERE node_id = ? AND artifact_type = 'runtime_node_contribution'
+         ORDER BY created_at, id
+        """,
+        (node["id"],),
+    ).fetchall()
+    for row in existing_rows:
+        payload = _loads(row["metadata_json"])
+        materialization_metadata = _loads(materialization.get("metadata_json"))
+        protocol_repair = materialization_metadata.get("receipt_protocol_repair")
+        source_attempt_id = (
+            str(protocol_repair.get("source_attempt_artifact_id") or "")
+            if isinstance(protocol_repair, dict)
+            else ""
+        )
+        if (
+            str(payload.get("materialization_id") or "")
+            == str(materialization["id"])
+            or source_attempt_id
+            and str(payload.get("source_attempt_artifact_id") or "")
+            == source_attempt_id
+        ):
+            payload["artifact_id"] = str(row["id"])
+            return payload
+    attempt_artifact = _attempt_patch_artifact_for_materialization(
+        conn,
+        str(materialization["id"]),
+    )
+    if attempt_artifact is None:
+        captured = _capture_runtime_attempt_patch(conn, job, node, materialization)
+        if captured is not None:
+            attempt_artifact = _runtime_artifact_by_id(
+                conn,
+                str(captured["artifact_id"]),
+                artifact_type="runtime_attempt_patch",
+            )
+    if attempt_artifact is None:
+        raise RuntimeError("runtime attempt patch was not captured")
+    attempt_payload = _verify_runtime_attempt_patch_artifact(attempt_artifact)
+    if attempt_payload.get("declared_scope_status") != "verified":
+        raise RuntimeError("runtime attempt patch is outside declared write scope")
+    artifact_id = _id("art")
+    payload = {
+        **attempt_payload,
+        "schema": RUNTIME_CONTRIBUTION_SCHEMA,
+        "artifact_id": artifact_id,
+        "source_attempt_artifact_id": attempt_artifact["id"],
+        "receipt_ref": (
+            f"node:{node['id']}:materialization:{materialization['id']}"
+        ),
+        "promotion_materialization_id": materialization["id"],
+        "promotion_status": "promoted",
+        "scope_status": "verified",
+    }
     conn.execute(
         """
         INSERT INTO node_artifacts (
@@ -11192,8 +12211,8 @@ def _freeze_runtime_node_contribution(
             artifact_id,
             job["id"],
             node["id"],
-            str(patch_path),
-            f"Frozen contribution from {node['node_key']}",
+            str(attempt_artifact["path_or_ref"]),
+            f"Promoted contribution from {node['node_key']}",
             _json(payload),
             _now(),
         ),
@@ -11206,6 +12225,16 @@ def _freeze_runtime_node_contribution(
         node_id=node["id"],
         task_id=node.get("latest_task_id"),
         run_id=node.get("latest_run_id"),
+        source="runtime_kernel",
+    )
+    _event(
+        conn,
+        job["id"],
+        "node_contribution_promoted",
+        payload,
+        node_id=node["id"],
+        task_id=materialization.get("task_id"),
+        run_id=materialization.get("run_id"),
         source="runtime_kernel",
     )
     return payload
@@ -11515,6 +12544,7 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
     node = conn.execute("SELECT * FROM execution_nodes WHERE id = ?", (node_id,)).fetchone()
     if node is None:
         raise ValueError(f"unknown node {node_id}")
+    node = dict(node)
     if not node["latest_task_id"]:
         return False
     snapshot = kb.task_progress_snapshot(conn, node["latest_task_id"], board=board)
@@ -11527,6 +12557,8 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
     ).fetchone()
     if materialization is None:
         return False
+    materialization = dict(materialization)
+    attempt_patch: Optional[dict[str, Any]] = None
     if _is_codex_lane_evidence(raw_evidence):
         checkpoint = _runtime_structure_checkpoint_from_evidence(
             raw_evidence,
@@ -11553,6 +12585,34 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
                 snapshot,
                 coordination_checkpoint,
             )
+    if _loads(node.get("metadata_json")).get("non_authoritative_contribution"):
+        try:
+            attempt_patch = _capture_runtime_attempt_patch(
+                conn,
+                _job(conn, node["job_id"]),
+                dict(node),
+                dict(materialization),
+            )
+        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            detail = redact_sensitive_text(str(exc))[:2000]
+            _recovery_event_once(
+                conn,
+                node["job_id"],
+                "runtime_attempt_patch_capture_failed",
+                f"attempt-patch-capture:{node['id']}:{materialization['id']}",
+                {
+                    "node_key": node["node_key"],
+                    "materialization_id": materialization["id"],
+                    "attempt": materialization["attempt"],
+                    "task_id": node["latest_task_id"],
+                    "run_id": snapshot.run.id if snapshot.run else None,
+                    "capture_error": detail,
+                },
+                node_id=node["id"],
+                task_id=node["latest_task_id"],
+                run_id=snapshot.run.id if snapshot.run else None,
+            )
+            return False
     metadata = (
         _runtime_receipt_from_evidence(raw_evidence, dict(node), conn=conn)
         if _is_codex_lane_evidence(raw_evidence)
@@ -11561,6 +12621,13 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
     if metadata is None:
         return False
     metadata = dict(metadata)
+    if attempt_patch is not None:
+        metadata["changed_files"] = list(attempt_patch.get("changed_files") or [])
+        metadata["runtime_attempt_patch"] = {
+            "artifact_id": attempt_patch["artifact_id"],
+            "patch_sha256": attempt_patch["patch_sha256"],
+            "materialization_id": attempt_patch["materialization_id"],
+        }
     consumed_directive_ids = metadata.get("consumed_directive_ids", [])
     if not isinstance(consumed_directive_ids, list) or any(
         not isinstance(value, str) or not value.strip()
@@ -11698,6 +12765,43 @@ def ingest_runtime_node_evidence(conn: sqlite3.Connection, node_id: str, board: 
             node["latest_task_id"],
         ),
     )
+    completed_materialization = conn.execute(
+        "SELECT metadata_json FROM node_materializations WHERE id = ?",
+        (materialization["id"],),
+    ).fetchone()
+    completed_materialization_metadata = _loads(
+        completed_materialization["metadata_json"]
+        if completed_materialization is not None
+        else materialization.get("metadata_json")
+    )
+    protocol_repair = completed_materialization_metadata.get(
+        "receipt_protocol_repair"
+    )
+    if (
+        isinstance(protocol_repair, dict)
+        and protocol_repair.get("verified_no_workspace_change") is True
+    ):
+        _event(
+            conn,
+            node["job_id"],
+            "receipt_protocol_repaired",
+            {
+                "node_key": node["node_key"],
+                "materialization_id": materialization["id"],
+                "source_materialization_id": protocol_repair.get(
+                    "source_materialization_id"
+                ),
+                "source_attempt_artifact_id": protocol_repair.get(
+                    "source_attempt_artifact_id"
+                ),
+                "patch_sha256": protocol_repair.get("verified_patch_sha256"),
+                "implementation_reexecuted": False,
+            },
+            node_id=node_id,
+            task_id=node["latest_task_id"],
+            run_id=snapshot_run_id,
+            source="runtime_kernel",
+        )
     if metadata.get("receipt_adapter"):
         _event(
             conn,
