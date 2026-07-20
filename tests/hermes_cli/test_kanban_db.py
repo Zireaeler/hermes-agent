@@ -102,6 +102,27 @@ def test_task_progress_snapshot_reads_worker_state_without_claiming(
     assert after.status == "running"
 
 
+def test_task_progress_snapshot_does_not_decode_task_body(kanban_home):
+    with kb.connect() as conn:
+        task_id = kb.create_task(
+            conn,
+            title="progress projection",
+            body="initial body",
+            initial_status="running",
+        )
+        conn.execute(
+            "UPDATE tasks SET body = CAST(X'80' AS TEXT) WHERE id = ?",
+            (task_id,),
+        )
+
+        snapshot = kb.task_progress_snapshot(conn, task_id)
+
+        assert snapshot is not None
+        assert snapshot.task.id == task_id
+        assert snapshot.task.status == "ready"
+        assert snapshot.task.body is None
+
+
 def test_task_progress_snapshot_includes_bounded_codex_events(
     kanban_home, tmp_path,
 ):

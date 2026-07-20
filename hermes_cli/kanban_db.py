@@ -1894,6 +1894,28 @@ def get_task(conn: sqlite3.Connection, task_id: str) -> Optional[Task]:
     return Task.from_row(row) if row else None
 
 
+def _get_task_progress_projection(
+    conn: sqlite3.Connection,
+    task_id: str,
+) -> Optional[Task]:
+    """Load task state without decoding the potentially large task body."""
+    row = conn.execute(
+        """
+        SELECT id, title, NULL AS body, assignee, status, priority, created_by,
+               created_at, started_at, completed_at, workspace_kind,
+               workspace_path, claim_lock, claim_expires, tenant, branch_name,
+               result, idempotency_key, consecutive_failures, worker_pid,
+               last_failure_error, max_runtime_seconds, last_heartbeat_at,
+               current_run_id, workflow_template_id, current_step_key, skills,
+               model_override, max_retries, session_id
+          FROM tasks
+         WHERE id = ?
+        """,
+        (task_id,),
+    ).fetchone()
+    return Task.from_row(row) if row else None
+
+
 # Canonical sort-order mappings for ``hermes kanban list --sort``.
 # Each value is a raw SQL fragment appended after ``ORDER BY``.
 VALID_SORT_ORDERS: dict[str, str] = {
@@ -2352,7 +2374,10 @@ def task_progress_snapshot(
     worker.  Main agents and dashboards can call it while external workers
     continue running.
     """
-    task = get_task(conn, task_id)
+    # Progress and recovery paths never consume the worker instruction body.
+    # Avoid decoding it so an unrelated malformed/legacy TEXT value cannot
+    # prevent terminal receipt ingestion or lease reconciliation.
+    task = _get_task_progress_projection(conn, task_id)
     if task is None:
         return None
     run = latest_run(conn, task_id)

@@ -13,6 +13,7 @@ import shutil
 import sqlite3
 import subprocess
 import time
+import traceback
 from typing import Any, Optional
 
 from hermes_cli import codex_worker
@@ -898,22 +899,162 @@ def run_case(config: CalibrationConfig, case: CalibrationCase) -> dict[str, Any]
                 os.environ[key] = value
 
 
+def _archive_infrastructure_invalid_case(
+    config: CalibrationConfig,
+    case: CalibrationCase,
+    exc: BaseException,
+) -> dict[str, Any]:
+    case_root = (config.root / case.key).resolve()
+    reports = case_root / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    db_path = case_root / "hermes-home" / "kanban.db"
+    error = rk.redact_sensitive_text(str(exc)).strip()[:2000]
+    stack = rk.redact_sensitive_text(traceback.format_exc()).strip()[-12000:]
+    job_id = None
+    learning_result = None
+    if db_path.is_file():
+        with kb.connect(db_path=db_path) as conn:
+            row = conn.execute(
+                "SELECT id FROM runtime_jobs ORDER BY created_at DESC, rowid DESC LIMIT 1"
+            ).fetchone()
+            if row is not None:
+                job_id = str(row["id"])
+                learning_result = learning.finalize_learning_bundle(
+                    conn,
+                    job_id,
+                    run_root=case_root,
+                    registry_path=(
+                        config.artifact_root
+                        / "orchestration-learning"
+                        / "registry.sqlite3"
+                    ),
+                    phase=PHASE,
+                    instance_id=case.key,
+                    run_id=config.root.name,
+                    source_db_ref="hermes-home/kanban.db",
+                    quality={
+                        "status": "infrastructure_invalid",
+                        "case_kind": case.kind,
+                        "runtime_error": error,
+                        "coordination_observations": {
+                            "missed_coordination_evidence_refs": [],
+                            "coordination_overhead_evidence_refs": [],
+                        },
+                    },
+                    baseline_bundle_ref=f"reports/{case.key}-baseline",
+                )
+    report = {
+        "schema": CASE_REPORT_SCHEMA,
+        "case": {
+            "key": case.key,
+            "title": case.title,
+            "kind": case.kind,
+            "objective": case.objective,
+        },
+        "status": "infrastructure_invalid",
+        "runtime_job_id": job_id,
+        "exception_type": type(exc).__name__,
+        "error": error,
+        "traceback": stack,
+        "learning": (
+            {
+                "status": learning_result["receipt"]["status"],
+                "bundle_sha256": learning_result["receipt"]["bundle_sha256"],
+            }
+            if learning_result is not None
+            else {"status": "not_available_before_runtime_job"}
+        ),
+        "conclusion": (
+            "该 case 因校准基础设施失效而中止，不计入 Runtime 能力结论；"
+            "已保留此前产生的 worker、Decision Provider 与 DB 事实。"
+        ),
+        "generated_at": int(time.time()),
+    }
+    _write_json(reports / "infrastructure-invalid.json", report)
+    (reports / "capability-trace.md").write_text(
+        "\n".join(
+            [
+                f"# Phase 4G16 {case.title} 基础设施失效",
+                "",
+                f"- 状态：`infrastructure_invalid`",
+                f"- Runtime job：`{job_id or '未创建'}`",
+                f"- 异常：`{type(exc).__name__}`：{error}",
+                "- 本 run 不计入能力结论，已保留并吸收此前产生的权威事实。",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    if learning_result is None:
+        return report
+    archive_instance = (
+        f"{case.key}-infrastructure-invalid-{config.root.name}"
+    )
+    expected_entries = tuple(
+        name
+        for name in (
+            "codex-home",
+            "codex-homes",
+            "hermes-home",
+            "reports",
+            "runtime-state",
+        )
+        if (case_root / name).exists()
+    )
+    manifest = validation_artifacts.archive_validation_run(
+        case_root,
+        artifact_root=config.artifact_root,
+        phase=PHASE,
+        instance_id=archive_instance,
+        redactions=validation_artifacts.model_source_redactions(
+            config.source_codex_home
+        ),
+        expected_entries=expected_entries,
+        orchestration_learning_required=True,
+    )
+    report["artifact_archive"] = {
+        "status": manifest["status"],
+        "artifact_path": manifest["artifact_path"],
+        "manifest_path": str(Path(manifest["artifact_path"]) / "manifest.json"),
+    }
+    if config.cleanup_source:
+        report["cleanup"] = validation_artifacts.cleanup_rebuildable_entries(
+            case_root,
+            manifest_path=Path(manifest["artifact_path"]) / "manifest.json",
+            entries=("workspace", "home", "codex-home-seed"),
+            orchestration_learning_required=True,
+        )
+    _write_json(reports / "infrastructure-invalid.json", report)
+    return report
+
+
 def run_campaign(config: CalibrationConfig) -> dict[str, Any]:
     root = config.root.expanduser().resolve()
     if root.exists() and any(root.iterdir()):
         raise ValueError(f"campaign root must be empty: {root}")
     root.mkdir(parents=True, exist_ok=True)
-    case_reports = [run_case(config, case) for case in _cases()]
+    case_reports = []
+    for case in _cases():
+        try:
+            case_reports.append(run_case(config, case))
+        except Exception as exc:
+            case_reports.append(
+                _archive_infrastructure_invalid_case(config, case, exc)
+            )
+            break
     report = {
         "schema": CAMPAIGN_SCHEMA,
         "status": (
-            "passed" if all(item["status"] == "passed" for item in case_reports) else "failed"
+            "passed"
+            if len(case_reports) == len(_cases())
+            and all(item["status"] == "passed" for item in case_reports)
+            else "failed"
         ),
         "cases": [
             {
                 "key": item["case"]["key"],
                 "status": item["status"],
-                "acceptance": item["acceptance"],
+                "acceptance": item.get("acceptance"),
                 "artifact_archive": item.get("artifact_archive"),
             }
             for item in case_reports

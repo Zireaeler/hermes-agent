@@ -128,3 +128,50 @@ def test_isolated_config_summary_omits_paths_and_provider_endpoint(tmp_path):
     assert "source_home" not in summary
     assert "target_home" not in summary
     assert "proxy_base_url" not in summary
+
+
+def test_campaign_archives_first_infrastructure_failure_and_stops(
+    tmp_path,
+    monkeypatch,
+):
+    config = phase4g16.CalibrationConfig(
+        root=tmp_path / "campaign",
+        artifact_root=tmp_path / "artifacts",
+        source_codex_home=tmp_path / "codex",
+    )
+    attempted = []
+    archived = []
+
+    def fail_case(_config, case):
+        attempted.append(case.key)
+        raise RuntimeError("broken calibration infrastructure")
+
+    def archive_failure(_config, case, exc):
+        archived.append((case.key, str(exc)))
+        return {
+            "case": {"key": case.key},
+            "status": "infrastructure_invalid",
+        }
+
+    monkeypatch.setattr(phase4g16, "run_case", fail_case)
+    monkeypatch.setattr(
+        phase4g16,
+        "_archive_infrastructure_invalid_case",
+        archive_failure,
+    )
+
+    report = phase4g16.run_campaign(config)
+
+    assert report["status"] == "failed"
+    assert attempted == ["coherent-negative"]
+    assert archived == [
+        ("coherent-negative", "broken calibration infrastructure")
+    ]
+    assert report["cases"] == [
+        {
+            "key": "coherent-negative",
+            "status": "infrastructure_invalid",
+            "acceptance": None,
+            "artifact_archive": None,
+        }
+    ]
