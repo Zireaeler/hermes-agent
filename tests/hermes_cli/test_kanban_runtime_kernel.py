@@ -2724,6 +2724,83 @@ def test_fixed_evaluator_attempt_budget_does_not_suppress_same_session_remediati
     ).fetchone()[0] == 0
 
 
+def test_evaluated_coverage_stop_suppresses_remediation_before_materialization(
+    conn,
+    tmp_path,
+):
+    scenario = _prepare_failed_evaluator_remediation(
+        conn,
+        tmp_path,
+        remediation_overrides={
+            "stop_after_coverage": {
+                "min_completed_evaluator_attempts": 1,
+                "min_consumed_evaluator_feedback": 0,
+            }
+        },
+    )
+    provider_calls = []
+
+    def provider_must_not_run(_session, _delta):
+        provider_calls.append(True)
+        raise AssertionError("coverage stop must not invoke Decision Provider")
+
+    result = rk.advance_runtime_job(
+        conn,
+        scenario["job_id"],
+        create_tasks=True,
+        decision_provider=provider_must_not_run,
+        auto_compact=False,
+    )
+
+    remediation = result.recovery["evaluator_remediation"]
+    primary = _node(conn, scenario["job_id"], "primary-result")
+    session = conn.execute(
+        "SELECT * FROM backend_worker_sessions WHERE node_id = ?",
+        (primary["id"],),
+    ).fetchone()
+    assert provider_calls == []
+    assert result.decision_requested is False
+    assert result.materialized_nodes == []
+    assert remediation["scheduled"] == []
+    assert remediation["stopped_by_coverage_policy"] is True
+    assert remediation["decision_suppressed"] is True
+    assert primary["state"] == "succeeded"
+    assert session["status"] == "completed"
+    assert conn.execute(
+        "SELECT COUNT(*) FROM node_materializations WHERE node_id = ?",
+        (primary["id"],),
+    ).fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM execution_events WHERE job_id = ? "
+        "AND event_type = 'required_evaluator_remediation_scheduled'",
+        (scenario["job_id"],),
+    ).fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM execution_events WHERE job_id = ? "
+        "AND event_type = 'evaluator_failure_bundle_created'",
+        (scenario["job_id"],),
+    ).fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM execution_events WHERE job_id = ? "
+        "AND event_type = 'required_evaluator_remediation_stopped_by_coverage_policy'",
+        (scenario["job_id"],),
+    ).fetchone()[0] == 1
+
+    repeated = rk.advance_runtime_job(
+        conn,
+        scenario["job_id"],
+        create_tasks=True,
+        decision_provider=provider_must_not_run,
+        auto_compact=False,
+    )
+    assert repeated.materialized_nodes == []
+    assert conn.execute(
+        "SELECT COUNT(*) FROM execution_events WHERE job_id = ? "
+        "AND event_type = 'required_evaluator_remediation_stopped_by_coverage_policy'",
+        (scenario["job_id"],),
+    ).fetchone()[0] == 1
+
+
 @pytest.mark.parametrize(
     ("result_overrides", "receipt_overrides"),
     [

@@ -55,3 +55,7 @@ Phase 4G10 Arm 2 历史对照：
 - 一份 malformed receipt 只触发 metadata repair，未重新执行实现；
 - 两份 contribution 均被 Primary 集成，完整测试与 consistency 通过；
 - contribution preservation ratio 为 `1.0`，receipt 导致的实现重做为 `0`。
+- Natural Medium：`phase4g14-runtime-medium-1c43cd09ba`；
+- Primary 自然扩展为 3 个 isolated child，attempt / promotion / integration 为 `3/3/3`；
+- 相对 Phase 4G13 Runtime wall time 下降约 `45.9%`，但与 coherent single worker 的最终
+  F2P/P2P 均为 `3/5`、`707/707`，未证明质量优势。

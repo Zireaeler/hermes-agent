@@ -1244,19 +1244,25 @@ def test_runtime_output_schema_constrains_role_specific_database_ids(tmp_path):
     assert receipt["properties"]["schema"]["enum"] == [
         "runtime_contribution_receipt_v1"
     ]
-    assert receipt["properties"]["claimed_goal_items"]["maxItems"] == 0
+    assert "must be empty" in receipt["properties"]["claimed_goal_items"][
+        "description"
+    ]
     assert receipt["properties"]["partial_goal_items"]["items"]["enum"] == [
         "runtime-result"
     ]
     directives = receipt["properties"]["consumed_directive_ids"]
     assert directives["items"]["enum"] == ["ndir-1"]
-    assert directives["minItems"] == directives["maxItems"] == 1
+    assert "every listed identifier" in directives["description"]
     for field_name in (
         "accepted_contributions",
         "modified_contributions",
         "rejected_contributions",
     ):
-        assert receipt["properties"][field_name]["maxItems"] == 0
+        assert "must be empty" in receipt["properties"][field_name]["description"]
+    rendered_schema = json.dumps(schema, sort_keys=True)
+    assert "uniqueItems" not in rendered_schema
+    assert "minItems" not in rendered_schema
+    assert "maxItems" not in rendered_schema
     extracted = cw._extract_runtime_receipt(
         json.dumps({
             "schema": "runtime_worker_event_v1",
@@ -1291,6 +1297,36 @@ def test_runtime_output_schema_constrains_role_specific_database_ids(tmp_path):
     assert integration["properties"]["accepted_contributions"]["items"][
         "enum"
     ] == ["art-a", "art-b"]
+
+
+def test_runtime_receipt_contract_does_not_mutate_structure_checkpoint_schema(
+    tmp_path,
+):
+    footer = {
+        "runtime_receipt_contract": {
+            "schema": "runtime_integration_receipt_v1",
+            "role": "integration_owner",
+            "allowed_goal_item_keys": ["runtime-result"],
+            "required_directive_ids": [],
+            "allowed_contribution_artifact_ids": [],
+        }
+    }
+    context = (
+        "# Runtime node\n\n"
+        "Early structure assessment mode: inspect only.\n\n"
+        f"Runtime footer: {json.dumps(footer)}\n"
+    )
+
+    schema_path = cw._prepare_runtime_output_schema(
+        context,
+        {"CODEX_HOME": str(tmp_path / "codex-home")},
+    )
+    schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
+
+    assert schema["properties"]["schema"]["enum"] == [
+        "runtime_worker_structure_checkpoint_v1"
+    ]
+    assert "claimed_goal_items" not in schema["properties"]
 
 
 def test_codex_prompt_keeps_runtime_contribution_outside_candidate_ready():

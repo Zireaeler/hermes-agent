@@ -43,10 +43,24 @@ def test_runtime_arm_uses_natural_coordination_and_one_unconsumed_evaluation(
     assert "assessment_replay" not in policy
     assert kwargs["fault_profile"] == "none"
     assert kwargs["worker_multi_agent_enabled"] is False
+    assert kwargs["run_id_prefix"] == "phase4g13-runtime"
     stop = kwargs["evaluated_stop_policy"]
     assert stop["schema"] == p4g8_run.EVALUATED_STOP_POLICY_SCHEMA
     assert stop["min_completed_evaluator_attempts"] == 1
     assert stop["min_consumed_evaluator_feedback"] == 0
+
+
+def test_runtime_arm_allows_later_validation_phase_run_id_prefix(tmp_path):
+    kwargs = phase4g13.runtime_arm_call_kwargs(
+        qualification_spec_path=tmp_path / "qualification.json",
+        run_root=tmp_path / "runtime",
+        source_codex_home=tmp_path / "codex",
+        max_wall_seconds=123,
+        worker_timeout_seconds=456,
+        run_id_prefix="phase4g14-runtime-medium",
+    )
+
+    assert kwargs["run_id_prefix"] == "phase4g14-runtime-medium"
 
 
 def test_comparison_keeps_quality_and_runtime_cost_separate():

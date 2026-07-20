@@ -295,6 +295,7 @@ def run_phase4g8_real_case(
                 paths["workspace"],
                 run_id,
                 max_evaluator_no_progress_streak=int(max_evaluator_no_progress_streak),
+                evaluated_stop_policy=effective_evaluated_stop_policy,
                 orchestration_policy=resolved_orchestration_policy or None,
             )
         _write_runner_state(
@@ -1706,8 +1707,24 @@ def _create_real_job(
     run_id: str,
     *,
     max_evaluator_no_progress_streak: int = 2,
+    evaluated_stop_policy: Optional[dict[str, Any]] = None,
     orchestration_policy: Optional[dict[str, Any]] = None,
 ) -> str:
+    remediation_policy: dict[str, Any] = {
+        "mode": "resume_target_session",
+        "max_no_progress_streak": int(max_evaluator_no_progress_streak),
+        "diagnostic_batch_size": 20,
+        "max_diagnostics_chars_per_case": 4000,
+    }
+    if evaluated_stop_policy is not None:
+        remediation_policy["stop_after_coverage"] = {
+            "min_completed_evaluator_attempts": int(
+                evaluated_stop_policy["min_completed_evaluator_attempts"]
+            ),
+            "min_consumed_evaluator_feedback": int(
+                evaluated_stop_policy["min_consumed_evaluator_feedback"]
+            ),
+        }
     with kb.connect() as conn:
         root_task = kb.create_task(
             conn,
@@ -1745,12 +1762,7 @@ def _create_real_job(
                     "mode": "required_evaluator",
                     "assignee": "phase4g8-evaluator",
                     "require_workspace_revision": True,
-                    "remediation": {
-                        "mode": "resume_target_session",
-                        "max_no_progress_streak": int(max_evaluator_no_progress_streak),
-                        "diagnostic_batch_size": 20,
-                        "max_diagnostics_chars_per_case": 4000,
-                    },
+                    "remediation": remediation_policy,
                 },
             },
         )

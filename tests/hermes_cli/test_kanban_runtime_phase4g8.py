@@ -985,6 +985,44 @@ def test_evaluated_coverage_stop_requires_consumed_feedback_and_current_candidat
     ) is None
 
 
+def test_create_real_job_persists_evaluated_stop_before_runtime_reduction(
+    kanban_home,
+    tmp_path,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    policy = p4g8_run._normalize_evaluated_stop_policy({
+        "schema": p4g8_run.EVALUATED_STOP_POLICY_SCHEMA,
+        "min_completed_evaluator_attempts": 1,
+        "min_consumed_evaluator_feedback": 0,
+        "reason": "record exactly one benchmark evaluator result",
+    })
+
+    job_id = p4g8_run._create_real_job(
+        {
+            "instance_id": "fixture__natural_medium",
+            "srs": "Implement the requested repository evolution.",
+        },
+        workspace,
+        "phase4g14-medium-fixture",
+        evaluated_stop_policy=policy,
+    )
+
+    with kb.connect() as conn:
+        metadata = json.loads(
+            conn.execute(
+                "SELECT metadata_json FROM runtime_jobs WHERE id = ?",
+                (job_id,),
+            ).fetchone()["metadata_json"]
+        )
+    remediation = metadata["verification_policy"]["remediation"]
+    assert remediation["mode"] == "resume_target_session"
+    assert remediation["stop_after_coverage"] == {
+        "min_completed_evaluator_attempts": 1,
+        "min_consumed_evaluator_feedback": 0,
+    }
+
+
 def test_workspace_ownership_canary_detects_and_accepts_bounded_owner_change(
     tmp_path,
 ):

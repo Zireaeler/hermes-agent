@@ -602,5 +602,21 @@ Phase 4G14 的成功标准不是 receipt 永远不会写错，而是：
 - `implementation_reexecution_due_to_receipt_count = 0`；
 - 受影响测试集为 `290 passed`。
 
-验证入口见 [Phase 4G14 验证索引](validation/phase4g14/README.md)。本阶段没有重跑
-Phase 4G13 Medium。
+验证入口见 [Phase 4G14 验证索引](validation/phase4g14/README.md)。Controlled case 完成后，
+另以全新 DB、workspace、Codex homes 和 run id 运行了一次 Natural Medium；它不是对 Phase
+4G13 失败状态的续跑。
+
+2026-07-20，Natural Medium `phase4g14-runtime-medium-1c43cd09ba` 完成：
+
+- Primary 从真实 repository evidence 自然提出 3 个 non-overlapping child；
+- 3 个 isolated attempt patch 全部捕获、晋升并由同一 Primary session 集成；
+- receipt repair、implementation reexecution 和 recovery worker 均为 `0`；
+- contribution preservation ratio 为 `1.0`；
+- official evaluator 只运行 1 次且不向 worker 回流；
+- F2P 为 `3/5`，P2P 为 `707/707`，task capability 未 resolved；
+- wall time 为 `1,877.121s`，比 Phase 4G13 Runtime 下降约 `45.9%`；
+- coherent single worker 得到相同质量且更快，因此本阶段不声称 orchestra 具有质量优势。
+
+实测同时修复了 checkpoint/receipt 动态 schema 混用、provider 不支持的 array schema 关键字，
+以及 evaluator coverage stop 晚于 remediation 调度的竞态。精确过程和对照见
+[Natural Medium 中文执行报告](validation/phase4g14/natural-medium-execution-report.md)。

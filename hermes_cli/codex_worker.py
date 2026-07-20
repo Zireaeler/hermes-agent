@@ -1037,15 +1037,18 @@ def _set_runtime_id_array_constraint(
     require_all: bool = False,
 ) -> None:
     field = receipt_schema["properties"][field_name]
-    field["uniqueItems"] = True
     if allowed_values:
         field["items"] = {"type": "string", "enum": allowed_values}
-        field["maxItems"] = len(allowed_values)
-        if require_all:
-            field["minItems"] = len(allowed_values)
+        requirement = (
+            "Include every listed identifier exactly once."
+            if require_all
+            else "Use only identifiers from this enum."
+        )
     else:
         field["items"] = {"type": "string"}
-        field["maxItems"] = 0
+        requirement = "This array must be empty."
+    description = str(field.get("description") or "").strip()
+    field["description"] = f"{description} {requirement}".strip()
 
 
 def _runtime_output_schema_for_context(
@@ -1056,11 +1059,34 @@ def _runtime_output_schema_for_context(
     contract = _runtime_footer(task_context).get("runtime_receipt_contract")
     if not isinstance(contract, dict):
         return schema
-    receipt_schema = (
-        schema["properties"]["event"]["anyOf"][0]
-        if schema.get("properties", {}).get("event")
-        else schema
-    )
+    required_receipt_fields = {
+        "claimed_goal_items",
+        "partial_goal_items",
+        "unmet_goal_items",
+        "contradicted_goal_items",
+        "consumed_directive_ids",
+        "accepted_contributions",
+        "modified_contributions",
+        "rejected_contributions",
+    }
+    receipt_schema: dict[str, Any] | None = None
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        if required_receipt_fields.issubset(properties):
+            receipt_schema = schema
+        event = properties.get("event")
+        if isinstance(event, dict):
+            for option in event.get("anyOf") or []:
+                option_properties = (
+                    option.get("properties") if isinstance(option, dict) else None
+                )
+                if isinstance(option_properties, dict) and (
+                    required_receipt_fields.issubset(option_properties)
+                ):
+                    receipt_schema = option
+                    break
+    if receipt_schema is None:
+        return schema
     receipt_name = str(contract.get("schema") or "runtime_worker_receipt_v1")
     receipt_schema["properties"]["schema"]["enum"] = [receipt_name]
     role = str(contract.get("role") or "standard_worker")
@@ -1099,7 +1125,11 @@ def _runtime_output_schema_for_context(
         require_all=True,
     )
     if role == "contribution_child":
-        receipt_schema["properties"]["claimed_goal_items"]["maxItems"] = 0
+        claimed = receipt_schema["properties"]["claimed_goal_items"]
+        claimed["description"] = (
+            f"{str(claimed.get('description') or '').strip()} "
+            "This array must be empty for a contribution child."
+        ).strip()
         for field_name in (
             "accepted_contributions",
             "modified_contributions",

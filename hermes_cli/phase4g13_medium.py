@@ -339,6 +339,7 @@ def runtime_arm_call_kwargs(
     source_codex_home: Path,
     max_wall_seconds: float,
     worker_timeout_seconds: int,
+    run_id_prefix: str = "phase4g13-runtime",
 ) -> dict[str, Any]:
     return {
         "qualification_spec_path": qualification_spec_path,
@@ -359,7 +360,7 @@ def runtime_arm_call_kwargs(
             "retention": "retain",
         },
         "fault_profile": "none",
-        "run_id_prefix": "phase4g13-runtime",
+        "run_id_prefix": str(run_id_prefix),
         "reasoning_effort_override": "max",
         "worker_multi_agent_enabled": False,
         "evaluated_stop_policy": {
@@ -449,6 +450,8 @@ def run_runtime_arm(
     execute_real: bool,
     max_wall_seconds: float,
     worker_timeout_seconds: int,
+    validation_phase: str = "phase4g13",
+    run_id_prefix: str = "phase4g13-runtime",
 ) -> dict[str, Any]:
     if not execute_real:
         raise ValueError("Phase 4G13 Runtime arm requires execute_real=True")
@@ -460,6 +463,7 @@ def run_runtime_arm(
             source_codex_home=source_codex_home,
             max_wall_seconds=max_wall_seconds,
             worker_timeout_seconds=worker_timeout_seconds,
+            run_id_prefix=run_id_prefix,
         )
     )
     actual_root = Path(str(payload["paths"]["root"])).resolve()
@@ -480,6 +484,7 @@ def run_runtime_arm(
         "run_id": payload["run_id"],
         "job_id": payload["job_id"],
         "instance_id": FROZEN_INSTANCE_ID,
+        "validation_phase": str(validation_phase),
         "runtime_kernel_used": True,
         "worker_count": len(non_evaluator_nodes),
         "wall_time_seconds": source_metrics.get("wall_time_seconds"),
@@ -507,7 +512,7 @@ def run_runtime_arm(
     archive = validation_artifacts.archive_validation_run(
         actual_root,
         artifact_root=artifact_root,
-        phase="phase4g13",
+        phase=str(validation_phase),
         instance_id=FROZEN_INSTANCE_ID,
         redactions=validation_artifacts.model_source_redactions(source_codex_home),
         expected_entries=expected,
@@ -590,6 +595,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--max-wall-seconds", type=float, default=7200)
     parser.add_argument("--worker-timeout-seconds", type=int, default=7200)
+    parser.add_argument("--validation-phase", default="phase4g13")
+    parser.add_argument("--run-id-prefix", default="phase4g13-runtime")
     parser.add_argument("--execute-real", action="store_true", required=True)
     sub = parser.add_subparsers(dest="arm", required=True)
     single = sub.add_parser("single")
@@ -623,6 +630,8 @@ def main(argv: list[str] | None = None) -> int:
             execute_real=bool(args.execute_real),
             max_wall_seconds=float(args.max_wall_seconds),
             worker_timeout_seconds=int(args.worker_timeout_seconds),
+            validation_phase=str(args.validation_phase),
+            run_id_prefix=str(args.run_id_prefix),
         )
     else:
         single = json.loads(Path(args.single_report).read_text(encoding="utf-8"))

@@ -249,6 +249,7 @@ RECOVERY_EVENT_TYPES = {
     "worker_session_identity_conflict",
     "evaluator_failure_bundle_created",
     "required_evaluator_remediation_scheduled",
+    "required_evaluator_remediation_stopped_by_coverage_policy",
     "required_evaluator_remediation_not_resumable",
     "required_evaluator_remediation_budget_exhausted",
 }
@@ -8414,6 +8415,33 @@ def _required_evaluator_remediation_policy(job: dict[str, Any]) -> Optional[dict
         except (TypeError, ValueError):
             return default
 
+    stop_after_coverage = remediation.get("stop_after_coverage")
+    normalized_stop_after_coverage = None
+    if isinstance(stop_after_coverage, dict):
+        try:
+            min_attempts = max(
+                1,
+                min(
+                    100,
+                    int(stop_after_coverage["min_completed_evaluator_attempts"]),
+                ),
+            )
+            min_consumed = max(
+                0,
+                min(
+                    99,
+                    int(stop_after_coverage["min_consumed_evaluator_feedback"]),
+                ),
+            )
+        except (KeyError, TypeError, ValueError):
+            normalized_stop_after_coverage = None
+        else:
+            if min_attempts > min_consumed:
+                normalized_stop_after_coverage = {
+                    "min_completed_evaluator_attempts": min_attempts,
+                    "min_consumed_evaluator_feedback": min_consumed,
+                }
+
     return {
         "mode": "resume_target_session",
         "max_no_progress_streak": bounded_int("max_no_progress_streak", 2, 1, 20),
@@ -8421,7 +8449,29 @@ def _required_evaluator_remediation_policy(job: dict[str, Any]) -> Optional[dict
         "max_diagnostics_chars_per_case": bounded_int(
             "max_diagnostics_chars_per_case", 4000, 256, 16000
         ),
+        "stop_after_coverage": normalized_stop_after_coverage,
     }
+
+
+def _evaluator_feedback_consumption_count(
+    conn: sqlite3.Connection,
+    job_id: str,
+    verifier_node_ids: set[str],
+) -> int:
+    if not verifier_node_ids:
+        return 0
+    consumed: set[str] = set()
+    for row in conn.execute(
+        "SELECT payload_json FROM execution_events "
+        "WHERE job_id = ? AND event_type = 'evaluator_failure_feedback_consumed'",
+        (job_id,),
+    ).fetchall():
+        source_verifier_node_id = str(
+            _loads(row["payload_json"]).get("source_verifier_node_id") or ""
+        )
+        if source_verifier_node_id in verifier_node_ids:
+            consumed.add(source_verifier_node_id)
+    return len(consumed)
 
 
 def _official_evaluator_receipts(
@@ -8908,6 +8958,7 @@ def schedule_required_evaluator_remediation(
         "progress": {},
         "latest_feedback_consumed": False,
         "budget_exhausted": False,
+        "stopped_by_coverage_policy": False,
         "decision_suppressed": False,
     }
     if policy is None:
@@ -8967,6 +9018,40 @@ def schedule_required_evaluator_remediation(
             source="verification_policy",
         )
         return summary
+    stop_after_coverage = policy.get("stop_after_coverage")
+    if isinstance(stop_after_coverage, dict):
+        consumed_feedback = _evaluator_feedback_consumption_count(
+            conn,
+            job_id,
+            {str(receipt["node"]["id"]) for receipt in failures},
+        )
+        completed_attempts = len(failures)
+        if (
+            completed_attempts
+            >= int(stop_after_coverage["min_completed_evaluator_attempts"])
+            and consumed_feedback
+            >= int(stop_after_coverage["min_consumed_evaluator_feedback"])
+        ):
+            summary["stopped_by_coverage_policy"] = True
+            summary["decision_suppressed"] = True
+            _event_once(
+                conn,
+                job_id,
+                "required_evaluator_remediation_stopped_by_coverage_policy",
+                (
+                    "evaluator-remediation-coverage-stop:"
+                    f"{latest['node']['id']}:{completed_attempts}:{consumed_feedback}"
+                ),
+                {
+                    "source_verifier_node_id": latest["node"]["id"],
+                    "completed_evaluator_attempts": completed_attempts,
+                    "consumed_evaluator_feedback": consumed_feedback,
+                    "policy": stop_after_coverage,
+                },
+                node_id=latest["node"]["id"],
+                source="verification_policy",
+            )
+            return summary
     if progress["no_progress_streak"] >= int(policy["max_no_progress_streak"]):
         _event_once(
             conn,

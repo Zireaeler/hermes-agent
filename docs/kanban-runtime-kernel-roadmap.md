@@ -103,8 +103,11 @@ contribution、Phase 4G11 coordination checkpoint / directive / ACK 闭环，以
 execution-discovered responsibility 驱动的受控 topology mutation 均已实现。Phase 4G13 的
 自然发现、终态 candidate 和 coordination 成本控制已经完成真实 Medium 验证；Phase 4G14
 进一步完成 attempt patch quarantine、receipt promotion 和低损耗 contribution handoff，
-并由真实双 child controlled case 证明 malformed receipt 不再丢失工程成果。下一阶段进入
-Phase 4H dashboard。
+并由真实双 child controlled case 证明 malformed receipt 不再丢失工程成果。随后 Natural
+Medium 在未预置拆分答案的条件下自然形成 1 Primary + 3 isolated children，3 份 contribution
+全部完成 capture、promotion 和 integration；相对 Phase 4G13 Runtime wall time 下降约
+`45.9%`，但与 coherent single worker 的 benchmark 质量相同，因此只证明 handoff 与恢复成本
+改善，不声称多 worker 带来质量优势。下一阶段进入 Phase 4H dashboard。
 
 隔离真实验证已经覆盖 decision execute/apply/reject、compaction fallback safety、3-tick
 real-provider loop，以及真实 provider -> validator -> Kanban dispatcher -> Codex worker ->
