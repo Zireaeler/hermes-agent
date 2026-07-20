@@ -38,6 +38,10 @@ def run_real_worker_lane_smoke(
     Nodes must already be assigned to ``lane_name`` by the job setup or an
     accepted provider patch. The helper will not repair an unassigned model
     proposal because that would turn the runner into a hidden graph authority.
+
+    The supplied connection is consumed. Once a local worker is dispatched it
+    is closed before the process wait, then replaced with a fresh connection
+    after the process exits. Callers must reopen the DB after this function.
     """
     rk.ensure_runtime_schema(conn)
     db_path = _connection_db_path(conn)
@@ -110,12 +114,21 @@ def run_real_worker_lane_smoke(
                 }
             )
             worker_pids = _active_worker_pids(active_conn, task_ids)
+            # Do not retain a SQLite connection across the external worker
+            # process boundary. On this runtime filesystem a connection that
+            # survives the worker's WAL lifecycle can keep obsolete sidecars
+            # alive and make every new connection report a malformed image
+            # until the old connection closes.
+            active_conn.close()
+            if refreshed_conn is active_conn:
+                refreshed_conn = None
             terminal_poll_db_error_count += _wait_for_terminal_tasks(
-                active_conn,
+                None,
                 task_ids,
                 worker_wait,
                 poll_interval_seconds,
                 worker_pids=worker_pids,
+                db_path=db_path,
             )
             # A worker process may checkpoint and replace WAL sidecars while
             # this supervisor connection is idle. Never ingest terminal facts
@@ -225,8 +238,7 @@ def run_real_worker_lane_smoke(
             "secrets_leaked": report["secrets_leaked"],
         },
     )
-    if refreshed_conn is not None:
-        refreshed_conn.close()
+    active_conn.close()
     return report
 
 
@@ -263,12 +275,13 @@ def _active_worker_pids(
 
 
 def _wait_for_terminal_tasks(
-    conn: sqlite3.Connection,
+    conn: Optional[sqlite3.Connection],
     task_ids: list[str],
     timeout: float,
     interval: float,
     *,
     worker_pids: Optional[list[int]] = None,
+    db_path: Optional[Path] = None,
 ) -> int:
     if worker_pids:
         deadline = time.monotonic() + timeout
@@ -278,7 +291,8 @@ def _wait_for_terminal_tasks(
             time.sleep(max(0.05, interval))
         return 0
 
-    db_path = _connection_db_path(conn)
+    if db_path is None and conn is not None:
+        db_path = _connection_db_path(conn)
     deadline = time.monotonic() + timeout
     db_error_started_at: Optional[float] = None
     db_error_count = 0
@@ -303,12 +317,14 @@ def _wait_for_terminal_tasks(
 
 
 def _poll_task_states(
-    conn: sqlite3.Connection,
+    conn: Optional[sqlite3.Connection],
     db_path: Optional[Path],
     task_ids: list[str],
 ) -> list[str]:
     placeholders = ",".join("?" for _ in task_ids)
     if db_path is None:
+        if conn is None:
+            raise RuntimeError("task polling requires a connection or database path")
         rows = conn.execute(
             f"SELECT status FROM tasks WHERE id IN ({placeholders})",
             tuple(task_ids),

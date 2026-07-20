@@ -1,4 +1,3 @@
-from contextlib import nullcontext
 from pathlib import Path
 
 from hermes_cli import phase4g16_natural_calibration as phase4g16
@@ -240,9 +239,29 @@ def test_campaign_rejects_unknown_case(tmp_path):
 def test_treatment_waits_for_complete_worker_attempt(tmp_path, monkeypatch):
     case = phase4g16._cases()[0]
     captured = {}
+    connections = []
+
+    class FakeConnection:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.close()
+            return False
+
+    def connect():
+        conn = FakeConnection()
+        connections.append(conn)
+        return conn
 
     monkeypatch.setattr(phase4g16, "_create_runtime_job", lambda *args: "job-1")
-    monkeypatch.setattr(phase4g16.kb, "connect", lambda: nullcontext(object()))
+    monkeypatch.setattr(phase4g16.kb, "connect", connect)
 
     def run_smoke(_conn, _job_id, **kwargs):
         captured.update(kwargs)
@@ -273,6 +292,8 @@ def test_treatment_waits_for_complete_worker_attempt(tmp_path, monkeypatch):
     )
 
     assert captured["worker_wait_seconds"] == 321.0
+    assert len(connections) == 2
+    assert all(conn.closed for conn in connections)
 
 
 def test_infrastructure_failure_retains_source_when_db_is_corrupt(

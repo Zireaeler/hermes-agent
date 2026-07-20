@@ -556,7 +556,8 @@ def _run_treatment(
     decision_timeout_seconds: int,
 ) -> tuple[str, dict[str, Any]]:
     job_id = _create_runtime_job(case, workspace, case_root)
-    with kb.connect() as conn:
+    conn = kb.connect()
+    try:
         smoke = run_real_worker_lane_smoke(
             conn,
             job_id,
@@ -572,6 +573,8 @@ def _run_treatment(
             timeout_seconds=float(decision_timeout_seconds),
             max_retries=1,
         )
+    finally:
+        conn.close()
     # The real worker is a process boundary and may replace WAL sidecars.
     # Evidence collection must not reuse the pre-worker connection.
     with kb.connect() as conn:

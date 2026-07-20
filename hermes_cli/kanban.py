@@ -2915,7 +2915,8 @@ def _cmd_runtime_worker_smoke(args: argparse.Namespace) -> int:
     from hermes_cli import kanban_runtime_worker_smoke as worker_smoke
 
     source = _runtime_model_source_from_args(args, require_for_real=True)
-    with kb.connect() as conn:
+    conn = kb.connect()
+    try:
         result = worker_smoke.run_real_worker_lane_smoke(
             conn,
             args.job_id,
@@ -2929,6 +2930,8 @@ def _cmd_runtime_worker_smoke(args: argparse.Namespace) -> int:
             max_retries=args.max_retries,
             timeout_seconds=args.timeout,
         )
+    finally:
+        conn.close()
     if getattr(args, "json", False):
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0

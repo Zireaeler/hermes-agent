@@ -122,7 +122,8 @@ def test_worker_smoke_uses_dispatcher_wrapper_and_runtime_receipt(kanban_home, t
     }, source="test"))
     monkeypatch.setattr(rd, "RuntimeDecisionProvider", Provider)
 
-    with kb.connect() as conn:
+    conn = kb.connect()
+    try:
         root = kb.create_task(conn, title="worker smoke root", initial_status="running")
         job_id = rk.create_runtime_job(
             conn,
@@ -149,9 +150,18 @@ def test_worker_smoke_uses_dispatcher_wrapper_and_runtime_receipt(kanban_home, t
             poll_interval_seconds=0.05,
         )
 
+        with pytest.raises(sqlite3.ProgrammingError):
+            conn.execute("SELECT 1")
+    finally:
+        conn.close()
+
+    with kb.connect() as conn:
         events = {
             row["event_type"]
-            for row in conn.execute("SELECT event_type FROM execution_events WHERE job_id = ?", (job_id,)).fetchall()
+            for row in conn.execute(
+                "SELECT event_type FROM execution_events WHERE job_id = ?",
+                (job_id,),
+            ).fetchall()
         }
 
     assert report["accepted_patch_count"] == 1
