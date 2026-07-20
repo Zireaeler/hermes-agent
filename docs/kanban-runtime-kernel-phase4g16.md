@@ -489,9 +489,139 @@ treatment 15/15、质量非回退和 Runtime consistency 全部通过；失败�
 
 ---
 
-## 11. 测试层次
+## 11. Deferred Decomposition
 
-### 11.1 Deterministic tests
+### 11.1 为什么需要第三种结构结论
+
+Early structure assessment 不能继续只返回：
+
+```text
+continue_single_node
+expand
+```
+
+当潜在 child 的写范围已经相对独立，但它们都依赖 Primary 尚未稳定的共享合同，立即扩图会让 child 基于
+猜测并行，继续单节点则会丢失后续安全并行的机会。Phase 4G16 增加第三种结论：
+
+```text
+defer_until_milestone
+```
+
+它表达的不是“任务很复杂，稍后再拆”，而是以下可验证状态：
+
+1. worker 已从 repository evidence 识别出两个或三个低耦合候选责任；
+2. 候选责任当前被一个明确、尚未完成的共享合同阻塞；
+3. Primary 仍负责建立、测试和集成该共享合同；
+4. 合同形成不可变 milestone artifact 后，Runtime 才允许 Provider 决定是否创建 child。
+
+### 11.2 Structure checkpoint contract
+
+`runtime_worker_structure_checkpoint_v1` 的 `recommendation` 增加
+`defer_until_milestone`。该结论必须同时给出：
+
+- 两个或三个 `proposed_nodes`；
+- 唯一 `milestone_contract`；
+- 现有 Primary 作为 `integration_owner_node_key`；
+- 候选之间不重叠的 `declared_write_scope`；
+- Primary 独占的 `shared_integration_scope`。
+
+`milestone_contract` 至少包含：
+
+```json
+{
+  "milestone_key": "stable-shared-contract",
+  "summary": "冻结后可供独立责任消费的共享合同",
+  "artifact_scope": ["src/shared/**", "tests/shared/**"],
+  "verification_criteria": ["共享合同测试通过"]
+}
+```
+
+Runtime 验证该 checkpoint 后必须本地完成以下动作，不调用 Decision Provider：
+
+1. 原样保存 worker checkpoint；
+2. 把 deferred candidates 和 milestone contract 写入 Primary 的 DB metadata；
+3. 记录 `structure_checkpoint_deferred_applied`；
+4. 将同一个 Primary node 置回 `ready`；
+5. 通过原 backend session 继续执行。
+
+此时 graph topology、owner、scope 和 capability 都没有发生变化，因此 Provider 没有结构决策可做。
+
+### 11.3 Milestone activation
+
+Primary 后续只有在自己实际建立并验证共享合同时，才能提交
+`runtime_worker_coordination_checkpoint_v1`，其中：
+
+- `kind=milestone_completed`；
+- `milestone_key` 必须精确匹配 deferred contract；
+- `changed_files` 必须包含可验证的 milestone artifact scope；
+- finding 必须引用真实 workspace evidence；
+- `worker_session_should_resume=true`。
+
+收到 checkpoint 后，Runtime 不直接相信“合同已冻结”的自然语言，而是：
+
+1. 相对 job 的原始 base revision 捕获当前 Primary workspace binary patch；
+2. 保存 hash-verified `runtime_milestone_seed_v1` artifact；
+3. 在 Runtime 自有临时 worktree 中应用 patch 并生成 detached seed commit；
+4. 将 commit 固定到 job 专用 `refs/hermes-runtime/...` ref；
+5. 把 milestone artifact、seed revision、原 structure checkpoint 和当前 checkpoint 组成 activation evidence；
+6. 将 deferred candidates 投影为 active responsibility candidates；
+7. 生成一个幂等 `provider_required` coordination action。
+
+Runtime-owned seed commit 不改变用户 branch，不要求 worker 获得 `git_write`，也不成为 progress ledger 或
+goal completion 事实。它只定义 child 的不可变输入基线。
+
+### 11.4 Child workspace 与 contribution
+
+Provider 仍只能根据 active candidate 提议受约束 graph patch。若 Provider 选择 expansion：
+
+- child node key、goal linkage、acceptance criteria 和 write scope 不得超出 candidate；
+- child 必须指向现有 Primary integration owner；
+- child 的 `isolated_worktree` 必须从 milestone seed revision 创建；
+- child receipt 和 contribution patch 只包含 seed revision 之后的自身增量；
+- Primary workspace 已含 milestone 改动，因此只需集成 child 增量；
+- Primary 在 child 完成前转为 `waiting_dependency`，child contribution 就绪后再恢复原 session。
+
+若 Provider 选择不 expansion，必须显式记录 `absorbed_by_existing`、`rejected_not_durable` 或 `deferred`。
+不得因为 milestone 已完成就自动创建 node。
+
+### 11.5 Restart、幂等与清理
+
+同一 structure checkpoint、milestone checkpoint 或 materialization 重放时：
+
+- deferred metadata 只写一次；
+- milestone artifact、seed ref 和 activation candidate 只产生一份；
+- coordination action 只产生一份；
+- graph patch 只能消费每个 candidate 一次；
+- child materialization 必须恢复同一 seed revision；
+- cleanup 在 contribution、learning 和 archive gate 通过前不得删除 seed artifact；
+- terminal cleanup 必须删除 Runtime-owned seed ref 和临时 worktree，但保留已归档 artifact manifest。
+
+### 11.6 失败分类
+
+以下属于 Runtime correctness failure：
+
+- milestone patch 未固定就创建 child；
+- child 从错误 revision 创建；
+- child contribution 重复包含 milestone patch；
+- restart 重复激活 candidate 或重复创建 action；
+- Primary 未等待 child 就错误完成；
+- Provider 未消费 active candidate，而 Runtime 静默继续；
+- cleanup 提前删除 seed evidence。
+
+以下不自动属于 Runtime failure：
+
+- worker 合理选择 `continue_single_node`；
+- worker 声明 defer 后始终未达到 milestone；
+- Provider 基于证据拒绝 expansion；
+- child 并行收益不足但最终质量未下降。
+
+后两类结果必须进入 learning finding，用于继续校准任务选择和 orchestration 成本。
+
+---
+
+## 12. 测试层次
+
+### 12.1 Deterministic tests
 
 至少覆盖：
 
@@ -507,13 +637,18 @@ treatment 15/15、质量非回退和 Runtime consistency 全部通过；失败�
 - local dependency/readiness transition 不调用 Provider；
 - analyzer 四类 finding 和 `unknown` 语义；
 - archive/cleanup 拒绝未吸收 campaign bundle。
+- `defer_until_milestone` 不调用 Provider，并恢复同一 Primary session；
+- milestone patch 生成 immutable seed artifact 和 Runtime-owned git ref；
+- child 从 seed revision 创建，contribution 不重复包含 milestone patch；
+- restart 不重复 deferred activation、artifact、action 或 graph consumption；
+- 未匹配 milestone key、空 patch、错误 scope 和篡改 artifact 被拒绝。
 
-### 11.2 Controlled production-path smoke
+### 12.2 Controlled production-path smoke
 
 允许使用 deterministic worker adapter 生成 canonical receipt，但必须通过正常 Kanban task/run/evidence
 ingest，禁止测试代码直接插 action 或 directive。该 smoke 只验证 route lifecycle，不作为自然模型行为证据。
 
-### 11.3 Real paired campaign
+### 12.3 Real paired campaign
 
 三个 case 使用真实模型 worker。Decision Provider 只在 classifier 选择 `provider_required` 时真实调用；
 baseline 不调用 Runtime Provider。报告必须把模型行为、Runtime correctness、任务质量和 orchestra value
@@ -521,7 +656,7 @@ baseline 不调用 Runtime Provider。报告必须把模型行为、Runtime corr
 
 ---
 
-## 12. Acceptance Criteria
+## 13. Acceptance Criteria
 
 Phase 4G16 完成时，系统必须能够证明：
 
@@ -529,6 +664,8 @@ Phase 4G16 完成时，系统必须能够证明：
 - 该变化不是 harness 直接插入 directive 的结果；
 - 本地可确定的 context routing 不调用 Decision Provider；
 - topology/scope/owner/capability 变化仍由 Provider + validator 控制；
+- deferred candidate 只有在 hash-verified milestone seed 形成后才可进入 Provider；
+- child 以固定 seed revision 为输入，Primary 以原 session 集成 child 增量；
 - 同一 checkpoint 只产生一个 action 和一组幂等 directive；
 - live delivery、durable fallback、ACK 和最终 consumption 都可追溯；
 - 无需 orchestra 的任务不会制造额外 worker 或 decision；

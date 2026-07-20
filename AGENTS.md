@@ -97,6 +97,17 @@ Natural calibration uses paired coherent/shared-contract/durable-boundary
 tasks, preserves the Phase 4G15 learning/archive gate, and may not trade final
 quality for orchestration activity.
 
+Phase 4G16 deferred decomposition adds a third early assessment outcome between
+immediate expansion and coherent continuation. Deferred candidates remain
+non-authoritative until the same Primary session reaches its declared shared-
+contract milestone. Runtime must then capture a hash-verified immutable seed
+artifact and Runtime-owned Git revision before asking the Decision Provider to
+change topology. Isolated children must start from that seed and contribute
+only their post-seed delta; the Primary remains integration owner and waits for
+those contributions. A harness may not fabricate the deferred candidate,
+milestone, seed, or activation event, and no provider call is allowed merely to
+persist or continue an unmet deferred milestone.
+
 Runtime Kernel 的设计、roadmap、phase、真实验证和证据保留文档必须以中文作为规范性
 叙述语言。函数名、类名、schema 字段、`event_type` 值、CLI 命令、API path、
 model/provider 名称和引用的原始标识可以保留英文；解释性段落、章节说明、实施计划、
