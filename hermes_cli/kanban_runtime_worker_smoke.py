@@ -8,6 +8,7 @@ synthetic receipt or starts a worker directly.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import sqlite3
 import time
 from typing import Any, Optional
@@ -39,6 +40,9 @@ def run_real_worker_lane_smoke(
     proposal because that would turn the runner into a hidden graph authority.
     """
     rk.ensure_runtime_schema(conn)
+    db_path = _connection_db_path(conn)
+    active_conn = conn
+    refreshed_conn: Optional[sqlite3.Connection] = None
     if not provider_source.get("provider_name") or not provider_source.get("model"):
         raise ValueError("real worker smoke requires an explicit model source")
     if not lane_name or not lane_name.strip():
@@ -67,13 +71,18 @@ def run_real_worker_lane_smoke(
     terminal_receipts: list[dict[str, Any]] = []
     reason = "step_limit"
     for index in range(step_limit):
-        job = rk._job(conn, job_id)
+        job = rk._job(active_conn, job_id)
         if job["state"] in {"done", "cancelled", "failed"}:
             reason = job["state"]
             break
 
-        advanced = rk.advance_runtime_job(conn, job_id, create_tasks=False, auto_compact=False)
-        ready = _ready_nodes(conn, job_id)
+        advanced = rk.advance_runtime_job(
+            active_conn,
+            job_id,
+            create_tasks=False,
+            auto_compact=False,
+        )
+        ready = _ready_nodes(active_conn, job_id)
         materialized: list[str] = []
         unassigned: list[str] = []
         for node in ready:
@@ -83,12 +92,12 @@ def run_real_worker_lane_smoke(
             if node.get("assignee") and node["assignee"] != lane_name:
                 unassigned.append(node["node_key"])
                 continue
-            if rk.materialize_runtime_node(conn, node):
+            if rk.materialize_runtime_node(active_conn, node):
                 materialized.append(node["node_key"])
         if materialized:
-            task_ids = _active_task_ids(conn, job_id, materialized)
+            task_ids = _active_task_ids(active_conn, job_id, materialized)
             dispatch = kb.dispatch_once(
-                conn,
+                active_conn,
                 max_spawn=max(1, len(task_ids)),
                 only_task_ids=task_ids,
             )
@@ -99,23 +108,42 @@ def run_real_worker_lane_smoke(
                     "spawned_task_ids": [item[0] for item in dispatch.spawned],
                 }
             )
-            _wait_for_terminal_tasks(conn, task_ids, worker_wait, poll_interval_seconds)
+            _wait_for_terminal_tasks(
+                active_conn,
+                task_ids,
+                worker_wait,
+                poll_interval_seconds,
+            )
+            # A worker process may checkpoint and replace WAL sidecars while
+            # this supervisor connection is idle. Never ingest terminal facts
+            # through the pre-worker connection: refresh the control-plane
+            # connection at every completed process boundary.
+            if db_path is not None:
+                if refreshed_conn is not None:
+                    refreshed_conn.close()
+                refreshed_conn = kb.connect(db_path=db_path)
+                active_conn = refreshed_conn
 
-        ingested = rk.advance_runtime_job(conn, job_id, create_tasks=False, auto_compact=False)
-        terminal_receipts.extend(_terminal_receipt_summaries(conn, job_id))
-        reduction = rk.reduce_runtime_job(conn, job_id)
+        ingested = rk.advance_runtime_job(
+            active_conn,
+            job_id,
+            create_tasks=False,
+            auto_compact=False,
+        )
+        terminal_receipts.extend(_terminal_receipt_summaries(active_conn, job_id))
+        reduction = rk.reduce_runtime_job(active_conn, job_id)
         decision = None
         if reduction["state"] == "waiting_decision" and len(decisions) < decision_limit:
-            before = _counts(conn, job_id)
+            before = _counts(active_conn, job_id)
             decision_result = rk.advance_runtime_job(
-                conn,
+                active_conn,
                 job_id,
                 create_tasks=False,
                 decision_provider=provider,
                 max_patches=1,
                 auto_compact=False,
             )
-            after = _counts(conn, job_id)
+            after = _counts(active_conn, job_id)
             decision = {
                 "decision_index": len(decisions) + 1,
                 "patch_status": decision_result.patch_status,
@@ -124,7 +152,11 @@ def run_real_worker_lane_smoke(
             }
             decisions.append(decision)
 
-        consistency = rk.check_runtime_consistency(conn, job_id, write_events=False)
+        consistency = rk.check_runtime_consistency(
+            active_conn,
+            job_id,
+            write_events=False,
+        )
         if consistency["status"] != "passed":
             reason = "consistency_failed"
             break
@@ -132,13 +164,17 @@ def run_real_worker_lane_smoke(
             reason = "ready_unassigned"
             break
         if not materialized and not decision and not advanced.ingested_nodes and not ingested.ingested_nodes:
-            reason = rk.runtime_legal_waiting_reason(conn, job_id)
+            reason = rk.runtime_legal_waiting_reason(active_conn, job_id)
             if reason != "waiting_worker":
                 break
 
-    final = rk.status_runtime_job(conn, job_id)
-    consistency = rk.check_runtime_consistency(conn, job_id, write_events=False)
-    attempts = _materialization_attempts(conn, job_id)
+    final = rk.status_runtime_job(active_conn, job_id)
+    consistency = rk.check_runtime_consistency(
+        active_conn,
+        job_id,
+        write_events=False,
+    )
+    attempts = _materialization_attempts(active_conn, job_id)
     materialized_node_keys = sorted({item["node_key"] for item in attempts})
     report = {
         "job_id": job_id,
@@ -166,7 +202,7 @@ def run_real_worker_lane_smoke(
     }
     report["secrets_leaked"] = _secrets_leaked(report, provider_source)
     rk._event(
-        conn,
+        active_conn,
         job_id,
         "real_worker_lane_smoke_completed",
         {
@@ -180,6 +216,8 @@ def run_real_worker_lane_smoke(
             "secrets_leaked": report["secrets_leaked"],
         },
     )
+    if refreshed_conn is not None:
+        refreshed_conn.close()
     return report
 
 
@@ -202,19 +240,33 @@ def _active_task_ids(conn: sqlite3.Connection, job_id: str, keys: list[str]) -> 
 
 
 def _wait_for_terminal_tasks(conn: sqlite3.Connection, task_ids: list[str], timeout: float, interval: float) -> None:
+    db_path = _connection_db_path(conn)
     deadline = time.monotonic() + timeout
     while task_ids and time.monotonic() < deadline:
         placeholders = ",".join("?" for _ in task_ids)
-        states = [
-            str(row["status"])
-            for row in conn.execute(
+        if db_path is None:
+            rows = conn.execute(
                 f"SELECT status FROM tasks WHERE id IN ({placeholders})",
                 tuple(task_ids),
             ).fetchall()
-        ]
+        else:
+            uri = db_path.resolve().as_uri() + "?mode=ro"
+            with sqlite3.connect(uri, uri=True, timeout=30) as poll_conn:
+                rows = poll_conn.execute(
+                    f"SELECT status FROM tasks WHERE id IN ({placeholders})",
+                    tuple(task_ids),
+                ).fetchall()
+        states = [str(row[0]) for row in rows]
         if states and all(state in {"done", "blocked"} for state in states):
             return
         time.sleep(max(0.05, interval))
+
+
+def _connection_db_path(conn: sqlite3.Connection) -> Optional[Path]:
+    row = conn.execute("PRAGMA database_list").fetchone()
+    if row is None or not row[2] or str(row[2]) == ":memory:":
+        return None
+    return Path(str(row[2]))
 
 
 def _terminal_receipt_summaries(conn: sqlite3.Connection, job_id: str) -> list[dict[str, Any]]:

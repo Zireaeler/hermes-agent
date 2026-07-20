@@ -568,6 +568,9 @@ def _run_treatment(
             timeout_seconds=float(decision_timeout_seconds),
             max_retries=1,
         )
+    # The real worker is a process boundary and may replace WAL sidecars.
+    # Evidence collection must not reuse the pre-worker connection.
+    with kb.connect() as conn:
         evidence = _runtime_evidence(conn, job_id)
     return job_id, {
         "smoke": smoke,

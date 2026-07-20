@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import stat
 from pathlib import Path
 
@@ -192,3 +193,36 @@ def test_terminal_poll_projects_status_without_decoding_task_body(kanban_home):
         assert conn.execute(
             "SELECT status FROM tasks WHERE id = ?", (task_id,)
         ).fetchone()["status"] == "done"
+
+
+def test_terminal_poll_observes_external_writer_through_fresh_read_connection(
+    kanban_home,
+):
+    with kb.connect() as conn:
+        task_id = kb.create_task(
+            conn,
+            title="external terminal writer",
+            initial_status="running",
+        )
+        db_path = Path(
+            conn.execute("PRAGMA database_list").fetchone()["file"]
+        )
+        with kb.connect(db_path=db_path) as writer:
+            writer.execute(
+                "UPDATE tasks SET status = 'blocked' WHERE id = ?",
+                (task_id,),
+            )
+
+        ws._wait_for_terminal_tasks(
+            conn,
+            [task_id],
+            timeout=0.2,
+            interval=0.01,
+        )
+
+        with sqlite3.connect(db_path) as observer:
+            status = observer.execute(
+                "SELECT status FROM tasks WHERE id = ?",
+                (task_id,),
+            ).fetchone()[0]
+        assert status == "blocked"
