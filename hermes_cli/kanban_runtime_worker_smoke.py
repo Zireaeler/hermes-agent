@@ -109,11 +109,13 @@ def run_real_worker_lane_smoke(
                     "spawned_task_ids": [item[0] for item in dispatch.spawned],
                 }
             )
+            worker_pids = _active_worker_pids(active_conn, task_ids)
             terminal_poll_db_error_count += _wait_for_terminal_tasks(
                 active_conn,
                 task_ids,
                 worker_wait,
                 poll_interval_seconds,
+                worker_pids=worker_pids,
             )
             # A worker process may checkpoint and replace WAL sidecars while
             # this supervisor connection is idle. Never ingest terminal facts
@@ -122,7 +124,11 @@ def run_real_worker_lane_smoke(
             if db_path is not None:
                 if refreshed_conn is not None:
                     refreshed_conn.close()
-                refreshed_conn = kb.connect(db_path=db_path)
+                refreshed_conn = _connect_after_worker(
+                    db_path,
+                    timeout=min(10.0, worker_wait),
+                    interval=poll_interval_seconds,
+                )
                 active_conn = refreshed_conn
 
         ingested = rk.advance_runtime_job(
@@ -242,12 +248,36 @@ def _active_task_ids(conn: sqlite3.Connection, job_id: str, keys: list[str]) -> 
     return [str(row["latest_task_id"]) for row in rows if row["latest_task_id"]]
 
 
+def _active_worker_pids(
+    conn: sqlite3.Connection,
+    task_ids: list[str],
+) -> list[int]:
+    if not task_ids:
+        return []
+    placeholders = ",".join("?" for _ in task_ids)
+    rows = conn.execute(
+        f"SELECT worker_pid FROM tasks WHERE id IN ({placeholders})",
+        tuple(task_ids),
+    ).fetchall()
+    return [int(row["worker_pid"]) for row in rows if row["worker_pid"]]
+
+
 def _wait_for_terminal_tasks(
     conn: sqlite3.Connection,
     task_ids: list[str],
     timeout: float,
     interval: float,
+    *,
+    worker_pids: Optional[list[int]] = None,
 ) -> int:
+    if worker_pids:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if all(not kb._pid_alive(pid) for pid in worker_pids):
+                return 0
+            time.sleep(max(0.05, interval))
+        return 0
+
     db_path = _connection_db_path(conn)
     deadline = time.monotonic() + timeout
     db_error_started_at: Optional[float] = None
@@ -298,6 +328,22 @@ def _connection_db_path(conn: sqlite3.Connection) -> Optional[Path]:
     if row is None or not row[2] or str(row[2]) == ":memory:":
         return None
     return Path(str(row[2]))
+
+
+def _connect_after_worker(
+    db_path: Path,
+    *,
+    timeout: float,
+    interval: float,
+) -> sqlite3.Connection:
+    deadline = time.monotonic() + max(1.0, float(timeout))
+    while True:
+        try:
+            return kb.connect(db_path=db_path)
+        except sqlite3.DatabaseError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(max(0.05, interval))
 
 
 def _terminal_receipt_summaries(conn: sqlite3.Connection, job_id: str) -> list[dict[str, Any]]:

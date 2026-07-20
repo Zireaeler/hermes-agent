@@ -264,3 +264,32 @@ def test_terminal_poll_reopens_after_transient_database_error(
 
     assert error_count == 1
     assert attempts == 2
+
+
+def test_terminal_wait_uses_local_worker_pid_without_reading_database(
+    kanban_home,
+    monkeypatch,
+):
+    with kb.connect() as conn:
+        task_id = kb.create_task(
+            conn,
+            title="pid-owned worker",
+            initial_status="running",
+        )
+        alive = iter((True, False))
+        monkeypatch.setattr(ws.kb, "_pid_alive", lambda _pid: next(alive))
+
+        def forbidden_poll(*_args, **_kwargs):
+            raise AssertionError("local worker wait must not poll SQLite")
+
+        monkeypatch.setattr(ws, "_poll_task_states", forbidden_poll)
+
+        error_count = ws._wait_for_terminal_tasks(
+            conn,
+            [task_id],
+            timeout=0.5,
+            interval=0.01,
+            worker_pids=[12345],
+        )
+
+    assert error_count == 0
