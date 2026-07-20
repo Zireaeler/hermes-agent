@@ -204,43 +204,55 @@ if __name__ == "__main__":
             title="Durable boundary Medium",
             kind="durable_boundary_medium",
             objective=(
-                "将事件流水线升级到 schema v2：摄取阶段产生带 version、kind、payload 的事件，"
-                "导出阶段生成稳定 JSON，同时保持仓库中已安装的 v1 插件可继续工作。插件兼容必须"
-                "保持独立、可测试且不污染核心 schema。补齐测试并运行 "
+                "将事件处理平台升级到 schema v2：核心摄取与导出必须生成稳定、隔离的事件契约；"
+                "同时保持已安装的 v1 transform 插件和 audit JSONL 批处理消费者继续工作。"
+                "两类扩展都必须独立、可测试，不能把兼容字段或敏感字段处理逻辑带入核心 schema，"
+                "最终完成端到端集成测试并运行 "
                 "python3 -m unittest discover -s tests -v。"
             ),
             goal_item_key="event-schema-v2",
-            goal_description="schema v2 核心流水线和 v1 插件兼容全部通过",
+            goal_description="schema v2 核心、legacy plugin 与 audit consumer 全部集成通过",
             files={
                 "src/__init__.py": "",
-                "src/ingest.py": '''def ingest(kind, payload):
-    return {"kind": kind, "payload": dict(payload)}
+                "src/core/__init__.py": "",
+                "src/core/event.py": '''def ingest(kind, payload):
+    return {"kind": str(kind), "payload": dict(payload)}
 ''',
-                "src/export.py": '''import json
+                "src/core/export.py": '''import json
 
 
 def export_event(event):
     return json.dumps(event, sort_keys=True)
 ''',
-                "src/plugin_loader.py": '''import importlib
+                "src/extensions/__init__.py": "",
+                "src/extensions/loader.py": '''import importlib
 
 
 def load_plugin(module_name):
     return importlib.import_module(module_name)
 ''',
                 "fixtures/__init__.py": "",
-                "fixtures/v1_plugin.py": '''def transform(event):
+                "fixtures/v1_enricher.py": '''def transform(event):
     return {
         "type": event["type"],
-        "data": dict(event["data"]),
-        "plugin": "v1",
+        "data": {**event["data"], "legacy_plugin": "v1"},
     }
 ''',
+                "fixtures/bad_v1_plugin.py": '''def transform(event):
+    return [event]
+''',
+                "fixtures/audit_policy.py": '''SENSITIVE_FIELDS = {"password", "secret", "token"}
+
+
+def include(event):
+    return event["kind"] != "heartbeat"
+''',
                 "tests/test_core_pipeline.py": '''import json
+import math
 import unittest
 
-from src.export import export_event
-from src.ingest import ingest
+from src.core.event import ingest
+from src.core.export import export_event
 
 
 class CorePipelineTest(unittest.TestCase):
@@ -253,38 +265,109 @@ class CorePipelineTest(unittest.TestCase):
         })
         self.assertEqual(json.loads(export_event(event)), event)
 
-    def test_payload_is_copied(self):
-        payload = {"item": 4}
+    def test_payload_is_deep_copied(self):
+        payload = {"item": {"value": 4}}
         event = ingest("updated", payload)
-        payload["item"] = 99
-        self.assertEqual(event["payload"], {"item": 4})
+        payload["item"]["value"] = 99
+        self.assertEqual(event["payload"], {"item": {"value": 4}})
+
+    def test_export_is_compact_and_stable(self):
+        event = ingest("created", {"z": 1, "a": {"b": 2, "a": 1}})
+        self.assertEqual(
+            export_event(event),
+            '{"kind":"created","payload":{"a":{"a":1,"b":2},"z":1},"version":2}',
+        )
+
+    def test_non_standard_numbers_are_rejected(self):
+        with self.assertRaises(ValueError):
+            export_event(ingest("bad", {"value": math.nan}))
 
 
 if __name__ == "__main__":
     unittest.main()
 ''',
-                "tests/test_plugin_compat.py": '''import json
+                "tests/test_legacy_plugin.py": '''import copy
 import unittest
 
-from src.export import export_event
-from src.ingest import ingest
-from src.plugin_compat import run_v1_plugin
+from src.core.event import ingest
+from src.extensions.legacy_v1 import run_v1_plugin
 
 
-class PluginCompatibilityTest(unittest.TestCase):
-    def test_installed_v1_plugin_isolated_adapter(self):
+class LegacyPluginTest(unittest.TestCase):
+    def test_installed_plugin_round_trip(self):
         event = ingest("legacy", {"value": 8})
-        transformed = run_v1_plugin("fixtures.v1_plugin", event)
+        transformed = run_v1_plugin("fixtures.v1_enricher", event)
         self.assertEqual(transformed, {
             "version": 2,
             "kind": "legacy",
-            "payload": {"value": 8, "plugin": "v1"},
+            "payload": {"value": 8, "legacy_plugin": "v1"},
         })
-        self.assertEqual(json.loads(export_event(transformed)), transformed)
 
-    def test_bad_v1_result_is_rejected(self):
+    def test_adapter_does_not_mutate_input(self):
+        event = ingest("legacy", {"nested": {"value": 3}})
+        original = copy.deepcopy(event)
+        run_v1_plugin("fixtures.v1_enricher", event)
+        self.assertEqual(event, original)
+
+    def test_legacy_fields_never_escape_adapter(self):
+        transformed = run_v1_plugin(
+            "fixtures.v1_enricher",
+            ingest("created", {"value": 1}),
+        )
+        self.assertEqual(set(transformed), {"version", "kind", "payload"})
+        self.assertNotIn("type", transformed)
+        self.assertNotIn("data", transformed)
+
+    def test_malformed_plugin_is_rejected(self):
         with self.assertRaises(ValueError):
-            run_v1_plugin("fixtures", ingest("bad", {}))
+            run_v1_plugin("fixtures.bad_v1_plugin", ingest("bad", {}))
+
+
+if __name__ == "__main__":
+    unittest.main()
+''',
+                "tests/test_audit_jsonl.py": '''import copy
+import json
+import unittest
+
+from src.core.event import ingest
+from src.extensions.audit_jsonl import export_audit_batch
+
+
+class AuditJsonlTest(unittest.TestCase):
+    def test_batch_is_stable_jsonl_with_sensitive_fields_removed(self):
+        events = [
+            ingest("created", {"item": 3, "token": "hidden"}),
+            ingest("updated", {"secret": "hidden", "item": 4}),
+        ]
+        output = export_audit_batch("fixtures.audit_policy", events)
+        rows = [json.loads(line) for line in output.splitlines()]
+        self.assertEqual(rows, [
+            {"kind": "created", "payload": {"item": 3}, "version": 2},
+            {"kind": "updated", "payload": {"item": 4}, "version": 2},
+        ])
+
+    def test_policy_can_filter_events(self):
+        events = [
+            ingest("heartbeat", {"sequence": 1}),
+            ingest("created", {"item": 2}),
+        ]
+        output = export_audit_batch("fixtures.audit_policy", events)
+        self.assertEqual(len(output.splitlines()), 1)
+        self.assertIn('"created"', output)
+
+    def test_export_does_not_mutate_events(self):
+        events = [ingest("created", {"password": "hidden", "item": 3})]
+        original = copy.deepcopy(events)
+        export_audit_batch("fixtures.audit_policy", events)
+        self.assertEqual(events, original)
+
+    def test_non_v2_event_is_rejected(self):
+        with self.assertRaises(ValueError):
+            export_audit_batch(
+                "fixtures.audit_policy",
+                [{"kind": "legacy", "payload": {}}],
+            )
 
 
 if __name__ == "__main__":
@@ -596,9 +679,14 @@ def _coordination_observations(
     coordination = orchestration.get("coordination") or {}
     actions = coordination.get("actions") or []
     missed: list[str] = []
+    calibration_gaps: list[str] = []
     overhead: list[str] = []
     if case.kind == "durable_boundary_medium" and int(treatment.get("candidate_count") or 0) == 0:
-        missed.append(f"report:{case.key}:candidate-not-observed")
+        structure_checkpoint = orchestration.get("structure_checkpoint") or {}
+        event_id = structure_checkpoint.get("event_id")
+        if event_id is not None:
+            calibration_gaps.append(f"execution_event:{event_id}")
+        calibration_gaps.append(f"report:{case.key}:candidate-not-observed")
     if (
         case.kind == "coherent_negative_control"
         and actions
@@ -608,6 +696,7 @@ def _coordination_observations(
         overhead.append(f"report:{case.key}:unnecessary-action-cost")
     return {
         "missed_coordination_evidence_refs": missed,
+        "calibration_fixture_gap_evidence_refs": calibration_gaps,
         "coordination_overhead_evidence_refs": overhead,
     }
 

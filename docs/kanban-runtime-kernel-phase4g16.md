@@ -329,6 +329,11 @@ receipt、quality result 和 baseline bundle，不能只根据报告作者判断
 
 若没有足够 lineage 证明 sibling 使用旧事实，字段必须为 `unknown`，不能推断为 0。
 
+仅仅因为 candidate-required 校准任务没有产生 candidate，不得标记为 `missed_coordination`。如果
+structure assessment 的 repository evidence 明确支持 coherent single worker，且没有 sibling、旧 revision
+artifact 或重做 lineage，则应记录 `calibration_fixture_gap`。该 finding 的改进范围是
+`validation_campaign`，不能生成修改 reducer、transport 或 worker policy 的候选。
+
 ### 8.3 `ineffective_coordination`
 
 满足以下事实之一：
@@ -468,6 +473,12 @@ Phase 4G16 完成要求：
 若 Case B/C 的真实 worker 没有自然产生所需 evidence，不得由 harness 补造。该 arm 标记
 `runtime_valid_task_failed` 或 `infrastructure_invalid`，分析 worker contract、任务可观测性和模型行为后再
 修正系统或冻结任务。不得只为通过验收直接写 DB event。
+
+首次 Durable-Boundary Medium 使用单一 v1 adapter 小仓库时，真实 worker 给出了
+`continue_single_node`：核心 schema 与唯一 adapter 共享同一小型语义契约，拆分成本高于收益。该 run 的
+任务质量、Runtime consistency 和归档均通过，但没有产生 candidate。此结果证明原 fixture 不足，不能反推
+Runtime 漏协调。修订后的 fixture 必须同时包含 core schema、legacy transform 与 audit batch consumer 三个
+可独立验收面；目标文本仍不得给出 node key、文件路径或预期 graph patch。
 
 ---
 

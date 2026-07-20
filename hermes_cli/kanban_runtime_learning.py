@@ -288,6 +288,24 @@ def _findings(
                 "candidate_created",
             )
         )
+    calibration_gap_refs = [
+        str(value)
+        for value in observations.get("calibration_fixture_gap_evidence_refs") or []
+        if str(value).strip()
+    ]
+    if calibration_gap_refs:
+        findings.append(
+            _finding(
+                job_id,
+                "calibration_fixture_gap",
+                "medium",
+                "冻结校准任务没有暴露预期的 durable responsibility candidate。",
+                "Repository evidence 表明任务仍可由一个 coherent worker 低成本完成；"
+                "该结果不足以证明 Runtime 错过了跨节点协调。",
+                calibration_gap_refs,
+                "candidate_created",
+            )
+        )
     overhead_refs = [
         str(value)
         for value in observations.get("coordination_overhead_evidence_refs") or []
@@ -429,16 +447,29 @@ def _candidates(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         category = str(finding["category"])
         candidate_key = _stable_id("candidate", category)
+        if category == "calibration_fixture_gap":
+            scope = "validation_campaign"
+            proposed_change = (
+                "修订 candidate-required 冻结任务，使 repository 自然呈现可独立验收、"
+                "写域不重叠且有明确集成 owner 的 durable responsibility。"
+            )
+            expected_effect = (
+                "让正向校准覆盖自然 candidate 的 Provider 消费，同时不通过 prompt 预告拆分答案。"
+            )
+        else:
+            scope = "runtime_coordination"
+            proposed_change = f"为 {category} 增加 reducer/transport 回归约束。"
+            expected_effect = "减少无效工作、重做或无效结构决策。"
         candidates.append(
             {
                 "candidate_key": candidate_key,
                 "category": category,
-                "scope": "runtime_coordination",
+                "scope": scope,
                 "symptom": finding["summary"],
                 "root_cause": finding["root_cause"],
                 "evidence_refs": finding["evidence_refs"],
-                "proposed_change": f"为 {category} 增加 reducer/transport 回归约束。",
-                "expected_effect": "减少无效工作、重做或无效结构决策。",
+                "proposed_change": proposed_change,
+                "expected_effect": expected_effect,
                 "regression_scenario_key": f"regression-{category}",
                 "status": "candidate",
             }

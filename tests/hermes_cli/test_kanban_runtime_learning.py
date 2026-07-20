@@ -236,3 +236,29 @@ def test_natural_calibration_findings_cover_false_missed_and_overhead():
         "missed_coordination",
         "coordination_overhead",
     }
+
+
+def test_calibration_fixture_gap_does_not_create_runtime_coordination_candidate():
+    quality = {
+        "case_kind": "durable_boundary_medium",
+        "coordination_observations": {
+            "missed_coordination_evidence_refs": [],
+            "calibration_fixture_gap_evidence_refs": [
+                "report:durable-boundary-medium:candidate-not-observed"
+            ],
+        },
+    }
+
+    findings = learning._findings(
+        "job-calibration-gap",
+        {"coordination": {"actions": [], "cost": {}}},
+        {"deliveries": []},
+        quality,
+    )
+    candidates = learning._candidates(findings)
+
+    assert [item["category"] for item in findings] == [
+        "calibration_fixture_gap"
+    ]
+    assert candidates[0]["scope"] == "validation_campaign"
+    assert "冻结任务" in candidates[0]["proposed_change"]

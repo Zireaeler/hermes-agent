@@ -37,6 +37,11 @@ def test_frozen_cases_do_not_preannounce_topology_or_candidate_keys():
         assert "src/" not in text
         assert "拆分" not in text
 
+    durable = cases[2]
+    assert "src/core/event.py" in durable.files
+    assert "tests/test_legacy_plugin.py" in durable.files
+    assert "tests/test_audit_jsonl.py" in durable.files
+
 
 def test_each_frozen_repository_starts_with_a_failing_oracle(tmp_path):
     for case in phase4g16._cases():
@@ -99,6 +104,25 @@ def test_durable_boundary_requires_natural_candidate_and_provider_consumption():
     assert missing["candidate_consumed_by_provider"] is False
     assert consumed["natural_candidate_observed"] is True
     assert consumed["candidate_consumed_by_provider"] is True
+
+
+def test_missing_durable_candidate_is_a_fixture_gap_not_missed_coordination():
+    case = phase4g16._cases()[2]
+    baseline = {"oracle": {"passed": True}}
+    treatment = _treatment()
+    treatment["orchestration"]["structure_checkpoint"] = {"event_id": 21}
+
+    observations = phase4g16._coordination_observations(
+        case,
+        baseline,
+        treatment,
+    )
+
+    assert observations["missed_coordination_evidence_refs"] == []
+    assert observations["calibration_fixture_gap_evidence_refs"] == [
+        "execution_event:21",
+        "report:durable-boundary-medium:candidate-not-observed",
+    ]
 
 
 def test_baseline_prompt_keeps_one_worker_and_no_runtime_answer():
