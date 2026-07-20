@@ -92,7 +92,7 @@ Phase 3D Long Running Autonomous Task Runtime
 Phase 4  Production Hardening
 ```
 
-当前代码已经完成 Phase 4G14 durable contribution handoff，并进入 Phase 4G15：Phase 2D 本地 compaction 闭环、Phase 3 real
+当前代码已经完成 Phase 4G15 evidence-driven live orchestra improvement，并进入 Phase 4G16：Phase 2D 本地 compaction 闭环、Phase 3 real
 decision provider、Phase 4 production hardening、Phase 4E recovery、Phase 4F capability
 policy、Phase 4G deterministic soak、Phase 4G0 memory lifecycle、Phase 4G1 real-smoke、
 Phase 4G2 real-provider bounded loop、Phase 4G3 real worker lane smoke、Phase 4G4 worker
@@ -109,7 +109,9 @@ Medium 在未预置拆分答案的条件下自然形成 1 Primary + 3 isolated c
 `45.9%`，但与 coherent single worker 的 benchmark 质量相同，因此只证明 handoff 与恢复成本
 改善，不声称多 worker 带来质量优势。Phase 4G15 在 Phase 4H 之前补齐 active turn live
 directive 和强制 orchestration learning bundle，使节点新事实能在 sibling terminal 前改变其责任，
-并将每次真实验证的过程结论进入 replay/promotion 生命周期。Dashboard 暂不实施。
+并将每次真实验证的过程结论进入 replay/promotion 生命周期。Phase 4G16 将该能力接入自然生产路径，
+由本地 action classifier 区分 source-only、existing-responsibility context route 和 provider-required
+durable change，并使用三类 paired task 校准误协调、错过协调、无效协调和成本。Dashboard 暂不实施。
 
 隔离真实验证已经覆盖 decision execute/apply/reject、compaction fallback safety、3-tick
 real-provider loop，以及真实 provider -> validator -> Kanban dispatcher -> Codex worker ->
@@ -667,7 +669,8 @@ responsibility candidate 能够驱动受控 graph topology mutation；Phase 4G13
 checkpoint、resume 和 decision，并用不泄露拓扑答案的自然 Medium 比较 coherent single worker
 与 Runtime orchestra；Phase 4G14 将 isolated attempt patch 捕获与 receipt 语义验收解耦，确保
 协议错误不会丢失已完成的 child 工程成果，并建立可验证的 promotion 和 integration lineage。
-Phase 4G15 先完成 live structural control 与 evidence-driven improvement loop。Phase 4H 暂缓；
+Phase 4G15 完成 live structural control 与 evidence-driven improvement loop；Phase 4G16 再用
+正常生产路径和三类 paired task 校准自然 coordination action。Phase 4H 暂缓；
 未来 UI 应消费已经经过真实长期任务证明的稳定
 observability API，而不是提前展示一个 recovery 和 consistency 尚未稳定的系统。
 
@@ -731,6 +734,9 @@ Phase 4G14 durable contribution handoff
       |
       v
 Phase 4G15 evidence-driven live orchestra improvement
+      |
+      v
+Phase 4G16 natural orchestra calibration
       |
       v
 Phase 4H dashboard runtime UI

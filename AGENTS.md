@@ -31,6 +31,7 @@ When working on branch `feature-kanban-runtime-kernel`, treat
 `docs/kanban-runtime-kernel-phase4g13.md` and
 `docs/kanban-runtime-kernel-phase4g14.md` and
 `docs/kanban-runtime-kernel-phase4g15.md` and
+`docs/kanban-runtime-kernel-phase4g16.md` and
 `docs/kanban-runtime-validation-artifact-retention.md` as binding design
 constraints, not background reading. If implementation details conflict with
 those documents, update the relevant design document first or stop and ask for
@@ -84,6 +85,17 @@ archive cleanup, but findings and candidates may not automatically mutate
 profiles, guidance, validators, capabilities, or graph policy. Promotion
 requires reproducible baseline/treatment evidence, quality non-regression, and
 explicit approval.
+
+Phase 4G16 calibrates that live control through the normal production path. A
+worker reports evidence and affected responsibilities but does not select the
+coordination route. Runtime must persist one idempotent action audit per
+checkpoint, locally route context-only effects without a Decision Provider,
+and reserve provider calls for topology, ownership, scope, capability, human,
+or new durable-responsibility changes. Validation harnesses may not directly
+insert checkpoints, directives, candidate keys, or decomposition answers.
+Natural calibration uses paired coherent/shared-contract/durable-boundary
+tasks, preserves the Phase 4G15 learning/archive gate, and may not trade final
+quality for orchestration activity.
 
 Runtime Kernel 的设计、roadmap、phase、真实验证和证据保留文档必须以中文作为规范性
 叙述语言。函数名、类名、schema 字段、`event_type` 值、CLI 命令、API path、
