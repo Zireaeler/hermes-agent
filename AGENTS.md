@@ -30,6 +30,7 @@ When working on branch `feature-kanban-runtime-kernel`, treat
 `docs/kanban-runtime-kernel-phase4g12.md` and
 `docs/kanban-runtime-kernel-phase4g13.md` and
 `docs/kanban-runtime-kernel-phase4g14.md` and
+`docs/kanban-runtime-kernel-phase4g15.md` and
 `docs/kanban-runtime-validation-artifact-retention.md` as binding design
 constraints, not background reading. If implementation details conflict with
 those documents, update the relevant design document first or stop and ask for
@@ -71,6 +72,18 @@ the same captured patch into a formal contribution. Receipt repair must not
 redo implementation. Replacement integration owners may inherit promoted
 lineage only through validated DB edges, and worktree cleanup must refuse to
 run until attempt artifacts and capture events are complete and verified.
+
+Phase 4G15 adds evidence-driven live control and a mandatory orchestration
+learning lifecycle for managed real validations. A live directive may steer an
+active Codex turn only when its source checkpoint, target materialization,
+thread, turn, contract revision, capability envelope, and non-expanding write
+scope are validated. Failed or unsafe steering must remain a durable queued
+directive; process termination is not a normal coordination mechanism. Every
+managed real run must produce and register a hash-linked learning bundle before
+archive cleanup, but findings and candidates may not automatically mutate
+profiles, guidance, validators, capabilities, or graph policy. Promotion
+requires reproducible baseline/treatment evidence, quality non-regression, and
+explicit approval.
 
 Runtime Kernel 的设计、roadmap、phase、真实验证和证据保留文档必须以中文作为规范性
 叙述语言。函数名、类名、schema 字段、`event_type` 值、CLI 命令、API path、
