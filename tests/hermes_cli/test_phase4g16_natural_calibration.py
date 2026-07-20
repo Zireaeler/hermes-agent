@@ -177,6 +177,46 @@ def test_campaign_archives_first_infrastructure_failure_and_stops(
     ]
 
 
+def test_campaign_can_run_one_frozen_case(tmp_path, monkeypatch):
+    config = phase4g16.CalibrationConfig(
+        root=tmp_path / "campaign",
+        artifact_root=tmp_path / "artifacts",
+        source_codex_home=tmp_path / "codex",
+    )
+    attempted = []
+
+    def pass_case(_config, case):
+        attempted.append(case.key)
+        return {
+            "case": {"key": case.key},
+            "status": "passed",
+            "acceptance": {"passed": True},
+        }
+
+    monkeypatch.setattr(phase4g16, "run_case", pass_case)
+
+    report = phase4g16.run_campaign(config, case_key="shared-contract-medium")
+
+    assert report["status"] == "passed"
+    assert report["selected_cases"] == ["shared-contract-medium"]
+    assert attempted == ["shared-contract-medium"]
+
+
+def test_campaign_rejects_unknown_case(tmp_path):
+    config = phase4g16.CalibrationConfig(
+        root=tmp_path / "campaign",
+        artifact_root=tmp_path / "artifacts",
+        source_codex_home=tmp_path / "codex",
+    )
+
+    try:
+        phase4g16.run_campaign(config, case_key="missing")
+    except ValueError as exc:
+        assert str(exc) == "unknown calibration case: missing"
+    else:
+        raise AssertionError("unknown case must be rejected")
+
+
 def test_infrastructure_failure_retains_source_when_db_is_corrupt(
     tmp_path,
     monkeypatch,

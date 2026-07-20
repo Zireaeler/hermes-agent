@@ -1043,13 +1043,23 @@ def _archive_infrastructure_invalid_case(
     return report
 
 
-def run_campaign(config: CalibrationConfig) -> dict[str, Any]:
+def run_campaign(
+    config: CalibrationConfig,
+    *,
+    case_key: Optional[str] = None,
+) -> dict[str, Any]:
     root = config.root.expanduser().resolve()
+    available_cases = _cases()
+    selected_cases = tuple(
+        case for case in available_cases if case_key is None or case.key == case_key
+    )
+    if not selected_cases:
+        raise ValueError(f"unknown calibration case: {case_key}")
     if root.exists() and any(root.iterdir()):
         raise ValueError(f"campaign root must be empty: {root}")
     root.mkdir(parents=True, exist_ok=True)
     case_reports = []
-    for case in _cases():
+    for case in selected_cases:
         try:
             case_reports.append(run_case(config, case))
         except Exception as exc:
@@ -1061,10 +1071,11 @@ def run_campaign(config: CalibrationConfig) -> dict[str, Any]:
         "schema": CAMPAIGN_SCHEMA,
         "status": (
             "passed"
-            if len(case_reports) == len(_cases())
+            if len(case_reports) == len(selected_cases)
             and all(item["status"] == "passed" for item in case_reports)
             else "failed"
         ),
+        "selected_cases": [case.key for case in selected_cases],
         "cases": [
             {
                 "key": item["case"]["key"],
@@ -1094,6 +1105,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--model")
     parser.add_argument("--worker-timeout-seconds", type=int, default=600)
     parser.add_argument("--decision-timeout-seconds", type=int, default=180)
+    parser.add_argument(
+        "--case",
+        choices=[case.key for case in _cases()],
+        help="只运行一个冻结 case；缺省时按顺序运行全部 case",
+    )
     parser.add_argument("--keep-source", action="store_true")
     args = parser.parse_args(argv)
     report = run_campaign(
@@ -1105,7 +1121,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             worker_timeout_seconds=args.worker_timeout_seconds,
             decision_timeout_seconds=args.decision_timeout_seconds,
             cleanup_source=not args.keep_source,
-        )
+        ),
+        case_key=args.case,
     )
     print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
     return 0 if report["status"] == "passed" else 1
