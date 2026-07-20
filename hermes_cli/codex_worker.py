@@ -1401,10 +1401,20 @@ def _write_log(log_f, text: str) -> None:
         pass
 
 
-def _record_event(task_id: str, kind: str, payload: dict[str, Any], *, run_id: Optional[int]) -> None:
+def _record_event(
+    task_id: str,
+    kind: str,
+    payload: dict[str, Any],
+    *,
+    run_id: Optional[int],
+    conn=None,
+) -> None:
     from hermes_cli import kanban_db as kb
 
     try:
+        if conn is not None:
+            kb.record_task_event(conn, task_id, kind, payload, run_id=run_id)
+            return
         with kb.connect() as conn:
             kb.record_task_event(conn, task_id, kind, payload, run_id=run_id)
     except Exception:
@@ -1564,36 +1574,43 @@ def _heartbeat(
     lane: str,
     execution_mode: str = "fresh",
     backend_session_id: Optional[str] = None,
+    conn=None,
 ) -> None:
     from hermes_cli import kanban_db as kb
 
+    def record(active_conn) -> None:
+        if claim_lock:
+            kb.heartbeat_claim(active_conn, task_id, claimer=claim_lock)
+        accepted = kb.heartbeat_worker(
+            active_conn,
+            task_id,
+            note=f"worker_lane={lane}",
+            expected_run_id=run_id,
+        )
+        if not accepted:
+            return
+        kb.record_task_event(
+            active_conn,
+            task_id,
+            "worker_heartbeat",
+            {
+                "worker_lane": lane,
+                "lane": lane,
+                "worker_kind": "codex_cli",
+                "run_id": run_id,
+                "claim_lock": claim_lock,
+                "execution_mode": execution_mode,
+                "backend_session_id": backend_session_id,
+            },
+            run_id=run_id,
+        )
+
     try:
-        with kb.connect() as conn:
-            if claim_lock:
-                kb.heartbeat_claim(conn, task_id, claimer=claim_lock)
-            accepted = kb.heartbeat_worker(
-                conn,
-                task_id,
-                note=f"worker_lane={lane}",
-                expected_run_id=run_id,
-            )
-            if not accepted:
-                return
-            kb.record_task_event(
-                conn,
-                task_id,
-                "worker_heartbeat",
-                {
-                    "worker_lane": lane,
-                    "lane": lane,
-                    "worker_kind": "codex_cli",
-                    "run_id": run_id,
-                    "claim_lock": claim_lock,
-                    "execution_mode": execution_mode,
-                    "backend_session_id": backend_session_id,
-                },
-                run_id=run_id,
-            )
+        if conn is not None:
+            record(conn)
+        else:
+            with kb.connect() as active_conn:
+                record(active_conn)
     except Exception:
         pass
 
@@ -2331,12 +2348,21 @@ def _finish_blocked(
     run_id: Optional[int],
     reason: str,
     metadata: dict[str, Any],
+    conn=None,
 ) -> bool:
     from hermes_cli import kanban_db as kb
 
-    with kb.connect() as conn:
+    if conn is not None:
         return kb.block_task(
             conn,
+            task_id,
+            reason=reason,
+            expected_run_id=run_id,
+            metadata=metadata,
+        )
+    with kb.connect() as active_conn:
+        return kb.block_task(
+            active_conn,
             task_id,
             reason=reason,
             expected_run_id=run_id,
@@ -2659,6 +2685,23 @@ be one of `pass`, `fail`, or `blocked`.
 """
 
 
+def _persist_app_server_notification(note: dict[str, Any]) -> bool:
+    """Keep bounded lifecycle evidence in Kanban; raw stream stays in logs."""
+    method = str(note.get("method") or "")
+    if method in {
+        "thread/started",
+        "thread/status/changed",
+        "turn/started",
+        "turn/completed",
+    }:
+        return True
+    if method not in {"item/started", "item/completed"}:
+        return False
+    params = note.get("params") if isinstance(note.get("params"), dict) else {}
+    item = params.get("item") if isinstance(params.get("item"), dict) else {}
+    return str(item.get("type") or "") != "userMessage"
+
+
 def run_codex_app_server_worker(
     *,
     task_id: str,
@@ -2702,7 +2745,12 @@ def run_codex_app_server_worker(
     final_text = ""
     backend_session_id = resume_session_id
 
-    with open(log_path, "a", encoding="utf-8", errors="replace") as log_f:
+    # One worker turn owns one control-plane connection. Opening a fresh
+    # connection for every streamed notification repeatedly churns WAL setup
+    # and checkpoints while the supervisor is reading the same database.
+    with kb.connect(board=board) as control_conn, open(
+        log_path, "a", encoding="utf-8", errors="replace"
+    ) as log_f:
         header = {
             "worker_lane": lane,
             "worker_kind": "codex_cli",
@@ -2716,13 +2764,18 @@ def run_codex_app_server_worker(
             "backend_session_id": resume_session_id,
         }
         _write_log(log_f, "[codex-worker] " + json.dumps(header, ensure_ascii=False) + "\n")
-        _record_event(task_id, "worker_started", header, run_id=run_id)
+        _record_event(
+            task_id,
+            "worker_started",
+            header,
+            run_id=run_id,
+            conn=control_conn,
+        )
         if codex_bin is None:
             result_error = "codex binary not found on PATH"
             final_text = result_error
         else:
-            with kb.connect(board=board) as conn:
-                task_context = kb.build_worker_context(conn, task_id)
+            task_context = kb.build_worker_context(control_conn, task_id)
             prompt = (
                 build_codex_resume_prompt(
                     task_id=task_id,
@@ -2749,18 +2802,18 @@ def run_codex_app_server_worker(
                     lane=lane,
                     execution_mode=execution_mode,
                     backend_session_id=backend_session_id,
+                    conn=control_conn,
                 )
                 next_heartbeat[0] = now + max(1.0, float(heartbeat_interval))
 
             def _register(thread_id: str, turn_id: str) -> list[dict[str, Any]]:
-                with kb.connect(board=board) as conn:
-                    registration = rk.register_runtime_live_turn(
-                        conn,
-                        task_id=task_id,
-                        run_id=run_id,
-                        thread_id=thread_id,
-                        turn_id=turn_id,
-                    )
+                registration = rk.register_runtime_live_turn(
+                    control_conn,
+                    task_id=task_id,
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                )
                 _record_event(
                     task_id,
                     "worker_app_server_turn_started",
@@ -2772,18 +2825,18 @@ def run_codex_app_server_worker(
                         "live_delivery_count": len(registration.get("deliveries") or []),
                     },
                     run_id=run_id,
+                    conn=control_conn,
                 )
                 return list(registration.get("deliveries") or [])
 
             def _poll(thread_id: str, turn_id: str) -> list[dict[str, Any]]:
-                with kb.connect(board=board) as conn:
-                    return rk.pending_runtime_live_directives(
-                        conn,
-                        task_id=task_id,
-                        run_id=run_id,
-                        thread_id=thread_id,
-                        turn_id=turn_id,
-                    )
+                return rk.pending_runtime_live_directives(
+                    control_conn,
+                    task_id=task_id,
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                )
 
             def _record_delivery(
                 delivery: dict[str, Any],
@@ -2798,28 +2851,26 @@ def run_codex_app_server_worker(
                         sort_keys=True,
                     ).encode("utf-8")
                 ).hexdigest()
-                with kb.connect(board=board) as conn:
-                    rk.record_runtime_live_delivery(
-                        conn,
-                        str(delivery["id"]),
-                        accepted=accepted,
-                        thread_id=str(delivery.get("thread_id") or ""),
-                        turn_id=str(delivery.get("turn_id") or ""),
-                        request_ref=request_ref,
-                        response_ref=("turn/steer:accepted" if accepted else None),
-                        error_code=error_code,
-                        error_message=error_message,
-                    )
+                rk.record_runtime_live_delivery(
+                    control_conn,
+                    str(delivery["id"]),
+                    accepted=accepted,
+                    thread_id=str(delivery.get("thread_id") or ""),
+                    turn_id=str(delivery.get("turn_id") or ""),
+                    request_ref=request_ref,
+                    response_ref=("turn/steer:accepted" if accepted else None),
+                    error_code=error_code,
+                    error_message=error_message,
+                )
 
             def _complete_turn(thread_id: str, turn_id: str) -> None:
-                with kb.connect(board=board) as conn:
-                    rk.close_runtime_live_turn(
-                        conn,
-                        task_id=task_id,
-                        run_id=run_id,
-                        thread_id=thread_id,
-                        turn_id=turn_id,
-                    )
+                rk.close_runtime_live_turn(
+                    control_conn,
+                    task_id=task_id,
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                )
 
             def _notification(note: dict[str, Any]) -> None:
                 payload = {
@@ -2831,7 +2882,14 @@ def run_codex_app_server_worker(
                         CODEX_EVENT_FIELD_MAX_BYTES,
                     ),
                 }
-                _record_event(task_id, "worker_codex_event", payload, run_id=run_id)
+                if _persist_app_server_notification(note):
+                    _record_event(
+                        task_id,
+                        "worker_codex_event",
+                        payload,
+                        run_id=run_id,
+                        conn=control_conn,
+                    )
                 _write_log(
                     log_f,
                     "[codex-app-server] " + json.dumps(note, ensure_ascii=False) + "\n",
@@ -2878,6 +2936,7 @@ def run_codex_app_server_worker(
                         "execution_mode": execution_mode,
                     },
                     run_id=run_id,
+                    conn=control_conn,
                 )
 
         succeeded = result_status == "completed" and not result_error
@@ -2913,20 +2972,34 @@ def run_codex_app_server_worker(
             3,
         )
         if succeeded:
-            _record_event(task_id, "worker_review_required", meta["worker_lane"], run_id=run_id)
+            _record_event(
+                task_id,
+                "worker_review_required",
+                meta["worker_lane"],
+                run_id=run_id,
+                conn=control_conn,
+            )
             _finish_blocked(
                 task_id=task_id,
                 run_id=run_id,
                 reason="review-required: Codex completed; Hermes review required",
                 metadata=meta,
+                conn=control_conn,
             )
         else:
-            _record_event(task_id, "worker_failed", meta["worker_lane"], run_id=run_id)
+            _record_event(
+                task_id,
+                "worker_failed",
+                meta["worker_lane"],
+                run_id=run_id,
+                conn=control_conn,
+            )
             _finish_blocked(
                 task_id=task_id,
                 run_id=run_id,
                 reason=f"codex-app-server-failed: {result_error or result_status}",
                 metadata=meta,
+                conn=control_conn,
             )
     return 0
 

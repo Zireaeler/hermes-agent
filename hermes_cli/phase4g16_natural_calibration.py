@@ -912,37 +912,41 @@ def _archive_infrastructure_invalid_case(
     stack = rk.redact_sensitive_text(traceback.format_exc()).strip()[-12000:]
     job_id = None
     learning_result = None
+    learning_error = None
     if db_path.is_file():
-        with kb.connect(db_path=db_path) as conn:
-            row = conn.execute(
-                "SELECT id FROM runtime_jobs ORDER BY created_at DESC, rowid DESC LIMIT 1"
-            ).fetchone()
-            if row is not None:
-                job_id = str(row["id"])
-                learning_result = learning.finalize_learning_bundle(
-                    conn,
-                    job_id,
-                    run_root=case_root,
-                    registry_path=(
-                        config.artifact_root
-                        / "orchestration-learning"
-                        / "registry.sqlite3"
-                    ),
-                    phase=PHASE,
-                    instance_id=case.key,
-                    run_id=config.root.name,
-                    source_db_ref="hermes-home/kanban.db",
-                    quality={
-                        "status": "infrastructure_invalid",
-                        "case_kind": case.kind,
-                        "runtime_error": error,
-                        "coordination_observations": {
-                            "missed_coordination_evidence_refs": [],
-                            "coordination_overhead_evidence_refs": [],
+        try:
+            with kb.connect(db_path=db_path) as conn:
+                row = conn.execute(
+                    "SELECT id FROM runtime_jobs ORDER BY created_at DESC, rowid DESC LIMIT 1"
+                ).fetchone()
+                if row is not None:
+                    job_id = str(row["id"])
+                    learning_result = learning.finalize_learning_bundle(
+                        conn,
+                        job_id,
+                        run_root=case_root,
+                        registry_path=(
+                            config.artifact_root
+                            / "orchestration-learning"
+                            / "registry.sqlite3"
+                        ),
+                        phase=PHASE,
+                        instance_id=case.key,
+                        run_id=config.root.name,
+                        source_db_ref="hermes-home/kanban.db",
+                        quality={
+                            "status": "infrastructure_invalid",
+                            "case_kind": case.kind,
+                            "runtime_error": error,
+                            "coordination_observations": {
+                                "missed_coordination_evidence_refs": [],
+                                "coordination_overhead_evidence_refs": [],
+                            },
                         },
-                    },
-                    baseline_bundle_ref=f"reports/{case.key}-baseline",
-                )
+                        baseline_bundle_ref=f"reports/{case.key}-baseline",
+                    )
+        except sqlite3.DatabaseError as db_exc:
+            learning_error = rk.redact_sensitive_text(str(db_exc)).strip()[:2000]
     report = {
         "schema": CASE_REPORT_SCHEMA,
         "case": {
@@ -962,7 +966,14 @@ def _archive_infrastructure_invalid_case(
                 "bundle_sha256": learning_result["receipt"]["bundle_sha256"],
             }
             if learning_result is not None
-            else {"status": "not_available_before_runtime_job"}
+            else {
+                "status": (
+                    "absorption_blocked_db_corruption"
+                    if learning_error
+                    else "not_available_before_runtime_job"
+                ),
+                **({"error": learning_error} if learning_error else {}),
+            }
         ),
         "conclusion": (
             "该 case 因校准基础设施失效而中止，不计入 Runtime 能力结论；"
@@ -979,7 +990,11 @@ def _archive_infrastructure_invalid_case(
                 f"- 状态：`infrastructure_invalid`",
                 f"- Runtime job：`{job_id or '未创建'}`",
                 f"- 异常：`{type(exc).__name__}`：{error}",
-                "- 本 run 不计入能力结论，已保留并吸收此前产生的权威事实。",
+                (
+                    "- learning absorption：DB 损坏阻断；source 已保留，禁止清理。"
+                    if learning_error
+                    else "- 本 run 不计入能力结论，已保留并吸收此前产生的权威事实。"
+                ),
                 "",
             ]
         ),

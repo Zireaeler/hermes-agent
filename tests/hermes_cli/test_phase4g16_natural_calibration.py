@@ -175,3 +175,35 @@ def test_campaign_archives_first_infrastructure_failure_and_stops(
             "artifact_archive": None,
         }
     ]
+
+
+def test_infrastructure_failure_retains_source_when_db_is_corrupt(
+    tmp_path,
+    monkeypatch,
+):
+    config = phase4g16.CalibrationConfig(
+        root=tmp_path / "campaign",
+        artifact_root=tmp_path / "artifacts",
+        source_codex_home=tmp_path / "codex",
+    )
+    case = phase4g16._cases()[0]
+    db_path = config.root / case.key / "hermes-home" / "kanban.db"
+    db_path.parent.mkdir(parents=True)
+    db_path.write_bytes(b"SQLite format 3\x00broken")
+
+    def corrupt_connect(*args, **kwargs):
+        raise phase4g16.sqlite3.DatabaseError("database disk image is malformed")
+
+    monkeypatch.setattr(phase4g16.kb, "connect", corrupt_connect)
+
+    report = phase4g16._archive_infrastructure_invalid_case(
+        config,
+        case,
+        RuntimeError("consistency read failed"),
+    )
+
+    assert report["status"] == "infrastructure_invalid"
+    assert report["learning"]["status"] == "absorption_blocked_db_corruption"
+    assert "artifact_archive" not in report
+    assert db_path.is_file()
+    assert (config.root / case.key / "reports" / "capability-trace.md").is_file()

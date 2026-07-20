@@ -224,6 +224,30 @@ def test_codex_app_server_transport_is_explicit_and_validated():
         "transport": "codex_app_server",
     })
     assert lane.config["transport"] == "codex_app_server"
+
+
+def test_app_server_kanban_events_exclude_stream_deltas_and_user_prompt():
+    assert cw._persist_app_server_notification(
+        {"method": "turn/started", "params": {}}
+    ) is True
+    assert cw._persist_app_server_notification(
+        {
+            "method": "item/completed",
+            "params": {"item": {"type": "agentMessage"}},
+        }
+    ) is True
+    assert cw._persist_app_server_notification(
+        {
+            "method": "item/completed",
+            "params": {"item": {"type": "userMessage"}},
+        }
+    ) is False
+    assert cw._persist_app_server_notification(
+        {"method": "item/agentMessage/delta", "params": {}}
+    ) is False
+    assert cw._persist_app_server_notification(
+        {"method": "thread/tokenUsage/updated", "params": {}}
+    ) is False
     with pytest.raises(ValueError, match="transport"):
         validate_worker_lane_request({
             "name": "codex-invalid-transport",
