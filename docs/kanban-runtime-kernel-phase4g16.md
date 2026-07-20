@@ -218,7 +218,8 @@ ledger 和 completion 仍由既有表负责。
 4. 不改变 goal linkage、capability、workspace owner 或 write scope；
 5. 不需要 human authority 或 independent verification；
 6. source evidence 可由 Runtime 验证；
-7. target 为 `ready`、`running` 或 `waiting_coordination`。
+7. target 为 `planned`、`waiting_dependency`、`ready`、`running` 或
+   `waiting_coordination`。
 
 MVP 本地动作固定为 `continue` context directive。Instruction 只包含 source checkpoint 的结构化 summary、
 finding summary 和 evidence refs，要求 target 在自身 contract 内重新检查当前假设；不能擅自告诉 target
@@ -229,6 +230,9 @@ Target 状态决定 transport：
 ```text
 ready
     -> queued，在首次 materialization 时进入 context
+
+planned / waiting_dependency
+    -> queued，dependency 满足后的首次 materialization 进入 context
 
 running + active app-server turn
     -> queued + live delivery attempt

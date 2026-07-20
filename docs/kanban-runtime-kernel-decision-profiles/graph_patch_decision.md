@@ -1,4 +1,4 @@
-Profile-Version: 7
+Profile-Version: 8
 
 # Graph Patch 决策 Profile
 
@@ -137,6 +137,14 @@ contract 时才能使用 `revise_contract` 或 `narrow_scope`。不得改变 goa
 capabilities。每个 directive 必须包含非空 summary、可执行 instructions 和 evidence refs。
 Provider 可以排队或 supersede directive，但不能声称 directive 已交付或已 ACK；后两者只能
 由本地 Runtime 事实确认。
+
+当 `pending_coordination_actions` 非空时，只处理其中 `route=provider_required` 且状态尚未解决的
+action。Runtime 已经完成 `local_context_route`、`resume_source_only` 或 `no_action` 的 checkpoint
+不得再次生成 Provider patch，也不得因为历史 `coordination_checkpoints` 仍可见而重复发送 directive。
+每个 provider-required action 必须在 patch 中处理其 source checkpoint 和 candidate；需要 topology、
+dependency、owner、scope 或 capability 变化时使用既有受约束 graph op。若现有责任可以吸收 candidate，
+必须使用 `resolve_responsibility_candidate` 明确记录，不得静默忽略。Provider 不得把 action classifier
+已经判定为 context-only 的事实升级成新 durable node。
 
 结构扩展必须使用以下精确的 decomposition 结构。不得使用 `schema`、`reason`、
 `node_keys` 或顶层 `evidence_refs` 等别名：

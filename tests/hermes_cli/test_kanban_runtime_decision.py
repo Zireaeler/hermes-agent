@@ -253,7 +253,7 @@ def test_decision_profile_loader_reads_markdown_profile():
     profile = rd.load_decision_profile("graph_patch_decision")
 
     assert profile["profile_name"] == "graph_patch_decision"
-    assert profile["profile_version"] == "7"
+    assert profile["profile_version"] == "8"
     assert "外部调研本身不构成独立 Runtime node 的理由" in profile["content"]
     assert "最多创建一个新的 runnable worker node" in profile["content"]
     assert "整个 workspace 使用 `**`" in profile["content"]
@@ -264,6 +264,7 @@ def test_decision_profile_loader_reads_markdown_profile():
     assert "source_responsibility_ref" in profile["content"]
     assert "execution_discovered_gap" in profile["content"]
     assert "receipt:<node_key>:attempt-<n>" in profile["content"]
+    assert "pending_coordination_actions" in profile["content"]
     assert profile["profile_hash"]
     assert profile["profile_path"].endswith("graph_patch_decision.md")
     assert "Graph Patch 决策 Profile" in profile["content"]
@@ -612,9 +613,10 @@ def test_decision_profiles_require_typed_contract_for_strategy_update():
         assert "strategy_update" in content
         assert "typed `contract`" in content
         assert "declared_write_scope" in content
-    assert "graph expansion requires `decomposition`" in recovery_profile
+    assert "graph expansion 被要求提供 `decomposition`" in recovery_profile
     assert "`context_or_runtime_limit`" in recovery_profile
-    assert "another execution node remains nonterminal" in recovery_profile
+    assert "另一个 nonterminal execution node" in recovery_profile
+    assert "pending_coordination_actions" in recovery_profile
 
 
 def test_runtime_decision_provider_parse_retry_stays_schema_only(conn):

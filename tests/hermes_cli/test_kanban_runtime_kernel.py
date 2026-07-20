@@ -6818,6 +6818,255 @@ def test_closed_loop_child_defaults_to_event_driven_terminal_execution(conn, tmp
     assert "cross-node structural effect" in error
 
 
+def test_natural_cross_node_checkpoint_routes_locally_without_provider(
+    conn,
+    tmp_path,
+):
+    job_id = _dynamic_coordination_job(conn, tmp_path)
+    parser = _node(conn, job_id, "parser")
+    metadata = json.loads(parser["metadata_json"])
+    metadata.pop("coordination_checkpoint_required", None)
+    conn.execute(
+        "UPDATE execution_nodes SET metadata_json = ? WHERE id = ?",
+        (json.dumps(metadata), parser["id"]),
+    )
+    _complete_codex_checkpoint(
+        conn,
+        parser,
+        _coordination_checkpoint(
+            kind="shared_contract_changed",
+            summary="Parser discovered that renderer must consume token model v2.",
+            finding_key="token-model-v2-natural",
+            affected_node_keys=["parser", "renderer"],
+            changed_files=["src/parser/token.py"],
+        ),
+    )
+
+    assert rk.ingest_runtime_node_evidence(conn, parser["id"])
+
+    action = dict(
+        conn.execute(
+            "SELECT * FROM runtime_coordination_actions WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+    )
+    assert action["classification"] == "existing_responsibility_context"
+    assert action["route"] == "local_context_route"
+    assert action["status"] == "applied"
+    assert json.loads(action["affected_node_keys_json"]) == ["renderer"]
+    directive_ids = json.loads(action["directive_ids_json"])
+    assert len(directive_ids) == 2
+    directives = conn.execute(
+        """
+        SELECT directive.status, node.node_key
+          FROM runtime_node_directives directive
+          JOIN execution_nodes node ON node.id = directive.target_node_id
+         WHERE directive.decision_id = ? ORDER BY node.node_key
+        """,
+        (action["id"],),
+    ).fetchall()
+    assert [(row["node_key"], row["status"]) for row in directives] == [
+        ("parser", "queued"),
+        ("renderer", "queued"),
+    ]
+    assert _node(conn, job_id, "parser")["state"] == "ready"
+    assert _node(conn, job_id, "renderer")["state"] == "running"
+
+    calls = []
+
+    def provider(_delta, _session):
+        calls.append(True)
+        raise AssertionError("local context route must not call provider")
+
+    advanced = rk.advance_runtime_job(
+        conn,
+        job_id,
+        create_tasks=False,
+        decision_provider=provider,
+    )
+    assert calls == []
+    assert not advanced.decision_requested
+    delta = rk.build_decision_delta(conn, job_id)
+    assert delta["pending_coordination_actions"] == []
+    summary = rk.summarize_runtime_orchestration(conn, job_id)
+    assert summary["coordination"]["action_route_counts"][
+        "local_context_route"
+    ] == 1
+
+
+def test_natural_candidate_checkpoint_requires_provider_action(conn, tmp_path):
+    job_id = _dynamic_coordination_job(conn, tmp_path)
+    parser = _node(conn, job_id, "parser")
+    metadata = json.loads(parser["metadata_json"])
+    metadata.pop("coordination_checkpoint_required", None)
+    conn.execute(
+        "UPDATE execution_nodes SET metadata_json = ? WHERE id = ?",
+        (json.dumps(metadata), parser["id"]),
+    )
+    candidate = {
+        "candidate_key": "natural-compatibility-gap",
+        "outcome": "Convert legacy records into the current parser contract.",
+        "reason_type": "execution_discovered_gap",
+        "acceptance_criteria": ["Legacy records are converted"],
+        "declared_write_scope": ["src/compat/**"],
+        "goal_item_keys": ["coordinated-result"],
+        "integration_owner_node_key": "integration-owner",
+        "evidence_refs": ["workspace:path:src/parser/token.py"],
+    }
+    checkpoint = _coordination_checkpoint(
+        kind="gap_discovered",
+        summary="Repository evidence exposed a separate compatibility responsibility.",
+        finding_key="natural-compatibility-evidence",
+        affected_node_keys=["integration-owner"],
+        changed_files=["src/parser/token.py"],
+        responsibility_candidates=[candidate],
+    )
+    _complete_codex_checkpoint(conn, parser, checkpoint)
+
+    assert rk.ingest_runtime_node_evidence(conn, parser["id"])
+
+    action = dict(
+        conn.execute(
+            "SELECT * FROM runtime_coordination_actions WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+    )
+    assert action["classification"] == "durable_structure_unknown"
+    assert action["route"] == "provider_required"
+    assert action["status"] == "waiting_provider"
+    assert _node(conn, job_id, "parser")["state"] == "waiting_coordination"
+    delta = rk.build_decision_delta(conn, job_id)
+    assert [item["id"] for item in delta["pending_coordination_actions"]] == [
+        action["id"]
+    ]
+    assert delta["coordination_checkpoints"][0]["event_id"] == action[
+        "source_checkpoint_event_id"
+    ]
+    assert conn.execute(
+        "SELECT COUNT(*) FROM runtime_node_directives WHERE decision_id = ?",
+        (action["id"],),
+    ).fetchone()[0] == 0
+
+
+def test_provider_result_resolves_natural_coordination_action(conn, tmp_path):
+    job_id = _dynamic_coordination_job(conn, tmp_path)
+    parser = _node(conn, job_id, "parser")
+    metadata = json.loads(parser["metadata_json"])
+    metadata.pop("coordination_checkpoint_required", None)
+    conn.execute(
+        "UPDATE execution_nodes SET metadata_json = ? WHERE id = ?",
+        (json.dumps(metadata), parser["id"]),
+    )
+    checkpoint = _coordination_checkpoint(
+        kind="integration_risk",
+        summary="Integration ownership needs a durable decision.",
+        finding_key="natural-owner-risk",
+        affected_node_keys=["integration-owner"],
+        changed_files=["src/parser/token.py"],
+    )
+    _complete_codex_checkpoint(conn, parser, checkpoint)
+    assert rk.ingest_runtime_node_evidence(conn, parser["id"])
+    action = dict(
+        conn.execute(
+            "SELECT * FROM runtime_coordination_actions WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+    )
+    event_id = int(action["source_checkpoint_event_id"])
+
+    def provider(_session, _delta):
+        return _patch(
+            job_id,
+            _revision(conn, job_id),
+            {
+                "op": "issue_directive",
+                "target_node_key": "parser",
+                "source_checkpoint_event_id": event_id,
+                "target_checkpoint_event_id": event_id,
+                "action": "continue",
+                "expected_contract_revision": 1,
+                "summary": "The existing integration owner retains responsibility.",
+                "instructions": ["Finish the parser responsibility within its current scope."],
+                "evidence_refs": [f"event:{event_id}"],
+            },
+        )
+
+    advanced = rk.advance_runtime_job(
+        conn,
+        job_id,
+        create_tasks=False,
+        decision_provider=provider,
+    )
+
+    assert advanced.patch_status == "applied"
+    resolved = dict(
+        conn.execute(
+            "SELECT * FROM runtime_coordination_actions WHERE id = ?",
+            (action["id"],),
+        ).fetchone()
+    )
+    assert resolved["status"] == "applied"
+    assert resolved["decision_id"]
+    assert resolved["graph_revision_after"] == _revision(conn, job_id)
+    assert rk.build_decision_delta(conn, job_id)["pending_coordination_actions"] == []
+    consistency = rk.check_runtime_consistency(conn, job_id, write_events=False)
+    assert consistency["violations"] == []
+
+
+def test_rejected_provider_action_remains_visible_for_recovery(conn, tmp_path):
+    job_id = _dynamic_coordination_job(conn, tmp_path)
+    parser = _node(conn, job_id, "parser")
+    metadata = json.loads(parser["metadata_json"])
+    metadata.pop("coordination_checkpoint_required", None)
+    conn.execute(
+        "UPDATE execution_nodes SET metadata_json = ? WHERE id = ?",
+        (json.dumps(metadata), parser["id"]),
+    )
+    _complete_codex_checkpoint(
+        conn,
+        parser,
+        _coordination_checkpoint(
+            kind="integration_risk",
+            summary="Integration ownership needs a durable decision.",
+            finding_key="rejected-owner-risk",
+            affected_node_keys=["integration-owner"],
+            changed_files=["src/parser/token.py"],
+        ),
+    )
+    assert rk.ingest_runtime_node_evidence(conn, parser["id"])
+
+    def provider(_session, _delta):
+        return {
+            "schema": rk.PATCH_SCHEMA,
+            "expected_revision": _revision(conn, job_id),
+            "rationale_summary": "Invalid empty recovery patch.",
+            "ops": [],
+        }
+
+    advanced = rk.advance_runtime_job(
+        conn,
+        job_id,
+        create_tasks=False,
+        decision_provider=provider,
+    )
+
+    assert advanced.patch_status == "rejected"
+    action = dict(
+        conn.execute(
+            "SELECT * FROM runtime_coordination_actions WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+    )
+    assert action["status"] == "rejected"
+    assert action["resolved_at"] is None
+    assert [
+        item["id"]
+        for item in rk.build_decision_delta(conn, job_id)[
+            "pending_coordination_actions"
+        ]
+    ] == [action["id"]]
+
+
 def test_terminal_children_without_structure_advance_locally_without_provider(
     conn,
     tmp_path,

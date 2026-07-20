@@ -162,6 +162,30 @@ COORDINATION_DIRECTIVE_STATES = {
     "acknowledged",
     "superseded",
 }
+COORDINATION_ACTION_CLASSIFICATIONS = {
+    "source_only",
+    "existing_responsibility_context",
+    "durable_structure_unknown",
+    "stale_or_unrouteable",
+}
+COORDINATION_ACTION_ROUTES = {
+    "resume_source_only",
+    "local_context_route",
+    "provider_required",
+    "no_action",
+}
+COORDINATION_ACTION_STATES = {
+    "classified",
+    "waiting_provider",
+    "applied",
+    "rejected",
+    "no_action",
+}
+COORDINATION_PROVIDER_REQUIRED_KINDS = {
+    "scope_overlap_detected",
+    "gap_discovered",
+    "integration_risk",
+}
 RESPONSIBILITY_CANDIDATE_RESOLUTIONS = {
     "absorbed_by_existing",
     "rejected_not_durable",
@@ -664,6 +688,26 @@ def ensure_runtime_schema(conn: sqlite3.Connection) -> None:
             acknowledged_materialization_id TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS runtime_coordination_actions (
+            id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL,
+            source_node_id TEXT NOT NULL,
+            source_checkpoint_event_id INTEGER NOT NULL UNIQUE,
+            classification TEXT NOT NULL,
+            route TEXT NOT NULL,
+            status TEXT NOT NULL,
+            affected_node_keys_json TEXT NOT NULL DEFAULT '[]',
+            finding_keys_json TEXT NOT NULL DEFAULT '[]',
+            candidate_refs_json TEXT NOT NULL DEFAULT '[]',
+            rationale_json TEXT NOT NULL DEFAULT '{}',
+            directive_ids_json TEXT NOT NULL DEFAULT '[]',
+            decision_id TEXT,
+            graph_revision_before INTEGER NOT NULL,
+            graph_revision_after INTEGER,
+            created_at INTEGER NOT NULL,
+            resolved_at INTEGER
+        );
+
         CREATE TABLE IF NOT EXISTS runtime_live_directive_deliveries (
             id TEXT PRIMARY KEY,
             job_id TEXT NOT NULL,
@@ -848,6 +892,8 @@ def ensure_runtime_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_backend_worker_sessions_job ON backend_worker_sessions(job_id, node_id, updated_at);
         CREATE INDEX IF NOT EXISTS idx_runtime_directives_target_status
             ON runtime_node_directives(job_id, target_node_id, status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_runtime_coordination_actions_job_status
+            ON runtime_coordination_actions(job_id, status, created_at);
         CREATE INDEX IF NOT EXISTS idx_runtime_live_delivery_task_status
             ON runtime_live_directive_deliveries(task_id, run_id, status, created_at);
         DELETE FROM progress_ledger
@@ -1815,6 +1861,11 @@ def status_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
         "runtime_node_directives": _rows(
             conn,
             "SELECT * FROM runtime_node_directives WHERE job_id = ? ORDER BY created_at, id",
+            (job_id,),
+        ),
+        "runtime_coordination_actions": _rows(
+            conn,
+            "SELECT * FROM runtime_coordination_actions WHERE job_id = ? ORDER BY created_at, id",
             (job_id,),
         ),
         "recent_events": _rows(conn, "SELECT * FROM execution_events WHERE job_id = ? ORDER BY id DESC LIMIT 50", (job_id,)),
@@ -3332,6 +3383,117 @@ def validate_graph_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str,
     }
 
 
+def _create_runtime_node_directive(
+    conn: sqlite3.Connection,
+    job_id: str,
+    target: dict[str, Any],
+    *,
+    source_checkpoint_event_id: int,
+    action: str,
+    summary: str,
+    instructions: list[str],
+    evidence_refs: list[str],
+    decision_id: Optional[str] = None,
+    target_checkpoint_event_id: Optional[int] = None,
+    replacement_contract: Optional[dict[str, Any]] = None,
+) -> str:
+    existing = conn.execute(
+        """
+        SELECT id FROM runtime_node_directives
+         WHERE job_id = ? AND target_node_id = ?
+           AND decision_id IS ?
+           AND source_checkpoint_event_id = ?
+         ORDER BY created_at, id LIMIT 1
+        """,
+        (
+            job_id,
+            target["id"],
+            decision_id,
+            int(source_checkpoint_event_id),
+        ),
+    ).fetchone()
+    if existing is not None:
+        return str(existing["id"])
+    expected_revision = int(target.get("contract_revision") or 1)
+    applied_revision = (
+        expected_revision + 1
+        if action in {"revise_contract", "narrow_scope"}
+        else expected_revision
+    )
+    directive_id = _id("rdir")
+    now = _now()
+    payload = {
+        "schema": RUNTIME_NODE_DIRECTIVE_SCHEMA,
+        "directive_id": directive_id,
+        "target_node_key": target["node_key"],
+        "source_checkpoint_event_id": int(source_checkpoint_event_id),
+        "target_checkpoint_event_id": target_checkpoint_event_id,
+        "action": action,
+        "summary": str(summary).strip(),
+        "instructions": [str(value).strip() for value in instructions],
+        "evidence_refs": [str(value).strip() for value in evidence_refs],
+        "expected_contract_revision": expected_revision,
+        "applied_contract_revision": applied_revision,
+        "contract": replacement_contract,
+    }
+    conn.execute(
+        """
+        INSERT INTO runtime_node_directives (
+            id, job_id, target_node_id, source_checkpoint_event_id,
+            target_checkpoint_event_id, decision_id, action, status,
+            expected_contract_revision, applied_contract_revision,
+            directive_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)
+        """,
+        (
+            directive_id,
+            job_id,
+            target["id"],
+            int(source_checkpoint_event_id),
+            target_checkpoint_event_id,
+            decision_id,
+            action,
+            expected_revision,
+            applied_revision,
+            _json(payload),
+            now,
+        ),
+    )
+    _event(
+        conn,
+        job_id,
+        "runtime_directive_queued",
+        {
+            "directive_id": directive_id,
+            "target_node_key": target["node_key"],
+            "action": action,
+            "expected_contract_revision": expected_revision,
+            "applied_contract_revision": applied_revision,
+            "source_checkpoint_event_id": int(source_checkpoint_event_id),
+            "coordination_action_id": (
+                decision_id
+                if str(decision_id or "").startswith("rcact_")
+                else None
+            ),
+        },
+        node_id=target["id"],
+        source_event_id=int(source_checkpoint_event_id),
+    )
+    if target["state"] == "waiting_coordination":
+        if target_checkpoint_event_id is None:
+            raise RuntimeError(
+                "waiting_coordination directive requires checkpoint event"
+            )
+        _activate_queued_runtime_directive(
+            conn,
+            target["id"],
+            target_checkpoint_event_id=int(target_checkpoint_event_id),
+        )
+    elif target["state"] == "running":
+        _queue_runtime_live_delivery(conn, directive_id)
+    return directive_id
+
+
 def _apply_op(
     conn: sqlite3.Connection,
     job_id: str,
@@ -3648,87 +3810,23 @@ def _apply_op(
         )
     elif name == "issue_directive":
         target = _node_by_key(conn, job_id, str(op["target_node_key"]))
-        action = str(op["action"])
-        expected_revision = int(op["expected_contract_revision"])
-        applied_revision = (
-            expected_revision + 1
-            if action in {"revise_contract", "narrow_scope"}
-            else expected_revision
-        )
-        directive_id = _id("rdir")
-        now = _now()
-        payload = {
-            "schema": RUNTIME_NODE_DIRECTIVE_SCHEMA,
-            "directive_id": directive_id,
-            "target_node_key": target["node_key"],
-            "source_checkpoint_event_id": int(
-                op["source_checkpoint_event_id"]
-            ),
-            "target_checkpoint_event_id": op.get(
-                "target_checkpoint_event_id"
-            ),
-            "action": action,
-            "summary": str(op["summary"]).strip(),
-            "instructions": [
-                str(value).strip() for value in op.get("instructions") or []
-            ],
-            "evidence_refs": [
-                str(value).strip() for value in op.get("evidence_refs") or []
-            ],
-            "expected_contract_revision": expected_revision,
-            "applied_contract_revision": applied_revision,
-            "contract": op.get("contract"),
-        }
-        conn.execute(
-            """
-            INSERT INTO runtime_node_directives (
-                id, job_id, target_node_id, source_checkpoint_event_id,
-                target_checkpoint_event_id, decision_id, action, status,
-                expected_contract_revision, applied_contract_revision,
-                directive_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)
-            """,
-            (
-                directive_id,
-                job_id,
-                target["id"],
-                int(op["source_checkpoint_event_id"]),
-                op.get("target_checkpoint_event_id"),
-                decision_id,
-                action,
-                expected_revision,
-                applied_revision,
-                _json(payload),
-                now,
-            ),
-        )
-        _event(
+        _create_runtime_node_directive(
             conn,
             job_id,
-            "runtime_directive_queued",
-            {
-                "directive_id": directive_id,
-                "target_node_key": target["node_key"],
-                "action": action,
-                "expected_contract_revision": expected_revision,
-                "applied_contract_revision": applied_revision,
-                "source_checkpoint_event_id": int(
-                    op["source_checkpoint_event_id"]
-                ),
-            },
-            node_id=target["id"],
-            source_event_id=int(op["source_checkpoint_event_id"]),
+            target,
+            source_checkpoint_event_id=int(op["source_checkpoint_event_id"]),
+            target_checkpoint_event_id=op.get("target_checkpoint_event_id"),
+            action=str(op["action"]),
+            summary=str(op["summary"]).strip(),
+            instructions=[
+                str(value).strip() for value in op.get("instructions") or []
+            ],
+            evidence_refs=[
+                str(value).strip() for value in op.get("evidence_refs") or []
+            ],
+            replacement_contract=op.get("contract"),
+            decision_id=decision_id,
         )
-        if target["state"] == "waiting_coordination":
-            _activate_queued_runtime_directive(
-                conn,
-                target["id"],
-                target_checkpoint_event_id=int(
-                    op["target_checkpoint_event_id"]
-                ),
-            )
-        elif target["state"] == "running":
-            _queue_runtime_live_delivery(conn, directive_id)
     elif name == "supersede_directive":
         directive_id = str(op["directive_id"])
         now = _now()
@@ -7482,6 +7580,90 @@ def check_runtime_consistency(
                     "session_status": session["status"],
                 }
             )
+    for action in conn.execute(
+        "SELECT * FROM runtime_coordination_actions WHERE job_id = ?",
+        (job_id,),
+    ).fetchall():
+        if action["classification"] not in COORDINATION_ACTION_CLASSIFICATIONS:
+            violations.append(
+                {
+                    "type": "runtime_coordination_action_classification_invalid",
+                    "coordination_action_id": action["id"],
+                    "classification": action["classification"],
+                }
+            )
+        if action["route"] not in COORDINATION_ACTION_ROUTES:
+            violations.append(
+                {
+                    "type": "runtime_coordination_action_route_invalid",
+                    "coordination_action_id": action["id"],
+                    "route": action["route"],
+                }
+            )
+        if action["status"] not in COORDINATION_ACTION_STATES:
+            violations.append(
+                {
+                    "type": "runtime_coordination_action_status_invalid",
+                    "coordination_action_id": action["id"],
+                    "status": action["status"],
+                }
+            )
+        source = conn.execute(
+            """
+            SELECT id, node_id FROM execution_events
+             WHERE id = ? AND job_id = ?
+               AND event_type = 'worker_coordination_checkpointed'
+            """,
+            (action["source_checkpoint_event_id"], job_id),
+        ).fetchone()
+        if source is None or str(source["node_id"]) != str(action["source_node_id"]):
+            violations.append(
+                {
+                    "type": "runtime_coordination_action_source_mismatch",
+                    "coordination_action_id": action["id"],
+                    "source_checkpoint_event_id": action[
+                        "source_checkpoint_event_id"
+                    ],
+                }
+            )
+        directive_ids = _loads_list(action["directive_ids_json"])
+        for directive_id in directive_ids:
+            directive = conn.execute(
+                """
+                SELECT id, decision_id FROM runtime_node_directives
+                 WHERE id = ? AND job_id = ?
+                """,
+                (directive_id, job_id),
+            ).fetchone()
+            if directive is None:
+                violations.append(
+                    {
+                        "type": "runtime_coordination_action_directive_missing",
+                        "coordination_action_id": action["id"],
+                        "directive_id": directive_id,
+                    }
+                )
+            elif action["route"] == "local_context_route" and str(
+                directive["decision_id"]
+            ) != str(action["id"]):
+                violations.append(
+                    {
+                        "type": "runtime_coordination_action_directive_lineage_mismatch",
+                        "coordination_action_id": action["id"],
+                        "directive_id": directive_id,
+                    }
+                )
+        if (
+            action["route"] == "provider_required"
+            and action["status"] == "applied"
+            and not action["decision_id"]
+        ):
+            violations.append(
+                {
+                    "type": "runtime_coordination_action_decision_missing",
+                    "coordination_action_id": action["id"],
+                }
+            )
     for directive in conn.execute(
         "SELECT * FROM runtime_node_directives WHERE job_id = ?",
         (job_id,),
@@ -7809,6 +7991,10 @@ def reduce_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
         conn,
         job_id,
     )
+    pending_coordination_actions = _pending_runtime_coordination_actions(
+        conn,
+        job_id,
+    )
     held_candidate_refs_by_owner: dict[str, list[str]] = {}
     for item in pending_terminal_candidates:
         owner_key = str(
@@ -7892,6 +8078,23 @@ def reduce_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
             "early_structure_checkpoint",
             {"reason": "primary worker submitted early structure assessment"},
         )
+    elif pending_coordination_actions:
+        state = "waiting_decision"
+        action_ids = [str(item["id"]) for item in pending_coordination_actions]
+        _event_once(
+            conn,
+            job_id,
+            "decision_requested",
+            "coordination_actions:" + ",".join(action_ids),
+            {
+                "reason": "coordination actions require durable structural decisions",
+                "coordination_action_ids": action_ids,
+                "checkpoint_event_ids": [
+                    int(item["source_checkpoint_event_id"])
+                    for item in pending_coordination_actions
+                ],
+            },
+        )
     elif has_waiting_coordination:
         state = "waiting_decision"
         checkpoint_ids = [
@@ -7966,6 +8169,7 @@ def reduce_runtime_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
         "complete": complete,
         "frontier": frontier,
         "pending_terminal_responsibility_candidates": pending_terminal_candidates,
+        "pending_coordination_actions": pending_coordination_actions,
     }
 
 
@@ -8142,6 +8346,10 @@ def build_decision_delta(conn: sqlite3.Connection, job_id: str, trigger_event_id
             (job_id,),
         ).fetchall()
     ]
+    pending_coordination_actions = _pending_runtime_coordination_actions(
+        conn,
+        job_id,
+    )
     coordination_checkpoints = [
         {
             "event_id": int(row["id"]),
@@ -8168,6 +8376,45 @@ def build_decision_delta(conn: sqlite3.Connection, job_id: str, trigger_event_id
             (job_id,),
         ).fetchall()
     ]
+    if pending_coordination_actions:
+        pending_event_ids = {
+            int(item["source_checkpoint_event_id"])
+            for item in pending_coordination_actions
+        }
+        existing_event_ids = {
+            int(item["event_id"]) for item in coordination_checkpoints
+        }
+        missing_event_ids = sorted(pending_event_ids - existing_event_ids)
+        if missing_event_ids:
+            placeholders = ",".join("?" for _ in missing_event_ids)
+            coordination_checkpoints.extend(
+                {
+                    "event_id": int(row["id"]),
+                    "node_key": _loads(row["payload_json"]).get("node_key"),
+                    "materialization_id": _loads(row["payload_json"]).get(
+                        "materialization_id"
+                    ),
+                    "contract_revision": _loads(row["payload_json"]).get(
+                        "contract_revision"
+                    ),
+                    "checkpoint": _loads(row["payload_json"]).get("checkpoint"),
+                }
+                for row in conn.execute(
+                    f"""
+                    SELECT id, payload_json FROM execution_events
+                     WHERE job_id = ?
+                       AND event_type = 'worker_coordination_checkpointed'
+                       AND id IN ({placeholders})
+                     ORDER BY id
+                    """,
+                    (job_id, *missing_event_ids),
+                ).fetchall()
+            )
+        coordination_checkpoints = [
+            item
+            for item in coordination_checkpoints
+            if int(item["event_id"]) in pending_event_ids
+        ]
     terminal_responsibility_candidates = _pending_terminal_responsibility_candidates(
         conn,
         job_id,
@@ -8263,11 +8510,13 @@ def build_decision_delta(conn: sqlite3.Connection, job_id: str, trigger_event_id
         "structure_requests": structure_requests,
         "structure_checkpoints": structure_checkpoints,
         "coordination_checkpoints": coordination_checkpoints,
+        "pending_coordination_actions": pending_coordination_actions,
         "terminal_responsibility_candidates": terminal_responsibility_candidates,
         "global_execution_snapshot": {
             "graph_revision": int(status["job"]["graph_revision"]),
             "active_responsibilities": active_responsibilities,
             "coordination_checkpoints": coordination_checkpoints,
+            "pending_coordination_actions": pending_coordination_actions,
             "terminal_responsibility_candidates": terminal_responsibility_candidates,
             "directives": directives,
             "available_worker_capacity": None,
@@ -8439,6 +8688,78 @@ def append_decision_segment_entry(
         (estimated, estimated, segment["id"]),
     )
     return dict(conn.execute("SELECT * FROM decision_segment_entries WHERE id = ?", (entry_id,)).fetchone())
+
+
+def _record_coordination_action_decision_result(
+    conn: sqlite3.Connection,
+    job_id: str,
+    decision_id: str,
+    result: dict[str, Any],
+) -> None:
+    pending = _pending_runtime_coordination_actions(conn, job_id)
+    if not pending:
+        return
+    applied = result.get("status") == "applied"
+    now = _now()
+    graph_revision = int(_job(conn, job_id)["graph_revision"])
+    status = "applied" if applied else "rejected"
+    for action in pending:
+        directive_ids = [
+            str(row["id"])
+            for row in conn.execute(
+                """
+                SELECT id FROM runtime_node_directives
+                 WHERE job_id = ? AND decision_id = ?
+                   AND source_checkpoint_event_id = ?
+                 ORDER BY created_at, id
+                """,
+                (
+                    job_id,
+                    decision_id,
+                    int(action["source_checkpoint_event_id"]),
+                ),
+            ).fetchall()
+        ]
+        conn.execute(
+            """
+            UPDATE runtime_coordination_actions
+               SET status = ?, decision_id = ?, graph_revision_after = ?,
+                   directive_ids_json = ?, resolved_at = ?
+             WHERE id = ? AND status IN ('waiting_provider', 'rejected')
+            """,
+            (
+                status,
+                decision_id,
+                graph_revision if applied else None,
+                _json(directive_ids),
+                now if applied else None,
+                action["id"],
+            ),
+        )
+        _event(
+            conn,
+            job_id,
+            (
+                "runtime_coordination_action_applied"
+                if applied
+                else "runtime_coordination_action_rejected"
+            ),
+            {
+                "coordination_action_id": action["id"],
+                "route": "provider_required",
+                "decision_id": decision_id,
+                "result_status": result.get("status"),
+                "patch_id": result.get("patch_id"),
+                "directive_ids": directive_ids,
+                "reason": result.get("reason"),
+                "graph_revision_before": action["graph_revision_before"],
+                "graph_revision_after": graph_revision if applied else None,
+            },
+            node_id=action["source_node_id"],
+            source_event_id=int(action["source_checkpoint_event_id"]),
+        )
+    if applied:
+        reduce_runtime_job(conn, job_id)
 
 
 def advance_runtime_job(
@@ -8724,6 +9045,12 @@ def advance_runtime_job(
             raise
         else:
             if patch is None:
+                _record_coordination_action_decision_result(
+                    conn,
+                    job_id,
+                    decision_id,
+                    result,
+                )
                 reduction = reduce_runtime_job(conn, job_id)
                 if auto_compact:
                     policy_result = rd.should_compact_decision_session(conn, job_id, compaction_policy)
@@ -8752,6 +9079,12 @@ def advance_runtime_job(
                     recovery=recovery,
                 )
             result = apply_graph_patch(conn, job_id, patch, decision_id=decision_id)
+            _record_coordination_action_decision_result(
+                conn,
+                job_id,
+                decision_id,
+                result,
+            )
             patch_status = result["status"]
             rm.record_memory_hint_usage(
                 conn,
@@ -10631,6 +10964,23 @@ def summarize_runtime_orchestration(
             (job_id,),
         ).fetchall()
     ]
+    coordination_actions = [
+        {
+            **dict(row),
+            "affected_node_keys": _loads_list(row["affected_node_keys_json"]),
+            "finding_keys": _loads_list(row["finding_keys_json"]),
+            "candidate_refs": _loads_list(row["candidate_refs_json"]),
+            "rationale": _loads(row["rationale_json"]),
+            "directive_ids": _loads_list(row["directive_ids_json"]),
+        }
+        for row in conn.execute(
+            """
+            SELECT * FROM runtime_coordination_actions
+             WHERE job_id = ? ORDER BY created_at, id
+            """,
+            (job_id,),
+        ).fetchall()
+    ]
     directives = [
         {
             "directive_id": row["id"],
@@ -10890,6 +11240,11 @@ def summarize_runtime_orchestration(
     coordination_cost = {
         "structure_assessment_count": len(structure_assessment_materializations),
         "coordination_checkpoint_count": len(coordination_checkpoints),
+        "coordination_action_count": len(coordination_actions),
+        "coordination_action_route_counts": {
+            route: sum(1 for item in coordination_actions if item["route"] == route)
+            for route in sorted(COORDINATION_ACTION_ROUTES)
+        },
         "coordination_resume_count": len(coordination_resume_materializations),
         "coordination_resume_without_new_evidence_count": (
             resume_without_new_evidence_count
@@ -10974,6 +11329,14 @@ def summarize_runtime_orchestration(
             ),
             "checkpoint_count": len(coordination_checkpoints),
             "checkpoints": coordination_checkpoints,
+            "action_count": len(coordination_actions),
+            "actions": coordination_actions,
+            "action_route_counts": {
+                route: sum(
+                    1 for item in coordination_actions if item["route"] == route
+                )
+                for route in sorted(COORDINATION_ACTION_ROUTES)
+            },
             "responsibility_candidate_count": responsibility_candidate_count,
             "dynamic_node_count": len(dynamic_nodes),
             "dynamic_nodes": dynamic_nodes,
@@ -12961,6 +13324,314 @@ def _ingest_runtime_structure_checkpoint(
     return True
 
 
+def _pending_runtime_coordination_actions(
+    conn: sqlite3.Connection,
+    job_id: str,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            **dict(row),
+            "affected_node_keys": _loads_list(row["affected_node_keys_json"]),
+            "finding_keys": _loads_list(row["finding_keys_json"]),
+            "candidate_refs": _loads_list(row["candidate_refs_json"]),
+            "rationale": _loads(row["rationale_json"]),
+            "directive_ids": _loads_list(row["directive_ids_json"]),
+        }
+        for row in conn.execute(
+            """
+            SELECT * FROM runtime_coordination_actions
+             WHERE job_id = ? AND route = 'provider_required'
+               AND status IN ('waiting_provider', 'rejected')
+             ORDER BY created_at, id
+            """,
+            (job_id,),
+        ).fetchall()
+    ]
+
+
+def _latest_node_coordination_checkpoint_event_id(
+    conn: sqlite3.Connection,
+    job_id: str,
+    node_id: str,
+) -> Optional[int]:
+    row = conn.execute(
+        """
+        SELECT id FROM execution_events
+         WHERE job_id = ? AND node_id = ?
+           AND event_type = 'worker_coordination_checkpointed'
+         ORDER BY id DESC LIMIT 1
+        """,
+        (job_id, node_id),
+    ).fetchone()
+    return int(row["id"]) if row is not None else None
+
+
+def _classify_runtime_coordination_action(
+    conn: sqlite3.Connection,
+    node: dict[str, Any],
+    checkpoint_event_id: int,
+    checkpoint: dict[str, Any],
+) -> dict[str, Any]:
+    existing = conn.execute(
+        """
+        SELECT * FROM runtime_coordination_actions
+         WHERE source_checkpoint_event_id = ?
+        """,
+        (int(checkpoint_event_id),),
+    ).fetchone()
+    if existing is not None:
+        return dict(existing)
+
+    job_id = str(node["job_id"])
+    source_key = str(node["node_key"])
+    findings = [
+        item for item in checkpoint.get("findings") or [] if isinstance(item, dict)
+    ]
+    finding_keys = sorted(
+        {str(item.get("finding_key") or "").strip() for item in findings} - {""}
+    )
+    affected_keys = sorted(
+        {
+            str(key).strip()
+            for item in findings
+            for key in item.get("affected_node_keys") or []
+            if str(key).strip() and str(key).strip() != source_key
+        }
+    )
+    candidates = [
+        item
+        for item in checkpoint.get("responsibility_candidates") or []
+        if isinstance(item, dict)
+    ]
+    candidate_refs = [
+        f"event:{int(checkpoint_event_id)}#responsibility:{item['candidate_key']}"
+        for item in candidates
+    ]
+    node_rows = {
+        str(row["node_key"]): dict(row)
+        for row in conn.execute(
+            "SELECT * FROM execution_nodes WHERE job_id = ?",
+            (job_id,),
+        ).fetchall()
+    }
+    active_affected = [
+        key
+        for key in affected_keys
+        if key in node_rows and node_rows[key]["state"] not in TERMINAL_NODE_STATES
+    ]
+    unknown_affected = sorted(set(affected_keys) - set(node_rows))
+    structural_kinds = sorted(
+        {
+            str(item.get("type") or "")
+            for item in findings
+            if item.get("type") in COORDINATION_PROVIDER_REQUIRED_KINDS
+        }
+    )
+    unsupported_states = sorted(
+        key
+        for key in active_affected
+        if node_rows[key]["state"]
+        not in {"planned", "waiting_dependency", "ready", "running", "waiting_coordination"}
+    )
+    conflicting_targets = sorted(
+        key
+        for key in active_affected
+        if conn.execute(
+            """
+            SELECT 1 FROM runtime_node_directives
+             WHERE job_id = ? AND target_node_id = ?
+               AND status IN ('queued', 'delivered')
+             LIMIT 1
+            """,
+            (job_id, node_rows[key]["id"]),
+        ).fetchone()
+        is not None
+    )
+    fixture_forced = (
+        _loads(node.get("metadata_json")).get("coordination_checkpoint_required")
+        is True
+    )
+    rationale = {
+        "source_node_key": source_key,
+        "active_affected_node_keys": active_affected,
+        "terminal_affected_node_keys": sorted(set(affected_keys) - set(active_affected)),
+        "unknown_affected_node_keys": unknown_affected,
+        "structural_finding_kinds": structural_kinds,
+        "unsupported_target_states": unsupported_states,
+        "targets_with_pending_directives": conflicting_targets,
+        "legacy_forced_provider_route": fixture_forced,
+    }
+    if (
+        fixture_forced
+        or candidates
+        or structural_kinds
+        or unknown_affected
+        or unsupported_states
+        or conflicting_targets
+    ):
+        classification = "durable_structure_unknown"
+        route = "provider_required"
+        status = "waiting_provider"
+    elif active_affected:
+        classification = "existing_responsibility_context"
+        route = "local_context_route"
+        status = "classified"
+    elif affected_keys:
+        classification = "stale_or_unrouteable"
+        route = "resume_source_only" if node["state"] == "waiting_coordination" else "no_action"
+        status = "classified" if route == "resume_source_only" else "no_action"
+    else:
+        classification = "source_only"
+        route = "resume_source_only" if node["state"] == "waiting_coordination" else "no_action"
+        status = "classified" if route == "resume_source_only" else "no_action"
+
+    action_id = _id("rcact")
+    now = _now()
+    graph_revision = int(_job(conn, job_id)["graph_revision"])
+    conn.execute(
+        """
+        INSERT INTO runtime_coordination_actions (
+            id, job_id, source_node_id, source_checkpoint_event_id,
+            classification, route, status, affected_node_keys_json,
+            finding_keys_json, candidate_refs_json, rationale_json,
+            directive_ids_json, graph_revision_before, created_at, resolved_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?)
+        """,
+        (
+            action_id,
+            job_id,
+            node["id"],
+            int(checkpoint_event_id),
+            classification,
+            route,
+            status,
+            _json(affected_keys),
+            _json(finding_keys),
+            _json(candidate_refs),
+            _json(rationale),
+            graph_revision,
+            now,
+            now if status == "no_action" else None,
+        ),
+    )
+    _event(
+        conn,
+        job_id,
+        "runtime_coordination_action_classified",
+        {
+            "schema": "runtime_coordination_action_v1",
+            "coordination_action_id": action_id,
+            "source_checkpoint_event_id": int(checkpoint_event_id),
+            "classification": classification,
+            "route": route,
+            "status": status,
+            "affected_node_keys": affected_keys,
+            "candidate_refs": candidate_refs,
+            "rationale": rationale,
+        },
+        node_id=node["id"],
+        source_event_id=int(checkpoint_event_id),
+    )
+
+    directive_ids: list[str] = []
+    if route == "resume_source_only":
+        if node["state"] == "waiting_coordination":
+            conn.execute(
+                """
+                UPDATE execution_nodes
+                   SET state = 'ready', updated_at = ?, completed_at = NULL
+                 WHERE id = ? AND state = 'waiting_coordination'
+                """,
+                (now, node["id"]),
+            )
+        status = "applied"
+    elif route == "local_context_route":
+        targets = [source_key, *active_affected]
+        for target_key in targets:
+            target = dict(
+                conn.execute(
+                    "SELECT * FROM execution_nodes WHERE job_id = ? AND node_key = ?",
+                    (job_id, target_key),
+                ).fetchone()
+            )
+            if target["state"] in TERMINAL_NODE_STATES:
+                continue
+            relevant = [
+                item
+                for item in findings
+                if target_key == source_key
+                or target_key in (item.get("affected_node_keys") or [])
+            ]
+            finding_summary = "; ".join(
+                str(item.get("summary") or "").strip()
+                for item in relevant
+                if str(item.get("summary") or "").strip()
+            )
+            target_checkpoint_event_id = (
+                _latest_node_coordination_checkpoint_event_id(
+                    conn,
+                    job_id,
+                    str(target["id"]),
+                )
+                if target["state"] == "waiting_coordination"
+                else None
+            )
+            directive_ids.append(
+                _create_runtime_node_directive(
+                    conn,
+                    job_id,
+                    target,
+                    source_checkpoint_event_id=int(checkpoint_event_id),
+                    target_checkpoint_event_id=target_checkpoint_event_id,
+                    action="continue",
+                    summary=(
+                        f"Runtime routed new evidence from {source_key} to {target_key}."
+                    ),
+                    instructions=[
+                        "Re-check the following evidence within the existing node contract "
+                        "before continuing: " + (finding_summary or checkpoint["summary"]),
+                        "Do not expand capability, write scope, or graph ownership from this directive.",
+                    ],
+                    evidence_refs=[f"event:{int(checkpoint_event_id)}"],
+                    decision_id=action_id,
+                )
+            )
+        status = "applied"
+    if status == "applied":
+        resolved_at = _now()
+        conn.execute(
+            """
+            UPDATE runtime_coordination_actions
+               SET status = 'applied', directive_ids_json = ?,
+                   graph_revision_after = ?, resolved_at = ?
+             WHERE id = ?
+            """,
+            (_json(directive_ids), graph_revision, resolved_at, action_id),
+        )
+        _event(
+            conn,
+            job_id,
+            "runtime_coordination_action_applied",
+            {
+                "coordination_action_id": action_id,
+                "route": route,
+                "directive_ids": directive_ids,
+                "graph_revision_before": graph_revision,
+                "graph_revision_after": graph_revision,
+            },
+            node_id=node["id"],
+            source_event_id=int(checkpoint_event_id),
+        )
+    elif route == "provider_required":
+        _touch_job(conn, job_id, state="waiting_decision")
+    return dict(
+        conn.execute(
+            "SELECT * FROM runtime_coordination_actions WHERE id = ?",
+            (action_id,),
+        ).fetchone()
+    )
+
+
 def _ingest_runtime_coordination_checkpoint(
     conn: sqlite3.Connection,
     node: dict[str, Any],
@@ -13053,13 +13724,23 @@ def _ingest_runtime_coordination_checkpoint(
         "UPDATE node_materializations SET metadata_json = ? WHERE id = ?",
         (_json(mat_metadata), materialization["id"]),
     )
-    activated = _activate_queued_runtime_directive(
+    _activate_queued_runtime_directive(
         conn,
         node["id"],
         target_checkpoint_event_id=event_id,
     )
-    if activated is None:
-        _touch_job(conn, node["job_id"], state="waiting_decision")
+    refreshed_node = dict(
+        conn.execute(
+            "SELECT * FROM execution_nodes WHERE id = ?",
+            (node["id"],),
+        ).fetchone()
+    )
+    _classify_runtime_coordination_action(
+        conn,
+        refreshed_node,
+        event_id,
+        checkpoint,
+    )
     reduce_runtime_job(conn, node["job_id"])
     return True
 

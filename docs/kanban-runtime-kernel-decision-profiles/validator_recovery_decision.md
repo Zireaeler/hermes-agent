@@ -1,107 +1,96 @@
-Profile-Version: 4
+Profile-Version: 5
 
-# Validator Recovery Decision Profile
+# Validator Recovery 决策 Profile
 
-## Purpose
+## 用途
 
-Use this profile after a previous runtime graph patch was parsed but rejected by
-the local validator.
+上一份 Runtime graph patch 已经被解析，但被本地 validator 拒绝时，使用本 Profile 生成一次受约束修正。
 
-## Input
+## 输入
 
-The provider receives the normal runtime decision request plus
-`validator_feedback` containing:
+Provider 接收普通 Runtime decision request，以及 `validator_feedback`：
 
-- `rejected_patch`;
-- validator `status`;
-- validator `reason`;
-- current and expected graph revision when relevant.
+- `rejected_patch`；
+- validator `status`；
+- validator `reason`；
+- 相关的当前和预期 graph revision；
+- 尚未解决的 `pending_coordination_actions`。
 
-## Output
+## 输出
 
-Return exactly one corrected JSON object matching `runtime_graph_patch_v1`.
-
-No Markdown fences, no explanatory prose, no comments.
+只返回一个符合 `runtime_graph_patch_v1` 的 JSON 对象。不得输出 Markdown fence、解释性文字或注释。
 
 ## Recovery Rules
 
-- Do not repeat the same rejected op shape.
-- If the rejected reason says a node key is unknown, either reference an
-  existing node from `delta.frontier` / checkpoint `graph_frontier`, or avoid
-  that dependency.
-- If the rejected reason concerns `add_dependency`, use only
-  `from_node_key` for the prerequisite node and `to_node_key` for the dependent
-  node. Do not use alias fields such as `node_key` or `depends_on_node_key`.
-- If the rejected reason says `insert_verifier` needs
-  `target_node_key` or `target_goal_item_key`, include one of those fields.
-- If the rejected reason says `insert_verifier` needs `goal_item_keys` or
-  `gap_keys`, add concrete existing goal/gap keys for the verifier node itself.
-- If the rejected reason says the linked goal does not have
-  `verifier_required=true`, do not retry another verifier shape. Recover with
-  one coherent implementation node that owns testing, debugging, and local
-  verification, or return no structural change if that responsibility is
-  already covered.
-- If no valid verifier target is obvious, prefer `create_node` linked to a
-  required `goal_item_key` or open `gap_key`.
-- If the rejected reason says a new node lacks goal/gap/human linkage, add
-  `goal_item_keys`, `gap_keys`, or `human_gate_reason`.
-- If the rejected reason is stale revision, use the current `db_revision` /
-  `graph_revision` from the request.
-- If the rejected op is `strategy_update`, include `strategy_summary` and a
-  non-empty `changes_from_previous_attempts` list. Include a typed `contract`
-  with `outcome`, `acceptance_criteria`, `success_evidence`,
-  `declared_write_scope`, and `prohibited_actions`. Provider-first jobs reject
-  `strategy_update` without this contract. Do not use it to mark the job done
-  or blocked.
-- If the rejected reason says graph expansion requires `decomposition`, keep
-  the corrected execution op and add the exact versioned decomposition object
-  required by the graph-patch profile. One new node is still graph expansion
-  when another execution node remains nonterminal. For recovery after a
-  receipt-invalid, timeout, or exhausted branch, use an evidence-backed
-  `context_or_runtime_limit` justification and cite an existing `event:<id>` or
-  `receipt:<node-key>:attempt-<n>` reference from the decision delta. The
-  justification `nodes` array must cover every execution node created by the
-  corrected patch.
-- Do not attach an `add_dependency` to a new `strategy_update` node in the same
-  recovery patch. If the new strategy node replaces an integration owner that
-  already has promoted contributions, set `replaces_node_key` to that owner and
-  `inherit_promoted_contributions=true`; Runtime will copy only validated
-  promoted artifact dependencies. Never ask the replacement worker to
-  reconstruct promoted work from summaries, and never inherit quarantined
-  attempt patches.
+- 不得重复同一个已拒绝 op shape。
+- 若 reason 指出 node key 未知，只能引用 `delta.frontier`、checkpoint graph frontier 或
+  `pending_coordination_actions` 中已存在的 node；否则放弃该 dependency。
+- `add_dependency` 只能使用 `from_node_key` 表示 prerequisite，使用 `to_node_key` 表示 dependent；
+  不得使用 `node_key`、`depends_on_node_key` 等 alias。
+- `insert_verifier` 必须提供 `target_node_key` 或 `target_goal_item_key`，并为 verifier 自身提供真实
+  `goal_item_keys` 或 `gap_keys`。
+- 若关联 goal 没有 `verifier_required=true`，不得继续尝试 verifier。责任已覆盖时不改 graph；尚未覆盖时
+  使用一个 coherent implementation node 承担实现、测试、调试和本地验证。
+- 新 node 缺少 goal/gap/human linkage 时，补充当前 request 中真实存在的 `goal_item_keys`、
+  `gap_keys` 或 `human_gate_reason`。
+- stale revision 必须使用 request 中当前 `db_revision` / `graph_revision`。
+- `strategy_update` 必须包含 `strategy_summary`、非空 `changes_from_previous_attempts` 和 typed `contract`。
+  不得用它直接完成或阻塞 job。
+- graph expansion 被要求提供 `decomposition` 时，保留合法 execution op，并增加 graph-patch profile
+  规定的精确 versioned decomposition。存在另一个 nonterminal execution node 时，即使只新增一个 node，
+  也属于 expansion。
+- receipt-invalid、timeout 或 branch exhausted 后的 recovery 使用 evidence-backed
+  `context_or_runtime_limit`，并引用 decision delta 中真实的 `event:<id>` 或
+  `receipt:<node-key>:attempt-<n>`。Justification 的 `nodes` 必须覆盖 patch 创建的全部 execution node。
+- 不得在同一个 recovery patch 中为新 `strategy_update` 再添加 dependency。若它替换已有 promoted
+  contribution 的 integration owner，设置 `replaces_node_key` 和
+  `inherit_promoted_contributions=true`。Runtime 只继承 validated promoted artifact，不继承
+  quarantined attempt patch。
+
+## Coordination Action Recovery
+
+当 `pending_coordination_actions` 含 `status=rejected` 的 provider-required action：
+
+1. 只修正 validator 指出的字段或结构原因；
+2. 继续引用原 `source_checkpoint_event_id` 和 candidate ref；
+3. 不得把 action 降级为本地已解决，也不得伪造 ACK、delivery 或 terminal evidence；
+4. 若现有责任足以吸收 candidate，使用 `resolve_responsibility_candidate`；
+5. 若需要 durable expansion，保持 source candidate、goal、scope、dependency 和 integration owner
+   lineage；
+6. 不得重新处理已经 `applied`、`no_action` 或本地 `local_context_route` 的 action；
+7. 若 reason 表明 candidate 不足以支持 expansion，选择显式 no-expansion resolution，而不是猜测新
+   candidate。
+
+一次 rejection 不允许删除 action。修正 patch 再次失败时，Runtime 保留 action 与全部 validator feedback，
+后续 recovery 仍基于同一事实链。
 
 ## Safe Fallback
 
-When the best structural action is unclear, prefer one coherent primary
-execution node covering the current goal gap. The node may include inspection,
-research, implementation, testing, debugging, and local verification when they
-share one workspace, capability envelope, accountable outcome, and feedback
-loop.
+最佳结构动作不明确时，优先保持一个覆盖当前 goal gap 的 coherent primary execution node。同一 workspace、
+capability envelope、完整 outcome 和 feedback loop 下的 inspection、research、implementation、testing、
+debugging 和 local verification 应保持在一个 node 中。
 
-Do not recover from validator rejection by splitting work into analysis,
-research, implementation, testing, or debugging phases. Without a valid
-`decomposition`, return at most one new runnable worker node, and only when the
-current delta has no nonterminal execution node that makes decomposition
-mandatory.
+不得为了从 validator rejection 恢复，而拆成 analysis、research、implementation、testing 或 debugging
+阶段。没有合法 `decomposition` 时，最多返回一个新的 runnable worker node，并且当前 delta 中不能存在
+使 decomposition 成为必需的其他 nonterminal execution node。
 
-Write scopes must be canonical workspace-relative globs. Use `**` for the
-whole workspace; do not use `repository/**`, `workspace/**`, absolute paths,
-or `..` segments.
+Write scope 必须是规范化 workspace-relative glob。整个 workspace 使用 `**`；不得使用
+`repository/**`、`workspace/**`、绝对路径或 `..` segment。
 
-## Example
+## 示例
 
 ```json
 {
   "schema": "runtime_graph_patch_v1",
   "expected_revision": 7,
-  "rationale_summary": "Validator rejected the verifier because it had no target, so this creates a linked implementation node for the open goal instead.",
+  "rationale_summary": "上一份 verifier patch 缺少合法 target，因此改为由一个 coherent implementation node 覆盖仍未满足的 goal。",
   "ops": [
     {
       "op": "create_node",
       "node_key": "produce-initial-runtime-result",
       "node_type": "implementation",
       "title": "Produce initial runtime result",
-      "description": "Create the first concrete artifact or evidence needed to satisfy the initial runtime goal.",
+      "description": "Create and locally verify the complete result for the open goal.",
       "goal_item_keys": ["initial-runtime-result"],
       "contract": {
         "outcome": "Produce and locally verify the complete initial runtime result.",

@@ -201,3 +201,38 @@ def test_terminal_pending_live_delivery_creates_improvement_candidate():
         "live_delivery_unresolved"
     ]
     assert candidates[0]["category"] == "live_delivery_unresolved"
+
+
+def test_natural_calibration_findings_cover_false_missed_and_overhead():
+    orchestration = {
+        "coordination": {
+            "actions": [
+                {
+                    "id": "rcact-negative",
+                    "route": "local_context_route",
+                    "status": "applied",
+                }
+            ],
+            "cost": {},
+        }
+    }
+    quality = {
+        "case_kind": "coherent_negative_control",
+        "coordination_observations": {
+            "missed_coordination_evidence_refs": ["artifact:stale-child"],
+            "coordination_overhead_evidence_refs": ["pair:wall-time"],
+        },
+    }
+
+    findings = learning._findings(
+        "job-natural-calibration",
+        orchestration,
+        {"deliveries": []},
+        quality,
+    )
+
+    assert {item["category"] for item in findings} == {
+        "false_coordination",
+        "missed_coordination",
+        "coordination_overhead",
+    }

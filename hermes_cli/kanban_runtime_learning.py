@@ -250,8 +250,78 @@ def _findings(
     job_id: str,
     orchestration: dict[str, Any],
     live: dict[str, Any],
+    quality: Optional[dict[str, Any]] = None,
 ) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
+    quality = quality or {}
+    coordination = orchestration.get("coordination") or {}
+    actions = coordination.get("actions") or []
+    observations = quality.get("coordination_observations") or {}
+    if not isinstance(observations, dict):
+        observations = {}
+    if quality.get("case_kind") == "coherent_negative_control" and actions:
+        findings.append(
+            _finding(
+                job_id,
+                "false_coordination",
+                "high",
+                "Coherent negative control 中出现了不需要的 coordination action。",
+                "Runtime 或 worker 把单责任局部事实升级成了全局协调。",
+                [f"coordination_action:{item['id']}" for item in actions],
+                "candidate_created",
+            )
+        )
+    missed_refs = [
+        str(value)
+        for value in observations.get("missed_coordination_evidence_refs") or []
+        if str(value).strip()
+    ]
+    if missed_refs:
+        findings.append(
+            _finding(
+                job_id,
+                "missed_coordination",
+                "high",
+                "跨节点新事实没有在 sibling 产生过时工作前进入 coordination 路径。",
+                "Worker 未提交可路由 checkpoint，或 Runtime 未在事实仍有时效时处理它。",
+                missed_refs,
+                "candidate_created",
+            )
+        )
+    overhead_refs = [
+        str(value)
+        for value in observations.get("coordination_overhead_evidence_refs") or []
+        if str(value).strip()
+    ]
+    if overhead_refs:
+        findings.append(
+            _finding(
+                job_id,
+                "coordination_overhead",
+                "medium",
+                "Coordination 增加了可测成本，但没有对应的质量或过时工作收益。",
+                "Paired baseline/treatment 证明额外 checkpoint、resume、decision 或 token 没有产生净收益。",
+                overhead_refs,
+                "candidate_created",
+            )
+        )
+    rejected_actions = [
+        f"coordination_action:{item['id']}"
+        for item in actions
+        if item.get("status") == "rejected"
+    ]
+    if rejected_actions:
+        findings.append(
+            _finding(
+                job_id,
+                "ineffective_coordination",
+                "high",
+                "至少一个 provider-required coordination action 未形成有效结构结果。",
+                "Decision Provider 输出缺失、解析失败或 graph patch 被 validator 拒绝。",
+                rejected_actions,
+                "candidate_created",
+            )
+        )
     fallback_ids = [
         f"live_delivery:{item['delivery_id']}"
         for item in live["deliveries"]
@@ -317,7 +387,7 @@ def _findings(
                 "candidate_created",
             )
         )
-    cost = ((orchestration.get("coordination") or {}).get("cost") or {})
+    cost = (coordination.get("cost") or {})
     ineffective = int(cost.get("structural_decision_count") or 0) - int(
         cost.get("effective_structural_decision_count") or 0
     )
@@ -393,7 +463,8 @@ def build_learning_bundle(
     )
     orchestration = rk.summarize_runtime_orchestration(conn, job_id)
     live = _live_coordination(conn, job_id)
-    findings = _findings(job_id, orchestration, live)
+    normalized_quality = quality or {"status": "unknown"}
+    findings = _findings(job_id, orchestration, live, normalized_quality)
     candidates = _candidates(findings)
     nodes = [
         {
@@ -436,6 +507,7 @@ def build_learning_bundle(
                 "task_events",
                 "graph_patches",
                 "runtime_node_directives",
+                "runtime_coordination_actions",
                 "runtime_live_directive_deliveries",
                 "runtime_active_worker_turns",
                 "node_materializations",
@@ -457,7 +529,7 @@ def build_learning_bundle(
         },
         "handoff": orchestration.get("contribution_handoff") or {},
         "cost": ((orchestration.get("coordination") or {}).get("cost") or {}),
-        "quality": quality or {"status": "unknown"},
+        "quality": normalized_quality,
         "findings": findings,
         "improvement_candidates": candidates,
         "regression_scenarios": [
