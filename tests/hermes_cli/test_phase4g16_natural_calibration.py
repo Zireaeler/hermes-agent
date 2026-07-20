@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from pathlib import Path
 
 from hermes_cli import phase4g16_natural_calibration as phase4g16
@@ -215,6 +216,44 @@ def test_campaign_rejects_unknown_case(tmp_path):
         assert str(exc) == "unknown calibration case: missing"
     else:
         raise AssertionError("unknown case must be rejected")
+
+
+def test_treatment_waits_for_complete_worker_attempt(tmp_path, monkeypatch):
+    case = phase4g16._cases()[0]
+    captured = {}
+
+    monkeypatch.setattr(phase4g16, "_create_runtime_job", lambda *args: "job-1")
+    monkeypatch.setattr(phase4g16.kb, "connect", lambda: nullcontext(object()))
+
+    def run_smoke(_conn, _job_id, **kwargs):
+        captured.update(kwargs)
+        return {"final_state": "done"}
+
+    monkeypatch.setattr(phase4g16, "run_real_worker_lane_smoke", run_smoke)
+    monkeypatch.setattr(
+        phase4g16,
+        "_runtime_evidence",
+        lambda _conn, _job_id: {
+            "status": {"job": {"state": "done"}},
+            "consistency": {"status": "passed"},
+            "orchestration": {},
+            "nodes": [],
+            "candidate_count": 0,
+        },
+    )
+    monkeypatch.setattr(phase4g16, "_oracle", lambda _path: {"passed": True})
+    monkeypatch.setattr(phase4g16, "_changed_files", lambda _path: [])
+
+    phase4g16._run_treatment(
+        case,
+        tmp_path / "workspace",
+        tmp_path,
+        provider_source={"provider_name": "provider", "model": "model"},
+        worker_timeout_seconds=321,
+        decision_timeout_seconds=45,
+    )
+
+    assert captured["worker_wait_seconds"] == 321.0
 
 
 def test_infrastructure_failure_retains_source_when_db_is_corrupt(

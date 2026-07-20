@@ -560,7 +560,10 @@ def _run_treatment(
             lane_name=LANE_NAME,
             max_decision_ticks=5,
             max_steps=180,
-            worker_wait_seconds=2,
+            # A structure assessment is a complete model turn. The reducer can
+            # only consume its checkpoint after the worker has persisted the
+            # terminal receipt, so use the configured attempt budget here.
+            worker_wait_seconds=float(worker_timeout_seconds),
             poll_interval_seconds=0.2,
             timeout_seconds=float(decision_timeout_seconds),
             max_retries=1,
