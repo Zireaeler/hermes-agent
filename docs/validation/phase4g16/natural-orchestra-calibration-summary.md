@@ -1,5 +1,10 @@
 # Phase 4G16 Natural Orchestra Calibration 总结
 
+> 本文记录 deferred decomposition 实现前的三次校准。后续扩大后的 Deferred Medium 已自然产生
+> `defer_until_milestone`，但暴露 checkpoint repair 缺陷；权威补充见
+> [Deferred Medium 首轮复盘](deferred-medium-checkpoint-repair-analysis.md)。不得继续引用本文旧 Case C
+> 结论来声称最新 fixture 没有自然拆分价值。
+
 ## 结论
 
 Phase 4G16 已完成自然生产路径、确定性回归、三类 paired run、learning absorption、归档与清理 gate。

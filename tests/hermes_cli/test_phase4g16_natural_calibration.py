@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from hermes_cli import phase4g16_natural_calibration as phase4g16
@@ -52,6 +53,20 @@ def test_each_frozen_repository_starts_with_a_failing_oracle(tmp_path):
         assert len(revision) == 40
         assert result["passed"] is False
         assert result["test_count"] is not None
+
+
+def test_changed_files_preserves_first_character_of_modified_path(tmp_path):
+    case = phase4g16._cases()[0]
+    workspace = tmp_path / "changed-files"
+    phase4g16._write_repository(workspace, case)
+    target = workspace / "src" / "retry.py"
+    target.write_text(target.read_text(encoding="utf-8") + "\nVALUE = 2\n", encoding="utf-8")
+    (workspace / "src" / "new.py").write_text("NEW = True\n", encoding="utf-8")
+
+    assert phase4g16._changed_files(workspace) == [
+        "src/new.py",
+        "src/retry.py",
+    ]
 
 
 def test_negative_control_rejects_any_coordination_action():
@@ -119,9 +134,40 @@ def test_missing_durable_candidate_is_a_fixture_gap_not_missed_coordination():
     )
 
     assert observations["missed_coordination_evidence_refs"] == []
+    assert observations["coordination_protocol_failure_evidence_refs"] == []
     assert observations["calibration_fixture_gap_evidence_refs"] == [
         "execution_event:21",
         "report:durable-boundary-medium:candidate-not-observed",
+    ]
+
+
+def test_invalid_natural_candidate_checkpoint_is_protocol_failure_not_fixture_gap():
+    case = phase4g16._cases()[2]
+    baseline = {"oracle": {"passed": True}}
+    treatment = _treatment()
+    treatment["invalid_structural_checkpoints"] = [{
+        "materialization_id": "mat-invalid",
+        "event_id": 31,
+        "checkpoint_schema": "runtime_worker_structure_checkpoint_v1",
+        "recommendation": "defer_until_milestone",
+        "proposed_node_count": 2,
+        "responsibility_candidate_count": 0,
+        "validation_error": (
+            "milestone_contract artifact_scope must be within shared_integration_scope"
+        ),
+    }]
+
+    observations = phase4g16._coordination_observations(
+        case,
+        baseline,
+        treatment,
+    )
+
+    assert observations["calibration_fixture_gap_evidence_refs"] == []
+    assert observations["coordination_protocol_failure_evidence_refs"] == [
+        "execution_event:31",
+        "materialization:mat-invalid",
+        "report:durable-boundary-medium:natural-candidate-checkpoint-rejected",
     ]
 
 
@@ -140,6 +186,23 @@ def test_fixture_gap_conclusion_does_not_claim_runtime_or_quality_failure():
 
     assert "校准夹具不足" in conclusion
     assert "不是 Runtime correctness 或任务质量失败" in conclusion
+
+
+def test_protocol_failure_conclusion_separates_quality_from_orchestra():
+    conclusion = phase4g16._case_conclusion(
+        passed=False,
+        acceptance={
+            "baseline_quality_passed": True,
+            "treatment_quality_passed": True,
+            "quality_non_regression": True,
+            "runtime_consistency_passed": True,
+            "natural_candidate_observed": False,
+        },
+        finding_categories=["coordination_protocol_failure"],
+    )
+
+    assert "orchestration protocol failure" in conclusion
+    assert "不能归类为校准夹具不足" in conclusion
 
 
 def test_baseline_prompt_keeps_one_worker_and_no_runtime_answer():
@@ -188,6 +251,55 @@ def test_archive_instance_is_unique_per_campaign_root(tmp_path):
         second,
         case,
     )
+
+
+def test_verified_baseline_reuse_skips_model_and_records_provenance(
+    tmp_path,
+    monkeypatch,
+):
+    case = phase4g16._cases()[2]
+    archive = tmp_path / "archive"
+    reports = archive / "reports"
+    reports.mkdir(parents=True)
+    manifest_path = archive / "manifest.json"
+    manifest_path.write_text("{}", encoding="utf-8")
+    prior_report = {
+        "schema": phase4g16.CASE_REPORT_SCHEMA,
+        "case": {
+            "key": case.key,
+            "title": case.title,
+            "kind": case.kind,
+            "objective": case.objective,
+            "fixture_sha256": phase4g16._case_fixture_sha256(case),
+        },
+        "baseline": {
+            "transport_status": "completed",
+            "oracle": {"passed": True, "test_count": 27},
+            "changed_files": ["src/core/event.py"],
+            "wall_time_seconds": 12.5,
+        },
+        "status": "failed",
+    }
+    (reports / "case-report.json").write_text(
+        json.dumps(prior_report),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        phase4g16.validation_artifacts,
+        "verify_artifact_manifest",
+        lambda path: {
+            "schema": "manifest",
+            "status": "verified",
+            "source_run_root": "/tmp/prior-run",
+            "files": [{"path": "reports/case-report.json"}],
+        },
+    )
+
+    baseline = phase4g16._load_verified_reused_baseline(manifest_path, case)
+
+    assert baseline["oracle"]["passed"] is True
+    assert baseline["reuse_provenance"]["status"] == "verified_archive_reused"
+    assert baseline["reuse_provenance"]["fixture_identity_mode"] == "fixture_sha256"
 
 
 def test_campaign_archives_first_infrastructure_failure_and_stops(

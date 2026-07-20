@@ -1156,6 +1156,38 @@ def test_codex_prompt_uses_read_only_early_structure_assessment_contract():
     assert "When finished, print a concise structured receipt" not in prompt
 
 
+def test_codex_checkpoint_repair_keeps_checkpoint_schema_without_reassessment(tmp_path):
+    from hermes_cli.codex_worker import (
+        _prepare_runtime_output_schema,
+        build_codex_prompt,
+    )
+
+    context = (
+        "# Runtime node\n\n"
+        "Checkpoint protocol repair mode: metadata-only repair of a prior "
+        "runtime_worker_structure_checkpoint_v1. Do not inspect files or re-evaluate "
+        "topology.\n\n"
+        'Runtime footer: {"node_key": "primary"}\n'
+    )
+    prompt = build_codex_prompt(
+        context,
+        lane="codex-runtime",
+        model="gpt-5.6-sol",
+    )
+    schema_path = _prepare_runtime_output_schema(
+        context,
+        {"CODEX_HOME": str(tmp_path / "codex-home")},
+    )
+    schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
+
+    assert "protocol repair lane `codex-runtime`" in prompt
+    assert "reconsider the prior structural decision" in prompt
+    assert "assessment lane `codex-runtime`" not in prompt
+    assert schema["properties"]["schema"]["enum"] == [
+        "runtime_worker_structure_checkpoint_v1"
+    ]
+
+
 def test_extract_runtime_receipt_accepts_structure_checkpoint():
     from hermes_cli.codex_worker import _extract_runtime_receipt
 

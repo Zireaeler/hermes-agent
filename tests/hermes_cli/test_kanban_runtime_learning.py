@@ -262,3 +262,29 @@ def test_calibration_fixture_gap_does_not_create_runtime_coordination_candidate(
     ]
     assert candidates[0]["scope"] == "validation_campaign"
     assert "冻结任务" in candidates[0]["proposed_change"]
+
+
+def test_checkpoint_protocol_failure_creates_runtime_coordination_candidate():
+    quality = {
+        "case_kind": "durable_boundary_medium",
+        "coordination_observations": {
+            "coordination_protocol_failure_evidence_refs": [
+                "materialization:mat-invalid"
+            ],
+            "calibration_fixture_gap_evidence_refs": [],
+        },
+    }
+
+    findings = learning._findings(
+        "job-checkpoint-protocol-failure",
+        {"coordination": {"actions": [], "cost": {}}},
+        {"deliveries": []},
+        quality,
+    )
+    candidates = learning._candidates(findings)
+
+    assert [item["category"] for item in findings] == [
+        "coordination_protocol_failure"
+    ]
+    assert candidates[0]["scope"] == "runtime_coordination"
+    assert "reducer/transport" in candidates[0]["proposed_change"]

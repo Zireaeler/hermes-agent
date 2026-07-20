@@ -487,6 +487,14 @@ treatment 15/15、质量非回退和 Runtime consistency 全部通过；失败�
 “先由 Primary 冻结共享合同，再根据 milestone evidence 激活低耦合 child”。Phase 4G16 不得将本 run
 写成正向 orchestra 证明。
 
+扩大后的第三次 run 已自然返回 `defer_until_milestone` 和两个候选责任，但 checkpoint 的
+`milestone_contract.artifact_scope` 与 `shared_integration_scope` 不一致。该 metadata 错误后的通用 receipt
+recovery 同时要求 terminal receipt 与 nonterminal structure checkpoint，且没有回传精确错误，最终丢失原
+candidate 并触发 full-workspace strategy worker 重做。该 run 必须归类为
+`coordination_protocol_failure`，而不是 `calibration_fixture_gap`。正式重跑前必须支持：原 checkpoint 与字段
+错误回流同一 session、metadata-only correction、workspace identity 不变校验，以及 repair attempt 进入原
+checkpoint reducer。
+
 ---
 
 ## 11. Deferred Decomposition

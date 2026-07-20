@@ -6706,7 +6706,10 @@ def _receipt_evidence_valid(
             and _runtime_structure_checkpoint_from_evidence(evidence, node)
             is not None
         ):
-            return True
+            return (
+                conn is None
+                or _checkpoint_protocol_repair_workspace_error(conn, node) is None
+            )
         if (
             node is not None
             and conn is not None
@@ -6717,7 +6720,7 @@ def _receipt_evidence_valid(
             )
             is not None
         ):
-            return True
+            return _checkpoint_protocol_repair_workspace_error(conn, node) is None
         return _runtime_receipt_from_evidence(evidence, node, conn=conn) is not None
     if not isinstance(evidence, dict) or not evidence:
         return False
@@ -6779,6 +6782,34 @@ def _receipt_evidence_validation_diagnostics(
         add("runtime_receipt_missing", "runtime_receipt")
         return errors
     schema = str(receipt.get("schema") or "")
+    if schema == STRUCTURE_CHECKPOINT_SCHEMA or receipt.get("kind") == "early_structure_assessment":
+        message = _runtime_structure_checkpoint_validation_error(evidence, node)
+        if message is None:
+            message = _checkpoint_protocol_repair_workspace_error(conn, node)
+        if message is not None:
+            add(
+                "checkpoint_semantic_validation_failed",
+                "runtime_receipt",
+                received={"schema": schema, "message": message},
+                allowed=[STRUCTURE_CHECKPOINT_SCHEMA],
+            )
+        return errors
+    if schema == COORDINATION_CHECKPOINT_SCHEMA or receipt.get("kind") in COORDINATION_CHECKPOINT_KINDS:
+        message = _coordination_checkpoint_validation_error(
+            receipt,
+            conn=conn,
+            node=node,
+        )
+        if message is None:
+            message = _checkpoint_protocol_repair_workspace_error(conn, node)
+        if message is not None:
+            add(
+                "checkpoint_semantic_validation_failed",
+                "runtime_receipt",
+                received={"schema": schema, "message": message},
+                allowed=[COORDINATION_CHECKPOINT_SCHEMA],
+            )
+        return errors
     if schema not in RUNTIME_RECEIPT_SCHEMAS:
         add(
             "unknown_receipt_schema",
@@ -6966,7 +6997,9 @@ def _receipt_evidence_validation_error(
             receipt.get("schema") == STRUCTURE_CHECKPOINT_SCHEMA
             or receipt.get("kind") == "early_structure_assessment"
         ):
-            return _runtime_structure_checkpoint_validation_error(evidence, node)
+            return _runtime_structure_checkpoint_validation_error(
+                evidence, node
+            ) or _checkpoint_protocol_repair_workspace_error(conn, node)
         if isinstance(receipt, dict) and (
             receipt.get("schema") == COORDINATION_CHECKPOINT_SCHEMA
             or receipt.get("kind") in COORDINATION_CHECKPOINT_KINDS
@@ -6975,7 +7008,7 @@ def _receipt_evidence_validation_error(
                 receipt,
                 conn=conn,
                 node=node,
-            )
+            ) or _checkpoint_protocol_repair_workspace_error(conn, node)
         diagnostics = _receipt_evidence_validation_diagnostics(
             evidence,
             node=node,
@@ -12206,6 +12239,135 @@ def _pending_receipt_protocol_repair(
     }
 
 
+def _runtime_workspace_identity_for_materialization(
+    conn: sqlite3.Connection,
+    node: dict[str, Any],
+    materialization: dict[str, Any],
+) -> dict[str, Any]:
+    metadata = _loads(materialization.get("metadata_json"))
+    workspace_info = metadata.get("runtime_workspace")
+    if not isinstance(workspace_info, dict) or not workspace_info.get("path"):
+        return {"mode": "no_workspace", "sha256": _stable_fingerprint(None)}
+    workspace = Path(str(workspace_info["path"])).expanduser().resolve()
+    if not workspace.is_dir():
+        raise RuntimeError("checkpoint protocol repair workspace is missing")
+    job = _job(conn, node["job_id"])
+    policy = _loads(job.get("metadata_json")).get("orchestration_policy")
+    policy = policy if isinstance(policy, dict) else {}
+    try:
+        head = _run_git_command(
+            workspace,
+            ["rev-parse", "HEAD"],
+            owner_policy=policy,
+        ).strip()
+        patch = _collect_runtime_workspace_patch(
+            workspace,
+            head,
+            owner_policy=policy,
+        )
+        return {
+            "mode": "git_patch",
+            "head": head,
+            "patch_sha256": hashlib.sha256(patch.encode("utf-8")).hexdigest(),
+            "changed_files": _runtime_workspace_changed_files(
+                workspace,
+                head,
+                owner_policy=policy,
+            ),
+        }
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        revision = _workspace_revision(str(workspace))
+        return {
+            "mode": "workspace_revision",
+            "revision": revision,
+            "sha256": _stable_fingerprint(revision),
+        }
+
+
+def _pending_checkpoint_protocol_repair(
+    conn: sqlite3.Connection,
+    node: dict[str, Any],
+    *,
+    board: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    prior = conn.execute(
+        """
+        SELECT * FROM node_materializations
+         WHERE node_id = ? AND status = 'receipt_invalid'
+         ORDER BY attempt DESC, created_at DESC LIMIT 1
+        """,
+        (node["id"],),
+    ).fetchone()
+    if prior is None:
+        return None
+    prior = dict(prior)
+    snapshot = kb.task_progress_snapshot(conn, str(prior["task_id"]), board=board)
+    original_checkpoint = (
+        (snapshot.evidence or {}).get("runtime_receipt")
+        if snapshot is not None and isinstance(snapshot.evidence, dict)
+        else None
+    )
+    if not isinstance(original_checkpoint, dict):
+        return None
+    checkpoint_schema = str(original_checkpoint.get("schema") or "")
+    if checkpoint_schema not in {
+        STRUCTURE_CHECKPOINT_SCHEMA,
+        COORDINATION_CHECKPOINT_SCHEMA,
+    }:
+        return None
+    prior_metadata = _loads(prior.get("metadata_json"))
+    recovery = prior_metadata.get("recovery")
+    recovery = recovery if isinstance(recovery, dict) else {}
+    return {
+        "schema": "runtime_checkpoint_protocol_repair_v1",
+        "source_materialization_id": prior["id"],
+        "source_materialization_attempt": int(prior["attempt"]),
+        "checkpoint_schema": checkpoint_schema,
+        "validation_error": recovery.get("validation_error"),
+        "validation_errors": recovery.get("validation_errors") or [],
+        "original_checkpoint": original_checkpoint,
+        "workspace_identity": _runtime_workspace_identity_for_materialization(
+            conn,
+            node,
+            prior,
+        ),
+        "metadata_only": True,
+    }
+
+
+def _checkpoint_protocol_repair_workspace_error(
+    conn: sqlite3.Connection,
+    node: dict[str, Any],
+) -> Optional[str]:
+    if not node.get("latest_task_id"):
+        return None
+    row = conn.execute(
+        "SELECT * FROM node_materializations WHERE node_id = ? AND task_id = ?",
+        (node["id"], node["latest_task_id"]),
+    ).fetchone()
+    if row is None:
+        return None
+    materialization = dict(row)
+    repair = _loads(materialization.get("metadata_json")).get(
+        "checkpoint_protocol_repair"
+    )
+    if not isinstance(repair, dict):
+        return None
+    try:
+        observed = _runtime_workspace_identity_for_materialization(
+            conn,
+            node,
+            materialization,
+        )
+    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        return "checkpoint protocol repair workspace identity failed: " + redact_sensitive_text(
+            str(exc)
+        )[:500]
+    if observed != repair.get("workspace_identity"):
+        return "checkpoint protocol repair modified workspace state"
+    return None
+
+
 def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], board: Optional[str] = None) -> Optional[str]:
     if node["state"] != "ready":
         return None
@@ -12328,10 +12490,13 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
             )
     except Exception:
         pass
-    receipt_protocol_repair = _pending_receipt_protocol_repair(
-        conn,
-        node,
-        board=board,
+    checkpoint_protocol_repair = _pending_checkpoint_protocol_repair(
+        conn, node, board=board
+    )
+    receipt_protocol_repair = (
+        None
+        if checkpoint_protocol_repair is not None
+        else _pending_receipt_protocol_repair(conn, node, board=board)
     )
     body = _worker_context(
         conn,
@@ -12340,6 +12505,7 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
         materialization_id,
         continuity=continuity,
         receipt_protocol_repair=receipt_protocol_repair,
+        checkpoint_protocol_repair=checkpoint_protocol_repair,
     )
     task_id = kb.create_task(
         conn,
@@ -12384,6 +12550,11 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
                         if receipt_protocol_repair is not None
                         else {}
                     ),
+                    **(
+                        {"checkpoint_protocol_repair": checkpoint_protocol_repair}
+                        if checkpoint_protocol_repair is not None
+                        else {}
+                    ),
                 }
             ),
         ),
@@ -12404,6 +12575,33 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
                     "source_attempt_artifact_id"
                 ],
                 "validation_errors": receipt_protocol_repair.get(
+                    "validation_errors"
+                )
+                or [],
+            },
+            node_id=node["id"],
+            task_id=task_id,
+            run_id=run_id,
+        )
+    if checkpoint_protocol_repair is not None:
+        _event(
+            conn,
+            job["id"],
+            "checkpoint_protocol_repair_requested",
+            {
+                "node_key": node["node_key"],
+                "materialization_id": materialization_id,
+                "attempt": attempt,
+                "source_materialization_id": checkpoint_protocol_repair[
+                    "source_materialization_id"
+                ],
+                "checkpoint_schema": checkpoint_protocol_repair[
+                    "checkpoint_schema"
+                ],
+                "validation_error": checkpoint_protocol_repair.get(
+                    "validation_error"
+                ),
+                "validation_errors": checkpoint_protocol_repair.get(
                     "validation_errors"
                 )
                 or [],
@@ -12553,6 +12751,7 @@ def _worker_context(
     *,
     continuity: Optional[dict[str, Any]] = None,
     receipt_protocol_repair: Optional[dict[str, Any]] = None,
+    checkpoint_protocol_repair: Optional[dict[str, Any]] = None,
 ) -> str:
     metadata = _loads(node.get("metadata_json"))
     job_metadata = _loads(job.get("metadata_json"))
@@ -12672,14 +12871,18 @@ def _worker_context(
         },
         "runtime_receipt_contract": {
             "schema": (
-                RUNTIME_CONTRIBUTION_RECEIPT_SCHEMA
+                checkpoint_protocol_repair["checkpoint_schema"]
+                if checkpoint_protocol_repair is not None
+                else RUNTIME_CONTRIBUTION_RECEIPT_SCHEMA
                 if metadata.get("non_authoritative_contribution")
                 else RUNTIME_INTEGRATION_RECEIPT_SCHEMA
                 if contribution_bundle
                 else RUNTIME_STANDARD_RECEIPT_SCHEMA
             ),
             "role": (
-                "contribution_child"
+                "checkpoint_protocol_repair"
+                if checkpoint_protocol_repair is not None
+                else "contribution_child"
                 if metadata.get("non_authoritative_contribution")
                 else "integration_owner"
                 if contribution_bundle
@@ -12709,6 +12912,12 @@ def _worker_context(
             key: value
             for key, value in receipt_protocol_repair.items()
             if key != "original_receipt"
+        }
+    if checkpoint_protocol_repair is not None:
+        footer["runtime_checkpoint_protocol_repair"] = {
+            key: value
+            for key, value in checkpoint_protocol_repair.items()
+            if key != "original_checkpoint"
         }
     if node.get("node_type") == "verification":
         try:
@@ -12925,6 +13134,10 @@ def _worker_context(
                 "satisfied, continue working normally. Deferred contract: "
                 f"{_json(deferred_decomposition)}\n\n"
             )
+    if checkpoint_protocol_repair is not None:
+        structure_assessment_boundary = ""
+        coordination_checkpoint_boundary = ""
+        event_driven_coordination_boundary = ""
     receipt_recovery_instruction = ""
     resume_from_materialization_id = (continuity or {}).get(
         "resume_from_materialization_id"
@@ -13013,6 +13226,23 @@ def _worker_context(
             f"Validation errors: {json.dumps(receipt_protocol_repair.get('validation_errors') or [], sort_keys=True)}\n"
             f"Original receipt: {json.dumps(receipt_protocol_repair.get('original_receipt'), sort_keys=True)}\n\n"
         )
+    if checkpoint_protocol_repair is not None:
+        checkpoint_schema = str(checkpoint_protocol_repair["checkpoint_schema"])
+        receipt_recovery_instruction = (
+            "Checkpoint protocol repair mode: this is metadata-only repair of a prior "
+            f"{checkpoint_schema}; it is not a new implementation or structure assessment. "
+            "Preserve the original recommendation, proposed nodes, milestone contract, "
+            "findings, candidates, and evidence except for the minimum field correction "
+            "required by the exact validation error. Do not inspect repository files, run "
+            "shell commands, modify the workspace, rerun tests, re-evaluate topology, or "
+            "emit a terminal receipt. Return only one corrected checkpoint using the same "
+            "checkpoint schema.\n"
+            f"Exact validation error: {checkpoint_protocol_repair.get('validation_error')}\n"
+            "Field diagnostics: "
+            f"{json.dumps(checkpoint_protocol_repair.get('validation_errors') or [], sort_keys=True)}\n"
+            "Original checkpoint: "
+            f"{json.dumps(checkpoint_protocol_repair.get('original_checkpoint'), sort_keys=True)}\n\n"
+        )
     return (
         f"# Runtime node\n\n"
         f"Objective: {job['objective']}\n\n"
@@ -13031,7 +13261,10 @@ def _worker_context(
         f"{phase4g8_worker_boundary}"
         f"{receipt_recovery_instruction}"
         + (
-            "Expected output: runtime_worker_structure_checkpoint_v1 only; this checkpoint is "
+            f"Expected output: {checkpoint_protocol_repair['checkpoint_schema']} only; "
+            "this is a metadata-only correction and remains non-terminal.\n\n"
+            if checkpoint_protocol_repair is not None
+            else "Expected output: runtime_worker_structure_checkpoint_v1 only; this checkpoint is "
             "non-terminal for the execution node and does not update the progress ledger.\n\n"
             if structure_assessment_boundary
             else (
@@ -13924,6 +14157,56 @@ def _verify_integrated_contributions(
     return result, violations
 
 
+def _record_checkpoint_protocol_repaired(
+    conn: sqlite3.Connection,
+    node: dict[str, Any],
+    materialization: dict[str, Any],
+    *,
+    checkpoint_event_id: int,
+) -> None:
+    current = conn.execute(
+        "SELECT metadata_json FROM node_materializations WHERE id = ?",
+        (materialization["id"],),
+    ).fetchone()
+    metadata = _loads(
+        current["metadata_json"] if current is not None else materialization.get("metadata_json")
+    )
+    repair = metadata.get("checkpoint_protocol_repair")
+    if not isinstance(repair, dict):
+        return
+    repair["verified_no_workspace_change"] = True
+    repair["verified_workspace_identity"] = _runtime_workspace_identity_for_materialization(
+        conn,
+        node,
+        materialization,
+    )
+    repair["checkpoint_event_id"] = int(checkpoint_event_id)
+    metadata["checkpoint_protocol_repair"] = repair
+    conn.execute(
+        "UPDATE node_materializations SET metadata_json = ? WHERE id = ?",
+        (_json(metadata), materialization["id"]),
+    )
+    _event(
+        conn,
+        node["job_id"],
+        "checkpoint_protocol_repaired",
+        {
+            "node_key": node["node_key"],
+            "materialization_id": materialization["id"],
+            "source_materialization_id": repair.get("source_materialization_id"),
+            "checkpoint_schema": repair.get("checkpoint_schema"),
+            "checkpoint_event_id": int(checkpoint_event_id),
+            "workspace_modified": False,
+            "implementation_reexecuted": False,
+        },
+        node_id=node["id"],
+        task_id=materialization.get("task_id"),
+        run_id=materialization.get("run_id"),
+        source="runtime_kernel",
+        source_event_id=int(checkpoint_event_id),
+    )
+
+
 def _ingest_runtime_structure_checkpoint(
     conn: sqlite3.Connection,
     node: dict[str, Any],
@@ -13938,7 +14221,18 @@ def _ingest_runtime_structure_checkpoint(
         "closed_loop_coordination",
     }:
         return False
-    if node.get("node_type") == "verification" or int(materialization["attempt"]) != 1:
+    materialization_metadata = _loads(materialization.get("metadata_json"))
+    checkpoint_repair = materialization_metadata.get("checkpoint_protocol_repair")
+    valid_repair_attempt = bool(
+        isinstance(checkpoint_repair, dict)
+        and checkpoint_repair.get("checkpoint_schema") == STRUCTURE_CHECKPOINT_SCHEMA
+        and int(checkpoint_repair.get("source_materialization_attempt") or 0) == 1
+    )
+    if node.get("node_type") == "verification" or (
+        int(materialization["attempt"]) != 1 and not valid_repair_attempt
+    ):
+        return False
+    if _checkpoint_protocol_repair_workspace_error(conn, node) is not None:
         return False
     prior = conn.execute(
         """
@@ -14006,6 +14300,12 @@ def _ingest_runtime_structure_checkpoint(
     conn.execute(
         "UPDATE node_materializations SET metadata_json = ? WHERE id = ?",
         (_json(mat_metadata), materialization["id"]),
+    )
+    _record_checkpoint_protocol_repaired(
+        conn,
+        node,
+        materialization,
+        checkpoint_event_id=event_id,
     )
     if checkpoint["recommendation"] == "defer_until_milestone":
         node_metadata = _loads(node.get("metadata_json"))
@@ -14382,6 +14682,8 @@ def _ingest_runtime_coordination_checkpoint(
         return False
     if node.get("node_type") == "verification":
         return False
+    if _checkpoint_protocol_repair_workspace_error(conn, node) is not None:
+        return False
     prior = conn.execute(
         """
         SELECT 1 FROM execution_events
@@ -14526,6 +14828,12 @@ def _ingest_runtime_coordination_checkpoint(
     conn.execute(
         "UPDATE node_materializations SET metadata_json = ? WHERE id = ?",
         (_json(mat_metadata), materialization["id"]),
+    )
+    _record_checkpoint_protocol_repaired(
+        conn,
+        node,
+        materialization,
+        checkpoint_event_id=event_id,
     )
     _activate_queued_runtime_directive(
         conn,

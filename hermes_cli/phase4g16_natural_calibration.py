@@ -42,6 +42,7 @@ class CalibrationConfig:
     worker_timeout_seconds: int = 600
     decision_timeout_seconds: int = 180
     cleanup_source: bool = True
+    reuse_baseline_manifest: Optional[Path] = None
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,25 @@ class CalibrationCase:
 
 def _archive_instance_id(config: CalibrationConfig, case: CalibrationCase) -> str:
     return f"{case.key}-{config.root.expanduser().resolve().name}"
+
+
+def _case_fixture_sha256(case: CalibrationCase) -> str:
+    payload = {
+        "key": case.key,
+        "title": case.title,
+        "kind": case.kind,
+        "objective": case.objective,
+        "goal_item_key": case.goal_item_key,
+        "goal_description": case.goal_description,
+        "files": case.files,
+        "generated_files": {
+            ".gitignore": "__pycache__/\n*.py[cod]\n.hermes-*\n",
+            "README.md": f"# {case.title}\n\n{case.objective}\n",
+        },
+    }
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
 
 
 def _cases() -> tuple[CalibrationCase, ...]:
@@ -698,9 +718,85 @@ def _run_baseline(
     }
 
 
+def _load_verified_reused_baseline(
+    manifest_path: Path,
+    case: CalibrationCase,
+) -> dict[str, Any]:
+    resolved_manifest = manifest_path.expanduser().resolve()
+    manifest = validation_artifacts.verify_artifact_manifest(resolved_manifest)
+    report_relative = "reports/case-report.json"
+    if report_relative not in {
+        str(item.get("path") or "") for item in manifest.get("files") or []
+    }:
+        raise RuntimeError("verified baseline archive does not contain case-report.json")
+    report_path = resolved_manifest.parent / report_relative
+    try:
+        prior_report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("verified baseline report is unreadable") from exc
+    if prior_report.get("schema") != CASE_REPORT_SCHEMA:
+        raise RuntimeError("verified baseline report schema mismatch")
+    prior_case = prior_report.get("case")
+    prior_case = prior_case if isinstance(prior_case, dict) else {}
+    expected_case = {
+        "key": case.key,
+        "title": case.title,
+        "kind": case.kind,
+        "objective": case.objective,
+    }
+    if any(prior_case.get(key) != value for key, value in expected_case.items()):
+        raise RuntimeError("verified baseline belongs to a different frozen case")
+    fixture_sha256 = _case_fixture_sha256(case)
+    prior_fixture_sha256 = str(prior_case.get("fixture_sha256") or "")
+    if prior_fixture_sha256 and prior_fixture_sha256 != fixture_sha256:
+        raise RuntimeError("verified baseline fixture hash mismatch")
+    baseline = prior_report.get("baseline")
+    if not isinstance(baseline, dict):
+        raise RuntimeError("verified baseline result is missing")
+    oracle = baseline.get("oracle")
+    if (
+        baseline.get("transport_status") != "completed"
+        or not isinstance(oracle, dict)
+        or oracle.get("passed") is not True
+    ):
+        raise RuntimeError("verified baseline did not complete with a passing oracle")
+    reused = json.loads(json.dumps(baseline))
+    reused["reuse_provenance"] = {
+        "status": "verified_archive_reused",
+        "manifest_path": str(resolved_manifest),
+        "manifest_sha256": hashlib.sha256(resolved_manifest.read_bytes()).hexdigest(),
+        "source_run_root": manifest.get("source_run_root"),
+        "source_case_status": prior_report.get("status"),
+        "fixture_sha256": fixture_sha256,
+        "fixture_identity_mode": (
+            "fixture_sha256"
+            if prior_fixture_sha256
+            else "legacy_exact_case_contract"
+        ),
+    }
+    return reused
+
+
 def _changed_files(workspace: Path) -> list[str]:
-    output = _git(workspace, "status", "--short", "--untracked-files=all")
-    return sorted(line[3:].strip() for line in output.splitlines() if len(line) >= 4)
+    completed = subprocess.run(
+        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        cwd=workspace,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    entries = completed.stdout.decode("utf-8", errors="surrogateescape").split("\0")
+    changed: list[str] = []
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        if len(entry) < 4:
+            index += 1
+            continue
+        status = entry[:2]
+        changed.append(entry[3:].replace("\\", "/"))
+        index += 2 if "R" in status or "C" in status else 1
+    return sorted(set(changed))
 
 
 def _create_runtime_job(
@@ -767,12 +863,64 @@ def _runtime_evidence(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
         )
         or 0
     ) + sum(len(item.get("candidate_refs") or []) for item in actions)
+    invalid_structural_checkpoints: list[dict[str, Any]] = []
+    for row in conn.execute(
+        """
+        SELECT materialization.*, node.node_key
+          FROM node_materializations materialization
+          JOIN execution_nodes node ON node.id = materialization.node_id
+         WHERE materialization.job_id = ?
+           AND materialization.status = 'receipt_invalid'
+         ORDER BY materialization.attempt, materialization.created_at
+        """,
+        (job_id,),
+    ).fetchall():
+        snapshot = kb.task_progress_snapshot(conn, str(row["task_id"]))
+        receipt = (
+            (snapshot.evidence or {}).get("runtime_receipt")
+            if snapshot is not None and isinstance(snapshot.evidence, dict)
+            else None
+        )
+        if not isinstance(receipt, dict) or receipt.get("schema") not in {
+            rk.STRUCTURE_CHECKPOINT_SCHEMA,
+            rk.COORDINATION_CHECKPOINT_SCHEMA,
+        }:
+            continue
+        materialization_metadata = json.loads(row["metadata_json"] or "{}")
+        recovery = materialization_metadata.get("recovery")
+        recovery = recovery if isinstance(recovery, dict) else {}
+        event = conn.execute(
+            """
+            SELECT id FROM execution_events
+             WHERE job_id = ? AND event_type = 'receipt_invalid'
+               AND json_extract(payload_json, '$.materialization_id') = ?
+             ORDER BY id DESC LIMIT 1
+            """,
+            (job_id, row["id"]),
+        ).fetchone()
+        invalid_structural_checkpoints.append(
+            {
+                "materialization_id": row["id"],
+                "attempt": int(row["attempt"]),
+                "node_key": row["node_key"],
+                "event_id": int(event["id"]) if event is not None else None,
+                "checkpoint_schema": receipt.get("schema"),
+                "recommendation": receipt.get("recommendation"),
+                "proposed_node_count": len(receipt.get("proposed_nodes") or []),
+                "responsibility_candidate_count": len(
+                    receipt.get("responsibility_candidates") or []
+                ),
+                "validation_error": recovery.get("validation_error"),
+                "validation_errors": recovery.get("validation_errors") or [],
+            }
+        )
     return {
         "status": rk.status_runtime_job(conn, job_id),
         "consistency": rk.check_runtime_consistency(conn, job_id, write_events=False),
         "orchestration": orchestration,
         "nodes": nodes,
         "candidate_count": candidate_count,
+        "invalid_structural_checkpoints": invalid_structural_checkpoints,
     }
 
 
@@ -826,14 +974,35 @@ def _coordination_observations(
     coordination = orchestration.get("coordination") or {}
     actions = coordination.get("actions") or []
     missed: list[str] = []
+    protocol_failures: list[str] = []
     calibration_gaps: list[str] = []
     overhead: list[str] = []
     if case.kind == "durable_boundary_medium" and int(treatment.get("candidate_count") or 0) == 0:
-        structure_checkpoint = orchestration.get("structure_checkpoint") or {}
-        event_id = structure_checkpoint.get("event_id")
-        if event_id is not None:
-            calibration_gaps.append(f"execution_event:{event_id}")
-        calibration_gaps.append(f"report:{case.key}:candidate-not-observed")
+        invalid_candidates = [
+            item
+            for item in treatment.get("invalid_structural_checkpoints") or []
+            if int(item.get("proposed_node_count") or 0)
+            + int(item.get("responsibility_candidate_count") or 0)
+            > 0
+        ]
+        if invalid_candidates:
+            for item in invalid_candidates:
+                if item.get("event_id") is not None:
+                    protocol_failures.append(
+                        f"execution_event:{int(item['event_id'])}"
+                    )
+                protocol_failures.append(
+                    f"materialization:{item['materialization_id']}"
+                )
+            protocol_failures.append(
+                f"report:{case.key}:natural-candidate-checkpoint-rejected"
+            )
+        else:
+            structure_checkpoint = orchestration.get("structure_checkpoint") or {}
+            event_id = structure_checkpoint.get("event_id")
+            if event_id is not None:
+                calibration_gaps.append(f"execution_event:{event_id}")
+            calibration_gaps.append(f"report:{case.key}:candidate-not-observed")
     if (
         case.kind == "coherent_negative_control"
         and actions
@@ -843,6 +1012,7 @@ def _coordination_observations(
         overhead.append(f"report:{case.key}:unnecessary-action-cost")
     return {
         "missed_coordination_evidence_refs": missed,
+        "coordination_protocol_failure_evidence_refs": protocol_failures,
         "calibration_fixture_gap_evidence_refs": calibration_gaps,
         "coordination_overhead_evidence_refs": overhead,
     }
@@ -904,6 +1074,7 @@ def _render_trace(report: dict[str, Any]) -> str:
         "",
         f"- coherent baseline：{'通过' if baseline['oracle']['passed'] else '失败'}；"
         f"耗时 {baseline['wall_time_seconds']} 秒；修改 {len(baseline['changed_files'])} 个文件。",
+        f"- baseline 来源：{'已验证历史 archive（未重新调用模型）' if baseline.get('reuse_provenance') else '本次 fresh coherent worker'}。",
         f"- Runtime treatment：{'通过' if treatment['oracle']['passed'] else '失败'}；"
         f"job 状态 `{treatment['status']['job']['state']}`；"
         f"materialization {treatment['smoke']['materialization_attempt_count']} 次。",
@@ -925,6 +1096,14 @@ def _render_trace(report: dict[str, Any]) -> str:
             f"- action `{action['id']}`：`{action['classification']}` -> "
             f"`{action['route']}` -> `{action['status']}`；targets="
             f"{', '.join(action.get('affected_node_keys') or []) or '-'}。"
+        )
+    for invalid in treatment.get("invalid_structural_checkpoints") or []:
+        lines.append(
+            f"- invalid structural checkpoint：node `{invalid['node_key']}`，"
+            f"schema `{invalid['checkpoint_schema']}`，recommendation "
+            f"`{invalid.get('recommendation') or '-'}`，proposed "
+            f"{invalid.get('proposed_node_count', 0)}；错误："
+            f"{invalid.get('validation_error') or 'unknown'}。"
         )
     lines.extend(
         [
@@ -959,6 +1138,16 @@ def _case_conclusion(
         "quality_non_regression",
         "runtime_consistency_passed",
     )
+    if (
+        "coordination_protocol_failure" in finding_categories
+        and all(acceptance.get(key) is True for key in quality_keys)
+    ):
+        return (
+            "该 paired case 的任务质量、质量非回退和 Runtime consistency 均通过，但 worker "
+            "已经产生的自然结构证据在 checkpoint 校验/修复路径中丢失，随后没有形成预期的 "
+            "durable graph action。该结果属于 Runtime orchestration protocol failure，不能归类为"
+            "校准夹具不足，也不能证明系统级 orchestra 已产生正价值。"
+        )
     if (
         "calibration_fixture_gap" in finding_categories
         and all(acceptance.get(key) is True for key in quality_keys)
@@ -1044,13 +1233,17 @@ def run_case(config: CalibrationConfig, case: CalibrationCase) -> dict[str, Any]
         base_url=str(source["explicit_base_url"]),
     )
     (case_root / "codex-homes").mkdir()
-    baseline = _run_baseline(
-        case,
-        baseline_workspace,
-        baseline_home,
-        model=model,
-        timeout_seconds=config.worker_timeout_seconds,
-        reports=reports,
+    baseline = (
+        _load_verified_reused_baseline(config.reuse_baseline_manifest, case)
+        if config.reuse_baseline_manifest is not None
+        else _run_baseline(
+            case,
+            baseline_workspace,
+            baseline_home,
+            model=model,
+            timeout_seconds=config.worker_timeout_seconds,
+            reports=reports,
+        )
     )
 
     hermes_home = case_root / "hermes-home"
@@ -1125,7 +1318,11 @@ def run_case(config: CalibrationConfig, case: CalibrationCase) -> dict[str, Any]
                 run_id=config.root.expanduser().resolve().name,
                 source_db_ref="hermes-home/kanban.db",
                 quality=quality,
-                baseline_bundle_ref=f"reports/{case.key}-baseline",
+                baseline_bundle_ref=(
+                    f"verified-manifest:{config.reuse_baseline_manifest.expanduser().resolve()}"
+                    if config.reuse_baseline_manifest is not None
+                    else f"reports/{case.key}-baseline"
+                ),
             )
         passed = all(acceptance.values())
         finding_categories = [
@@ -1139,6 +1336,7 @@ def run_case(config: CalibrationConfig, case: CalibrationCase) -> dict[str, Any]
                 "kind": case.kind,
                 "objective": case.objective,
                 "base_revision": base_revision,
+                "fixture_sha256": _case_fixture_sha256(case),
             },
             "model": model,
             "source_summary": source["summary"],
@@ -1359,6 +1557,8 @@ def run_campaign(
     )
     if not selected_cases:
         raise ValueError(f"unknown calibration case: {case_key}")
+    if config.reuse_baseline_manifest is not None and case_key is None:
+        raise ValueError("baseline reuse requires selecting exactly one calibration case")
     if root.exists() and any(root.iterdir()):
         raise ValueError(f"campaign root must be empty: {root}")
     root.mkdir(parents=True, exist_ok=True)
@@ -1412,6 +1612,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--worker-timeout-seconds", type=int, default=600)
     parser.add_argument("--decision-timeout-seconds", type=int, default=180)
     parser.add_argument(
+        "--reuse-baseline-manifest",
+        help="复用已校验 archive 中同一冻结 case 的 coherent baseline，仅运行 treatment",
+    )
+    parser.add_argument(
         "--case",
         choices=[case.key for case in _cases()],
         help="只运行一个冻结 case；缺省时按顺序运行全部 case",
@@ -1427,6 +1631,11 @@ def main(argv: Optional[list[str]] = None) -> int:
             worker_timeout_seconds=args.worker_timeout_seconds,
             decision_timeout_seconds=args.decision_timeout_seconds,
             cleanup_source=not args.keep_source,
+            reuse_baseline_manifest=(
+                Path(args.reuse_baseline_manifest)
+                if args.reuse_baseline_manifest
+                else None
+            ),
         ),
         case_key=args.case,
     )

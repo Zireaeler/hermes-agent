@@ -4259,6 +4259,293 @@ def test_early_structure_checkpoint_rejects_workspace_mutation(conn):
     )
 
 
+def test_invalid_structure_checkpoint_is_repaired_in_same_session_without_reimplementation(
+    conn,
+    tmp_path,
+):
+    workspace = tmp_path / "checkpoint-repair"
+    (workspace / "src").mkdir(parents=True)
+    (workspace / "tests").mkdir()
+    (workspace / "src" / "core.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (workspace / "tests" / "test_core.py").write_text(
+        "import unittest\n\nclass CoreTest(unittest.TestCase):\n    pass\n",
+        encoding="utf-8",
+    )
+    _git(workspace, "init")
+    _git(workspace, "config", "user.email", "runtime@example.invalid")
+    _git(workspace, "config", "user.name", "Runtime Test")
+    _git(workspace, "add", ".")
+    _git(workspace, "commit", "-m", "base")
+    job_id = rk.create_runtime_job(
+        conn,
+        _root_task(conn),
+        "defer two extensions until the shared contract is verified",
+        workspace_path=str(workspace),
+        goal_items=[{
+            "item_key": "runtime-result",
+            "description": "integrated result exists",
+            "required": True,
+            "verifier_required": False,
+        }],
+        initial_assignee="codex-runtime",
+        initialization_mode="fixture",
+        runtime_metadata={
+            "orchestration_policy": {
+                "schema": rk.RUNTIME_ORCHESTRATION_POLICY_SCHEMA,
+                "mode": "closed_loop_coordination",
+                "enabled": True,
+                "worker_lane": "codex-runtime",
+                "max_child_nodes": 3,
+            },
+        },
+    )
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = dict(_node(conn, job_id, "understand-scope"))
+    first_materialization = conn.execute(
+        "SELECT * FROM node_materializations WHERE node_id = ?",
+        (node["id"],),
+    ).fetchone()
+    session_id = "019f0000-0000-7000-8000-000000000099"
+    kb.record_task_event(
+        conn,
+        node["latest_task_id"],
+        "worker_backend_session_started",
+        {
+            "worker_lane": "codex-runtime",
+            "worker_kind": "codex_cli",
+            "backend_session_id": session_id,
+            "execution_mode": "fresh",
+        },
+    )
+    rk.sync_runtime_backend_sessions(conn, job_id)
+    proposed_nodes = [
+        {
+            "node_key": key,
+            "outcome": f"Implement {key}",
+            "acceptance_criteria": [f"{key} tests pass"],
+            "declared_write_scope": [scope],
+            "requested_capabilities": ["workspace_write"],
+        }
+        for key, scope in (
+            ("legacy-child", "src/legacy/**"),
+            ("audit-child", "src/audit/**"),
+        )
+    ]
+    invalid = {
+        "schema": rk.STRUCTURE_CHECKPOINT_SCHEMA,
+        "kind": "early_structure_assessment",
+        "recommendation": "defer_until_milestone",
+        "summary": "Two extensions depend on a shared core contract.",
+        "inspected_scope": ["src", "tests"],
+        "repository_facts": [{
+            "fact": "Both extensions consume the core contract.",
+            "evidence_refs": ["workspace:path:src/core.py"],
+        }],
+        "proposed_nodes": proposed_nodes,
+        "integration_owner_node_key": "understand-scope",
+        "shared_integration_scope": ["src/core.py"],
+        "milestone_contract": {
+            "milestone_key": "core-contract-verified",
+            "summary": "Core contract and focused tests are verified.",
+            "artifact_scope": ["src/core.py", "tests/test_core.py"],
+            "verification_criteria": ["focused core tests pass"],
+        },
+        "risks": [],
+        "worker_session_should_resume": True,
+        "changed_files": [],
+    }
+    _complete_node(
+        conn,
+        node,
+        {
+            "worker_lane": {"name": "codex-runtime", "kind": "codex_cli"},
+            "runtime_receipt": invalid,
+        },
+    )
+
+    reconciled = rk.reconcile_runtime_materializations(conn, job_id)
+    assert reconciled["events"] == ["receipt_invalid"]
+    invalid_event = conn.execute(
+        "SELECT payload_json FROM execution_events WHERE job_id = ? "
+        "AND event_type = 'receipt_invalid' ORDER BY id DESC LIMIT 1",
+        (job_id,),
+    ).fetchone()
+    invalid_payload = json.loads(invalid_event["payload_json"])
+    assert invalid_payload["validation_error"] == (
+        "milestone_contract artifact_scope must be within shared_integration_scope"
+    )
+    assert invalid_payload["validation_errors"][0]["code"] == (
+        "checkpoint_semantic_validation_failed"
+    )
+
+    repair_task_id = rk.materialize_runtime_node(
+        conn,
+        dict(_node(conn, job_id, "understand-scope")),
+    )
+    repair_task = kb.get_task(conn, repair_task_id)
+    assert "Checkpoint protocol repair mode:" in repair_task.body
+    assert invalid_payload["validation_error"] in repair_task.body
+    assert '"recommendation": "defer_until_milestone"' in repair_task.body
+    assert "emit a terminal receipt" in repair_task.body
+    assert "Emit a new terminal runtime_worker_receipt_v1" not in repair_task.body
+    repair_materialization = conn.execute(
+        "SELECT * FROM node_materializations WHERE task_id = ?",
+        (repair_task_id,),
+    ).fetchone()
+    repair_metadata = json.loads(repair_materialization["metadata_json"])
+    assert repair_metadata["execution_continuity"]["mode"] == "resume"
+    assert repair_metadata["execution_continuity"]["resume_session_id"] == session_id
+    assert repair_metadata["checkpoint_protocol_repair"]["source_materialization_id"] == (
+        first_materialization["id"]
+    )
+
+    repaired = {
+        **invalid,
+        "shared_integration_scope": ["src/core.py", "tests/test_core.py"],
+    }
+    repaired_node = dict(_node(conn, job_id, "understand-scope"))
+    _complete_node(
+        conn,
+        repaired_node,
+        {
+            "worker_lane": {"name": "codex-runtime", "kind": "codex_cli"},
+            "runtime_receipt": repaired,
+        },
+    )
+    assert rk.ingest_runtime_node_evidence(conn, repaired_node["id"])
+
+    refreshed = _node(conn, job_id, "understand-scope")
+    deferred = json.loads(refreshed["metadata_json"])["deferred_decomposition"]
+    assert deferred["status"] == "waiting_milestone"
+    assert [item["node_key"] for item in deferred["proposed_nodes"]] == [
+        "legacy-child",
+        "audit-child",
+    ]
+    assert conn.execute(
+        "SELECT COUNT(*) FROM execution_events WHERE job_id = ? "
+        "AND event_type = 'checkpoint_protocol_repaired'",
+        (job_id,),
+    ).fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM execution_nodes WHERE job_id = ?",
+        (job_id,),
+    ).fetchone()[0] == 1
+
+
+def test_invalid_coordination_checkpoint_repair_preserves_workspace_patch(
+    conn,
+    tmp_path,
+):
+    workspace = tmp_path / "coordination-repair"
+    (workspace / "src").mkdir(parents=True)
+    source = workspace / "src" / "core.py"
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    _git(workspace, "init")
+    _git(workspace, "config", "user.email", "runtime@example.invalid")
+    _git(workspace, "config", "user.name", "Runtime Test")
+    _git(workspace, "add", ".")
+    _git(workspace, "commit", "-m", "base")
+    job_id = rk.create_runtime_job(
+        conn,
+        _root_task(conn),
+        "publish one real coordination checkpoint",
+        workspace_path=str(workspace),
+        goal_items=[{
+            "item_key": "runtime-result",
+            "description": "runtime result exists",
+            "required": True,
+            "verifier_required": False,
+        }],
+        initial_assignee="codex-runtime",
+        initialization_mode="fixture",
+        runtime_metadata={
+            "orchestration_policy": {
+                "schema": rk.RUNTIME_ORCHESTRATION_POLICY_SCHEMA,
+                "mode": "closed_loop_coordination",
+                "enabled": True,
+                "worker_lane": "codex-runtime",
+                "max_child_nodes": 3,
+            },
+        },
+    )
+    node = dict(_node(conn, job_id, "understand-scope"))
+    metadata = json.loads(node["metadata_json"])
+    metadata["coordination_checkpoint_required"] = True
+    conn.execute(
+        "UPDATE execution_nodes SET metadata_json = ? WHERE id = ?",
+        (json.dumps(metadata), node["id"]),
+    )
+    rk._event(
+        conn,
+        job_id,
+        "worker_structure_checkpointed",
+        {"checkpoint": {"recommendation": "continue_single_node"}},
+        node_id=node["id"],
+    )
+    rk.advance_runtime_job(conn, job_id, create_tasks=True)
+    node = dict(_node(conn, job_id, "understand-scope"))
+    source.write_text("VALUE = 2\n", encoding="utf-8")
+    invalid = {
+        "schema": rk.COORDINATION_CHECKPOINT_SCHEMA,
+        "kind": "shared_contract_changed",
+        "summary": "",
+        "phase": "implementation",
+        "completed_scope": ["updated core contract"],
+        "remaining_scope": ["finish integration"],
+        "findings": [{
+            "finding_key": "core-contract-changed",
+            "type": "shared_contract_changed",
+            "summary": "Core contract changed.",
+            "affected_node_keys": ["understand-scope"],
+            "evidence_refs": ["workspace:path:src/core.py"],
+        }],
+        "next_intent": "finish integration",
+        "changed_files": ["src/core.py"],
+        "consumed_directive_ids": [],
+        "responsibility_candidates": [],
+        "worker_session_should_resume": True,
+    }
+    _complete_node(
+        conn,
+        node,
+        {
+            "worker_lane": {"name": "codex-runtime", "kind": "codex_cli"},
+            "runtime_receipt": invalid,
+        },
+    )
+    assert rk.reconcile_runtime_materializations(conn, job_id)["events"] == [
+        "receipt_invalid"
+    ]
+
+    repair_task_id = rk.materialize_runtime_node(
+        conn,
+        dict(_node(conn, job_id, "understand-scope")),
+    )
+    repair_task = kb.get_task(conn, repair_task_id)
+    assert "coordination checkpoint requires summary" in repair_task.body
+    assert "runtime_worker_coordination_checkpoint_v1 only" in repair_task.body
+    assert "Emit a new terminal runtime_worker_receipt_v1" not in repair_task.body
+
+    repaired_node = dict(_node(conn, job_id, "understand-scope"))
+    repaired = {**invalid, "summary": "Core contract changed and integration remains."}
+    _complete_node(
+        conn,
+        repaired_node,
+        {
+            "worker_lane": {"name": "codex-runtime", "kind": "codex_cli"},
+            "runtime_receipt": repaired,
+        },
+    )
+    assert rk.ingest_runtime_node_evidence(conn, repaired_node["id"])
+    assert source.read_text(encoding="utf-8") == "VALUE = 2\n"
+    repair_event = conn.execute(
+        "SELECT payload_json FROM execution_events WHERE job_id = ? "
+        "AND event_type = 'checkpoint_protocol_repaired' ORDER BY id DESC LIMIT 1",
+        (job_id,),
+    ).fetchone()
+    assert json.loads(repair_event["payload_json"])["workspace_modified"] is False
+
+
 def test_early_structure_expansion_requires_checkpoint_backed_child_dependencies(conn):
     job_id = _job(conn, verifier_required=False)
     primary = _node(conn, job_id, "understand-scope")

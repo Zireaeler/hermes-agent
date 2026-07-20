@@ -288,6 +288,25 @@ def _findings(
                 "candidate_created",
             )
         )
+    protocol_failure_refs = [
+        str(value)
+        for value in observations.get("coordination_protocol_failure_evidence_refs")
+        or []
+        if str(value).strip()
+    ]
+    if protocol_failure_refs:
+        findings.append(
+            _finding(
+                job_id,
+                "coordination_protocol_failure",
+                "high",
+                "Worker 已产生自然结构证据，但 checkpoint 协议失败使 Runtime 丢失了该决策。",
+                "结构化 checkpoint 的校验或同线程修复路径未能保留原始 candidate，"
+                "导致错误恢复、重复实现或未发生预期 graph action。",
+                protocol_failure_refs,
+                "candidate_created",
+            )
+        )
     calibration_gap_refs = [
         str(value)
         for value in observations.get("calibration_fixture_gap_evidence_refs") or []

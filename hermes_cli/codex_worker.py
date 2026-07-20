@@ -998,9 +998,16 @@ def _prepare_runtime_output_schema(
 ) -> Optional[str]:
     """Persist the structured final-response contract outside the workspace."""
 
-    is_structure_assessment = "Early structure assessment mode:" in task_context
+    is_checkpoint_protocol_repair = "Checkpoint protocol repair mode:" in task_context
+    is_structure_assessment = (
+        "Early structure assessment mode:" in task_context
+        or is_checkpoint_protocol_repair
+        and "runtime_worker_structure_checkpoint_v1" in task_context
+    )
     is_coordination_checkpoint = (
         "Runtime coordination checkpoint mode:" in task_context
+        or is_checkpoint_protocol_repair
+        and "runtime_worker_coordination_checkpoint_v1" in task_context
     )
     is_event_driven_coordination = (
         "Runtime event-driven coordination mode:" in task_context
@@ -2409,9 +2416,16 @@ def _finish_blocked(
 def build_codex_prompt(task_context: str, *, lane: str, model: Optional[str]) -> str:
     is_review_followup = "## Required review output" in task_context
     is_test_followup = "## Required test output" in task_context
-    is_structure_assessment = "Early structure assessment mode:" in task_context
+    is_checkpoint_protocol_repair = "Checkpoint protocol repair mode:" in task_context
+    is_structure_assessment = (
+        "Early structure assessment mode:" in task_context
+        or is_checkpoint_protocol_repair
+        and "runtime_worker_structure_checkpoint_v1" in task_context
+    )
     is_coordination_checkpoint = (
         "Runtime coordination checkpoint mode:" in task_context
+        or is_checkpoint_protocol_repair
+        and "runtime_worker_coordination_checkpoint_v1" in task_context
     )
     is_event_driven_coordination = (
         "Runtime event-driven coordination mode:" in task_context
@@ -2425,7 +2439,14 @@ def build_codex_prompt(task_context: str, *, lane: str, model: Optional[str]) ->
         if is_runtime_integration
         else "runtime_worker_receipt_v1"
     )
-    if is_structure_assessment:
+    if is_checkpoint_protocol_repair:
+        role_lines = (
+            f"You are Codex CLI running as Hermes Kanban protocol repair lane `{lane}`.\n"
+            "Correct only the supplied checkpoint metadata in the existing session. Do not "
+            "inspect or modify the workspace, run commands, retest, reimplement, or reconsider "
+            "the prior structural decision. Return the corrected checkpoint only."
+        )
+    elif is_structure_assessment:
         role_lines = (
             f"You are Codex CLI running as Hermes Kanban assessment lane `{lane}`.\n"
             "Inspect the assigned repository and goal, but do not modify source or tests. "
