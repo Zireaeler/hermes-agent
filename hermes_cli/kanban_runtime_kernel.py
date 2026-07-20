@@ -28,6 +28,7 @@ PATCH_SCHEMA = "runtime_graph_patch_v1"
 STRUCTURE_CHECKPOINT_SCHEMA = "runtime_worker_structure_checkpoint_v1"
 COORDINATION_CHECKPOINT_SCHEMA = "runtime_worker_coordination_checkpoint_v1"
 RUNTIME_NODE_DIRECTIVE_SCHEMA = "runtime_node_directive_v1"
+RUNTIME_LIVE_DIRECTIVE_DELIVERY_SCHEMA = "runtime_live_directive_delivery_v1"
 EVALUATOR_FAILURE_BUNDLE_SCHEMA = "runtime_evaluator_failure_bundle_v1"
 OFFICIAL_EVALUATOR_RESULT_SCHEMA = "hermes_phase4g8_evaluator_result_v1"
 RUNTIME_ORCHESTRATION_POLICY_SCHEMA = "runtime_orchestration_policy_v1"
@@ -147,6 +148,13 @@ COORDINATION_DIRECTIVE_ACTIONS = {
     "revise_contract",
     "narrow_scope",
     "request_partial_contribution",
+    "stop_obsolete_work",
+}
+LIVE_COORDINATION_DIRECTIVE_ACTIONS = {
+    "continue",
+    "narrow_scope",
+    "request_partial_contribution",
+    "stop_obsolete_work",
 }
 COORDINATION_DIRECTIVE_STATES = {
     "queued",
@@ -656,6 +664,46 @@ def ensure_runtime_schema(conn: sqlite3.Connection) -> None:
             acknowledged_materialization_id TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS runtime_live_directive_deliveries (
+            id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL,
+            directive_id TEXT NOT NULL,
+            target_node_id TEXT NOT NULL,
+            materialization_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            run_id INTEGER,
+            transport_kind TEXT NOT NULL,
+            thread_id TEXT,
+            turn_id TEXT,
+            status TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            request_ref TEXT,
+            response_ref TEXT,
+            error_code TEXT,
+            error_message TEXT,
+            created_at INTEGER NOT NULL,
+            attempted_at INTEGER,
+            accepted_at INTEGER,
+            acknowledged_at INTEGER,
+            updated_at INTEGER NOT NULL,
+            UNIQUE(directive_id, materialization_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS runtime_active_worker_turns (
+            materialization_id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL,
+            target_node_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            run_id INTEGER,
+            transport_kind TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
+            turn_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            registered_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            completed_at INTEGER
+        );
+
         CREATE TABLE IF NOT EXISTS kernel_decisions (
             id TEXT PRIMARY KEY,
             job_id TEXT NOT NULL,
@@ -800,6 +848,8 @@ def ensure_runtime_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_backend_worker_sessions_job ON backend_worker_sessions(job_id, node_id, updated_at);
         CREATE INDEX IF NOT EXISTS idx_runtime_directives_target_status
             ON runtime_node_directives(job_id, target_node_id, status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_runtime_live_delivery_task_status
+            ON runtime_live_directive_deliveries(task_id, run_id, status, created_at);
         DELETE FROM progress_ledger
          WHERE evidence_ref IS NOT NULL
            AND rowid NOT IN (
@@ -3677,6 +3727,8 @@ def _apply_op(
                     op["target_checkpoint_event_id"]
                 ),
             )
+        elif target["state"] == "running":
+            _queue_runtime_live_delivery(conn, directive_id)
     elif name == "supersede_directive":
         directive_id = str(op["directive_id"])
         now = _now()
@@ -5504,6 +5556,372 @@ def _node_directives(
     ]
 
 
+def _latest_running_materialization(
+    conn: sqlite3.Connection,
+    node_id: str,
+) -> Optional[dict[str, Any]]:
+    row = conn.execute(
+        """
+        SELECT * FROM node_materializations
+         WHERE node_id = ? AND status = 'running'
+         ORDER BY attempt DESC, created_at DESC LIMIT 1
+        """,
+        (node_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def _queue_runtime_live_delivery(
+    conn: sqlite3.Connection,
+    directive_id: str,
+) -> Optional[str]:
+    """Bind a live-safe directive to the target's current materialization."""
+
+    directive_row = conn.execute(
+        "SELECT * FROM runtime_node_directives WHERE id = ? AND status = 'queued'",
+        (directive_id,),
+    ).fetchone()
+    if directive_row is None:
+        return None
+    directive = dict(directive_row)
+    if str(directive["action"]) not in LIVE_COORDINATION_DIRECTIVE_ACTIONS:
+        return None
+    materialization = _latest_running_materialization(
+        conn,
+        str(directive["target_node_id"]),
+    )
+    if materialization is None or not materialization.get("task_id"):
+        return None
+    metadata = _loads(materialization.get("metadata_json"))
+    transport = str(metadata.get("worker_transport") or "codex_exec")
+    if transport != "codex_app_server":
+        return None
+    active_turn_row = conn.execute(
+        """
+        SELECT * FROM runtime_active_worker_turns
+         WHERE materialization_id = ? AND status = 'active'
+        """,
+        (materialization["id"],),
+    ).fetchone()
+    active_turn = dict(active_turn_row) if active_turn_row is not None else {}
+    delivery_id = _id("rld")
+    now = _now()
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO runtime_live_directive_deliveries (
+            id, job_id, directive_id, target_node_id, materialization_id,
+            task_id, run_id, transport_kind, thread_id, turn_id,
+            status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+        """,
+        (
+            delivery_id,
+            directive["job_id"],
+            directive_id,
+            directive["target_node_id"],
+            materialization["id"],
+            materialization["task_id"],
+            materialization.get("run_id"),
+            transport,
+            active_turn.get("thread_id"),
+            active_turn.get("turn_id"),
+            now,
+            now,
+        ),
+    )
+    row = conn.execute(
+        """
+        SELECT id FROM runtime_live_directive_deliveries
+         WHERE directive_id = ? AND materialization_id = ?
+        """,
+        (directive_id, materialization["id"]),
+    ).fetchone()
+    if row is None:
+        return None
+    persisted_id = str(row["id"])
+    _event(
+        conn,
+        str(directive["job_id"]),
+        "runtime_live_directive_queued",
+        {
+            "schema": RUNTIME_LIVE_DIRECTIVE_DELIVERY_SCHEMA,
+            "delivery_id": persisted_id,
+            "directive_id": directive_id,
+            "materialization_id": materialization["id"],
+            "transport_kind": transport,
+        },
+        node_id=directive["target_node_id"],
+        task_id=materialization["task_id"],
+        run_id=materialization.get("run_id"),
+        source_event_id=int(directive["source_checkpoint_event_id"]),
+    )
+    return persisted_id
+
+
+def register_runtime_live_turn(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    run_id: Optional[int],
+    thread_id: str,
+    turn_id: str,
+) -> dict[str, Any]:
+    """Register the trusted wrapper's active turn and return pending deliveries."""
+
+    ensure_runtime_schema(conn)
+    materialization_row = conn.execute(
+        """
+        SELECT * FROM node_materializations
+         WHERE task_id = ? AND status = 'running'
+         ORDER BY attempt DESC LIMIT 1
+        """,
+        (task_id,),
+    ).fetchone()
+    if materialization_row is None:
+        return {"registered": False, "deliveries": []}
+    materialization = dict(materialization_row)
+    if run_id is not None and materialization.get("run_id") not in {None, run_id}:
+        return {"registered": False, "deliveries": []}
+    now = _now()
+    conn.execute(
+        """
+        INSERT INTO runtime_active_worker_turns (
+            materialization_id, job_id, target_node_id, task_id, run_id,
+            transport_kind, thread_id, turn_id, status,
+            registered_at, updated_at, completed_at
+        ) VALUES (?, ?, ?, ?, ?, 'codex_app_server', ?, ?, 'active', ?, ?, NULL)
+        ON CONFLICT(materialization_id) DO UPDATE SET
+            run_id = excluded.run_id,
+            transport_kind = excluded.transport_kind,
+            thread_id = excluded.thread_id,
+            turn_id = excluded.turn_id,
+            status = 'active',
+            registered_at = excluded.registered_at,
+            updated_at = excluded.updated_at,
+            completed_at = NULL
+        """,
+        (
+            materialization["id"],
+            materialization["job_id"],
+            materialization["node_id"],
+            task_id,
+            run_id,
+            thread_id,
+            turn_id,
+            now,
+            now,
+        ),
+    )
+    conn.execute(
+        """
+        UPDATE runtime_live_directive_deliveries
+           SET thread_id = ?, turn_id = ?, updated_at = ?
+         WHERE materialization_id = ? AND status = 'pending'
+        """,
+        (thread_id, turn_id, now, materialization["id"]),
+    )
+    deliveries = pending_runtime_live_directives(
+        conn,
+        task_id=task_id,
+        run_id=run_id,
+        thread_id=thread_id,
+        turn_id=turn_id,
+    )
+    return {
+        "registered": True,
+        "materialization_id": materialization["id"],
+        "deliveries": deliveries,
+    }
+
+
+def close_runtime_live_turn(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    run_id: Optional[int],
+    thread_id: str,
+    turn_id: str,
+) -> bool:
+    """Close the exact active turn so later directives use durable fallback."""
+
+    ensure_runtime_schema(conn)
+    now = _now()
+    cursor = conn.execute(
+        """
+        UPDATE runtime_active_worker_turns
+           SET status = 'completed', completed_at = ?, updated_at = ?
+         WHERE task_id = ?
+           AND (run_id IS NULL OR run_id = ?)
+           AND thread_id = ? AND turn_id = ? AND status = 'active'
+        """,
+        (now, now, task_id, run_id, thread_id, turn_id),
+    )
+    return cursor.rowcount == 1
+
+
+def pending_runtime_live_directives(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    run_id: Optional[int],
+    thread_id: str,
+    turn_id: str,
+) -> list[dict[str, Any]]:
+    ensure_runtime_schema(conn)
+    rows = conn.execute(
+        """
+        SELECT delivery.*, directive.directive_json, directive.action
+          FROM runtime_live_directive_deliveries delivery
+          JOIN runtime_node_directives directive
+            ON directive.id = delivery.directive_id
+         WHERE delivery.task_id = ?
+           AND (delivery.run_id IS NULL OR delivery.run_id = ?)
+           AND delivery.thread_id = ? AND delivery.turn_id = ?
+           AND delivery.status = 'pending'
+           AND directive.status = 'queued'
+         ORDER BY delivery.created_at, delivery.id
+        """,
+        (task_id, run_id, thread_id, turn_id),
+    ).fetchall()
+    return [
+        {
+            **dict(row),
+            "directive": _loads(row["directive_json"]),
+        }
+        for row in rows
+    ]
+
+
+def record_runtime_live_delivery(
+    conn: sqlite3.Connection,
+    delivery_id: str,
+    *,
+    accepted: bool,
+    thread_id: str,
+    turn_id: str,
+    request_ref: Optional[str] = None,
+    response_ref: Optional[str] = None,
+    error_code: Optional[str] = None,
+    error_message: Optional[str] = None,
+) -> dict[str, Any]:
+    """Commit a steer result without treating transport acceptance as worker ACK."""
+
+    ensure_runtime_schema(conn)
+    row = conn.execute(
+        "SELECT * FROM runtime_live_directive_deliveries WHERE id = ?",
+        (delivery_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"unknown live directive delivery {delivery_id}")
+    delivery = dict(row)
+    if delivery["status"] != "pending":
+        return delivery
+    if delivery.get("thread_id") != thread_id or delivery.get("turn_id") != turn_id:
+        accepted = False
+        error_code = error_code or "stale_turn"
+        error_message = error_message or "active turn identity changed"
+    now = _now()
+    status = "accepted" if accepted else "queued_fallback"
+    cursor = conn.execute(
+        """
+        UPDATE runtime_live_directive_deliveries
+           SET status = ?, attempt_count = attempt_count + 1,
+               request_ref = ?, response_ref = ?, error_code = ?,
+               error_message = ?, attempted_at = ?, accepted_at = ?,
+               updated_at = ?
+         WHERE id = ? AND status = 'pending'
+        """,
+        (
+            status,
+            request_ref,
+            response_ref,
+            error_code,
+            error_message,
+            now,
+            now if accepted else None,
+            now,
+            delivery_id,
+        ),
+    )
+    if cursor.rowcount != 1:
+        latest = conn.execute(
+            "SELECT * FROM runtime_live_directive_deliveries WHERE id = ?",
+            (delivery_id,),
+        ).fetchone()
+        return dict(latest)
+    directive = conn.execute(
+        "SELECT * FROM runtime_node_directives WHERE id = ?",
+        (delivery["directive_id"],),
+    ).fetchone()
+    if directive is None:
+        raise ValueError("live delivery references missing directive")
+    directive = dict(directive)
+    if accepted:
+        conn.execute(
+            """
+            UPDATE runtime_node_directives
+               SET status = 'delivered', delivered_at = ?,
+                   delivered_materialization_id = ?
+             WHERE id = ? AND status = 'queued'
+            """,
+            (now, delivery["materialization_id"], delivery["directive_id"]),
+        )
+        if str(directive["action"]) == "narrow_scope":
+            node_row = conn.execute(
+                "SELECT * FROM execution_nodes WHERE id = ?",
+                (delivery["target_node_id"],),
+            ).fetchone()
+            if node_row is not None:
+                node = dict(node_row)
+                payload = _loads(directive["directive_json"])
+                constraints = _loads(node.get("constraints_json"))
+                constraints["contract"] = payload.get("contract") or constraints.get("contract")
+                conn.execute(
+                    """
+                    UPDATE execution_nodes
+                       SET constraints_json = ?, contract_revision = ?, updated_at = ?
+                     WHERE id = ? AND contract_revision = ?
+                    """,
+                    (
+                        _json(constraints),
+                        int(directive["applied_contract_revision"]),
+                        now,
+                        node["id"],
+                        int(directive["expected_contract_revision"]),
+                    ),
+                )
+    event_type = (
+        "runtime_live_directive_accepted"
+        if accepted
+        else "runtime_live_directive_fallback_queued"
+    )
+    _event(
+        conn,
+        str(delivery["job_id"]),
+        event_type,
+        {
+            "schema": RUNTIME_LIVE_DIRECTIVE_DELIVERY_SCHEMA,
+            "delivery_id": delivery_id,
+            "directive_id": delivery["directive_id"],
+            "materialization_id": delivery["materialization_id"],
+            "thread_id": thread_id,
+            "turn_id": turn_id,
+            "request_ref": request_ref,
+            "response_ref": response_ref,
+            "error_code": error_code,
+        },
+        node_id=delivery["target_node_id"],
+        task_id=delivery["task_id"],
+        run_id=delivery.get("run_id"),
+        source_event_id=int(directive["source_checkpoint_event_id"]),
+    )
+    latest = conn.execute(
+        "SELECT * FROM runtime_live_directive_deliveries WHERE id = ?",
+        (delivery_id,),
+    ).fetchone()
+    return dict(latest)
+
+
 def _acknowledge_node_directives(
     conn: sqlite3.Connection,
     node: dict[str, Any],
@@ -5537,6 +5955,15 @@ def _acknowledge_node_directives(
         if cursor.rowcount != 1:
             continue
         acknowledged.append(directive_id)
+        conn.execute(
+            """
+            UPDATE runtime_live_directive_deliveries
+               SET status = 'acknowledged', acknowledged_at = ?, updated_at = ?
+             WHERE directive_id = ? AND materialization_id = ?
+               AND status = 'accepted'
+            """,
+            (now, now, directive_id, materialization["id"]),
+        )
         _event(
             conn,
             node["job_id"],
@@ -11149,6 +11576,17 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
         assignee=assignee,
         workspace_path=workspace["path"],
     )
+    worker_transport = "codex_exec"
+    try:
+        from hermes_cli.worker_lanes import get_worker_lane
+
+        registered_lane = get_worker_lane(str(assignee))
+        if registered_lane is not None:
+            worker_transport = str(
+                registered_lane.config.get("transport") or "codex_exec"
+            )
+    except Exception:
+        pass
     receipt_protocol_repair = _pending_receipt_protocol_repair(
         conn,
         node,
@@ -11199,6 +11637,7 @@ def materialize_runtime_node(conn: sqlite3.Connection, node: dict[str, Any], boa
                 {
                     "execution_continuity": continuity,
                     "runtime_workspace": workspace,
+                    "worker_transport": worker_transport,
                     **(
                         {"receipt_protocol_repair": receipt_protocol_repair}
                         if receipt_protocol_repair is not None

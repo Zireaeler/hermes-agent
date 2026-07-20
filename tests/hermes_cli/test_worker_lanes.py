@@ -217,6 +217,21 @@ def test_lane_request_validator_rejects_invalid_json_events():
         })
 
 
+def test_codex_app_server_transport_is_explicit_and_validated():
+    lane = enable_worker_lane_request({
+        "name": "codex-live",
+        "type": "codex_cli",
+        "transport": "codex_app_server",
+    })
+    assert lane.config["transport"] == "codex_app_server"
+    with pytest.raises(ValueError, match="transport"):
+        validate_worker_lane_request({
+            "name": "codex-invalid-transport",
+            "type": "codex_cli",
+            "transport": "shell-wrapper",
+        })
+
+
 def test_phase4g8_lane_requires_managed_namespace_and_run_marker():
     valid = validate_worker_lane_request({
         "name": "codex-phase4g8",

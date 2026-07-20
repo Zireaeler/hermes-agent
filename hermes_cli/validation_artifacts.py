@@ -14,6 +14,9 @@ import uuid
 
 
 MANIFEST_SCHEMA = "hermes_validation_artifact_manifest_v1"
+ORCHESTRATION_VALIDATION_MARKER_SCHEMA = (
+    "hermes_managed_orchestration_validation_v1"
+)
 DEFAULT_ARTIFACT_ROOT = Path("/root/hermes-validation-artifacts")
 RAW_ENTRY_ALLOWLIST = {
     "codex-home",
@@ -43,6 +46,47 @@ REBUILDABLE_ENTRY_ALLOWLIST = {
 
 class ArtifactArchiveError(RuntimeError):
     pass
+
+
+def declare_managed_orchestration_validation(
+    run_root: Path,
+    *,
+    phase: str,
+    instance_id: str,
+) -> Path:
+    """Mark a run so archive and cleanup cannot bypass learning absorption."""
+
+    runtime_state = run_root.expanduser().resolve() / "runtime-state"
+    runtime_state.mkdir(parents=True, exist_ok=True)
+    marker = runtime_state / "orchestration-validation.json"
+    _write_json(
+        marker,
+        {
+            "schema": ORCHESTRATION_VALIDATION_MARKER_SCHEMA,
+            "phase": str(phase),
+            "instance_id": str(instance_id),
+            "learning_bundle_required": True,
+            "declared_at": int(time.time()),
+        },
+    )
+    return marker
+
+
+def _managed_orchestration_marker(run_root: Path) -> Optional[dict[str, Any]]:
+    marker = run_root / "runtime-state" / "orchestration-validation.json"
+    if not marker.is_file():
+        return None
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ArtifactArchiveError("managed orchestration marker is unreadable") from exc
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema") != ORCHESTRATION_VALIDATION_MARKER_SCHEMA
+        or payload.get("learning_bundle_required") is not True
+    ):
+        raise ArtifactArchiveError("managed orchestration marker is invalid")
+    return payload
 
 
 def default_artifact_root() -> Path:
@@ -91,6 +135,7 @@ def archive_validation_run(
     instance_id: str,
     redactions: Optional[dict[str, str]] = None,
     expected_entries: Iterable[str] = (),
+    orchestration_learning_required: bool = False,
 ) -> dict[str, Any]:
     """Atomically copy raw evidence, redact credentials, and verify every file."""
 
@@ -100,13 +145,26 @@ def archive_validation_run(
     run_id = source.name
     root = (artifact_root or default_artifact_root()).expanduser().resolve()
     destination = root / str(phase) / str(instance_id) / run_id
+    managed_marker = _managed_orchestration_marker(source)
     if destination.exists():
         manifest = verify_artifact_manifest(destination / "manifest.json")
         if manifest.get("source_run_root") != str(source):
             raise ArtifactArchiveError("existing artifact destination belongs to another source run")
+        if managed_marker is not None and not isinstance(
+            manifest.get("orchestration_learning"), dict
+        ):
+            raise ArtifactArchiveError(
+                "managed orchestration archive lacks learning evidence"
+            )
         return manifest
     if destination == source or source in destination.parents:
         raise ArtifactArchiveError("artifact destination must not be inside the source run")
+    learning_required = orchestration_learning_required or managed_marker is not None
+    learning_gate = (
+        verify_orchestration_learning_gate(source)
+        if learning_required
+        else None
+    )
 
     root.mkdir(parents=True, exist_ok=True)
     os.chmod(root, 0o700)
@@ -164,6 +222,8 @@ def archive_validation_run(
             "files": files,
             "file_count": len(files),
             "total_bytes": sum(int(item["bytes"]) for item in files),
+            "orchestration_learning": learning_gate,
+            "managed_orchestration_validation": managed_marker,
         }
         _write_json(staging / "manifest.json", manifest)
         _write_catalog(staging / "ARTIFACTS.md", manifest)
@@ -195,6 +255,7 @@ def cleanup_rebuildable_entries(
     *,
     manifest_path: Path,
     entries: Iterable[str],
+    orchestration_learning_required: bool = False,
 ) -> dict[str, Any]:
     """Delete allowlisted rebuildable entries only after archive verification."""
 
@@ -202,6 +263,12 @@ def cleanup_rebuildable_entries(
     manifest = verify_artifact_manifest(manifest_path)
     if manifest.get("source_run_root") != str(source):
         raise ArtifactArchiveError("artifact manifest does not belong to the requested run")
+    managed_marker = _managed_orchestration_marker(source)
+    if orchestration_learning_required or managed_marker is not None:
+        verify_orchestration_learning_gate(source)
+        archived_learning = manifest.get("orchestration_learning")
+        if not isinstance(archived_learning, dict):
+            raise ArtifactArchiveError("archive manifest lacks orchestration learning receipt")
     requested = sorted(set(str(value) for value in entries))
     invalid = sorted(set(requested) - REBUILDABLE_ENTRY_ALLOWLIST)
     if invalid:
@@ -223,6 +290,54 @@ def cleanup_rebuildable_entries(
         "manifest_path": str(manifest_path.expanduser().resolve()),
         "removed_entries": removed,
         "bytes_removed": bytes_removed,
+    }
+
+
+def verify_orchestration_learning_gate(run_root: Path) -> dict[str, Any]:
+    """Require one absorbed Phase 4G15 learning bundle before retention cleanup."""
+
+    from hermes_cli import kanban_runtime_learning as learning
+
+    source = run_root.expanduser().resolve()
+    bundle_path = source / "reports" / "orchestration-learning.json"
+    receipt_path = source / "reports" / "orchestration-learning-receipt.json"
+    try:
+        bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ArtifactArchiveError(
+            "orchestration learning bundle or registry receipt is missing"
+        ) from exc
+    try:
+        learning.validate_learning_bundle(bundle)
+    except learning.LearningBundleError as exc:
+        raise ArtifactArchiveError(str(exc)) from exc
+    absorption = bundle.get("absorption") or {}
+    digest = learning.bundle_sha256(bundle)
+    if absorption.get("status") != "absorbed":
+        raise ArtifactArchiveError("orchestration learning bundle is not absorbed")
+    if receipt.get("schema") != learning.LEARNING_RECEIPT_SCHEMA:
+        raise ArtifactArchiveError("orchestration learning receipt schema is invalid")
+    if receipt.get("status") != "absorbed" or receipt.get("bundle_sha256") != digest:
+        raise ArtifactArchiveError("orchestration learning receipt hash does not match bundle")
+    registry_path = Path(str(receipt.get("registry_path") or "")).expanduser()
+    if not registry_path.is_file():
+        raise ArtifactArchiveError("orchestration learning registry is missing")
+    import sqlite3
+
+    with sqlite3.connect(registry_path) as conn:
+        row = conn.execute(
+            "SELECT status FROM learning_runs WHERE bundle_sha256 = ?",
+            (digest,),
+        ).fetchone()
+    if row is None or str(row[0]) != "absorbed":
+        raise ArtifactArchiveError("orchestration learning registry did not absorb bundle")
+    return {
+        "status": "absorbed",
+        "bundle_path": str(bundle_path.relative_to(source)),
+        "receipt_path": str(receipt_path.relative_to(source)),
+        "bundle_sha256": digest,
+        "registry_schema": receipt.get("registry_schema"),
     }
 
 

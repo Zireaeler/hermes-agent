@@ -194,7 +194,8 @@ codex_app_server
 ```
 
 `codex_exec` 保持当前兼容行为，不支持 live steer。`codex_app_server` 使用独立、Hermes-owned
-app-server process 和 private Unix socket，运行 thread/turn 并保留原生 session。
+app-server process 和由 wrapper 独占的 private stdio control channel，运行 thread/turn 并保留原生
+session。
 
 Runtime 必须记录：
 
@@ -209,8 +210,8 @@ last_transport_heartbeat_at
 steer_capability
 ```
 
-endpoint 只能位于该 worker 的 private runtime directory，不进入 worker prompt，不允许其他 job
-使用。API key/base URL 继续按 validation retention policy 脱敏。
+control channel identity 只能存在于该 worker wrapper 的 runtime state，不进入 worker prompt，不允许
+其他 job 使用。API key/base URL 继续按 validation retention policy 脱敏。
 
 ### 5.2 App-server lifecycle
 
@@ -218,7 +219,7 @@ endpoint 只能位于该 worker 的 private runtime directory，不进入 worker
 
 ```text
 Kanban worker task
-    -> launch codex app-server on private Unix socket
+    -> launch codex app-server with a wrapper-owned private stdio channel
     -> initialize
     -> thread/start or thread/resume
     -> turn/start
@@ -229,7 +230,7 @@ Kanban worker task
     -> normal receipt ingest
 ```
 
-app-server process、socket、thread 和 turn identity 都必须进入 worker event stream。Wrapper crash 后
+app-server process、control channel、thread 和 turn identity 都必须进入 worker event stream。Wrapper crash 后
 不得根据内存猜测 turn identity；恢复路径从 DB/task events 和 app-server/thread evidence 重建，无法
 重建时退回现有 same-session resume。
 
@@ -490,7 +491,10 @@ validator 或代码。
 
 ## 9. Archive 与 Cleanup Gate
 
-启用 `orchestration_learning_required=true` 的 run，archive 前必须：
+受管 orchestra run 在启动时必须写入 `runtime-state/orchestration-validation.json`。Marker 存在时，
+即使调用方漏传 `orchestration_learning_required=true`，archive 和 cleanup 仍必须强制 learning gate。
+
+Archive 前必须：
 
 1. 生成 JSON/Markdown bundle；
 2. deterministic schema validation 通过；
@@ -541,27 +545,25 @@ Decision Provider patch 只执行 deterministic readiness/routing transition 时
 
 ## 11. 受控验证
 
-第一版不使用 hard benchmark。构造一个真实 git repository 和三个责任：
+第一版不使用 hard benchmark，也不重复 Phase 4G14 已覆盖的 isolated contribution handoff。构造两个
+独立 workspace 的同一受控责任：
 
 ```text
-producer child
-consumer child
-Primary integration owner
+producer process
+coherent Codex consumer
 ```
 
 场景：
 
-1. 两个 child 在独立 worktree 并行执行；
-2. consumer 先按 contract v1 开始任务，并写入可观测 stale marker；
-3. producer 从 repository evidence 发现 contract v2，在 safe point 提交 checkpoint；
-4. Runtime 在 consumer terminal 前发布 live-safe directive；
-5. consumer 的同一 app-server thread/turn 接收 steer，删除或避免 stale marker，按 v2 完成；
+1. consumer 启动时捕获 contract v1，并在同一 turn 中等待；
+2. producer 根据真实 marker 将共享契约更新为 contract v2，并发布 checkpoint；
+3. Baseline 不接收 live directive，首轮按 v1 结束，轻量外部质量检查拒绝后由同一 thread 修正；
+4. Treatment 由 Runtime 在 consumer terminal 前发布 live-safe directive；
+5. consumer 的同一 app-server thread/turn 接收 steer，避免写入 v1，按 v2 完成；
 6. receipt ACK directive；
-7. Primary 集成两个 frozen contribution；
-8. 完整测试通过；
-9. analyzer 生成 bundle；
-10. registry 吸收 run；
-11. archive gate 通过后清理临时 workspace。
+7. 两边运行同一固定质量检查并比较恢复 turn；
+8. analyzer 生成 bundle，registry 吸收 run；
+9. archive gate 通过后清理临时 workspace 和 Codex cache。
 
 同一场景运行两个 arm：
 
@@ -579,22 +581,22 @@ Baseline 不需要故意让最终质量失败。它可以由 Primary 最终修�
 
 Phase 4G15 完成必须满足：
 
-- [ ] `codex_app_server` worker transport 有明确配置和审计身份；
-- [ ] active thread/turn identity 可从持久事件恢复；
-- [ ] live-safe directive 使用 expected thread/turn precondition；
-- [ ] stale turn、not steerable 和 transport failure 都退回 durable queue；
-- [ ] source checkpoint 到 target ACK 有完整 DB lineage；
-- [ ] controlled treatment 在 target terminal 前 ACK directive；
-- [ ] treatment 比 baseline 少至少一次可证明的 stale work/reimplementation；
-- [ ] treatment 最终质量不低于 coherent baseline；
-- [ ] 每个受管 run 都生成 JSON bundle 和中文过程报告；
-- [ ] 每个 finding 都有 evidence refs 和 absorption disposition；
-- [ ] registry import 幂等；
-- [ ] 未经 replay/approval 的 candidate 不能 promotion；
-- [ ] learning bundle 缺失或未 absorbed 时 archive/cleanup 被拒绝；
-- [ ] 原始 DB、session、worker events 和 artifact lineage 保留；
-- [ ] 不调用 hard benchmark；
-- [ ] 受影响离线测试通过。
+- [x] `codex_app_server` worker transport 有明确配置和审计身份；
+- [x] active thread/turn identity 持久化在 DB，不能由进程内存猜测；
+- [x] live-safe directive 使用 expected thread/turn precondition；
+- [x] stale turn、not steerable 和 transport failure 都退回 durable queue；
+- [x] source checkpoint 到 target ACK 有完整 DB lineage；
+- [x] controlled treatment 在 target terminal 前 ACK directive；
+- [x] treatment 比 baseline 少一次可证明的 stale recovery turn；
+- [x] treatment 最终质量不低于 coherent baseline；
+- [x] 每个受管 run 都生成 JSON bundle 和中文过程报告；
+- [x] 每个 finding 都有 evidence refs 和 absorption disposition；
+- [x] registry import 幂等；
+- [x] 未经 replay/approval 的 candidate 不能 promotion；
+- [x] learning bundle 缺失或未 absorbed 时 archive/cleanup 被拒绝；
+- [x] 原始 DB、session、worker events 和 artifact lineage 保留；
+- [x] 不调用 hard benchmark；
+- [x] 受影响离线测试通过。
 
 ---
 
@@ -637,3 +639,14 @@ Learning Loop
 > Runtime 在真实新证据出现后，及时改变仍在执行的责任，减少错误工作或避免重做；每次验证中的
 > orchestra 行为都被证据化分析并进入可追踪的改进生命周期，且最终质量不低于 coherent single
 > worker。
+
+---
+
+## 15. 实施与验证状态
+
+Phase 4G15 已实现并通过轻量真实模型对照。实现过程中的失败 run 也按相同 schema 重新分析，形成
+`live_delivery_unresolved` candidate，并以通过 run 作为 treatment 完成 replay 和显式 promotion。
+
+详细事实、时间线、artifact 和适用边界见：
+
+- `docs/validation/phase4g15/capability-trace.md`

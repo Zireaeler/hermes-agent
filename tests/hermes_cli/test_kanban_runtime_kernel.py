@@ -4472,7 +4472,8 @@ def test_isolated_children_freeze_contributions_for_primary_integration(
             "integration_owner_node_key": primary["node_key"],
         }],
     }
-    assert rk.apply_graph_patch(conn, job_id, patch)["status"] == "applied"
+    applied = rk.apply_graph_patch(conn, job_id, patch)
+    assert applied["status"] == "applied"
 
     contribution_ids = []
     contribution_paths = []
@@ -6132,6 +6133,136 @@ def test_running_target_queues_directive_until_its_coordination_safe_point(conn)
     )
     assert queued["id"] in recovery_body
     assert "Runtime coordination directives:" in recovery_body
+
+
+def test_running_app_server_target_receives_live_directive_and_acknowledges(conn):
+    job_id = _closed_loop_coordination_job(conn)
+    parser = _node(conn, job_id, "understand-scope")
+    renderer = _node(conn, job_id, "renderer")
+    materialization = conn.execute(
+        """
+        SELECT * FROM node_materializations
+         WHERE node_id = ? AND status = 'running'
+         ORDER BY attempt DESC LIMIT 1
+        """,
+        (renderer["id"],),
+    ).fetchone()
+    metadata = json.loads(materialization["metadata_json"])
+    metadata["worker_transport"] = "codex_app_server"
+    conn.execute(
+        "UPDATE node_materializations SET metadata_json = ? WHERE id = ?",
+        (json.dumps(metadata), materialization["id"]),
+    )
+    registration = rk.register_runtime_live_turn(
+        conn,
+        task_id=materialization["task_id"],
+        run_id=materialization["run_id"],
+        thread_id="thread-live-1",
+        turn_id="turn-live-1",
+    )
+    assert registration["registered"] is True
+    assert registration["deliveries"] == []
+    _complete_codex_checkpoint(
+        conn,
+        parser,
+        _coordination_checkpoint(
+            kind="shared_contract_changed",
+            summary="Parser published token-model-v2.",
+            finding_key="token-model-v2-live",
+            affected_node_keys=["renderer"],
+            changed_files=["src/parser/token.py"],
+        ),
+    )
+    assert rk.ingest_runtime_node_evidence(conn, parser["id"])
+    source_event = conn.execute(
+        """
+        SELECT id FROM execution_events
+         WHERE node_id = ? AND event_type = 'worker_coordination_checkpointed'
+         ORDER BY id DESC LIMIT 1
+        """,
+        (parser["id"],),
+    ).fetchone()[0]
+    patch = _patch(
+        job_id,
+        _revision(conn, job_id),
+        {
+            "op": "issue_directive",
+            "target_node_key": "understand-scope",
+            "source_checkpoint_event_id": source_event,
+            "target_checkpoint_event_id": source_event,
+            "action": "continue",
+            "expected_contract_revision": 1,
+            "summary": "Finish parser verification.",
+            "instructions": ["Finish parser verification without renderer work."],
+            "evidence_refs": [f"event:{source_event}"],
+        },
+        {
+            "op": "issue_directive",
+            "target_node_key": "renderer",
+            "source_checkpoint_event_id": source_event,
+            "action": "narrow_scope",
+            "expected_contract_revision": 1,
+            "summary": "Consume token-model-v2 and stop rebuilding parser behavior.",
+            "instructions": ["Keep work inside renderer scope."],
+            "evidence_refs": [f"event:{source_event}"],
+            "contract": {
+                **_contract("src/renderer/render.py"),
+                "acceptance_criteria": ["Renderer consumes token-model-v2"],
+            },
+        },
+    )
+    applied = rk.apply_graph_patch(conn, job_id, patch)
+    assert applied["status"] == "applied", applied
+    delivery = conn.execute(
+        "SELECT * FROM runtime_live_directive_deliveries WHERE task_id = ?",
+        (materialization["task_id"],),
+    ).fetchone()
+    assert delivery["status"] == "pending"
+    assert delivery["thread_id"] == "thread-live-1"
+    assert delivery["turn_id"] == "turn-live-1"
+    pending = rk.pending_runtime_live_directives(
+        conn,
+        task_id=materialization["task_id"],
+        run_id=materialization["run_id"],
+        thread_id="thread-live-1",
+        turn_id="turn-live-1",
+    )
+    assert len(pending) == 1
+    accepted = rk.record_runtime_live_delivery(
+        conn,
+        delivery["id"],
+        accepted=True,
+        thread_id="thread-live-1",
+        turn_id="turn-live-1",
+        request_ref="sha256:request",
+        response_ref="turn/steer:accepted",
+    )
+    assert accepted["status"] == "accepted"
+    directive = conn.execute(
+        "SELECT * FROM runtime_node_directives WHERE id = ?",
+        (delivery["directive_id"],),
+    ).fetchone()
+    assert directive["status"] == "delivered"
+    assert _node(conn, job_id, "renderer")["contract_revision"] == 2
+    acknowledged = rk._acknowledge_node_directives(
+        conn,
+        dict(_node(conn, job_id, "renderer")),
+        dict(materialization),
+        [directive["id"]],
+    )
+    assert acknowledged == [directive["id"]]
+    final_delivery = conn.execute(
+        "SELECT * FROM runtime_live_directive_deliveries WHERE id = ?",
+        (delivery["id"],),
+    ).fetchone()
+    assert final_delivery["status"] == "acknowledged"
+    assert rk.close_runtime_live_turn(
+        conn,
+        task_id=materialization["task_id"],
+        run_id=materialization["run_id"],
+        thread_id="thread-live-1",
+        turn_id="turn-live-1",
+    )
 
 
 def test_coordination_directive_rejects_stale_revision_and_scope_overlap(conn):

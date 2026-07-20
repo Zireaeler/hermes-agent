@@ -35,6 +35,7 @@ _ALLOWED_CODEX_MODELS = {
 _ALLOWED_SANDBOXES = {"read-only", "workspace-write"}
 _ALLOWED_APPROVALS = {"never", "on-request", "on-failure", "untrusted"}
 _ALLOWED_SUCCESS_POLICIES = {"block_for_review"}
+_ALLOWED_CODEX_TRANSPORTS = {"codex_exec", "codex_app_server"}
 _MAX_LANE_CONCURRENCY = 8
 _FORBIDDEN_REQUEST_KEYS = {"command", "cmd", "shell", "argv", "executable"}
 _PHASE4G8_NETNS_RE = re.compile(r"^h4g8-[0-9a-f]{8}$")
@@ -263,6 +264,13 @@ def validate_worker_lane_request(request: dict[str, Any]) -> dict[str, Any]:
         "max_concurrency": max_concurrency,
         "success_policy": success_policy,
     }
+    transport = str(request.get("transport") or "codex_exec").strip()
+    if transport not in _ALLOWED_CODEX_TRANSPORTS:
+        raise ValueError(
+            f"transport {transport!r} is not allowed; "
+            f"allowed: {sorted(_ALLOWED_CODEX_TRANSPORTS)}"
+        )
+    out["transport"] = transport
     if model:
         out["model"] = model
     if request.get("reason"):

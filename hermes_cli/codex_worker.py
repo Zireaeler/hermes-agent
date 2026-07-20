@@ -521,6 +521,7 @@ _MARKDOWN_HEADING_PREFIX_RE = re.compile(r"^\s*(?:#{1,6}\s*)+")
 @dataclass(frozen=True)
 class CodexLaneConfig:
     name: str
+    transport: str = "codex_exec"
     model: Optional[str] = None
     sandbox: str = "workspace-write"
     approval: str = "never"
@@ -556,6 +557,7 @@ class _TailBuffer:
 def make_codex_worker_lane(config: dict[str, Any], *, source: str = "config") -> WorkerLane:
     cfg = CodexLaneConfig(
         name=str(config["name"]),
+        transport=str(config.get("transport") or "codex_exec"),
         model=(str(config["model"]) if config.get("model") else None),
         sandbox=str(config.get("sandbox") or "workspace-write"),
         approval=str(config.get("approval") or "never"),
@@ -592,6 +594,7 @@ def make_codex_worker_lane(config: dict[str, Any], *, source: str = "config") ->
 
     lane_config = {
         "type": "codex_cli",
+        "transport": cfg.transport,
         "model": cfg.model,
         "sandbox": cfg.sandbox,
         "approval": cfg.approval,
@@ -869,6 +872,8 @@ def spawn_codex_worker(
         cfg.approval,
         "--success-policy",
         cfg.success_policy,
+        "--transport",
+        cfg.transport,
         "--heartbeat-interval",
         str(cfg.heartbeat_interval_seconds),
     ]
@@ -2654,6 +2659,278 @@ be one of `pass`, `fail`, or `blocked`.
 """
 
 
+def run_codex_app_server_worker(
+    *,
+    task_id: str,
+    lane: str,
+    workspace: str,
+    sandbox: str,
+    approval: str,
+    model: Optional[str] = None,
+    run_id: Optional[int] = None,
+    claim_lock: Optional[str] = None,
+    board: Optional[str] = None,
+    success_policy: str = "block_for_review",
+    timeout_seconds: Optional[float] = None,
+    heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
+) -> int:
+    """Run one Kanban materialization through app-server with live steer."""
+
+    from hermes_cli import kanban_db as kb
+    from hermes_cli import kanban_runtime_kernel as rk
+    from hermes_cli.codex_app_server_worker import (
+        load_output_schema,
+        run_app_server_turn,
+    )
+
+    del success_policy
+    log_path = kb.worker_log_path(task_id, board=board)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    worker_pid = os.getpid()
+    continuity = _runtime_execution_continuity(task_id)
+    execution_mode = str(continuity.get("mode") or "fresh")
+    resume_session_id = (
+        str(continuity.get("resume_session_id"))
+        if execution_mode == "resume" and continuity.get("resume_session_id")
+        else None
+    )
+    git_baseline = capture_git_change_baseline(workspace)
+    started = time.monotonic()
+    codex_bin = shutil.which("codex")
+    result_status = "failed"
+    result_error: Optional[str] = None
+    final_text = ""
+    backend_session_id = resume_session_id
+
+    with open(log_path, "a", encoding="utf-8", errors="replace") as log_f:
+        header = {
+            "worker_lane": lane,
+            "worker_kind": "codex_cli",
+            "transport": "codex_app_server",
+            "task_id": task_id,
+            "run_id": run_id,
+            "worker_pid": worker_pid,
+            "workspace": workspace,
+            "model": model,
+            "execution_mode": execution_mode,
+            "backend_session_id": resume_session_id,
+        }
+        _write_log(log_f, "[codex-worker] " + json.dumps(header, ensure_ascii=False) + "\n")
+        _record_event(task_id, "worker_started", header, run_id=run_id)
+        if codex_bin is None:
+            result_error = "codex binary not found on PATH"
+            final_text = result_error
+        else:
+            with kb.connect(board=board) as conn:
+                task_context = kb.build_worker_context(conn, task_id)
+            prompt = (
+                build_codex_resume_prompt(
+                    task_id=task_id,
+                    lane=lane,
+                    continuity=continuity,
+                    task_context=task_context,
+                    model=model,
+                )
+                if resume_session_id
+                else build_codex_prompt(task_context, lane=lane, model=model)
+            )
+            codex_env = _safe_env_for_codex(workspace)
+            output_schema_path = _prepare_runtime_output_schema(task_context, codex_env)
+            next_heartbeat = [time.monotonic()]
+
+            def _tick() -> None:
+                now = time.monotonic()
+                if now < next_heartbeat[0]:
+                    return
+                _heartbeat(
+                    task_id,
+                    run_id=run_id,
+                    claim_lock=claim_lock,
+                    lane=lane,
+                    execution_mode=execution_mode,
+                    backend_session_id=backend_session_id,
+                )
+                next_heartbeat[0] = now + max(1.0, float(heartbeat_interval))
+
+            def _register(thread_id: str, turn_id: str) -> list[dict[str, Any]]:
+                with kb.connect(board=board) as conn:
+                    registration = rk.register_runtime_live_turn(
+                        conn,
+                        task_id=task_id,
+                        run_id=run_id,
+                        thread_id=thread_id,
+                        turn_id=turn_id,
+                    )
+                _record_event(
+                    task_id,
+                    "worker_app_server_turn_started",
+                    {
+                        "worker_lane": lane,
+                        "transport": "codex_app_server",
+                        "thread_id": thread_id,
+                        "turn_id": turn_id,
+                        "live_delivery_count": len(registration.get("deliveries") or []),
+                    },
+                    run_id=run_id,
+                )
+                return list(registration.get("deliveries") or [])
+
+            def _poll(thread_id: str, turn_id: str) -> list[dict[str, Any]]:
+                with kb.connect(board=board) as conn:
+                    return rk.pending_runtime_live_directives(
+                        conn,
+                        task_id=task_id,
+                        run_id=run_id,
+                        thread_id=thread_id,
+                        turn_id=turn_id,
+                    )
+
+            def _record_delivery(
+                delivery: dict[str, Any],
+                accepted: bool,
+                error_code: Optional[str],
+                error_message: Optional[str],
+            ) -> None:
+                request_ref = "sha256:" + hashlib.sha256(
+                    json.dumps(
+                        delivery.get("directive") or {},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                ).hexdigest()
+                with kb.connect(board=board) as conn:
+                    rk.record_runtime_live_delivery(
+                        conn,
+                        str(delivery["id"]),
+                        accepted=accepted,
+                        thread_id=str(delivery.get("thread_id") or ""),
+                        turn_id=str(delivery.get("turn_id") or ""),
+                        request_ref=request_ref,
+                        response_ref=("turn/steer:accepted" if accepted else None),
+                        error_code=error_code,
+                        error_message=error_message,
+                    )
+
+            def _complete_turn(thread_id: str, turn_id: str) -> None:
+                with kb.connect(board=board) as conn:
+                    rk.close_runtime_live_turn(
+                        conn,
+                        task_id=task_id,
+                        run_id=run_id,
+                        thread_id=thread_id,
+                        turn_id=turn_id,
+                    )
+
+            def _notification(note: dict[str, Any]) -> None:
+                payload = {
+                    "worker_lane": lane,
+                    "transport": "codex_app_server",
+                    "method": str(note.get("method") or ""),
+                    "params": _cap(
+                        json.dumps(note.get("params") or {}, ensure_ascii=False),
+                        CODEX_EVENT_FIELD_MAX_BYTES,
+                    ),
+                }
+                _record_event(task_id, "worker_codex_event", payload, run_id=run_id)
+                _write_log(
+                    log_f,
+                    "[codex-app-server] " + json.dumps(note, ensure_ascii=False) + "\n",
+                )
+
+            app_result = run_app_server_turn(
+                prompt=prompt,
+                workspace=workspace,
+                model=model,
+                sandbox=sandbox,
+                approval=approval,
+                output_schema=load_output_schema(output_schema_path),
+                resume_thread_id=resume_session_id,
+                codex_bin=codex_bin,
+                codex_home=codex_env.get("CODEX_HOME"),
+                env=codex_env,
+                timeout_seconds=float(timeout_seconds or 3600),
+                poll_interval=0.25,
+                on_notification=_notification,
+                on_tick=_tick,
+                register_turn=_register,
+                poll_live_directives=_poll,
+                record_live_delivery=_record_delivery,
+                complete_turn=_complete_turn,
+            )
+            result_error = app_result.error
+            result_status = app_result.status
+            final_text = app_result.final_text or app_result.error or ""
+            backend_session_id = app_result.thread_id or resume_session_id
+            if backend_session_id:
+                _record_event(
+                    task_id,
+                    (
+                        "worker_backend_session_resumed"
+                        if resume_session_id
+                        else "worker_backend_session_started"
+                    ),
+                    {
+                        "worker_lane": lane,
+                        "worker_kind": "codex_cli",
+                        "transport": "codex_app_server",
+                        "backend_session_id": backend_session_id,
+                        "active_turn_id": app_result.turn_id,
+                        "execution_mode": execution_mode,
+                    },
+                    run_id=run_id,
+                )
+
+        succeeded = result_status == "completed" and not result_error
+        meta = _metadata(
+            lane=lane,
+            task_id=task_id,
+            run_id=run_id,
+            worker_pid=worker_pid,
+            claim_lock=claim_lock,
+            workspace=workspace,
+            model=model,
+            exit_code=0 if succeeded else 1,
+            timed_out=bool(result_error and "timed out" in result_error),
+            output_tail=final_text,
+            runtime_receipt_source=final_text,
+            binary_missing=codex_bin is None,
+            json_events=True,
+            execution_mode=execution_mode,
+            backend_session_id=backend_session_id,
+            resume_status=(
+                "resumed"
+                if resume_session_id and succeeded
+                else "started"
+                if succeeded
+                else "failed"
+            ),
+            git_baseline=git_baseline,
+        )
+        meta["worker_instance"]["transport"] = "codex_app_server"
+        meta["worker_lane"]["transport"] = "codex_app_server"
+        meta["worker_lane"]["wall_time_seconds"] = round(
+            time.monotonic() - started,
+            3,
+        )
+        if succeeded:
+            _record_event(task_id, "worker_review_required", meta["worker_lane"], run_id=run_id)
+            _finish_blocked(
+                task_id=task_id,
+                run_id=run_id,
+                reason="review-required: Codex completed; Hermes review required",
+                metadata=meta,
+            )
+        else:
+            _record_event(task_id, "worker_failed", meta["worker_lane"], run_id=run_id)
+            _finish_blocked(
+                task_id=task_id,
+                run_id=run_id,
+                reason=f"codex-app-server-failed: {result_error or result_status}",
+                metadata=meta,
+            )
+    return 0
+
+
 def run_codex_worker(
     *,
     task_id: str,
@@ -2672,8 +2949,27 @@ def run_codex_worker(
     network_namespace: Optional[str] = None,
     network_uid: int = 65534,
     network_gid: int = 65534,
+    transport: str = "codex_exec",
 ) -> int:
     from hermes_cli import kanban_db as kb
+
+    if transport == "codex_app_server":
+        return run_codex_app_server_worker(
+            task_id=task_id,
+            lane=lane,
+            workspace=workspace,
+            sandbox=sandbox,
+            approval=approval,
+            model=model,
+            run_id=run_id,
+            claim_lock=claim_lock,
+            board=board,
+            success_policy=success_policy,
+            timeout_seconds=timeout_seconds,
+            heartbeat_interval=heartbeat_interval,
+        )
+    if transport != "codex_exec":
+        raise ValueError(f"unsupported Codex worker transport: {transport}")
 
     log_path = kb.worker_log_path(task_id, board=board)
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3109,6 +3405,11 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     run.add_argument("--sandbox", required=True)
     run.add_argument("--approval", required=True)
     run.add_argument("--success-policy", default="block_for_review")
+    run.add_argument(
+        "--transport",
+        choices=("codex_exec", "codex_app_server"),
+        default="codex_exec",
+    )
     run.add_argument("--model")
     run.add_argument("--run-id", type=int)
     run.add_argument("--claim-lock")
@@ -3136,6 +3437,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             claim_lock=args.claim_lock,
             board=args.board,
             success_policy=args.success_policy,
+            transport=args.transport,
             timeout_seconds=args.timeout_seconds,
             heartbeat_interval=args.heartbeat_interval,
             json_events=bool(args.json_events),

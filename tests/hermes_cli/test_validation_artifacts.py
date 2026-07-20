@@ -141,3 +141,25 @@ def test_manifest_verification_detects_archive_tampering(tmp_path):
 
     with pytest.raises(artifacts.ArtifactArchiveError, match="mismatch"):
         artifacts.verify_artifact_manifest(archived / "manifest.json")
+
+
+def test_managed_orchestration_marker_requires_absorbed_learning(tmp_path):
+    run = tmp_path / "managed-run"
+    artifacts.declare_managed_orchestration_validation(
+        run,
+        phase="phase4g15",
+        instance_id="managed",
+    )
+    (run / "reports").mkdir()
+    (run / "reports" / "run-report.json").write_text(
+        '{"status":"failed"}\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(artifacts.ArtifactArchiveError, match="learning bundle"):
+        artifacts.archive_validation_run(
+            run,
+            artifact_root=tmp_path / "artifacts",
+            phase="phase4g15",
+            instance_id="managed",
+        )
