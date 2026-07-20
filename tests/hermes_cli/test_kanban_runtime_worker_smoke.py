@@ -226,3 +226,41 @@ def test_terminal_poll_observes_external_writer_through_fresh_read_connection(
                 (task_id,),
             ).fetchone()[0]
         assert status == "blocked"
+
+
+def test_terminal_poll_reopens_after_transient_database_error(
+    kanban_home,
+    monkeypatch,
+):
+    with kb.connect() as conn:
+        task_id = kb.create_task(
+            conn,
+            title="transient poll failure",
+            initial_status="running",
+        )
+        attempts = 0
+        original = ws._poll_task_states
+
+        def flaky_poll(active_conn, db_path, task_ids):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise sqlite3.DatabaseError("database disk image is malformed")
+            return original(active_conn, db_path, task_ids)
+
+        monkeypatch.setattr(ws, "_poll_task_states", flaky_poll)
+        with kb.connect() as writer:
+            writer.execute(
+                "UPDATE tasks SET status = 'blocked' WHERE id = ?",
+                (task_id,),
+            )
+
+        error_count = ws._wait_for_terminal_tasks(
+            conn,
+            [task_id],
+            timeout=0.5,
+            interval=0.01,
+        )
+
+    assert error_count == 1
+    assert attempts == 2

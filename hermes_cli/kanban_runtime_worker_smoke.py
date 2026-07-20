@@ -69,6 +69,7 @@ def run_real_worker_lane_smoke(
     decisions: list[dict[str, Any]] = []
     dispatches: list[dict[str, Any]] = []
     terminal_receipts: list[dict[str, Any]] = []
+    terminal_poll_db_error_count = 0
     reason = "step_limit"
     for index in range(step_limit):
         job = rk._job(active_conn, job_id)
@@ -108,7 +109,7 @@ def run_real_worker_lane_smoke(
                     "spawned_task_ids": [item[0] for item in dispatch.spawned],
                 }
             )
-            _wait_for_terminal_tasks(
+            terminal_poll_db_error_count += _wait_for_terminal_tasks(
                 active_conn,
                 task_ids,
                 worker_wait,
@@ -190,6 +191,7 @@ def run_real_worker_lane_smoke(
         "single_primary_node": len(materialized_node_keys) == 1,
         "single_worker_attempt": len(attempts) == 1,
         "terminal_receipts": _dedupe_receipts(terminal_receipts),
+        "terminal_poll_db_error_count": terminal_poll_db_error_count,
         "final_state": final["job"]["state"],
         "goal_items": [{"item_key": item["item_key"], "state": item["state"]} for item in final["goal_items"]],
         "reason": reason,
@@ -210,6 +212,7 @@ def run_real_worker_lane_smoke(
             "accepted_patch_count": report["accepted_patch_count"],
             "rejected_patch_count": report["rejected_patch_count"],
             "receipt_count": len(report["terminal_receipts"]),
+            "terminal_poll_db_error_count": terminal_poll_db_error_count,
             "final_state": report["final_state"],
             "reason": reason,
             "consistency_status": report["consistency"]["status"],
@@ -239,27 +242,55 @@ def _active_task_ids(conn: sqlite3.Connection, job_id: str, keys: list[str]) -> 
     return [str(row["latest_task_id"]) for row in rows if row["latest_task_id"]]
 
 
-def _wait_for_terminal_tasks(conn: sqlite3.Connection, task_ids: list[str], timeout: float, interval: float) -> None:
+def _wait_for_terminal_tasks(
+    conn: sqlite3.Connection,
+    task_ids: list[str],
+    timeout: float,
+    interval: float,
+) -> int:
     db_path = _connection_db_path(conn)
     deadline = time.monotonic() + timeout
+    db_error_started_at: Optional[float] = None
+    db_error_count = 0
+    db_error_grace = min(10.0, max(1.0, float(timeout)))
     while task_ids and time.monotonic() < deadline:
-        placeholders = ",".join("?" for _ in task_ids)
-        if db_path is None:
-            rows = conn.execute(
+        try:
+            states = _poll_task_states(conn, db_path, task_ids)
+            db_error_started_at = None
+        except sqlite3.DatabaseError:
+            now = time.monotonic()
+            db_error_count += 1
+            if db_error_started_at is None:
+                db_error_started_at = now
+            elif now - db_error_started_at >= db_error_grace:
+                raise
+            time.sleep(max(0.05, interval))
+            continue
+        if states and all(state in {"done", "blocked"} for state in states):
+            return db_error_count
+        time.sleep(max(0.05, interval))
+    return db_error_count
+
+
+def _poll_task_states(
+    conn: sqlite3.Connection,
+    db_path: Optional[Path],
+    task_ids: list[str],
+) -> list[str]:
+    placeholders = ",".join("?" for _ in task_ids)
+    if db_path is None:
+        rows = conn.execute(
+            f"SELECT status FROM tasks WHERE id IN ({placeholders})",
+            tuple(task_ids),
+        ).fetchall()
+    else:
+        uri = db_path.resolve().as_uri() + "?mode=ro"
+        with sqlite3.connect(uri, uri=True, timeout=30) as poll_conn:
+            rows = poll_conn.execute(
                 f"SELECT status FROM tasks WHERE id IN ({placeholders})",
                 tuple(task_ids),
             ).fetchall()
-        else:
-            uri = db_path.resolve().as_uri() + "?mode=ro"
-            with sqlite3.connect(uri, uri=True, timeout=30) as poll_conn:
-                rows = poll_conn.execute(
-                    f"SELECT status FROM tasks WHERE id IN ({placeholders})",
-                    tuple(task_ids),
-                ).fetchall()
-        states = [str(row[0]) for row in rows]
-        if states and all(state in {"done", "blocked"} for state in states):
-            return
-        time.sleep(max(0.05, interval))
+    return [str(row[0]) for row in rows]
 
 
 def _connection_db_path(conn: sqlite3.Connection) -> Optional[Path]:
