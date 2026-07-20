@@ -204,7 +204,11 @@ def archive_validation_run(
                 "reason": "model_source_api_key",
             })
             auth_path.unlink()
-        redaction_counts = _redact_archive_files(staging, effective_redactions)
+        redaction_counts, binary_omissions = _redact_archive_files(
+            staging,
+            effective_redactions,
+        )
+        omitted.extend(binary_omissions)
         files = _file_manifest(staging, source_hashes, redaction_counts)
         manifest = {
             "schema": MANIFEST_SCHEMA,
@@ -372,13 +376,17 @@ def _regular_files(root: Path) -> list[Path]:
     return [path for path in root.rglob("*") if path.is_file() and not path.is_symlink()]
 
 
-def _redact_archive_files(root: Path, redactions: dict[str, str]) -> dict[str, int]:
+def _redact_archive_files(
+    root: Path,
+    redactions: dict[str, str],
+) -> tuple[dict[str, int], list[dict[str, str]]]:
     encoded = [
         (secret.encode("utf-8"), replacement.encode("utf-8"))
         for secret, replacement in redactions.items()
         if secret
     ]
     counts: dict[str, int] = {}
+    omitted: list[dict[str, str]] = []
     for path in _regular_files(root):
         data = path.read_bytes()
         changed = 0
@@ -390,13 +398,19 @@ def _redact_archive_files(root: Path, redactions: dict[str, str]) -> dict[str, i
         if changed:
             try:
                 data.decode("utf-8")
-            except UnicodeDecodeError as exc:
-                raise ArtifactArchiveError(
-                    f"credential value found in non-text artifact: {path.relative_to(root)}"
-                ) from exc
+            except UnicodeDecodeError:
+                relative = str(path.relative_to(root))
+                path.unlink()
+                omitted.append(
+                    {
+                        "path": relative,
+                        "reason": "credential_value_in_non_text_artifact",
+                    }
+                )
+                continue
             path.write_bytes(data)
             counts[str(path.relative_to(root))] = changed
-    return counts
+    return counts, omitted
 
 
 def _file_manifest(

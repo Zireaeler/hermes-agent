@@ -204,7 +204,14 @@ def _active_task_ids(conn: sqlite3.Connection, job_id: str, keys: list[str]) -> 
 def _wait_for_terminal_tasks(conn: sqlite3.Connection, task_ids: list[str], timeout: float, interval: float) -> None:
     deadline = time.monotonic() + timeout
     while task_ids and time.monotonic() < deadline:
-        states = [kb.get_task(conn, task_id).status for task_id in task_ids if kb.get_task(conn, task_id)]
+        placeholders = ",".join("?" for _ in task_ids)
+        states = [
+            str(row["status"])
+            for row in conn.execute(
+                f"SELECT status FROM tasks WHERE id IN ({placeholders})",
+                tuple(task_ids),
+            ).fetchall()
+        ]
         if states and all(state in {"done", "blocked"} for state in states):
             return
         time.sleep(max(0.05, interval))

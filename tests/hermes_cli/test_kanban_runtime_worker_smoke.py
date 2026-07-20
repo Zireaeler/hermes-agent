@@ -167,3 +167,28 @@ def test_worker_smoke_uses_dispatcher_wrapper_and_runtime_receipt(kanban_home, t
     assert report["secrets_leaked"] is False
     assert "node_completed" in events
     assert "real_worker_lane_smoke_completed" in events
+
+
+def test_terminal_poll_projects_status_without_decoding_task_body(kanban_home):
+    with kb.connect() as conn:
+        task_id = kb.create_task(
+            conn,
+            title="poll projection",
+            body="initial body",
+            initial_status="running",
+        )
+        conn.execute(
+            "UPDATE tasks SET status = 'done', body = CAST(X'80' AS TEXT) WHERE id = ?",
+            (task_id,),
+        )
+
+        ws._wait_for_terminal_tasks(
+            conn,
+            [task_id],
+            timeout=0.1,
+            interval=0.01,
+        )
+
+        assert conn.execute(
+            "SELECT status FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()["status"] == "done"

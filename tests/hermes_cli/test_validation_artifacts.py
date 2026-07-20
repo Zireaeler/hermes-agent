@@ -99,6 +99,29 @@ def test_archive_validation_run_accepts_zero_byte_lock_files(tmp_path):
     assert artifacts.verify_artifact_manifest(archived / "manifest.json")["status"] == "verified"
 
 
+def test_archive_omits_non_text_state_that_contains_a_credential(tmp_path):
+    run = _validation_run(tmp_path)
+    binary_state = run / "codex-home" / "logs_2.sqlite"
+    binary_state.write_bytes(b"SQLite format 3\x00\xffsk-test-secret\x80")
+
+    manifest = artifacts.archive_validation_run(
+        run,
+        artifact_root=tmp_path / "artifacts",
+        phase="phase4g9",
+        instance_id="fixture",
+    )
+
+    archived = Path(manifest["artifact_path"])
+    assert not (archived / "codex-home" / "logs_2.sqlite").exists()
+    assert {
+        "path": "codex-home/logs_2.sqlite",
+        "reason": "credential_value_in_non_text_artifact",
+    } in manifest["omitted_files"]
+    assert artifacts.verify_artifact_manifest(
+        archived / "manifest.json"
+    )["status"] == "verified"
+
+
 def test_cleanup_requires_matching_verified_manifest_and_allowlisted_entries(tmp_path):
     run = _validation_run(tmp_path)
     manifest = artifacts.archive_validation_run(
