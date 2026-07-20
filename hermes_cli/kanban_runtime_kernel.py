@@ -33,6 +33,7 @@ EVALUATOR_FAILURE_BUNDLE_SCHEMA = "runtime_evaluator_failure_bundle_v1"
 OFFICIAL_EVALUATOR_RESULT_SCHEMA = "hermes_phase4g8_evaluator_result_v1"
 RUNTIME_ORCHESTRATION_POLICY_SCHEMA = "runtime_orchestration_policy_v1"
 RUNTIME_ATTEMPT_PATCH_SCHEMA = "runtime_attempt_patch_v1"
+RUNTIME_MILESTONE_SEED_SCHEMA = "runtime_milestone_seed_v1"
 RUNTIME_CONTRIBUTION_SCHEMA = "runtime_node_contribution_v2"
 RUNTIME_CONTRIBUTION_RECEIPT_SCHEMA = "runtime_contribution_receipt_v1"
 RUNTIME_INTEGRATION_RECEIPT_SCHEMA = "runtime_integration_receipt_v1"
@@ -2405,18 +2406,46 @@ def _validate_coordination_epoch_decision(
             (job_id,),
         ).fetchall()
     }
+    create_ops = [op for op in ops if op.get("op") == "create_node"]
+    deferred_integration_owners: set[str] = set()
+    for op in create_ops:
+        source_ref = str(op.get("source_responsibility_ref") or "").strip()
+        if not source_ref:
+            continue
+        try:
+            event_id, candidate, source_event_type = _responsibility_candidate_from_ref(
+                conn,
+                job_id,
+                source_ref,
+            )
+        except PatchValidationError:
+            continue
+        if source_event_type != "worker_coordination_checkpointed":
+            continue
+        source = conn.execute(
+            "SELECT payload_json FROM execution_events WHERE id = ?",
+            (event_id,),
+        ).fetchone()
+        activation = (
+            _loads(source["payload_json"]).get("deferred_activation")
+            if source is not None
+            else None
+        )
+        if isinstance(activation, dict):
+            deferred_integration_owners.add(
+                str(candidate.get("integration_owner_node_key") or "")
+            )
     directive_ops = [op for op in ops if op.get("op") == "issue_directive"]
     directive_targets = {
         str(op.get("target_node_key") or "").strip() for op in directive_ops
     }
-    missing = waiting_keys - directive_targets
+    missing = waiting_keys - directive_targets - deferred_integration_owners
     if missing:
         raise PatchValidationError(
             "coordination epoch must issue one directive to every "
             f"waiting_coordination node: missing {sorted(missing)!r}"
         )
 
-    create_ops = [op for op in ops if op.get("op") == "create_node"]
     coordination_create_ops: list[dict[str, Any]] = []
     terminal_create_ops: list[dict[str, Any]] = []
     for op in create_ops:
@@ -2902,7 +2931,8 @@ def _validate_patch(conn: sqlite3.Connection, job_id: str, patch: dict[str, Any]
                  WHERE job_id = ? AND source_event_id = ?
                    AND event_type IN (
                        'structure_checkpoint_continue_applied',
-                       'structure_checkpoint_expansion_applied'
+                       'structure_checkpoint_expansion_applied',
+                       'structure_checkpoint_deferred_applied'
                    )
                  LIMIT 1
                 """,
@@ -3564,8 +3594,56 @@ def _apply_op(
                     "decision_id": decision_id,
                 },
                 node_id=node_id,
-                source_event_id=source_event_id,
+                    source_event_id=source_event_id,
+                )
+            source_event = conn.execute(
+                "SELECT payload_json FROM execution_events WHERE id = ?",
+                (source_event_id,),
+            ).fetchone()
+            source_payload = (
+                _loads(source_event["payload_json"])
+                if source_event is not None
+                else {}
             )
+            activation = source_payload.get("deferred_activation")
+            if isinstance(activation, dict):
+                artifact_id = str(
+                    activation.get("milestone_artifact_id") or ""
+                )
+                artifact = _runtime_artifact_by_id(
+                    conn,
+                    artifact_id,
+                    artifact_type="runtime_milestone_seed",
+                )
+                if artifact is None:
+                    raise RuntimeError(
+                        "deferred child milestone seed artifact is missing"
+                    )
+                job = _job(conn, job_id)
+                workspace = Path(
+                    str(job.get("workspace_path") or "")
+                ).expanduser().resolve()
+                policy = _loads(job.get("metadata_json")).get(
+                    "orchestration_policy"
+                )
+                policy = policy if isinstance(policy, dict) else {}
+                seed = _verify_runtime_milestone_seed_artifact(
+                    artifact,
+                    workspace=workspace,
+                    owner_policy=policy,
+                )
+                metadata["runtime_workspace_seed"] = {
+                    "schema": RUNTIME_MILESTONE_SEED_SCHEMA,
+                    "artifact_id": artifact_id,
+                    "milestone_key": activation.get("milestone_key"),
+                    "base_revision": seed["seed_revision"],
+                    "seed_ref": seed["seed_ref"],
+                    "source_checkpoint_event_id": source_event_id,
+                }
+                conn.execute(
+                    "UPDATE execution_nodes SET metadata_json = ? WHERE id = ?",
+                    (_json(metadata), node_id),
+                )
         for dep_key in depends_on:
             from_node = _node_by_key(conn, job_id, dep_key)
             _insert_dependency(conn, job_id, from_node["id"], node_id, "depends_on")
@@ -3585,6 +3663,7 @@ def _apply_op(
         if checkpoint is not None and to_node["state"] in {
             "waiting_structure",
             "waiting_dependency",
+            "waiting_coordination",
         }:
             now = _now()
             source_metadata = _loads(from_node.get("metadata_json"))
@@ -3594,22 +3673,41 @@ def _apply_op(
                 "UPDATE execution_nodes SET metadata_json = ?, updated_at = ? WHERE id = ?",
                 (_json(source_metadata), now, from_node["id"]),
             )
-            if to_node["state"] == "waiting_structure":
+            if to_node["state"] in {"waiting_structure", "waiting_coordination"}:
                 conn.execute(
                     "UPDATE execution_nodes SET state = 'waiting_dependency', updated_at = ? WHERE id = ?",
                     (now, to_node["id"]),
                 )
+            source_ref = str(
+                source_metadata.get("source_responsibility_ref") or ""
+            )
+            source_event_type = None
+            expansion_source_event_id = int(checkpoint["id"])
+            if source_ref:
+                _source_event_id, _candidate, source_event_type = (
+                    _responsibility_candidate_from_ref(
+                        conn,
+                        job_id,
+                        source_ref,
+                    )
+                )
+                expansion_source_event_id = int(_source_event_id)
+            expansion_event_type = (
+                "coordination_candidate_expansion_applied"
+                if source_event_type == "worker_coordination_checkpointed"
+                else "structure_checkpoint_expansion_applied"
+            )
             _event(
                 conn,
                 job_id,
-                "structure_checkpoint_expansion_applied",
+                expansion_event_type,
                 {
                     "integration_owner_node_key": to_node["node_key"],
                     "dependency_node_key": from_node["node_key"],
-                    "checkpoint_event_id": checkpoint["id"],
+                    "checkpoint_event_id": expansion_source_event_id,
                 },
                 node_id=to_node["id"],
-                source_event_id=checkpoint["id"],
+                source_event_id=expansion_source_event_id,
             )
     elif name == "insert_verifier":
         goal_keys = op.get("goal_item_keys") or ([op["target_goal_item_key"]] if op.get("target_goal_item_key") else [])
@@ -5037,8 +5135,15 @@ def _structure_checkpoint_validation_error(
     if checkpoint.get("kind") != "early_structure_assessment":
         return "structure checkpoint kind must be 'early_structure_assessment'"
     recommendation = checkpoint.get("recommendation")
-    if recommendation not in {"continue_single_node", "expand"}:
-        return "structure checkpoint recommendation must be continue_single_node or expand"
+    if recommendation not in {
+        "continue_single_node",
+        "defer_until_milestone",
+        "expand",
+    }:
+        return (
+            "structure checkpoint recommendation must be continue_single_node, "
+            "defer_until_milestone, or expand"
+        )
     if not str(checkpoint.get("summary") or "").strip():
         return "structure checkpoint requires summary"
     inspected = checkpoint.get("inspected_scope")
@@ -5060,8 +5165,13 @@ def _structure_checkpoint_validation_error(
     proposed = checkpoint.get("proposed_nodes") or []
     if not isinstance(proposed, list):
         return "structure checkpoint proposed_nodes must be a list"
-    if recommendation == "expand" and not 2 <= len(proposed) <= 3:
-        return "expand structure checkpoint requires two or three proposed_nodes"
+    if recommendation in {"expand", "defer_until_milestone"} and not 2 <= len(
+        proposed
+    ) <= 3:
+        return (
+            f"{recommendation} structure checkpoint requires two or three "
+            "proposed_nodes"
+        )
     if recommendation == "continue_single_node" and proposed:
         return "continue_single_node structure checkpoint must not propose nodes"
     proposed_keys: set[str] = set()
@@ -5127,6 +5237,49 @@ def _structure_checkpoint_validation_error(
         )
     except PatchValidationError as exc:
         return str(exc)
+    milestone = checkpoint.get("milestone_contract")
+    if recommendation == "defer_until_milestone":
+        if not isinstance(milestone, dict):
+            return "defer_until_milestone requires milestone_contract"
+        milestone_key = str(milestone.get("milestone_key") or "").strip()
+        if not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", milestone_key
+        ):
+            return "milestone_contract milestone_key must be valid"
+        if not str(milestone.get("summary") or "").strip():
+            return "milestone_contract requires summary"
+        for field in ("artifact_scope", "verification_criteria"):
+            values = milestone.get(field)
+            if (
+                not isinstance(values, list)
+                or not values
+                or any(
+                    not isinstance(value, str) or not value.strip()
+                    for value in values
+                )
+                or len(values) != len(set(values))
+            ):
+                return f"milestone_contract requires unique non-empty {field}"
+        try:
+            _validate_declared_write_scopes(
+                milestone.get("artifact_scope") or [],
+                field_name="milestone_contract artifact_scope",
+            )
+        except PatchValidationError as exc:
+            return str(exc)
+        if not shared_scope:
+            return "defer_until_milestone requires shared_integration_scope"
+        for artifact_scope in milestone.get("artifact_scope") or []:
+            if not any(
+                _scope_is_within(artifact_scope, allowed)
+                for allowed in shared_scope
+            ):
+                return (
+                    "milestone_contract artifact_scope must be within "
+                    "shared_integration_scope"
+                )
+    elif milestone not in (None, {}):
+        return "milestone_contract is only allowed for defer_until_milestone"
     risks = checkpoint.get("risks") or []
     if not isinstance(risks, list) or any(
         not isinstance(value, str) or not value.strip() for value in risks
@@ -5212,6 +5365,35 @@ def _coordination_checkpoint_validation_error(
         )
     if checkpoint.get("kind") not in COORDINATION_CHECKPOINT_KINDS:
         return "coordination checkpoint kind is not allowed"
+    milestone_key = checkpoint.get("milestone_key")
+    if milestone_key is not None and (
+        not isinstance(milestone_key, str) or not milestone_key.strip()
+    ):
+        return "coordination checkpoint milestone_key must be null or a non-empty string"
+    if milestone_key is not None and checkpoint.get("kind") != "milestone_completed":
+        return "coordination checkpoint milestone_key requires milestone_completed kind"
+    if node is not None:
+        node_metadata = _loads(node.get("metadata_json"))
+        deferred = node_metadata.get("deferred_decomposition")
+        deferred = deferred if isinstance(deferred, dict) else None
+        if deferred is not None and checkpoint.get("kind") == "milestone_completed":
+            expected_milestone = str(
+                (deferred.get("milestone_contract") or {}).get("milestone_key")
+                or ""
+            ).strip()
+            if (
+                not expected_milestone
+                or str(milestone_key or "").strip() != expected_milestone
+            ):
+                return (
+                    "coordination checkpoint milestone_key does not match "
+                    "deferred milestone"
+                )
+            if checkpoint.get("responsibility_candidates"):
+                return (
+                    "deferred milestone checkpoint must not restate "
+                    "responsibility_candidates"
+                )
     for field in ("summary", "phase", "next_intent"):
         if not str(checkpoint.get(field) or "").strip():
             return f"coordination checkpoint requires {field}"
@@ -5421,6 +5603,22 @@ def _coordination_checkpoint_validation_error(
     if conn is not None and node is not None:
         node_metadata = _loads(node.get("metadata_json"))
         fixture_forced = node_metadata.get("coordination_checkpoint_required") is True
+        deferred = node_metadata.get("deferred_decomposition")
+        deferred = deferred if isinstance(deferred, dict) else None
+        expected_milestone = (
+            str(
+                (deferred.get("milestone_contract") or {}).get("milestone_key")
+                or ""
+            ).strip()
+            if deferred is not None
+            else ""
+        )
+        deferred_milestone = bool(
+            deferred is not None
+            and deferred.get("status") == "waiting_milestone"
+            and checkpoint.get("kind") == "milestone_completed"
+            and str(milestone_key or "").strip() == expected_milestone
+        )
         cross_node_effect = any(
             any(
                 str(key).strip() != str(node.get("node_key") or "")
@@ -5428,7 +5626,12 @@ def _coordination_checkpoint_validation_error(
             )
             for finding in findings
         )
-        if not fixture_forced and not candidates and not cross_node_effect:
+        if (
+            not fixture_forced
+            and not candidates
+            and not cross_node_effect
+            and not deferred_milestone
+        ):
             return (
                 "coordination checkpoint requires a cross-node structural effect "
                 "or responsibility candidate"
@@ -7402,6 +7605,66 @@ def check_runtime_consistency(
 
     for node in conn.execute("SELECT * FROM execution_nodes WHERE job_id = ?", (job_id,)).fetchall():
         metadata = _loads(node["metadata_json"])
+        deferred = metadata.get("deferred_decomposition")
+        if isinstance(deferred, dict):
+            if deferred.get("schema") != "runtime_deferred_decomposition_v1":
+                violations.append({
+                    "type": "deferred_decomposition_schema_invalid",
+                    "node_key": node["node_key"],
+                })
+            source_event_id = deferred.get("source_structure_event_id")
+            if conn.execute(
+                """
+                SELECT 1 FROM execution_events
+                 WHERE id = ? AND job_id = ? AND node_id = ?
+                   AND event_type = 'worker_structure_checkpointed'
+                """,
+                (source_event_id, job_id, node["id"]),
+            ).fetchone() is None:
+                violations.append({
+                    "type": "deferred_decomposition_source_missing",
+                    "node_key": node["node_key"],
+                })
+            if deferred.get("status") == "milestone_activated":
+                artifact_id = str(deferred.get("milestone_artifact_id") or "")
+                if conn.execute(
+                    """
+                    SELECT 1 FROM node_artifacts
+                     WHERE id = ? AND job_id = ? AND node_id = ?
+                       AND artifact_type = 'runtime_milestone_seed'
+                    """,
+                    (artifact_id, job_id, node["id"]),
+                ).fetchone() is None:
+                    violations.append({
+                        "type": "deferred_milestone_seed_missing",
+                        "node_key": node["node_key"],
+                        "artifact_id": artifact_id,
+                    })
+        workspace_seed = metadata.get("runtime_workspace_seed")
+        if isinstance(workspace_seed, dict):
+            artifact_id = str(workspace_seed.get("artifact_id") or "")
+            artifact = conn.execute(
+                """
+                SELECT metadata_json FROM node_artifacts
+                 WHERE id = ? AND job_id = ?
+                   AND artifact_type = 'runtime_milestone_seed'
+                """,
+                (artifact_id, job_id),
+            ).fetchone()
+            if artifact is None:
+                violations.append({
+                    "type": "child_milestone_seed_missing",
+                    "node_key": node["node_key"],
+                    "artifact_id": artifact_id,
+                })
+            elif _loads(artifact["metadata_json"]).get("seed_revision") != (
+                workspace_seed.get("base_revision")
+            ):
+                violations.append({
+                    "type": "child_milestone_seed_revision_mismatch",
+                    "node_key": node["node_key"],
+                    "artifact_id": artifact_id,
+                })
         if not (
             metadata.get("goal_item_keys")
             or metadata.get("gap_keys")
@@ -10786,12 +11049,22 @@ def summarize_runtime_orchestration(
         str(session["node_id"]): session for session in worker_sessions
     }
     children: list[dict[str, Any]] = []
+    deferred_decompositions: list[dict[str, Any]] = []
     for row in conn.execute(
         "SELECT * FROM execution_nodes WHERE job_id = ? ORDER BY created_at, node_key",
         (job_id,),
     ).fetchall():
         node = dict(row)
         node_metadata = _loads(node.get("metadata_json"))
+        deferred = node_metadata.get("deferred_decomposition")
+        if isinstance(deferred, dict):
+            deferred_decompositions.append(
+                {
+                    "node_id": node["id"],
+                    "node_key": node["node_key"],
+                    **deferred,
+                }
+            )
         if not node_metadata.get("non_authoritative_contribution"):
             continue
         workspace = node_metadata.get("runtime_workspace")
@@ -10870,6 +11143,35 @@ def summarize_runtime_orchestration(
                     "declared_scope_status"
                 ),
                 "capture_status": payload.get("capture_status"),
+            }
+        )
+    milestone_seeds: list[dict[str, Any]] = []
+    for row in conn.execute(
+        """
+        SELECT artifact.id, artifact.node_id, artifact.path_or_ref,
+               artifact.metadata_json, node.node_key
+          FROM node_artifacts artifact
+          JOIN execution_nodes node ON node.id = artifact.node_id
+         WHERE artifact.job_id = ?
+           AND artifact.artifact_type = 'runtime_milestone_seed'
+         ORDER BY artifact.created_at, artifact.id
+        """,
+        (job_id,),
+    ).fetchall():
+        payload = _loads(row["metadata_json"])
+        milestone_seeds.append(
+            {
+                "artifact_id": row["id"],
+                "node_id": row["node_id"],
+                "node_key": row["node_key"],
+                "path": row["path_or_ref"],
+                "milestone_key": payload.get("milestone_key"),
+                "base_revision": payload.get("base_revision"),
+                "seed_revision": payload.get("seed_revision"),
+                "seed_ref": payload.get("seed_ref"),
+                "patch_sha256": payload.get("patch_sha256"),
+                "patch_bytes": payload.get("patch_bytes"),
+                "changed_files": payload.get("changed_files") or [],
             }
         )
     checkpoint = conn.execute(
@@ -11368,6 +11670,10 @@ def summarize_runtime_orchestration(
         },
         "children": children,
         "child_count": len(children),
+        "deferred_decompositions": deferred_decompositions,
+        "deferred_decomposition_count": len(deferred_decompositions),
+        "milestone_seeds": milestone_seeds,
+        "milestone_seed_count": len(milestone_seeds),
         "worker_sessions": worker_sessions,
         "worker_session_count": len(worker_sessions),
         "contributions": contributions,
@@ -11473,6 +11779,22 @@ def cleanup_runtime_orchestration_worktrees(
             source="runtime_orchestration",
         )
         return result
+    prior_cleanup = conn.execute(
+        """
+        SELECT payload_json FROM execution_events
+         WHERE job_id = ?
+           AND event_type = 'runtime_orchestration_worktrees_cleaned'
+         ORDER BY id DESC LIMIT 1
+        """,
+        (job_id,),
+    ).fetchone()
+    if prior_cleanup is not None:
+        return {
+            **_loads(prior_cleanup["payload_json"]),
+            "status": "already_clean",
+            "job_id": job_id,
+            "reason": reason,
+        }
     workspace_value = str(job.get("workspace_path") or "").strip()
     worktree_root_value = str(policy.get("worktree_root") or "").strip()
     contribution_root_value = str(policy.get("contribution_root") or "").strip()
@@ -11557,6 +11879,27 @@ def cleanup_runtime_orchestration_worktrees(
         if payload.get("artifact_id")
     }
     errors: list[str] = []
+    milestone_seeds: list[dict[str, Any]] = []
+    for row in conn.execute(
+        """
+        SELECT * FROM node_artifacts
+         WHERE job_id = ? AND artifact_type = 'runtime_milestone_seed'
+         ORDER BY created_at, id
+        """,
+        (job_id,),
+    ).fetchall():
+        artifact = dict(row)
+        artifact["payload"] = _loads(artifact.get("metadata_json"))
+        try:
+            milestone_seeds.append(
+                _verify_runtime_milestone_seed_artifact(
+                    artifact,
+                    workspace=workspace,
+                    owner_policy=policy,
+                )
+            )
+        except RuntimeError as exc:
+            errors.append(str(exc))
     for node, _node_metadata in children:
         attempt_artifacts = attempts_by_node.get(str(node["id"]), [])
         if not attempt_artifacts:
@@ -11633,11 +11976,24 @@ def cleanup_runtime_orchestration_worktrees(
         removed.append(str(path))
     if worktree_root.is_dir() and not any(worktree_root.iterdir()):
         worktree_root.rmdir()
+    removed_seed_refs: list[str] = []
+    for seed in milestone_seeds:
+        seed_ref = str(seed.get("seed_ref") or "")
+        if not seed_ref:
+            continue
+        _run_git_command(
+            workspace,
+            ["update-ref", "-d", seed_ref, str(seed["seed_revision"])],
+            owner_policy=policy,
+        )
+        removed_seed_refs.append(seed_ref)
     result = {
-        "status": "cleaned" if removed else "already_clean",
+        "status": "cleaned" if removed or removed_seed_refs else "already_clean",
         "job_id": job_id,
         "reason": reason,
         "removed_worktrees": removed,
+        "removed_milestone_seed_refs": removed_seed_refs,
+        "milestone_seed_artifacts_retained": len(milestone_seeds),
         "contributions_retained": sum(len(value) for value in artifacts_by_node.values()),
         "attempt_patches_retained": sum(
             len(value) for value in attempts_by_node.values()
@@ -11728,7 +12084,27 @@ def _prepare_runtime_node_workspace(
     job_metadata = _loads(job.get("metadata_json"))
     policy = job_metadata.get("orchestration_policy")
     policy = policy if isinstance(policy, dict) else {}
-    base_revision = str(policy.get("base_revision") or "").removeprefix("git:")
+    metadata = _loads(node.get("metadata_json"))
+    seed = metadata.get("runtime_workspace_seed")
+    seed = seed if isinstance(seed, dict) else None
+    base_revision = str(
+        (seed or {}).get("base_revision") or policy.get("base_revision") or ""
+    ).removeprefix("git:")
+    if seed is not None:
+        artifact = _runtime_artifact_by_id(
+            conn,
+            str(seed.get("artifact_id") or ""),
+            artifact_type="runtime_milestone_seed",
+        )
+        if artifact is None:
+            raise RuntimeError("runtime workspace seed artifact is missing")
+        verified_seed = _verify_runtime_milestone_seed_artifact(
+            artifact,
+            workspace=job_workspace,
+            owner_policy=policy,
+        )
+        if verified_seed["seed_revision"] != base_revision:
+            raise RuntimeError("runtime workspace seed revision mismatch")
     if not base_revision:
         base_revision = _run_git_command(
             job_workspace,
@@ -11763,11 +12139,13 @@ def _prepare_runtime_node_workspace(
             owner_policy=policy,
         )
     _apply_workspace_owner(path, policy)
-    metadata = _loads(node.get("metadata_json"))
     metadata["runtime_workspace"] = {
         "mode": "isolated_worktree",
         "path": str(path),
         "base_revision": base_revision,
+        "milestone_seed_artifact_id": (
+            seed.get("artifact_id") if seed is not None else None
+        ),
     }
     node["metadata_json"] = _json(metadata)
     conn.execute(
@@ -12448,9 +12826,10 @@ def _worker_context(
             "provide real parallel value. The existing node remains the integration owner. "
             "Finish this attempt with exactly one final fenced JSON object using schema "
             "runtime_worker_structure_checkpoint_v1 and no prose after it. Set kind to "
-            "early_structure_assessment, recommendation to continue_single_node or expand, and "
+            "early_structure_assessment, recommendation to continue_single_node, "
+            "defer_until_milestone, or expand, and "
             "include summary, inspected_scope, repository_facts with evidence_refs, proposed_nodes, "
-            "integration_owner_node_key, shared_integration_scope, risks, "
+            "integration_owner_node_key, shared_integration_scope, milestone_contract, risks, "
             "worker_session_should_resume=true, and changed_files=[]. For expand, propose between "
             f"2 and {structure_max_children} nodes; each needs node_key, outcome, "
             "acceptance_criteria, declared_write_scope, "
@@ -12458,7 +12837,11 @@ def _worker_context(
             "filesystem_write, workspace_write, git_read, git_write, process_spawn, "
             "long_running_process, network_access, secret_access, external_cost, "
             "destructive_action, workspace_escape, db_read, or db_migration. For "
-            "continue_single_node, proposed_nodes must be empty. "
+            "defer_until_milestone only when those same low-coupling responsibilities are real "
+            "but cannot safely start until this Primary establishes and verifies one shared "
+            "contract. In that case propose the nodes now and provide milestone_contract with "
+            "milestone_key, summary, artifact_scope, and verification_criteria. For "
+            "continue_single_node, proposed_nodes must be empty and milestone_contract must be null. "
             f"This job permits at most {structure_max_children} children; the trusted worker "
             f"lane is {structure_worker_lane or 'the Runtime-selected lane'}; child capability "
             f"requests must be a subset of {_json(structure_required_capabilities)}.\n\n"
@@ -12505,6 +12888,13 @@ def _worker_context(
             "created a node or changed the graph.\n\n"
         )
     event_driven_coordination_boundary = ""
+    deferred_decomposition = metadata.get("deferred_decomposition")
+    deferred_decomposition = (
+        deferred_decomposition
+        if isinstance(deferred_decomposition, dict)
+        and deferred_decomposition.get("status") == "waiting_milestone"
+        else None
+    )
     if (
         isinstance(orchestration_policy, dict)
         and orchestration_policy.get("mode") == "closed_loop_coordination"
@@ -12523,6 +12913,18 @@ def _worker_context(
             "complete but evidence exposes a separate responsibility owned by another "
             "nonterminal integration node.\n\n"
         )
+        if deferred_decomposition is not None:
+            event_driven_coordination_boundary += (
+                "Deferred decomposition is active. Continue the complete Primary responsibility "
+                "in this same worker session. Establish and verify the exact shared milestone "
+                "contract below before any child can start. At the first safe point after the "
+                "contract is genuinely satisfied, emit a nonterminal coordination checkpoint "
+                "with kind=milestone_completed and copy the exact milestone_key. Do not restate "
+                "or invent child candidates; Runtime retained the original assessment and will "
+                "activate it only after capturing an immutable seed. If the milestone is not yet "
+                "satisfied, continue working normally. Deferred contract: "
+                f"{_json(deferred_decomposition)}\n\n"
+            )
     receipt_recovery_instruction = ""
     resume_from_materialization_id = (continuity or {}).get(
         "resume_from_materialization_id"
@@ -12831,6 +13233,292 @@ def _verify_runtime_attempt_patch_artifact(
     if observed != expected:
         raise RuntimeError("runtime attempt patch artifact hash mismatch")
     payload["artifact_id"] = str(artifact["id"])
+    return payload
+
+
+def _milestone_seed_artifact_for_materialization(
+    conn: sqlite3.Connection,
+    job_id: str,
+    materialization_id: str,
+    milestone_key: str,
+) -> Optional[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT * FROM node_artifacts
+         WHERE job_id = ? AND artifact_type = 'runtime_milestone_seed'
+         ORDER BY created_at, id
+        """,
+        (job_id,),
+    ).fetchall()
+    for row in rows:
+        artifact = dict(row)
+        payload = _loads(artifact.get("metadata_json"))
+        if (
+            str(payload.get("materialization_id") or "") == materialization_id
+            and str(payload.get("milestone_key") or "") == milestone_key
+        ):
+            artifact["payload"] = payload
+            return artifact
+    return None
+
+
+def _ensure_runtime_milestone_seed_event(
+    conn: sqlite3.Connection,
+    job_id: str,
+    node_id: str,
+    materialization: dict[str, Any],
+    payload: dict[str, Any],
+) -> int:
+    artifact_id = str(payload["artifact_id"])
+    existing = conn.execute(
+        """
+        SELECT id FROM execution_events
+         WHERE job_id = ? AND event_type = 'runtime_milestone_seed_frozen'
+           AND json_extract(payload_json, '$.artifact_id') = ?
+         ORDER BY id LIMIT 1
+        """,
+        (job_id, artifact_id),
+    ).fetchone()
+    if existing is not None:
+        return int(existing["id"])
+    return _event(
+        conn,
+        job_id,
+        "runtime_milestone_seed_frozen",
+        payload,
+        node_id=node_id,
+        task_id=materialization.get("task_id"),
+        run_id=materialization.get("run_id"),
+        source="runtime_kernel",
+    )
+
+
+def _verify_runtime_milestone_seed_artifact(
+    artifact: dict[str, Any],
+    *,
+    workspace: Path,
+    owner_policy: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    payload = dict(artifact.get("payload") or _loads(artifact.get("metadata_json")))
+    if payload.get("schema") != RUNTIME_MILESTONE_SEED_SCHEMA:
+        raise RuntimeError("runtime milestone seed schema mismatch")
+    patch_path = Path(
+        str(artifact.get("path_or_ref") or payload.get("patch_ref") or "")
+    )
+    expected_hash = str(payload.get("patch_sha256") or "")
+    seed_revision = str(payload.get("seed_revision") or "")
+    seed_ref = str(payload.get("seed_ref") or "")
+    if not patch_path.is_file() or not expected_hash or not seed_revision or not seed_ref:
+        raise RuntimeError("runtime milestone seed artifact is incomplete")
+    observed_hash = hashlib.sha256(patch_path.read_bytes()).hexdigest()
+    if observed_hash != expected_hash:
+        raise RuntimeError("runtime milestone seed patch hash mismatch")
+    observed_revision = _run_git_command(
+        workspace,
+        ["rev-parse", "--verify", seed_ref],
+        owner_policy=owner_policy,
+    ).strip()
+    if observed_revision != seed_revision:
+        raise RuntimeError("runtime milestone seed ref mismatch")
+    _run_git_command(
+        workspace,
+        ["cat-file", "-e", f"{seed_revision}^{{commit}}"],
+        owner_policy=owner_policy,
+    )
+    payload["artifact_id"] = str(artifact["id"])
+    return payload
+
+
+def _freeze_runtime_milestone_seed(
+    conn: sqlite3.Connection,
+    job: dict[str, Any],
+    node: dict[str, Any],
+    materialization: dict[str, Any],
+    checkpoint: dict[str, Any],
+    deferred: dict[str, Any],
+) -> dict[str, Any]:
+    milestone = deferred.get("milestone_contract") or {}
+    milestone_key = str(milestone.get("milestone_key") or "").strip()
+    if not milestone_key or checkpoint.get("milestone_key") != milestone_key:
+        raise RuntimeError("runtime milestone checkpoint does not match deferred contract")
+    existing = _milestone_seed_artifact_for_materialization(
+        conn,
+        str(job["id"]),
+        str(materialization["id"]),
+        milestone_key,
+    )
+    workspace = Path(str(job.get("workspace_path") or "")).expanduser().resolve()
+    policy = _loads(job.get("metadata_json")).get("orchestration_policy")
+    policy = policy if isinstance(policy, dict) else {}
+    if existing is not None:
+        payload = _verify_runtime_milestone_seed_artifact(
+            existing,
+            workspace=workspace,
+            owner_policy=policy,
+        )
+        payload["event_id"] = _ensure_runtime_milestone_seed_event(
+            conn,
+            str(job["id"]),
+            str(node["id"]),
+            materialization,
+            payload,
+        )
+        return payload
+    if not workspace.is_dir():
+        raise RuntimeError("runtime milestone seed requires job workspace")
+    base_revision = str(policy.get("base_revision") or "").removeprefix("git:")
+    if not base_revision:
+        base_revision = _run_git_command(
+            workspace,
+            ["rev-parse", "HEAD"],
+            owner_policy=policy,
+        ).strip()
+    patch = _collect_runtime_workspace_patch(
+        workspace,
+        base_revision,
+        owner_policy=policy,
+    )
+    if not patch:
+        raise RuntimeError("runtime milestone seed requires a non-empty workspace patch")
+    changed_files = _runtime_workspace_changed_files(
+        workspace,
+        base_revision,
+        owner_policy=policy,
+    )
+    reported_files = {
+        str(value).strip().replace("\\", "/")
+        for value in checkpoint.get("changed_files") or []
+    }
+    if not reported_files or not reported_files.issubset(set(changed_files)):
+        raise RuntimeError(
+            "runtime milestone checkpoint changed_files do not match workspace patch"
+        )
+    artifact_scopes = milestone.get("artifact_scope") or []
+    if not any(
+        fnmatch.fnmatch(path, scope)
+        for path in changed_files
+        for scope in artifact_scopes
+    ):
+        raise RuntimeError("runtime milestone seed does not touch artifact_scope")
+
+    root = Path(
+        str(
+            policy.get("contribution_root")
+            or (workspace.parent / "runtime-contributions" / str(job["id"]))
+        )
+    ).expanduser().resolve()
+    artifact_id = _id("art")
+    milestone_root = (
+        root
+        / "milestones"
+        / _safe_workspace_component(str(node["node_key"]))
+        / _safe_workspace_component(milestone_key)
+    )
+    patch_path = milestone_root / f"{artifact_id}.patch"
+    metadata_path = milestone_root / f"{artifact_id}.json"
+    seed_worktree = milestone_root / f".{artifact_id}.worktree"
+    patch_sha = hashlib.sha256(patch.encode("utf-8")).hexdigest()
+    _write_runtime_artifact_text(patch_path, patch)
+    seed_ref = (
+        "refs/hermes-runtime/"
+        f"{_safe_workspace_component(str(job['id']))}/"
+        f"{_safe_workspace_component(milestone_key)}"
+    )
+    try:
+        _run_git_command(
+            workspace,
+            ["worktree", "add", "--detach", str(seed_worktree), base_revision],
+            owner_policy=policy,
+        )
+        _apply_workspace_owner(seed_worktree, policy)
+        _run_git_command(
+            seed_worktree,
+            ["apply", "--index", "--binary", str(patch_path)],
+            owner_policy=policy,
+        )
+        _run_git_command(
+            seed_worktree,
+            [
+                "-c",
+                "user.name=Hermes Runtime",
+                "-c",
+                "user.email=runtime@hermes.invalid",
+                "commit",
+                "--no-gpg-sign",
+                "-m",
+                f"Hermes runtime milestone {milestone_key}",
+            ],
+            owner_policy=policy,
+        )
+        seed_revision = _run_git_command(
+            seed_worktree,
+            ["rev-parse", "HEAD"],
+            owner_policy=policy,
+        ).strip()
+        _run_git_command(
+            workspace,
+            ["update-ref", seed_ref, seed_revision],
+            owner_policy=policy,
+        )
+    finally:
+        if seed_worktree.exists():
+            completed = _run_git_process(
+                workspace,
+                ["worktree", "remove", "--force", str(seed_worktree)],
+                owner_policy=policy,
+            )
+            if completed.returncode != 0:
+                raise RuntimeError(
+                    "runtime milestone seed temporary worktree cleanup failed: "
+                    + (completed.stderr.strip() or completed.stdout.strip())
+                )
+
+    payload = {
+        "schema": RUNTIME_MILESTONE_SEED_SCHEMA,
+        "artifact_id": artifact_id,
+        "job_id": job["id"],
+        "node_id": node["id"],
+        "node_key": node["node_key"],
+        "materialization_id": materialization["id"],
+        "materialization_attempt": int(materialization["attempt"]),
+        "milestone_key": milestone_key,
+        "source_structure_event_id": deferred["source_structure_event_id"],
+        "base_revision": base_revision,
+        "seed_revision": seed_revision,
+        "seed_ref": seed_ref,
+        "patch_ref": str(patch_path),
+        "patch_sha256": patch_sha,
+        "patch_bytes": len(patch.encode("utf-8")),
+        "changed_files": changed_files,
+        "file_sha256": _contribution_file_hashes(workspace, changed_files),
+        "artifact_scope": artifact_scopes,
+    }
+    _write_runtime_artifact_text(metadata_path, _json(payload) + "\n")
+    conn.execute(
+        """
+        INSERT INTO node_artifacts (
+            id, job_id, node_id, artifact_type, path_or_ref, summary,
+            metadata_json, created_at
+        ) VALUES (?, ?, ?, 'runtime_milestone_seed', ?, ?, ?, ?)
+        """,
+        (
+            artifact_id,
+            job["id"],
+            node["id"],
+            str(patch_path),
+            f"Frozen milestone seed {milestone_key}",
+            _json(payload),
+            _now(),
+        ),
+    )
+    event_id = _ensure_runtime_milestone_seed_event(
+        conn,
+        str(job["id"]),
+        str(node["id"]),
+        materialization,
+        payload,
+    )
+    payload["event_id"] = event_id
     return payload
 
 
@@ -13319,6 +14007,52 @@ def _ingest_runtime_structure_checkpoint(
         "UPDATE node_materializations SET metadata_json = ? WHERE id = ?",
         (_json(mat_metadata), materialization["id"]),
     )
+    if checkpoint["recommendation"] == "defer_until_milestone":
+        node_metadata = _loads(node.get("metadata_json"))
+        node_metadata["deferred_decomposition"] = {
+            "schema": "runtime_deferred_decomposition_v1",
+            "status": "waiting_milestone",
+            "source_structure_event_id": event_id,
+            "integration_owner_node_key": node["node_key"],
+            "proposed_nodes": checkpoint.get("proposed_nodes") or [],
+            "shared_integration_scope": checkpoint.get(
+                "shared_integration_scope"
+            )
+            or [],
+            "milestone_contract": checkpoint.get("milestone_contract"),
+            "repository_facts": checkpoint.get("repository_facts") or [],
+            "created_at": now,
+        }
+        conn.execute(
+            """
+            UPDATE execution_nodes
+               SET state = 'ready', metadata_json = ?, updated_at = ?
+             WHERE id = ? AND state = 'waiting_structure'
+            """,
+            (_json(node_metadata), now, node["id"]),
+        )
+        _event(
+            conn,
+            node["job_id"],
+            "structure_checkpoint_deferred_applied",
+            {
+                "node_key": node["node_key"],
+                "checkpoint_event_id": event_id,
+                "milestone_key": checkpoint["milestone_contract"][
+                    "milestone_key"
+                ],
+                "candidate_keys": [
+                    item["node_key"]
+                    for item in checkpoint.get("proposed_nodes") or []
+                ],
+                "provider_called": False,
+            },
+            node_id=node["id"],
+            source_event_id=event_id,
+            source="runtime_kernel",
+        )
+        reduce_runtime_job(conn, node["job_id"])
+        return True
     _touch_job(conn, node["job_id"], state="waiting_decision")
     reduce_runtime_job(conn, node["job_id"])
     return True
@@ -13660,6 +14394,70 @@ def _ingest_runtime_coordination_checkpoint(
     ).fetchone()
     if prior is not None:
         return False
+    node_metadata = _loads(node.get("metadata_json"))
+    deferred = node_metadata.get("deferred_decomposition")
+    deferred = deferred if isinstance(deferred, dict) else None
+    deferred_activation: Optional[dict[str, Any]] = None
+    if (
+        deferred is not None
+        and deferred.get("status") == "waiting_milestone"
+        and checkpoint.get("kind") == "milestone_completed"
+    ):
+        seed = _freeze_runtime_milestone_seed(
+            conn,
+            job,
+            node,
+            materialization,
+            checkpoint,
+            deferred,
+        )
+        goal_item_keys = sorted(_node_linked_goal_item_keys(conn, node))
+        evidence_refs = [
+            f"event:{int(deferred['source_structure_event_id'])}",
+            f"artifact:{seed['artifact_id']}",
+        ]
+        candidates = [
+            {
+                "candidate_key": str(item["node_key"]),
+                "outcome": str(item["outcome"]),
+                "reason_type": "execution_discovered_gap",
+                "acceptance_criteria": list(item["acceptance_criteria"]),
+                "declared_write_scope": list(item["declared_write_scope"]),
+                "goal_item_keys": goal_item_keys,
+                "integration_owner_node_key": str(node["node_key"]),
+                "evidence_refs": evidence_refs,
+            }
+            for item in deferred.get("proposed_nodes") or []
+        ]
+        checkpoint = {
+            **checkpoint,
+            "responsibility_candidates": candidates,
+        }
+        deferred_activation = {
+            "schema": "runtime_deferred_activation_v1",
+            "source_structure_event_id": int(
+                deferred["source_structure_event_id"]
+            ),
+            "milestone_key": seed["milestone_key"],
+            "milestone_artifact_id": seed["artifact_id"],
+            "milestone_seed_revision": seed["seed_revision"],
+            "milestone_seed_ref": seed["seed_ref"],
+            "candidate_keys": [item["candidate_key"] for item in candidates],
+        }
+        deferred.update(
+            {
+                "status": "milestone_activated",
+                "milestone_artifact_id": seed["artifact_id"],
+                "milestone_seed_revision": seed["seed_revision"],
+                "milestone_seed_ref": seed["seed_ref"],
+                "activated_at": _now(),
+            }
+        )
+        node_metadata["deferred_decomposition"] = deferred
+        conn.execute(
+            "UPDATE execution_nodes SET metadata_json = ?, updated_at = ? WHERE id = ?",
+            (_json(node_metadata), _now(), node["id"]),
+        )
     now = _now()
     snapshot_run_id = snapshot.run.id if snapshot.run else node.get("latest_run_id")
     mat_metadata = _loads(materialization.get("metadata_json"))
@@ -13713,6 +14511,7 @@ def _ingest_runtime_coordination_checkpoint(
             "contract_revision": int(node.get("contract_revision") or 1),
             "acknowledged_directive_ids": acknowledged,
             "checkpoint": checkpoint,
+            "deferred_activation": deferred_activation,
         },
         node_id=node["id"],
         task_id=node.get("latest_task_id"),
@@ -13720,6 +14519,10 @@ def _ingest_runtime_coordination_checkpoint(
         source="kanban_task",
     )
     mat_metadata["coordination_checkpoint"]["event_id"] = event_id
+    if deferred_activation is not None:
+        mat_metadata["coordination_checkpoint"]["deferred_activation"] = (
+            deferred_activation
+        )
     conn.execute(
         "UPDATE node_materializations SET metadata_json = ? WHERE id = ?",
         (_json(mat_metadata), materialization["id"]),

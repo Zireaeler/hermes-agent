@@ -4086,6 +4086,7 @@ def test_early_structure_checkpoint_pauses_without_ledger_and_resumes_same_sessi
         "proposed_nodes": [],
         "integration_owner_node_key": "understand-scope",
         "shared_integration_scope": [],
+        "milestone_contract": None,
         "risks": [],
         "worker_session_should_resume": True,
         "changed_files": [],
@@ -5739,6 +5740,7 @@ def _coordination_checkpoint(
     changed_files: list[str],
     consumed_directive_ids: list[str] | None = None,
     responsibility_candidates: list[dict] | None = None,
+    milestone_key: str | None = None,
 ):
     return {
         "schema": rk.COORDINATION_CHECKPOINT_SCHEMA,
@@ -5755,6 +5757,7 @@ def _coordination_checkpoint(
             "evidence_refs": [f"workspace:path:{changed_files[0]}"],
         }],
         "next_intent": "consume Runtime coordination and finish the responsibility",
+        "milestone_key": milestone_key,
         "changed_files": changed_files,
         "consumed_directive_ids": consumed_directive_ids or [],
         "responsibility_candidates": responsibility_candidates or [],

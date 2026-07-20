@@ -253,7 +253,7 @@ def test_decision_profile_loader_reads_markdown_profile():
     profile = rd.load_decision_profile("graph_patch_decision")
 
     assert profile["profile_name"] == "graph_patch_decision"
-    assert profile["profile_version"] == "8"
+    assert profile["profile_version"] == "9"
     assert "外部调研本身不构成独立 Runtime node 的理由" in profile["content"]
     assert "最多创建一个新的 runnable worker node" in profile["content"]
     assert "整个 workspace 使用 `**`" in profile["content"]

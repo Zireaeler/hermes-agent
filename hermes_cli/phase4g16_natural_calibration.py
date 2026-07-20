@@ -218,6 +218,15 @@ if __name__ == "__main__":
                 "src/core/event.py": '''def ingest(kind, payload):
     return {"kind": str(kind), "payload": dict(payload)}
 ''',
+                "src/core/schema.py": '''def validate_event(event):
+    return event
+''',
+                "src/core/batch.py": '''from .event import ingest
+
+
+def ingest_batch(records):
+    return [ingest(item["kind"], item["payload"]) for item in records]
+''',
                 "src/core/export.py": '''import json
 
 
@@ -230,6 +239,18 @@ def export_event(event):
 
 def load_plugin(module_name):
     return importlib.import_module(module_name)
+''',
+                "src/extensions/legacy_v1.py": '''from .loader import load_plugin
+
+
+def run_v1_plugin(module_name, event):
+    return load_plugin(module_name).transform(event)
+''',
+                "src/extensions/audit_jsonl.py": '''import json
+
+
+def export_audit_batch(policy_module, events):
+    return "\\n".join(json.dumps(event) for event in events)
 ''',
                 "fixtures/__init__.py": "",
                 "fixtures/v1_enricher.py": '''def transform(event):
@@ -282,6 +303,91 @@ class CorePipelineTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             export_event(ingest("bad", {"value": math.nan}))
 
+    def test_kind_is_normalized_and_must_not_be_empty(self):
+        self.assertEqual(ingest(" Created ", {})["kind"], "created")
+        with self.assertRaises(ValueError):
+            ingest("   ", {})
+
+    def test_payload_must_be_a_mapping(self):
+        with self.assertRaises(TypeError):
+            ingest("created", [("item", 3)])
+
+
+if __name__ == "__main__":
+    unittest.main()
+''',
+                "tests/test_core_batch.py": '''import copy
+import unittest
+
+from src.core.batch import ingest_batch
+
+
+class CoreBatchTest(unittest.TestCase):
+    def test_batch_uses_the_same_v2_contract(self):
+        records = [
+            {"kind": "created", "payload": {"item": 1}},
+            {"kind": "updated", "payload": {"item": 2}},
+        ]
+        self.assertEqual(ingest_batch(records), [
+            {"version": 2, "kind": "created", "payload": {"item": 1}},
+            {"version": 2, "kind": "updated", "payload": {"item": 2}},
+        ])
+
+    def test_batch_does_not_mutate_source_records(self):
+        records = [{"kind": "created", "payload": {"nested": {"value": 1}}}]
+        original = copy.deepcopy(records)
+        result = ingest_batch(records)
+        result[0]["payload"]["nested"]["value"] = 9
+        self.assertEqual(records, original)
+
+    def test_batch_reports_the_failing_record_index(self):
+        records = [
+            {"kind": "created", "payload": {}},
+            {"kind": "   ", "payload": {}},
+        ]
+        with self.assertRaisesRegex(ValueError, "record 1"):
+            ingest_batch(records)
+
+
+if __name__ == "__main__":
+    unittest.main()
+''',
+                "tests/test_schema_validation.py": '''import math
+import unittest
+
+from src.core.schema import validate_event
+
+
+class SchemaValidationTest(unittest.TestCase):
+    def test_valid_v2_event_is_returned_unchanged(self):
+        event = {"version": 2, "kind": "created", "payload": {"item": 3}}
+        self.assertIs(validate_event(event), event)
+
+    def test_contract_has_exact_top_level_fields(self):
+        with self.assertRaises(ValueError):
+            validate_event({
+                "version": 2,
+                "kind": "created",
+                "payload": {},
+                "legacy": True,
+            })
+
+    def test_nested_payload_keys_must_be_strings(self):
+        with self.assertRaises(TypeError):
+            validate_event({
+                "version": 2,
+                "kind": "created",
+                "payload": {"nested": {1: "bad"}},
+            })
+
+    def test_payload_must_be_json_safe(self):
+        with self.assertRaises(ValueError):
+            validate_event({
+                "version": 2,
+                "kind": "created",
+                "payload": {"value": math.inf},
+            })
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -322,9 +428,23 @@ class LegacyPluginTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             run_v1_plugin("fixtures.bad_v1_plugin", ingest("bad", {}))
 
+    def test_plugin_exception_keeps_its_original_type(self):
+        with self.assertRaisesRegex(RuntimeError, "plugin failed"):
+            run_v1_plugin(
+                "fixtures.v1_failure",
+                ingest("created", {"value": 1}),
+            )
+
+    def test_module_without_transform_is_rejected(self):
+        with self.assertRaises(ValueError):
+            run_v1_plugin("fixtures.audit_policy", ingest("created", {}))
+
 
 if __name__ == "__main__":
     unittest.main()
+''',
+                "fixtures/v1_failure.py": '''def transform(event):
+    raise RuntimeError("plugin failed")
 ''',
                 "tests/test_audit_jsonl.py": '''import copy
 import json
@@ -367,6 +487,33 @@ class AuditJsonlTest(unittest.TestCase):
             export_audit_batch(
                 "fixtures.audit_policy",
                 [{"kind": "legacy", "payload": {}}],
+            )
+
+    def test_nested_sensitive_fields_are_removed(self):
+        events = [ingest("created", {
+            "item": {"token": "hidden", "name": "kept"},
+            "rows": [{"password": "hidden", "value": 2}],
+        })]
+        row = json.loads(
+            export_audit_batch("fixtures.audit_policy", events)
+        )
+        self.assertEqual(row["payload"], {
+            "item": {"name": "kept"},
+            "rows": [{"value": 2}],
+        })
+
+    def test_empty_filtered_batch_has_no_trailing_newline(self):
+        output = export_audit_batch(
+            "fixtures.audit_policy",
+            [ingest("heartbeat", {"sequence": 1})],
+        )
+        self.assertEqual(output, "")
+
+    def test_policy_module_contract_is_checked(self):
+        with self.assertRaises(ValueError):
+            export_audit_batch(
+                "fixtures.v1_enricher",
+                [ingest("created", {})],
             )
 
 

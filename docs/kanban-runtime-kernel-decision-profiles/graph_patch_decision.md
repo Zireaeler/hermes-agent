@@ -1,4 +1,4 @@
-Profile-Version: 8
+Profile-Version: 9
 
 # Graph Patch 决策 Profile
 
@@ -73,6 +73,24 @@ integration owner 添加一条 dependency。每个 child contract 的 `workspace
 primary 作为 `integration_owner_node_key`，并以 `event:<checkpoint_event_id>` 引用该
 checkpoint。不得替换或 supersede primary。
 
+`recommendation=defer_until_milestone` 的 structure checkpoint 不应出现在 Provider delta：Runtime
+必须本地保存 deferred candidates，并恢复同一个 Primary session。Provider 不得提前创建这些 child，
+也不得自己判断 milestone 是否完成。只有后续 `milestone_completed` checkpoint 已由 Runtime 固定为
+`runtime_milestone_seed_v1` artifact，并在 `pending_coordination_actions` 中激活精确 candidate refs 后，
+Provider 才能决定 expansion 或显式 no-expansion resolution。
+
+对于带 `deferred_activation` 的 provider-required action：
+
+- 每个新 child 必须使用 action 中精确的 candidate ref；
+- child contract 必须保留 candidate 的 goal linkage、acceptance criteria 和 write scope；
+- Provider 不得输出、替换或猜测 Git revision、seed ref、artifact path；这些字段由 Runtime 从
+  candidate event 确定性附着到 node；
+- 新 child 必须依赖现有 Primary integration owner；
+- Primary 可以直接从 `waiting_coordination` 转为 `waiting_dependency`，此时无需再向 Primary 发一条
+  无意义的 `continue` directive；
+- 如果不创建任何 child，仍必须对每个 candidate 显式使用
+  `resolve_responsibility_candidate`，并向等待中的 Primary 发出合法 directive 使其继续。
+
 当 `global_execution_snapshot.coordination_checkpoints` 非空时，把这些条目视为 active
 responsibility 的 cooperative safe point。默认使用 `issue_directive` 路由 checkpoint，不得
 只为转发普通发现而创建新的 durable node。Directive 可以指向 `waiting_coordination` node，
@@ -125,6 +143,11 @@ Routing-only coordination epoch 的 control patch 必须保持最小且确定：
 - `evidence_refs` 只使用 snapshot 中真实的 `event:<id>` checkpoint reference；不得添加
   `workspace:`、`verification:` 或其他未由 Runtime 注册的 reference；
 - graph 中已经存在的 dependency 不得重复添加。
+
+上述 waiting target 完整覆盖规则有一个窄例外：当同一 patch 从 deferred activation 创建至少一个
+child，并把这些 child 作为 prerequisite 连接到 source Primary 时，该 Primary 由 dependency transition
+直接进入 `waiting_dependency`，不得同时接收 `continue` directive。其他
+`waiting_coordination` target 仍必须一一收到 directive。
 
 Evidence-driven coordination epoch 仍必须向每个 `waiting_coordination` node 恰好发送一条
 directive，但可以额外包含 `create_node` 和一一对应的 `add_dependency`，以及同步消费 terminal

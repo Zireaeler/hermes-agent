@@ -293,7 +293,11 @@ _RUNTIME_STRUCTURE_OUTPUT_SCHEMA: dict[str, Any] = {
         "kind": {"type": "string", "enum": ["early_structure_assessment"]},
         "recommendation": {
             "type": "string",
-            "enum": ["continue_single_node", "expand"],
+            "enum": [
+                "continue_single_node",
+                "defer_until_milestone",
+                "expand",
+            ],
         },
         "summary": {"type": "string"},
         "inspected_scope": {"type": "array", "items": {"type": "string"}},
@@ -344,6 +348,33 @@ _RUNTIME_STRUCTURE_OUTPUT_SCHEMA: dict[str, Any] = {
         },
         "integration_owner_node_key": {"type": "string"},
         "shared_integration_scope": {"type": "array", "items": {"type": "string"}},
+        "milestone_contract": {
+            "anyOf": [
+                {"type": "null"},
+                {
+                    "type": "object",
+                    "properties": {
+                        "milestone_key": {"type": "string"},
+                        "summary": {"type": "string"},
+                        "artifact_scope": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "verification_criteria": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                    },
+                    "required": [
+                        "milestone_key",
+                        "summary",
+                        "artifact_scope",
+                        "verification_criteria",
+                    ],
+                    "additionalProperties": False,
+                },
+            ]
+        },
         "risks": {"type": "array", "items": {"type": "string"}},
         "worker_session_should_resume": {"type": "boolean"},
         "changed_files": {"type": "array", "items": {"type": "string"}},
@@ -358,6 +389,7 @@ _RUNTIME_STRUCTURE_OUTPUT_SCHEMA: dict[str, Any] = {
         "proposed_nodes",
         "integration_owner_node_key",
         "shared_integration_scope",
+        "milestone_contract",
         "risks",
         "worker_session_should_resume",
         "changed_files",
@@ -429,6 +461,9 @@ _RUNTIME_COORDINATION_OUTPUT_SCHEMA: dict[str, Any] = {
             },
         },
         "next_intent": {"type": "string"},
+        "milestone_key": {
+            "anyOf": [{"type": "string"}, {"type": "null"}]
+        },
         "changed_files": {"type": "array", "items": {"type": "string"}},
         "responsibility_candidates": {
             "type": "array",
@@ -492,6 +527,7 @@ _RUNTIME_COORDINATION_OUTPUT_SCHEMA: dict[str, Any] = {
         "remaining_scope",
         "findings",
         "next_intent",
+        "milestone_key",
         "changed_files",
         "responsibility_candidates",
         "consumed_directive_ids",
@@ -2459,19 +2495,24 @@ fence and do not add prose before or after it:
   "proposed_nodes": [],
   "integration_owner_node_key": "node key from Runtime footer",
   "shared_integration_scope": [],
+  "milestone_contract": null,
   "risks": [],
   "worker_session_should_resume": true,
   "changed_files": []
 }
 ```
 
-Use recommendation `expand` only for 2-3 low-coupling responsibilities with
-non-overlapping declared write scopes. Each proposed node must include
+Use recommendation `expand` only when 2-3 low-coupling responsibilities can
+start safely now. Use `defer_until_milestone` when those responsibilities are
+real but first require this Primary to establish and verify one shared contract;
+in that case include the 2-3 proposed nodes and a non-null `milestone_contract`.
+Each proposed node must include
 `node_key`, `outcome`, `acceptance_criteria`, `declared_write_scope`, and
 `requested_capabilities`. Use only Runtime capability names from the task
 context; typical local implementation capabilities are `filesystem_read`,
 `workspace_write`, `git_read`, and `process_spawn`. Otherwise use
-`continue_single_node` and leave `proposed_nodes` empty.
+`continue_single_node`, leave `proposed_nodes` empty, and set
+`milestone_contract` to null.
 """
     elif is_coordination_checkpoint:
         runtime_receipt_instructions = """
@@ -2498,6 +2539,7 @@ and do not add prose before or after it:
     }
   ],
   "next_intent": "what this same worker will do after Runtime coordination",
+  "milestone_key": null,
   "changed_files": ["workspace-relative/path"],
   "responsibility_candidates": [],
   "consumed_directive_ids": [],
@@ -2533,6 +2575,11 @@ must identify another existing affected node or a valid responsibility
 candidate. Ordinary inspection, local progress, a test result, child status,
 or the end of a first work slice is not a checkpoint reason. Never create or
 complete Runtime nodes yourself.
+
+When the Runtime task supplies a deferred milestone contract, complete and
+verify that contract before emitting `kind=milestone_completed`; copy its exact
+`milestone_key` into the checkpoint. Use `milestone_key=null` for every other
+checkpoint. Do not invent a milestone key.
 """
         runtime_receipt_instructions += """
 
