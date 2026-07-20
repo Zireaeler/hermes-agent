@@ -55,6 +55,10 @@ class CalibrationCase:
     files: dict[str, str]
 
 
+def _archive_instance_id(config: CalibrationConfig, case: CalibrationCase) -> str:
+    return f"{case.key}-{config.root.expanduser().resolve().name}"
+
+
 def _cases() -> tuple[CalibrationCase, ...]:
     return (
         CalibrationCase(
@@ -820,7 +824,7 @@ def run_case(config: CalibrationConfig, case: CalibrationCase) -> dict[str, Any]
                 ),
                 phase=PHASE,
                 instance_id=case.key,
-                run_id=case_root.name,
+                run_id=config.root.expanduser().resolve().name,
                 source_db_ref="hermes-home/kanban.db",
                 quality=quality,
                 baseline_bundle_ref=f"reports/{case.key}-baseline",
@@ -869,7 +873,7 @@ def run_case(config: CalibrationConfig, case: CalibrationCase) -> dict[str, Any]
             case_root,
             artifact_root=config.artifact_root,
             phase=PHASE,
-            instance_id=case.key,
+            instance_id=_archive_instance_id(config, case),
             redactions=validation_artifacts.model_source_redactions(
                 config.source_codex_home
             ),

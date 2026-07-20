@@ -131,6 +131,25 @@ def test_isolated_config_summary_omits_paths_and_provider_endpoint(tmp_path):
     assert "proxy_base_url" not in summary
 
 
+def test_archive_instance_is_unique_per_campaign_root(tmp_path):
+    case = phase4g16._cases()[0]
+    first = phase4g16.CalibrationConfig(
+        root=tmp_path / "campaign-a",
+        artifact_root=tmp_path / "artifacts",
+        source_codex_home=tmp_path / "codex",
+    )
+    second = phase4g16.CalibrationConfig(
+        root=tmp_path / "campaign-b",
+        artifact_root=tmp_path / "artifacts",
+        source_codex_home=tmp_path / "codex",
+    )
+
+    assert phase4g16._archive_instance_id(first, case) != phase4g16._archive_instance_id(
+        second,
+        case,
+    )
+
+
 def test_campaign_archives_first_infrastructure_failure_and_stops(
     tmp_path,
     monkeypatch,
