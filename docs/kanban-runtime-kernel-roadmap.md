@@ -737,6 +737,12 @@ Phase 4G15 evidence-driven live orchestra improvement
       |
       v
 Phase 4G16 natural orchestra calibration
+
+当前状态：生产路径、learning/archive gate 与三类 paired campaign 已实现；Coherent Negative 和
+Shared-Contract Medium 通过，Durable-Boundary Medium 的任务质量与 Runtime consistency 通过，但两版
+小型 fixture 均自然选择单节点，尚未获得 candidate -> Provider -> durable child 的正向自然证据。
+下一阶段应先设计基于已冻结 milestone artifact 的 deferred decomposition，再选择具有足够独立工作量的
+自然 Medium；不得把继续放大同类 synthetic fixture 或强迫 worker 拆分当作完成。
       |
       v
 Phase 4H dashboard runtime UI

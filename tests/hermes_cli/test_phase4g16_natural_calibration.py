@@ -125,6 +125,23 @@ def test_missing_durable_candidate_is_a_fixture_gap_not_missed_coordination():
     ]
 
 
+def test_fixture_gap_conclusion_does_not_claim_runtime_or_quality_failure():
+    conclusion = phase4g16._case_conclusion(
+        passed=False,
+        acceptance={
+            "baseline_quality_passed": True,
+            "treatment_quality_passed": True,
+            "quality_non_regression": True,
+            "runtime_consistency_passed": True,
+            "natural_candidate_observed": False,
+        },
+        finding_categories=["calibration_fixture_gap"],
+    )
+
+    assert "校准夹具不足" in conclusion
+    assert "不是 Runtime correctness 或任务质量失败" in conclusion
+
+
 def test_baseline_prompt_keeps_one_worker_and_no_runtime_answer():
     prompt = phase4g16._baseline_prompt(phase4g16._cases()[2])
 
@@ -216,6 +233,8 @@ def test_campaign_archives_first_infrastructure_failure_and_stops(
             "status": "infrastructure_invalid",
             "acceptance": None,
             "artifact_archive": None,
+            "learning": None,
+            "cleanup": None,
         }
     ]
 

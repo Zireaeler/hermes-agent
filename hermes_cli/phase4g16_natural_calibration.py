@@ -798,6 +798,65 @@ def _render_trace(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _case_conclusion(
+    *,
+    passed: bool,
+    acceptance: dict[str, bool],
+    finding_categories: list[str],
+) -> str:
+    if passed:
+        return "该 paired case 满足冻结验收，Runtime 质量未低于 coherent baseline。"
+    quality_keys = (
+        "baseline_quality_passed",
+        "treatment_quality_passed",
+        "quality_non_regression",
+        "runtime_consistency_passed",
+    )
+    if (
+        "calibration_fixture_gap" in finding_categories
+        and all(acceptance.get(key) is True for key in quality_keys)
+    ):
+        return (
+            "该 paired case 的 baseline、Runtime treatment、质量非回退和 Runtime consistency "
+            "均通过；唯一未满足项是仓库没有自然暴露 durable responsibility candidate。"
+            "该结果归类为校准夹具不足，不是 Runtime correctness 或任务质量失败。"
+        )
+    return "该 paired case 暴露了未满足的自然协调或质量条件，结论已进入 learning bundle。"
+
+
+def _cleanup_archived_case_source(
+    case_root: Path,
+    *,
+    manifest_path: Path,
+) -> dict[str, Any]:
+    rebuildable = validation_artifacts.cleanup_rebuildable_entries(
+        case_root,
+        manifest_path=manifest_path,
+        entries=("workspace", "home", "codex-home-seed"),
+        orchestration_learning_required=True,
+    )
+    archived = validation_artifacts.verify_artifact_manifest(manifest_path)
+    raw_entries = sorted(
+        set(str(value) for value in archived.get("selected_entries") or [])
+        - {"reports"}
+    )
+    raw = validation_artifacts.cleanup_archived_source_entries(
+        case_root,
+        manifest_path=manifest_path,
+        entries=raw_entries,
+        orchestration_learning_required=True,
+    )
+    return {
+        "status": "cleaned_after_verified_archive",
+        "manifest_path": str(manifest_path.expanduser().resolve()),
+        "rebuildable": rebuildable,
+        "archived_source": raw,
+        "retained_entries": ["reports"],
+        "bytes_removed": int(rebuildable["bytes_removed"])
+        + int(raw["bytes_removed"]),
+    }
+
+
 def run_case(config: CalibrationConfig, case: CalibrationCase) -> dict[str, Any]:
     case_root = (config.root / case.key).resolve()
     if case_root.exists() and any(case_root.iterdir()):
@@ -922,6 +981,9 @@ def run_case(config: CalibrationConfig, case: CalibrationCase) -> dict[str, Any]
                 baseline_bundle_ref=f"reports/{case.key}-baseline",
             )
         passed = all(acceptance.values())
+        finding_categories = [
+            item["category"] for item in learning_result["bundle"]["findings"]
+        ]
         report = {
             "schema": CASE_REPORT_SCHEMA,
             "case": {
@@ -944,16 +1006,13 @@ def run_case(config: CalibrationConfig, case: CalibrationCase) -> dict[str, Any]
             "learning": {
                 "status": learning_result["receipt"]["status"],
                 "bundle_sha256": learning_result["receipt"]["bundle_sha256"],
-                "finding_categories": [
-                    item["category"]
-                    for item in learning_result["bundle"]["findings"]
-                ],
+                "finding_categories": finding_categories,
             },
             "status": "passed" if passed else "failed",
-            "conclusion": (
-                "该 paired case 满足冻结验收，Runtime 质量未低于 coherent baseline。"
-                if passed
-                else "该 paired case 暴露了未满足的自然协调或质量条件，结论已进入 learning bundle。"
+            "conclusion": _case_conclusion(
+                passed=passed,
+                acceptance=acceptance,
+                finding_categories=finding_categories,
             ),
             "generated_at": int(time.time()),
         }
@@ -984,11 +1043,9 @@ def run_case(config: CalibrationConfig, case: CalibrationCase) -> dict[str, Any]
             "manifest_path": str(Path(manifest["artifact_path"]) / "manifest.json"),
         }
         if config.cleanup_source:
-            report["cleanup"] = validation_artifacts.cleanup_rebuildable_entries(
+            report["cleanup"] = _cleanup_archived_case_source(
                 case_root,
                 manifest_path=Path(manifest["artifact_path"]) / "manifest.json",
-                entries=("workspace", "home", "codex-home-seed"),
-                orchestration_learning_required=True,
             )
         _write_json(reports / "case-report.json", report)
         return report
@@ -1135,11 +1192,9 @@ def _archive_infrastructure_invalid_case(
         "manifest_path": str(Path(manifest["artifact_path"]) / "manifest.json"),
     }
     if config.cleanup_source:
-        report["cleanup"] = validation_artifacts.cleanup_rebuildable_entries(
+        report["cleanup"] = _cleanup_archived_case_source(
             case_root,
             manifest_path=Path(manifest["artifact_path"]) / "manifest.json",
-            entries=("workspace", "home", "codex-home-seed"),
-            orchestration_learning_required=True,
         )
     _write_json(reports / "infrastructure-invalid.json", report)
     return report
@@ -1184,6 +1239,8 @@ def run_campaign(
                 "status": item["status"],
                 "acceptance": item.get("acceptance"),
                 "artifact_archive": item.get("artifact_archive"),
+                "learning": item.get("learning"),
+                "cleanup": item.get("cleanup"),
             }
             for item in case_reports
         ],

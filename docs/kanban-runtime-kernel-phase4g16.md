@@ -480,6 +480,13 @@ Phase 4G16 完成要求：
 Runtime 漏协调。修订后的 fixture 必须同时包含 core schema、legacy transform 与 audit batch consumer 三个
 可独立验收面；目标文本仍不得给出 node key、文件路径或预期 graph patch。
 
+第二次修订 run 同样没有产生 candidate。真实 worker 观察到三个行为面，但 repository 只有约 150 行，
+legacy 与 audit 又共同依赖尚未冻结的 v2 核心合同，因此仍选择 `continue_single_node`。Baseline 17/17、
+treatment 15/15、质量非回退和 Runtime consistency 全部通过；失败仅限 Case C 的自然 candidate 验收。
+该结果继续归类为 `calibration_fixture_gap`，同时暴露出后续设计问题：二元的“立即扩图/继续单节点”无法表达
+“先由 Primary 冻结共享合同，再根据 milestone evidence 激活低耦合 child”。Phase 4G16 不得将本 run
+写成正向 orchestra 证明。
+
 ---
 
 ## 11. 测试层次

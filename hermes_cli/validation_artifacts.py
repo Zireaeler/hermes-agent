@@ -297,6 +297,55 @@ def cleanup_rebuildable_entries(
     }
 
 
+def cleanup_archived_source_entries(
+    run_root: Path,
+    *,
+    manifest_path: Path,
+    entries: Iterable[str],
+    orchestration_learning_required: bool = False,
+) -> dict[str, Any]:
+    """Delete raw source entries only after their redacted archive is verified."""
+
+    source = run_root.expanduser().resolve()
+    manifest = verify_artifact_manifest(manifest_path)
+    if manifest.get("source_run_root") != str(source):
+        raise ArtifactArchiveError("artifact manifest does not belong to the requested run")
+    managed_marker = _managed_orchestration_marker(source)
+    if orchestration_learning_required or managed_marker is not None:
+        verify_orchestration_learning_gate(source)
+        if not isinstance(manifest.get("orchestration_learning"), dict):
+            raise ArtifactArchiveError("archive manifest lacks orchestration learning receipt")
+    requested = sorted(set(str(value) for value in entries))
+    archived_entries = set(str(value) for value in manifest.get("selected_entries") or [])
+    invalid = sorted(
+        value
+        for value in requested
+        if value not in RAW_ENTRY_ALLOWLIST or value not in archived_entries
+    )
+    if invalid:
+        raise ArtifactArchiveError(
+            f"cleanup requested entries without verified archive coverage: {invalid}"
+        )
+    removed: list[str] = []
+    bytes_removed = 0
+    for name in requested:
+        path = source / name
+        if not path.exists() and not path.is_symlink():
+            continue
+        bytes_removed += _path_size(path)
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+        removed.append(name)
+    return {
+        "status": "cleaned_source_after_verified_archive",
+        "manifest_path": str(manifest_path.expanduser().resolve()),
+        "removed_entries": removed,
+        "bytes_removed": bytes_removed,
+    }
+
+
 def verify_orchestration_learning_gate(run_root: Path) -> dict[str, Any]:
     """Require one absorbed Phase 4G15 learning bundle before retention cleanup."""
 

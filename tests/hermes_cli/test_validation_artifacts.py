@@ -151,6 +151,36 @@ def test_cleanup_requires_matching_verified_manifest_and_allowlisted_entries(tmp
     assert (run / "codex-home" / "sessions" / "rollout.jsonl").is_file()
 
 
+def test_cleanup_archived_source_entries_requires_verified_archive_coverage(tmp_path):
+    run = _validation_run(tmp_path)
+    manifest = artifacts.archive_validation_run(
+        run,
+        artifact_root=tmp_path / "artifacts",
+        phase="phase4g9",
+        instance_id="fixture",
+    )
+    manifest_path = Path(manifest["artifact_path"]) / "manifest.json"
+
+    with pytest.raises(artifacts.ArtifactArchiveError, match="archive coverage"):
+        artifacts.cleanup_archived_source_entries(
+            run,
+            manifest_path=manifest_path,
+            entries={"runtime-state"},
+        )
+
+    cleanup = artifacts.cleanup_archived_source_entries(
+        run,
+        manifest_path=manifest_path,
+        entries={"codex-home", "reports"},
+    )
+
+    assert cleanup["status"] == "cleaned_source_after_verified_archive"
+    assert cleanup["removed_entries"] == ["codex-home", "reports"]
+    assert not (run / "codex-home").exists()
+    assert not (run / "reports").exists()
+    assert (Path(manifest["artifact_path"]) / "reports" / "run-report.json").is_file()
+
+
 def test_manifest_verification_detects_archive_tampering(tmp_path):
     run = _validation_run(tmp_path)
     manifest = artifacts.archive_validation_run(
