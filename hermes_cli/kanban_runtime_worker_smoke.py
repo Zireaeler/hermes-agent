@@ -48,7 +48,9 @@ def run_real_worker_lane_smoke(
     # stable prefix is rendered; dispatcher registration alone is too late.
     register_configured_worker_lanes()
     decision_limit = max(1, min(int(max_decision_ticks), 5))
-    step_limit = max(2, min(int(max_steps), 32))
+    # Real workers can run for minutes. Keep the loop bounded, but poll often
+    # enough that one terminal checkpoint can affect siblings still running.
+    step_limit = max(2, min(int(max_steps), 256))
     worker_wait = max(1.0, min(float(worker_wait_seconds), 900.0))
     provider = rd.RuntimeDecisionProvider(
         provider_name=provider_source["provider_name"],

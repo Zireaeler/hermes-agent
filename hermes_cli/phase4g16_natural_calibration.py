@@ -1,0 +1,959 @@
+"""Phase 4G16 natural orchestration paired calibration campaign."""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import sqlite3
+import subprocess
+import time
+from typing import Any, Optional
+
+from hermes_cli import codex_worker
+from hermes_cli import kanban_db as kb
+from hermes_cli import kanban_runtime_kernel as rk
+from hermes_cli import kanban_runtime_learning as learning
+from hermes_cli import kanban_runtime_phase4g8 as p4g8
+from hermes_cli import validation_artifacts
+from hermes_cli.codex_app_server_worker import run_app_server_turn
+from hermes_cli.kanban_runtime_worker_smoke import run_real_worker_lane_smoke
+from hermes_cli.worker_lanes import clear_worker_lanes, register_worker_lane
+
+
+CAMPAIGN_SCHEMA = "hermes_phase4g16_natural_calibration_v1"
+CASE_REPORT_SCHEMA = "hermes_phase4g16_case_report_v1"
+PHASE = "phase4g16"
+LANE_NAME = "phase4g16-codex"
+
+
+@dataclass(frozen=True)
+class CalibrationConfig:
+    root: Path
+    artifact_root: Path
+    source_codex_home: Path
+    model: Optional[str] = None
+    worker_timeout_seconds: int = 600
+    decision_timeout_seconds: int = 180
+    cleanup_source: bool = True
+
+
+@dataclass(frozen=True)
+class CalibrationCase:
+    key: str
+    title: str
+    kind: str
+    objective: str
+    goal_item_key: str
+    goal_description: str
+    files: dict[str, str]
+
+
+def _cases() -> tuple[CalibrationCase, ...]:
+    return (
+        CalibrationCase(
+            key="coherent-negative",
+            title="Coherent negative control",
+            kind="coherent_negative_control",
+            objective=(
+                "为现有同步操作执行器增加可验证的重试策略：支持固定最大尝试次数、"
+                "可注入的等待函数、异常过滤和最终异常传播。保持 API 小而清晰，补齐测试，"
+                "并运行 python3 -m unittest discover -s tests -v。"
+            ),
+            goal_item_key="retry-policy",
+            goal_description="重试策略行为完整且全部仓库测试通过",
+            files={
+                "src/__init__.py": "",
+                "src/retry.py": (
+                    "def run(operation):\n"
+                    "    return operation()\n"
+                ),
+                "tests/test_retry.py": '''import unittest
+
+from src.retry import RetryPolicy, run_with_retry
+
+
+class RetryTest(unittest.TestCase):
+    def test_retries_then_returns_value(self):
+        calls = []
+        waits = []
+
+        def operation():
+            calls.append(len(calls))
+            if len(calls) < 3:
+                raise ValueError("temporary")
+            return "ok"
+
+        result = run_with_retry(
+            operation,
+            RetryPolicy(max_attempts=3, delay_seconds=0.25),
+            sleep=waits.append,
+        )
+        self.assertEqual(result, "ok")
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(waits, [0.25, 0.25])
+
+    def test_unmatched_exception_is_not_retried(self):
+        calls = []
+
+        def operation():
+            calls.append(1)
+            raise TypeError("programming error")
+
+        with self.assertRaises(TypeError):
+            run_with_retry(
+                operation,
+                RetryPolicy(max_attempts=4, retry_exceptions=(ValueError,)),
+                sleep=lambda _: None,
+            )
+        self.assertEqual(len(calls), 1)
+
+    def test_policy_rejects_invalid_attempt_count(self):
+        with self.assertRaises(ValueError):
+            RetryPolicy(max_attempts=0)
+
+
+if __name__ == "__main__":
+    unittest.main()
+''',
+            },
+        ),
+        CalibrationCase(
+            key="shared-contract-medium",
+            title="Shared contract Medium",
+            kind="shared_contract_medium",
+            objective=(
+                "升级记录处理流水线：所有输入规范化为包含 id、source 和稳定 tags 的共享记录契约；"
+                "格式化输出和内存存储必须消费同一契约，存储往返后保持语义一致。兼容缺少 tags 的旧输入，"
+                "补齐测试并运行 python3 -m unittest discover -s tests -v。"
+            ),
+            goal_item_key="record-contract",
+            goal_description="规范化、格式化和存储共享一个稳定记录契约",
+            files={
+                "src/__init__.py": "",
+                "src/normalize.py": '''def normalize_record(raw):
+    return {"id": str(raw["id"]), "name": str(raw.get("name", ""))}
+''',
+                "src/formatting.py": '''def format_record(record):
+    return f"{record['id']}:{record['name']}"
+''',
+                "src/store.py": '''class RecordStore:
+    def __init__(self):
+        self._items = {}
+
+    def put(self, record):
+        self._items[record["id"]] = dict(record)
+
+    def get(self, record_id):
+        value = self._items.get(str(record_id))
+        return dict(value) if value is not None else None
+''',
+                "tests/test_records.py": '''import unittest
+
+from src.formatting import format_record
+from src.normalize import normalize_record
+from src.store import RecordStore
+
+
+class RecordPipelineTest(unittest.TestCase):
+    def test_shared_contract_is_normalized_and_formatted(self):
+        record = normalize_record({
+            "id": 7,
+            "source": " Import ",
+            "tags": ["Blue", "blue", " fast "],
+        })
+        self.assertEqual(record, {
+            "id": "7",
+            "source": "import",
+            "tags": ("blue", "fast"),
+        })
+        self.assertEqual(format_record(record), "7@import [blue,fast]")
+
+    def test_legacy_input_and_store_round_trip(self):
+        record = normalize_record({"id": "old", "source": "legacy"})
+        self.assertEqual(record["tags"], ())
+        store = RecordStore()
+        store.put(record)
+        recovered = store.get("old")
+        self.assertEqual(recovered, record)
+        recovered["source"] = "changed"
+        self.assertEqual(store.get("old")["source"], "legacy")
+
+    def test_invalid_source_is_rejected(self):
+        with self.assertRaises(ValueError):
+            normalize_record({"id": "x", "source": "   "})
+
+
+if __name__ == "__main__":
+    unittest.main()
+''',
+            },
+        ),
+        CalibrationCase(
+            key="durable-boundary-medium",
+            title="Durable boundary Medium",
+            kind="durable_boundary_medium",
+            objective=(
+                "将事件流水线升级到 schema v2：摄取阶段产生带 version、kind、payload 的事件，"
+                "导出阶段生成稳定 JSON，同时保持仓库中已安装的 v1 插件可继续工作。插件兼容必须"
+                "保持独立、可测试且不污染核心 schema。补齐测试并运行 "
+                "python3 -m unittest discover -s tests -v。"
+            ),
+            goal_item_key="event-schema-v2",
+            goal_description="schema v2 核心流水线和 v1 插件兼容全部通过",
+            files={
+                "src/__init__.py": "",
+                "src/ingest.py": '''def ingest(kind, payload):
+    return {"kind": kind, "payload": dict(payload)}
+''',
+                "src/export.py": '''import json
+
+
+def export_event(event):
+    return json.dumps(event, sort_keys=True)
+''',
+                "src/plugin_loader.py": '''import importlib
+
+
+def load_plugin(module_name):
+    return importlib.import_module(module_name)
+''',
+                "fixtures/__init__.py": "",
+                "fixtures/v1_plugin.py": '''def transform(event):
+    return {
+        "type": event["type"],
+        "data": dict(event["data"]),
+        "plugin": "v1",
+    }
+''',
+                "tests/test_core_pipeline.py": '''import json
+import unittest
+
+from src.export import export_event
+from src.ingest import ingest
+
+
+class CorePipelineTest(unittest.TestCase):
+    def test_schema_v2_round_trip(self):
+        event = ingest("created", {"item": 3})
+        self.assertEqual(event, {
+            "version": 2,
+            "kind": "created",
+            "payload": {"item": 3},
+        })
+        self.assertEqual(json.loads(export_event(event)), event)
+
+    def test_payload_is_copied(self):
+        payload = {"item": 4}
+        event = ingest("updated", payload)
+        payload["item"] = 99
+        self.assertEqual(event["payload"], {"item": 4})
+
+
+if __name__ == "__main__":
+    unittest.main()
+''',
+                "tests/test_plugin_compat.py": '''import json
+import unittest
+
+from src.export import export_event
+from src.ingest import ingest
+from src.plugin_compat import run_v1_plugin
+
+
+class PluginCompatibilityTest(unittest.TestCase):
+    def test_installed_v1_plugin_isolated_adapter(self):
+        event = ingest("legacy", {"value": 8})
+        transformed = run_v1_plugin("fixtures.v1_plugin", event)
+        self.assertEqual(transformed, {
+            "version": 2,
+            "kind": "legacy",
+            "payload": {"value": 8, "plugin": "v1"},
+        })
+        self.assertEqual(json.loads(export_event(transformed)), transformed)
+
+    def test_bad_v1_result_is_rejected(self):
+        with self.assertRaises(ValueError):
+            run_v1_plugin("fixtures", ingest("bad", {}))
+
+
+if __name__ == "__main__":
+    unittest.main()
+''',
+            },
+        ),
+    )
+
+
+_BASELINE_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "status": {"type": "string", "enum": ["completed", "blocked"]},
+        "summary": {"type": "string"},
+        "tests_run": {"type": "array", "items": {"type": "string"}},
+        "known_limitations": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["status", "summary", "tests_run", "known_limitations"],
+    "additionalProperties": False,
+}
+
+
+def _write_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _git(workspace: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", *args],
+        cwd=workspace,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    return completed.stdout.strip()
+
+
+def _write_repository(workspace: Path, case: CalibrationCase) -> str:
+    workspace.mkdir(parents=True)
+    for relative, content in case.files.items():
+        path = workspace / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    (workspace / ".gitignore").write_text(
+        "__pycache__/\n*.py[cod]\n.hermes-*\n", encoding="utf-8"
+    )
+    (workspace / "README.md").write_text(
+        f"# {case.title}\n\n{case.objective}\n", encoding="utf-8"
+    )
+    _git(workspace, "init", "--quiet")
+    _git(workspace, "config", "user.email", "runtime@example.invalid")
+    _git(workspace, "config", "user.name", "Runtime Calibration")
+    _git(workspace, "add", ".")
+    _git(workspace, "commit", "--quiet", "-m", f"freeze {case.key}")
+    return _git(workspace, "rev-parse", "HEAD")
+
+
+def _clone_repository(source: Path, target: Path) -> None:
+    subprocess.run(
+        ["git", "clone", "--quiet", str(source), str(target)],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    _git(target, "config", "user.email", "runtime@example.invalid")
+    _git(target, "config", "user.name", "Runtime Calibration")
+
+
+def _oracle(workspace: Path) -> dict[str, Any]:
+    started = time.monotonic()
+    completed = subprocess.run(
+        ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"],
+        cwd=workspace,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+        timeout=120,
+    )
+    match = re.search(r"Ran (\d+) tests?", completed.stdout)
+    return {
+        "passed": completed.returncode == 0,
+        "returncode": completed.returncode,
+        "test_count": int(match.group(1)) if match else None,
+        "wall_time_seconds": round(time.monotonic() - started, 3),
+        "output": completed.stdout[-12000:],
+    }
+
+
+def _baseline_prompt(case: CalibrationCase) -> str:
+    return f"""你是这个仓库唯一的 coherent implementation worker。完整承担结果责任：理解现有行为、
+选择方案、修改实现、补充必要测试、运行测试并调试到最强终态。不要委派 subagent，不要只完成一个步骤，
+也不要在修改后未经验证就结束。不得读取 workspace 之外的 Hermes 源码、其他 arm 或历史运行产物。
+
+目标：
+{case.objective}
+
+最终只返回约束 JSON；status 只能在完整工作和验证结束后设为 completed，真实阻塞时设为 blocked。
+"""
+
+
+def _prepare_home(
+    source_home: Path,
+    target_home: Path,
+    *,
+    model: str,
+    base_url: str,
+) -> dict[str, Any]:
+    return p4g8.prepare_isolated_codex_home(
+        source_home,
+        target_home,
+        proxy_base_url=base_url,
+        model=model,
+        worker_uid=os.getuid(),
+        worker_gid=os.getgid(),
+        reasoning_effort_override="max",
+        multi_agent_enabled=False,
+    )
+
+
+def _isolated_config_summary(audit: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "model": audit.get("model"),
+        "reasoning_effort": audit.get("reasoning_effort"),
+        "multi_agent_enabled": audit.get("multi_agent_enabled"),
+        "context_window_tokens": audit.get("context_window_tokens"),
+        "auto_compact_token_limit": audit.get("auto_compact_token_limit"),
+        "provider_transport": audit.get("provider_transport"),
+        "approval": audit.get("approval"),
+        "copied_session_history": audit.get("copied_session_history"),
+    }
+
+
+def _run_baseline(
+    case: CalibrationCase,
+    workspace: Path,
+    codex_home: Path,
+    *,
+    model: str,
+    timeout_seconds: int,
+    reports: Path,
+) -> dict[str, Any]:
+    notifications: list[dict[str, Any]] = []
+    started = time.monotonic()
+    result = run_app_server_turn(
+        prompt=_baseline_prompt(case),
+        workspace=str(workspace),
+        model=model,
+        sandbox="workspace-write",
+        approval="never",
+        output_schema=_BASELINE_OUTPUT_SCHEMA,
+        resume_thread_id=None,
+        codex_bin=shutil.which("codex") or "codex",
+        codex_home=str(codex_home),
+        env={"CODEX_HOME": str(codex_home), "HOME": str(codex_home.parent)},
+        timeout_seconds=float(timeout_seconds),
+        poll_interval=0.2,
+        on_notification=notifications.append,
+    )
+    try:
+        receipt = json.loads(result.final_text or "{}")
+    except json.JSONDecodeError:
+        receipt = {"status": "invalid_output", "raw_tail": (result.final_text or "")[-2000:]}
+    oracle = _oracle(workspace)
+    _write_json(reports / "baseline-notifications.json", notifications)
+    return {
+        "transport_status": result.status,
+        "transport_error": result.error,
+        "thread_id": result.thread_id,
+        "turn_id": result.turn_id,
+        "wall_time_seconds": round(time.monotonic() - started, 3),
+        "receipt": receipt,
+        "oracle": oracle,
+        "changed_files": _changed_files(workspace),
+    }
+
+
+def _changed_files(workspace: Path) -> list[str]:
+    output = _git(workspace, "status", "--short", "--untracked-files=all")
+    return sorted(line[3:].strip() for line in output.splitlines() if len(line) >= 4)
+
+
+def _create_runtime_job(
+    case: CalibrationCase,
+    workspace: Path,
+    case_root: Path,
+) -> str:
+    with kb.connect() as conn:
+        root_task = kb.create_task(
+            conn,
+            title=f"Phase 4G16 {case.title}",
+            initial_status="running",
+            workspace_kind="dir",
+            workspace_path=str(workspace),
+        )
+        return rk.create_runtime_job(
+            conn,
+            root_task,
+            case.objective,
+            workspace_path=str(workspace),
+            goal_items=[
+                {
+                    "item_key": case.goal_item_key,
+                    "description": case.goal_description,
+                    "required": True,
+                    "verifier_required": False,
+                    "acceptance_criteria": [
+                        case.goal_description,
+                        "python3 -m unittest discover -s tests -v passes",
+                    ],
+                }
+            ],
+            initial_assignee=LANE_NAME,
+            initialization_mode="provider_first",
+            orchestration_policy={
+                "schema": rk.RUNTIME_ORCHESTRATION_POLICY_SCHEMA,
+                "mode": "closed_loop_coordination",
+                "worker_lane": LANE_NAME,
+                "max_child_nodes": 3,
+                "artifact_root": str(case_root / "runtime-contributions"),
+                "retention": "retain",
+            },
+        )
+
+
+def _runtime_evidence(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]:
+    orchestration = rk.summarize_runtime_orchestration(conn, job_id)
+    nodes = [
+        {
+            "node_key": row["node_key"],
+            "node_type": row["node_type"],
+            "state": row["state"],
+            "assignee": row["assignee"],
+        }
+        for row in conn.execute(
+            "SELECT * FROM execution_nodes WHERE job_id = ? ORDER BY created_at, node_key",
+            (job_id,),
+        ).fetchall()
+    ]
+    actions = (orchestration.get("coordination") or {}).get("actions") or []
+    candidate_count = int(
+        (orchestration.get("coordination") or {}).get("cost", {}).get(
+            "terminal_candidate_count", 0
+        )
+        or 0
+    ) + sum(len(item.get("candidate_refs") or []) for item in actions)
+    return {
+        "status": rk.status_runtime_job(conn, job_id),
+        "consistency": rk.check_runtime_consistency(conn, job_id, write_events=False),
+        "orchestration": orchestration,
+        "nodes": nodes,
+        "candidate_count": candidate_count,
+    }
+
+
+def _run_treatment(
+    case: CalibrationCase,
+    workspace: Path,
+    case_root: Path,
+    *,
+    provider_source: dict[str, Any],
+    worker_timeout_seconds: int,
+    decision_timeout_seconds: int,
+) -> tuple[str, dict[str, Any]]:
+    job_id = _create_runtime_job(case, workspace, case_root)
+    with kb.connect() as conn:
+        smoke = run_real_worker_lane_smoke(
+            conn,
+            job_id,
+            provider_source=provider_source,
+            lane_name=LANE_NAME,
+            max_decision_ticks=5,
+            max_steps=180,
+            worker_wait_seconds=2,
+            poll_interval_seconds=0.2,
+            timeout_seconds=float(decision_timeout_seconds),
+            max_retries=1,
+        )
+        evidence = _runtime_evidence(conn, job_id)
+    return job_id, {
+        "smoke": smoke,
+        "oracle": _oracle(workspace),
+        "changed_files": _changed_files(workspace),
+        **evidence,
+    }
+
+
+def _coordination_observations(
+    case: CalibrationCase,
+    baseline: dict[str, Any],
+    treatment: dict[str, Any],
+) -> dict[str, Any]:
+    orchestration = treatment.get("orchestration") or {}
+    coordination = orchestration.get("coordination") or {}
+    actions = coordination.get("actions") or []
+    missed: list[str] = []
+    overhead: list[str] = []
+    if case.kind == "durable_boundary_medium" and int(treatment.get("candidate_count") or 0) == 0:
+        missed.append(f"report:{case.key}:candidate-not-observed")
+    if (
+        case.kind == "coherent_negative_control"
+        and actions
+        and baseline["oracle"]["passed"]
+        and treatment["oracle"]["passed"]
+    ):
+        overhead.append(f"report:{case.key}:unnecessary-action-cost")
+    return {
+        "missed_coordination_evidence_refs": missed,
+        "coordination_overhead_evidence_refs": overhead,
+    }
+
+
+def _acceptance(
+    case: CalibrationCase,
+    baseline: dict[str, Any],
+    treatment: dict[str, Any],
+) -> dict[str, bool]:
+    orchestration = treatment.get("orchestration") or {}
+    coordination = orchestration.get("coordination") or {}
+    actions = coordination.get("actions") or []
+    checkpoint_count = len(coordination.get("checkpoints") or [])
+    candidate_count = int(treatment.get("candidate_count") or 0)
+    consistency = treatment.get("consistency") or {}
+    base = {
+        "baseline_quality_passed": baseline["oracle"]["passed"] is True,
+        "treatment_quality_passed": treatment["oracle"]["passed"] is True,
+        "quality_non_regression": (
+            int(treatment["oracle"]["passed"]) >= int(baseline["oracle"]["passed"])
+        ),
+        "runtime_consistency_passed": consistency.get("status") == "passed",
+        "natural_prompt_integrity": True,
+    }
+    if case.kind == "coherent_negative_control":
+        base["no_false_coordination"] = not actions
+    elif case.kind == "shared_contract_medium":
+        base["checkpoint_or_coherent_route"] = checkpoint_count > 0 or not actions
+    elif case.kind == "durable_boundary_medium":
+        terminal_candidates = coordination.get(
+            "terminal_responsibility_candidates"
+        ) or {}
+        base["natural_candidate_observed"] = candidate_count > 0
+        base["candidate_consumed_by_provider"] = any(
+            item.get("route") == "provider_required"
+            and item.get("status") == "applied"
+            for item in actions
+        ) or int(terminal_candidates.get("expanded_count") or 0) + int(
+            terminal_candidates.get("resolved_without_expansion_count") or 0
+        ) > 0
+    return base
+
+
+def _render_trace(report: dict[str, Any]) -> str:
+    case = report["case"]
+    baseline = report["baseline"]
+    treatment = report["treatment"]
+    orchestration = treatment.get("orchestration") or {}
+    coordination = orchestration.get("coordination") or {}
+    lines = [
+        f"# Phase 4G16 {case['title']} 过程报告",
+        "",
+        "## 任务",
+        "",
+        case["objective"],
+        "",
+        "## 对照结果",
+        "",
+        f"- coherent baseline：{'通过' if baseline['oracle']['passed'] else '失败'}；"
+        f"耗时 {baseline['wall_time_seconds']} 秒；修改 {len(baseline['changed_files'])} 个文件。",
+        f"- Runtime treatment：{'通过' if treatment['oracle']['passed'] else '失败'}；"
+        f"job 状态 `{treatment['status']['job']['state']}`；"
+        f"materialization {treatment['smoke']['materialization_attempt_count']} 次。",
+        f"- Runtime node：{', '.join(item['node_key'] for item in treatment['nodes']) or '无'}。",
+        "",
+        "## Orchestra 过程",
+        "",
+        f"- structure assessment：{(coordination.get('cost') or {}).get('structure_assessment_count', 0)} 次。",
+        f"- coordination checkpoint：{len(coordination.get('checkpoints') or [])} 次。",
+        f"- coordination action：{len(coordination.get('actions') or [])} 次。",
+        f"- natural candidate：{treatment.get('candidate_count', 0)} 个。",
+        f"- Decision Provider：{treatment['smoke']['decision_tick_count']} 次；"
+        f"accepted {treatment['smoke']['accepted_patch_count']}，"
+        f"rejected {treatment['smoke']['rejected_patch_count']}。",
+        "",
+    ]
+    for action in coordination.get("actions") or []:
+        lines.append(
+            f"- action `{action['id']}`：`{action['classification']}` -> "
+            f"`{action['route']}` -> `{action['status']}`；targets="
+            f"{', '.join(action.get('affected_node_keys') or []) or '-'}。"
+        )
+    lines.extend(
+        [
+            "",
+            "## 验收",
+            "",
+            *[
+                f"- {'通过' if passed else '失败'}：`{key}`"
+                for key, passed in report["acceptance"].items()
+            ],
+            "",
+            "## 结论",
+            "",
+            report["conclusion"],
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def run_case(config: CalibrationConfig, case: CalibrationCase) -> dict[str, Any]:
+    case_root = (config.root / case.key).resolve()
+    if case_root.exists() and any(case_root.iterdir()):
+        raise ValueError(f"case root must be empty: {case_root}")
+    case_root.mkdir(parents=True, exist_ok=True)
+    validation_artifacts.declare_managed_orchestration_validation(
+        case_root, phase=PHASE, instance_id=case.key
+    )
+    reports = case_root / "reports"
+    reports.mkdir()
+    workspace_root = case_root / "workspace"
+    base_workspace = workspace_root / "base"
+    baseline_workspace = workspace_root / "baseline"
+    treatment_workspace = workspace_root / "treatment"
+    base_revision = _write_repository(base_workspace, case)
+    _clone_repository(base_workspace, baseline_workspace)
+    _clone_repository(base_workspace, treatment_workspace)
+    base_oracle = _oracle(base_workspace)
+    if base_oracle["passed"]:
+        raise RuntimeError(f"frozen case must fail before implementation: {case.key}")
+
+    source = p4g8.load_codex_model_source(
+        config.source_codex_home, model=config.model
+    )
+    model = str(source["model"])
+    baseline_home = case_root / "codex-home"
+    treatment_seed = case_root / "codex-home-seed"
+    baseline_config = _prepare_home(
+        config.source_codex_home,
+        baseline_home,
+        model=model,
+        base_url=str(source["explicit_base_url"]),
+    )
+    treatment_config = _prepare_home(
+        config.source_codex_home,
+        treatment_seed,
+        model=model,
+        base_url=str(source["explicit_base_url"]),
+    )
+    (case_root / "codex-homes").mkdir()
+    baseline = _run_baseline(
+        case,
+        baseline_workspace,
+        baseline_home,
+        model=model,
+        timeout_seconds=config.worker_timeout_seconds,
+        reports=reports,
+    )
+
+    hermes_home = case_root / "hermes-home"
+    home = case_root / "home"
+    home.mkdir()
+    prior_env = {
+        key: os.environ.get(key)
+        for key in (
+            "HERMES_HOME",
+            "HOME",
+            "HERMES_RUNTIME_CONTRIBUTION_ROOT",
+        )
+    }
+    os.environ["HERMES_HOME"] = str(hermes_home)
+    os.environ["HOME"] = str(home)
+    os.environ["HERMES_RUNTIME_CONTRIBUTION_ROOT"] = str(
+        case_root / "runtime-contributions"
+    )
+    clear_worker_lanes()
+    register_worker_lane(
+        codex_worker.make_codex_worker_lane(
+            {
+                "name": LANE_NAME,
+                "transport": "codex_app_server",
+                "model": model,
+                "sandbox": "workspace-write",
+                "approval": "never",
+                "max_concurrency": 3,
+                "success_policy": "auto_complete",
+                "timeout_seconds": config.worker_timeout_seconds,
+                "json_events": True,
+                "isolated_codex_home_seed": str(treatment_seed),
+                "isolated_codex_home_root": str(case_root / "codex-homes"),
+            },
+            source="phase4g16",
+        )
+    )
+    try:
+        kb.init_db()
+        started = time.monotonic()
+        job_id, treatment = _run_treatment(
+            case,
+            treatment_workspace,
+            case_root,
+            provider_source=source,
+            worker_timeout_seconds=config.worker_timeout_seconds,
+            decision_timeout_seconds=config.decision_timeout_seconds,
+        )
+        treatment["wall_time_seconds"] = round(time.monotonic() - started, 3)
+        acceptance = _acceptance(case, baseline, treatment)
+        observations = _coordination_observations(case, baseline, treatment)
+        quality = {
+            "status": "passed" if treatment["oracle"]["passed"] else "failed",
+            "case_kind": case.kind,
+            "baseline_final_passed": baseline["oracle"]["passed"],
+            "treatment_final_passed": treatment["oracle"]["passed"],
+            "quality_non_regression": acceptance["quality_non_regression"],
+            "coordination_observations": observations,
+        }
+        with kb.connect() as conn:
+            learning_result = learning.finalize_learning_bundle(
+                conn,
+                job_id,
+                run_root=case_root,
+                registry_path=(
+                    config.artifact_root
+                    / "orchestration-learning"
+                    / "registry.sqlite3"
+                ),
+                phase=PHASE,
+                instance_id=case.key,
+                run_id=case_root.name,
+                source_db_ref="hermes-home/kanban.db",
+                quality=quality,
+                baseline_bundle_ref=f"reports/{case.key}-baseline",
+            )
+        passed = all(acceptance.values())
+        report = {
+            "schema": CASE_REPORT_SCHEMA,
+            "case": {
+                "key": case.key,
+                "title": case.title,
+                "kind": case.kind,
+                "objective": case.objective,
+                "base_revision": base_revision,
+            },
+            "model": model,
+            "source_summary": source["summary"],
+            "isolated_config": {
+                "baseline": _isolated_config_summary(baseline_config),
+                "treatment": _isolated_config_summary(treatment_config),
+            },
+            "base_oracle": base_oracle,
+            "baseline": baseline,
+            "treatment": treatment,
+            "acceptance": acceptance,
+            "learning": {
+                "status": learning_result["receipt"]["status"],
+                "bundle_sha256": learning_result["receipt"]["bundle_sha256"],
+                "finding_categories": [
+                    item["category"]
+                    for item in learning_result["bundle"]["findings"]
+                ],
+            },
+            "status": "passed" if passed else "failed",
+            "conclusion": (
+                "该 paired case 满足冻结验收，Runtime 质量未低于 coherent baseline。"
+                if passed
+                else "该 paired case 暴露了未满足的自然协调或质量条件，结论已进入 learning bundle。"
+            ),
+            "generated_at": int(time.time()),
+        }
+        _write_json(reports / "case-report.json", report)
+        (reports / "capability-trace.md").write_text(
+            _render_trace(report), encoding="utf-8"
+        )
+        manifest = validation_artifacts.archive_validation_run(
+            case_root,
+            artifact_root=config.artifact_root,
+            phase=PHASE,
+            instance_id=case.key,
+            redactions=validation_artifacts.model_source_redactions(
+                config.source_codex_home
+            ),
+            expected_entries=(
+                "codex-home",
+                "codex-homes",
+                "hermes-home",
+                "reports",
+                "runtime-state",
+            ),
+            orchestration_learning_required=True,
+        )
+        report["artifact_archive"] = {
+            "status": manifest["status"],
+            "artifact_path": manifest["artifact_path"],
+            "manifest_path": str(Path(manifest["artifact_path"]) / "manifest.json"),
+        }
+        if config.cleanup_source:
+            report["cleanup"] = validation_artifacts.cleanup_rebuildable_entries(
+                case_root,
+                manifest_path=Path(manifest["artifact_path"]) / "manifest.json",
+                entries=("workspace", "home", "codex-home-seed"),
+                orchestration_learning_required=True,
+            )
+        _write_json(reports / "case-report.json", report)
+        return report
+    finally:
+        clear_worker_lanes()
+        for key, value in prior_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def run_campaign(config: CalibrationConfig) -> dict[str, Any]:
+    root = config.root.expanduser().resolve()
+    if root.exists() and any(root.iterdir()):
+        raise ValueError(f"campaign root must be empty: {root}")
+    root.mkdir(parents=True, exist_ok=True)
+    case_reports = [run_case(config, case) for case in _cases()]
+    report = {
+        "schema": CAMPAIGN_SCHEMA,
+        "status": (
+            "passed" if all(item["status"] == "passed" for item in case_reports) else "failed"
+        ),
+        "cases": [
+            {
+                "key": item["case"]["key"],
+                "status": item["status"],
+                "acceptance": item["acceptance"],
+                "artifact_archive": item.get("artifact_archive"),
+            }
+            for item in case_reports
+        ],
+        "generated_at": int(time.time()),
+    }
+    _write_json(root / "campaign-report.json", report)
+    return report
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="运行 Phase 4G16 自然编排校准")
+    parser.add_argument("--root", required=True)
+    parser.add_argument(
+        "--artifact-root",
+        default=str(validation_artifacts.default_artifact_root()),
+    )
+    parser.add_argument(
+        "--source-codex-home",
+        default=str(Path.home() / ".codex"),
+    )
+    parser.add_argument("--model")
+    parser.add_argument("--worker-timeout-seconds", type=int, default=600)
+    parser.add_argument("--decision-timeout-seconds", type=int, default=180)
+    parser.add_argument("--keep-source", action="store_true")
+    args = parser.parse_args(argv)
+    report = run_campaign(
+        CalibrationConfig(
+            root=Path(args.root),
+            artifact_root=Path(args.artifact_root),
+            source_codex_home=Path(args.source_codex_home),
+            model=args.model,
+            worker_timeout_seconds=args.worker_timeout_seconds,
+            decision_timeout_seconds=args.decision_timeout_seconds,
+            cleanup_source=not args.keep_source,
+        )
+    )
+    print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+    return 0 if report["status"] == "passed" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
