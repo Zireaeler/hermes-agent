@@ -26,51 +26,86 @@ Hermes Runtime Kernel 本身出现过这种情况。历史对照还显示，多�
 - “命名实体数可以作为深审触发、实质证据和 cleanup 验收”；
 - “历史设计记录天然能提供无偏的长期判断”。
 
-## 3. 现在验证什么
+## 3. 正在验证什么
 
 实验问题是：
 
 > 在相同的七轮连续需求中，相比普通独立 review，只允许 `keep / remove /
 > merge / simplify / doubt` 的负向回顾，能否在能力不受损的情况下让后续维护更容易？
 
-具体协议见 `cheap-experiment.md`，prompt 见 `deep-review-prompt.md`。
+两组都在 R3、R5、R7 通过公开测试后获得相同次数的 reviewer 和 executor。唯一有意差异是 reviewer 可以提出什么动作。主要结果看最终能力和新的维护 agent 完成后续修改的真实成本，而不是 review 数量、LOC 或命名实体数。
 
-两组：
+共同 prompt 见 `deep-review-prompt.md`。
 
-- 完成完全相同的 R1–R7 scheduler 需求；
-- 使用同一套最小 CLI，内部结构自由；
-- 每轮先通过当前公开测试，再在 R3、R5、R7 后得到相同次数的独立 review 和 executor 修改机会；
-- 使用相同模型、输入材料和近似预算；
-- 唯一区别是 reviewer 可以提出的动作。
+## 4. 第一对：scheduler
 
-最终先运行相同的未公开行为变体，再让新的维护 agent 完成“增加任务执行超时”和“删除失败重试能力”两个任务。后续修改成功率、成本、失败次数和改动扩散，比实体数和 LOC 更能说明结构负担。
+第一对协议见 `cheap-experiment.md`，已经完整运行。
 
-先跑一对。只有结果有信号但不足以判断时才补第二对；方向冲突时再考虑第三对。这个规模只用于判断是否值得继续，不支持一般性结论。
+主要结果：
 
-## 4. 模型、隔离和子代理
+- 两组 R1–R7 公开测试均通过；
+- 最终有效隐藏行为维度均通过；
+- 两组“增加执行 timeout”和“删除 retry”维护任务均正确完成，无旧能力回归；
+- 两个维护任务合计，负向组 wall time 少约 38%，成本少约 56%；
+- 负向 review 主开发轨迹没有更便宜，wall time 反而更长，收益出现在最终结构和后续维护；
+- 负向轨迹多次出现“Worker 加入旧 schema 迁移，后续负向 review 删除，下一轮 Worker 又加入”的机制棘轮；
+- 只有一对轨迹，且两组从 R1 起选择了不同的 JSON/SQLite 架构和测试策略，不能把差异全部归因于 reviewer。
 
-第一对实验的 Worker、reviewer、executor 和维护 agent 统一使用 GPT-5.6 Sol、`high` reasoning effort，并记录 provider 实际返回的模型 ID。
+该结果是明显但仍有混杂因素的正向信号，因此不建设 Orchestra，而是补跑第二对确认。
 
-每个角色都运行在独立工作目录、独立会话和干净上下文中，不读取宿主机全局 `AGENTS.md`、`CLAUDE.md`、memory、skills、历史 session、Orchestra 文档或另一组结果。只传入该角色当前需要的需求、代码、测试和 prompt。
+## 5. 第二对：JSON 决策规则解释器
 
-可以按实际需要使用任意数量子代理，但每个都必须有不同且有用的任务。不要求两组机械地使用相同 agent 数量；记录实际 token、wall time 和未采用工作。
+完整规格见 `rule-interpreter-experiment.md`。
 
-每个 turn 都是有限任务，不自动重试、循环 review 或生成下一轮需求。超时或持续没有实质进展时直接终止并记录，不为实验增加恢复系统。
+第二对改用完全确定的问题：
 
-## 5. 文档状态
+- 无持久状态；
+- 无真实时间；
+- 无并发和进程终止；
+- policy、input 和 output 都是 JSON；
+- 统一 CLI 外部黑盒测试；
+- R1–R7 从原子条件发展到组合、多规则、类型操作、数组量词和解释树。
+
+最终只测试已有行为变体，不增加隐藏功能。两个独立维护任务是：
+
+1. 把缺失路径从二值 `false` 改为三值 `true/false/unknown`；
+2. 彻底删除 R7 的 explain 能力及只为它存在的结构。
+
+这两个任务方向相反：一个检验语义是否散落，一个检验能力能否直接删除，避免实验天然奖励“抽象更多”或“代码更短”。
+
+## 6. 模型、隔离和运行方式
+
+第二对沿用第一对已经验证的条件：
+
+- Worker、reviewer、executor 和维护 agent 统一使用 GPT-5.6 Sol、`high` reasoning effort；
+- Bubblewrap 严格隔离；
+- 每个角色独立工作目录、HOME、Claude 配置和 session；
+- 不读取宿主机全局 `AGENTS.md`、`CLAUDE.md`、memory、skills、历史会话、Orchestra 文档或另一组结果；
+- `--bare`、`--safe-mode`、关闭 skills、plugins 和 MCP；
+- 每个 agent turn 都是有限任务，不自动 retry、循环 review 或生成下一轮需求；
+- 公开测试和最终测试在两组对应运行前写好；
+- evaluator 结果不回灌给最终 Worker；
+- 不搭实验平台或 Runtime 基础设施。
+
+Worker 可以按实际需要使用子代理，但每个子代理必须承担不同且有用的工作。记录实际模型、token、wall time、成本、失败尝试和未采用工作。
+
+## 7. 文档状态
 
 - `orchestra-design.md`：方向说明，已降级为待验证假设，不是 Runtime 规范；
-- `cheap-experiment.md`：直接的两组低成本实验；
+- `cheap-experiment.md`：第一对 scheduler 协议和简要结果；
+- `rule-interpreter-experiment.md`：第二对完整协议；
 - `deep-review-prompt.md`：普通 review、负向回顾和 executor prompt；
-- 本文件：当前结论和下一步。
+- 本文件：当前判断和下一步。
 
 旧 Runtime Kernel phase 文档是历史实现和实验记录，不应因为存在就自动成为新 Orchestra 的需求。
 
-## 6. 下一步
+## 8. 下一步
 
-1. 检查四份 Orchestra 文档是否一致；
-2. 在独立临时目录准备最小 CLI 的公开测试和最终测试，不搭实验 infra；
-3. 人工驱动第一对实验；
-4. 根据能力保持、维护任务结果和实际成本决定停止还是补跑一对。
+1. 写好第二对 R1–R7 公开测试和最终隐藏测试；
+2. 验证新的实验目录仍满足严格隔离；
+3. 初始化普通组和负向组空目录；
+4. 人工驱动 R1–R7，在 R3、R5、R7 review；
+5. 运行最终测试和两个独立维护任务；
+6. 比较两对方向是否一致，再决定停止还是继续研究。
 
-在结果出现前，不新增数据库、状态机、decision schema、checkpoint、ledger、artifact 协议、节点通信层或其他 Runtime Kernel 机制。
+在第二对结果出现前，不新增数据库、状态机、decision schema、checkpoint、ledger、artifact 协议、节点通信层或其他 Runtime Kernel 机制。

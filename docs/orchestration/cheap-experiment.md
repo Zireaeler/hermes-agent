@@ -78,6 +78,7 @@
 python scheduler.py add-interval <name> <seconds> -- <command...>
 python scheduler.py add-once <name> <iso-time> -- <command...>
 python scheduler.py run
+python scheduler.py history <name>
 python scheduler.py list
 python scheduler.py pause <name>
 python scheduler.py resume <name>
@@ -245,3 +246,15 @@ Worker 可以按任务需要调用任意数量的子代理，但每个子代理�
 - 一份简单运行记录。
 
 能手工完成的步骤先手工完成。只有重复操作已经实际妨碍运行时，才写很薄的脚本。
+
+## 10. 第一对结果和第二对
+
+第一对 scheduler 实验已经完成：
+
+- 两组 R1–R7 公开能力均通过；
+- 最终有效隐藏行为维度均通过；
+- 负向组成品在“增加执行 timeout”和“删除 retry”两个维护任务中均正确完成，合计 wall time 少约 38%，成本少约 56%；
+- 负向 review 主轨迹本身并不更便宜，收益主要出现在后续维护；
+- 一对轨迹不足以作因果结论，两组从 R1 起的 JSON/SQLite 架构差异和项目内测试策略是明显混杂因素。
+
+因此按第 8 节规则补跑第二对。第二对改用完全确定、无持久状态、无真实时间和无并发的 JSON 决策规则解释器，检查信号能否跨问题类型复现。具体规格见 `rule-interpreter-experiment.md`。
