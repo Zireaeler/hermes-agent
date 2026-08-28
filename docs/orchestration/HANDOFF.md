@@ -95,16 +95,15 @@ Worker 可以按实际需要使用子代理，但每个子代理必须承担不�
 
 旧 Runtime Kernel phase 文档是历史实现和实验记录，不应因为存在就自动成为新 Orchestra 的需求。
 
-## 8. 下一步
+## 8. 第三次受控实验
 
-两对完整实验到此结束。两对维护结果方向一致，但两次都在第一次 review 前出现“普通组有大量项目内测试、负向组没有”的随机分叉，review 因果效果尚未隔离。
+用户已批准继续，但不再原样跑第三对。新协议见 `controlled-stockroom-experiment.md`：
 
-当前应停止扩建 Orchestra。若仍要验证，应先改变实验协议，而不是原样运行第三对：
+1. 由一个共同 Worker 完成本地库存 CLI 的 R1–R3；
+2. 在 Review 1 前复制完全相同的代码、项目内测试和数据格式；
+3. 分别施加普通 review 与负向 review；
+4. 两组继续相同的 CSV、调拨、预留和短缺报表需求；
+5. 最终维护任务是新增盘点批次、彻底删除预留；
+6. 仍然手工驱动、严格隔离，不建设实验平台。
 
-1. 用一个共同 Worker 完成 R1–R3；
-2. 在 Review 1 前复制完全相同的代码和项目内测试；
-3. 分别施加普通 review 和负向 review；
-4. 再继续相同后续需求、最终测试和维护任务；
-5. 仍然手工驱动，不建设实验平台。
-
-在得到消除 treatment 前混杂的证据前，不新增数据库、状态机、decision schema、checkpoint、ledger、artifact 协议、节点通信层或其他 Runtime Kernel 机制。
+该实验专门消除前两对最主要的 treatment 前混杂。结果出现前，不新增数据库服务、状态机框架、decision schema、checkpoint、ledger、artifact 协议、节点通信层或其他 Runtime Kernel 机制。
