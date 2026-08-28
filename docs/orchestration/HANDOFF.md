@@ -1,5 +1,7 @@
 # Orchestra 方向接手说明
 
+> 当前状态：三次实验已结束。负向 review 未在受控实验中证明稳定净收益，不建设 Orchestra Runtime。后续只讨论完整 Worker 之外是否存在真实的长周期外层缺口。
+
 ## 1. 当前要解决的问题
 
 成熟 coding agent 可以持续完成一条条明确需求，但长期连续开发可能形成自我强化的结构增长：Agent 先增加辅助机制，再把由它产生的测试、schema、文档和迁移当成独立需求，导致后续工作只能继续维护和扩展这些机制。
@@ -26,9 +28,9 @@ Hermes Runtime Kernel 本身出现过这种情况。历史对照还显示，多�
 - “命名实体数可以作为深审触发、实质证据和 cleanup 验收”；
 - “历史设计记录天然能提供无偏的长期判断”。
 
-## 3. 正在验证什么
+## 3. 实验验证了什么
 
-实验问题是：
+三次实验验证的问题是：
 
 > 在相同的七轮连续需求中，相比普通独立 review，只允许 `keep / remove /
 > merge / simplify / doubt` 的负向回顾，能否在能力不受损的情况下让后续维护更容易？
@@ -69,9 +71,9 @@ Hermes Runtime Kernel 本身出现过这种情况。历史对照还显示，多�
 
 第二对的负向 review 只执行了两个极小 cleanup、一个真实边界修复和一个 no-op，没有删除测试。因此当前证据支持“较小、没有大量 Agent 自建测试负担的成品更容易维护”，但还没有证明负向 review 是原因。
 
-## 6. 模型、隔离和运行方式
+## 6. 模型、隔离和运行方式（归档）
 
-第二对沿用第一对已经验证的条件：
+三次实验沿用相同的隔离原则：
 
 - Worker、reviewer、executor 和维护 agent 统一使用 GPT-5.6 Sol、`high` reasoning effort；
 - Bubblewrap 严格隔离；
@@ -87,11 +89,12 @@ Worker 可以按实际需要使用子代理，但每个子代理必须承担不�
 
 ## 7. 文档状态
 
-- `orchestra-design.md`：方向说明，已降级为待验证假设，不是 Runtime 规范；
-- `cheap-experiment.md`：第一对 scheduler 协议和简要结果；
-- `rule-interpreter-experiment.md`：第二对完整协议；
-- `deep-review-prompt.md`：普通 review、负向回顾和 executor prompt；
-- 本文件：当前判断和下一步。
+- `orchestra-design.md`：三次实验后的主结论、已排除职责和仍待讨论的最小外层边界；
+- `cheap-experiment.md`：第一对 scheduler 实验归档；
+- `rule-interpreter-experiment.md`：第二对规则解释器实验归档；
+- `controlled-stockroom-experiment.md`：第三次受控库存实验归档；
+- `deep-review-prompt.md`：实验使用过的 review prompt 归档，不是 Runtime 流程；
+- 本文件：当前接手摘要和最终判断。
 
 旧 Runtime Kernel phase 文档是历史实现和实验记录，不应因为存在就自动成为新 Orchestra 的需求。
 

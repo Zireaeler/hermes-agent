@@ -1,6 +1,8 @@
-# 独立 Review Prompt
+# 独立 Review Prompt（实验归档）
 
-本文档提供廉价实验使用的两份 reviewer prompt 和一份 executor prompt。两组输入、模型、工具和运行时机相同，只改变 reviewer 允许提出的动作。
+> 状态：三次实验已结束。本文是实验使用过的 prompt 模板，不是建议加入 Runtime 的永久 review 流程。受控实验没有证明负向 review 相对普通 review 有稳定净收益。
+
+本文档提供实验使用的两份 reviewer prompt 和一份 executor prompt。两组输入、模型、工具和运行时机相同，只改变 reviewer 允许提出的动作。
 
 ## 共同要求
 
