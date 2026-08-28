@@ -95,15 +95,18 @@ Worker 可以按实际需要使用子代理，但每个子代理必须承担不�
 
 旧 Runtime Kernel phase 文档是历史实现和实验记录，不应因为存在就自动成为新 Orchestra 的需求。
 
-## 8. 第三次受控实验
+## 8. 第三次受控实验与最终判断
 
-用户已批准继续，但不再原样跑第三对。新协议见 `controlled-stockroom-experiment.md`：
+第三次协议和结果见 `controlled-stockroom-experiment.md`。实验已完整运行。
 
-1. 由一个共同 Worker 完成本地库存 CLI 的 R1–R3；
-2. 在 Review 1 前复制完全相同的代码、项目内测试和数据格式；
-3. 分别施加普通 review 与负向 review；
-4. 两组继续相同的 CSV、调拨、预留和短缺报表需求；
-5. 最终维护任务是新增盘点批次、彻底删除预留；
-6. 仍然手工驱动、严格隔离，不建设实验平台。
+共同 Worker 完成 R1–R3 后，两组从完全相同的单文件基线开始，无项目内测试差异。消除 treatment 前混杂后：
 
-该实验专门消除前两对最主要的 treatment 前混杂。结果出现前，不新增数据库服务、状态机框架、decision schema、checkpoint、ledger、artifact 协议、节点通信层或其他 Runtime Kernel 机制。
+- 两组 R1–R7 和最终有效隐藏行为均通过；
+- 负向组 treatment 主轨迹 wall time 高约 7%，成本高约 17%；
+- 最终负向组代码少约 9%；
+- 新增盘点批次维护任务两组都因相同 CLI 误解失败；
+- 删除预留维护任务两组都成功，成本几乎相同。
+
+因此前两对显著维护优势不能归因于负向 review；它们主要与 treatment 前项目内测试策略分叉重合。受控实验没有证明负向 review 相对普通独立 review 有稳定净增量。
+
+最终决定：停止实验，不建设 Orchestra Runtime、自动负向 review 系统或新的 orchestration 基础设施。保留已经写入全局 Agent 规则的直接反劫持原则即可：不让 Agent 自建 contract、schema、测试、迁移和流程反过来成为新需求。

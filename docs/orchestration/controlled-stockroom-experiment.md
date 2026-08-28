@@ -333,3 +333,35 @@ LOC 和文件数只作旁证。
 - evaluator 不挂载给 Worker、reviewer 或 executor；
 - 每个 turn 有限，不自动 retry/循环 review；
 - 不建设数据库服务、ledger、checkpoint、审批或实验平台。
+
+## 11. 实际结果
+
+第三次受控实验已经完整运行。
+
+受控复制点：共同 Worker 完成 R1–R3 后，两组都只有同一个 `stockroom.py`，753 行、25,316 bytes，SHA256 完全相同，无项目内测试文件。
+
+能力结果：
+
+- 两组 R1–R7 公开测试全部通过；
+- 最终隐藏测试的有效行为维度两组全部通过；
+- 普通 review 和负向 review 都发现并修复了真实组合边界问题；
+- 没有证据表明负向 review 损坏能力。
+
+Treatment 阶段从 Review 1 到 Review 3 executor，两组各 10 个 agent turn：
+
+| | 普通组 | 负向组 |
+|---|---:|---:|
+| wall time | 65.39 分钟 | 70.18 分钟 |
+| 成本 | USD 6.347 | USD 7.443 |
+| input token | 488,135 | 588,946 |
+
+负向组 wall time 高约 7%，成本高约 17%。最终普通组 1,994 行，负向组 1,815 行，负向组少约 9%。
+
+维护任务：
+
+- 盘点批次：两组都把 `stocktake show/cancel` 实现成无 ID 命令，而契约要求 `show COUNT_ID`、`cancel COUNT_ID`；两组外部维护测试都失败，不能比较成功维护成本；
+- 删除预留：两组都正确完成。普通组 463 秒、USD 0.910；负向组 413 秒、USD 0.900。成本基本相同，负向组 input token 反而更多。
+
+受控实验消除项目内测试和初始架构混杂后，没有复现前两对显著维护优势。代码更少没有转化为可确认的净维护收益。
+
+综合三次实验，当前证据不支持为负向 review 建设 Orchestra Runtime 或自动化系统。负向 review 可以发现真实问题和做局部 cleanup，但相对普通独立 review 的稳定净增量没有在受控实验中成立。实验到此停止。
