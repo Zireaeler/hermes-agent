@@ -1,6 +1,6 @@
 # Orchestra 方向接手说明
 
-> 当前状态：三次实验已结束。负向 review 未在受控实验中证明稳定净收益，不建设 Orchestra Runtime。后续只讨论完整 Worker 之外是否存在真实的长周期外层缺口。
+> 当前状态：三次负向 review 实验已结束，该机制未证明稳定净收益。最新方向是 episodic Orchestra：阶段内由完整 Worker 自治，阶段之间由跨 activation 无会话继承的独立战略 Agent 基于持久项目状态重新判断路线。当前仅形成设计，尚未实现 Runtime。
 
 ## 1. 当前要解决的问题
 
@@ -98,7 +98,7 @@ Worker 可以按实际需要使用子代理，但每个子代理必须承担不�
 
 旧 Runtime Kernel phase 文档是历史实现和实验记录，不应因为存在就自动成为新 Orchestra 的需求。
 
-## 8. 第三次受控实验与最终判断
+## 8. 第三次受控实验结论
 
 第三次协议和结果见 `controlled-stockroom-experiment.md`。实验已完整运行。
 
@@ -110,6 +110,19 @@ Worker 可以按实际需要使用子代理，但每个子代理必须承担不�
 - 新增盘点批次维护任务两组都因相同 CLI 误解失败；
 - 删除预留维护任务两组都成功，成本几乎相同。
 
-因此前两对显著维护优势不能归因于负向 review；它们主要与 treatment 前项目内测试策略分叉重合。受控实验没有证明负向 review 相对普通独立 review 有稳定净增量。
+因此停止“负向 review 是 Orchestra 核心能力”的实验方向，不建设自动负向 review 或 cleanup Runtime。
 
-最终决定：停止实验，不建设 Orchestra Runtime、自动负向 review 系统或新的 orchestration 基础设施。保留已经写入全局 Agent 规则的直接反劫持原则即可：不让 Agent 自建 contract、schema、测试、迁移和流程反过来成为新需求。
+## 9. 最新 Orchestra 方向
+
+Hermes 的真实长期失败仍未被上述小型 review 实验覆盖：Human 给出远大 Goal 后，同一个 Worker 连续自审下一阶段，长期围绕自身结构修补，逐渐忘记推进端到端目标，而 Human 被迫持续充当纠偏者。
+
+最新主设计见 `orchestra-design.md`：
+
+- Orchestra 是跨 activation 无会话继承、基于持久项目状态运行的 episodic 战略 Agent；
+- 每个项目决策边界启动 fresh Orchestra session；
+- 单次 activation 内可以完整观察、调查、使用 Agent、判断和调度；
+- 阶段内交给完整 Worker 自治；
+- 写回经核实的项目事实和当前调度结果，不保存历史推理叙事；
+- 连续性属于项目状态，推理属于单次 episode。
+
+当前只形成文档和待验证协议，不实现新的 Runtime。下一步若继续，应做真实长期对照：Worker 自管理阶段路线 vs episodic Orchestra 管理阶段路线，Human 只提供初始目标和预定的重大方向变化。
