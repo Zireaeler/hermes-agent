@@ -1,105 +1,111 @@
 # orchestra 当前接手说明
 
-> 本文件只记录当前状态和下一步，不重复顶层设计。稳定原则见 [`orchestra-design.md`](orchestra-design.md)，首版行为见 [`v1/design.md`](v1/design.md)，具体实施见 [`v1/implementation.md`](v1/implementation.md)，真实目标见 [`v1/targets.md`](v1/targets.md)。
+> 本文件只记录当前状态和下一步。稳定原则见 [`orchestra-design.md`](orchestra-design.md)，首版行为见 [`v1/design.md`](v1/design.md)，具体代码计划见 [`v1/implementation.md`](v1/implementation.md)，真实目标见 [`v1/targets.md`](v1/targets.md)。
 
-## 当前结论
+## 当前状态
 
-orchestra 是运行在项目决策边界上的间歇式战略代理：
+**当前仓库里还没有可运行的 orchestra。**
 
-- 每轮使用全新会话；
-- 从当前人类意图、项目状态、最新结果和按需证据重新组装上下文；
+已有内容全部是设计：
+
+- orchestra 每轮使用全新会话；
+- 从当前人类意图、项目状态、最近结果和按需证据重新组装上下文；
 - 单轮内允许完整代理循环；
 - 跨轮不继承旧对话、推理过程和策略辩护；
-- 只选择一个当前任务；
+- 每轮最多选择一个当前任务；
 - 任务内部交给完整 worker 自治；
-- 长期连续性属于可直接重写的项目状态，不属于任何长期模型会话。
+- 长期连续性属于可直接重写的项目状态。
 
-首版严格一对一：任何时刻只有一个活动 worker。多 worker 是后续独立研究，不进入首版。
+股票模拟系统只是首个真实长期目标，不能在 orchestra 代码尚不存在时直接开始运行。
 
-## 已确定的边界
+## 首版固定边界
 
-- 不重新验证单 worker 长期维持宏大目标会发生注意力涣散；Hermes 历史已经提供了足够工程证据。
-- 不构造覆盖所有设计点的综合演示。
-- 不建立规划、编码、测试、评审固定角色。
-- 不管理 worker 内部子代理。
-- 不建设目标合同、进展账本、执行图、图修订、检查点和恢复协议。
-- 不把两段式上下文写成首版强制流程。
-- orchestra 默认只读检查业务代码，只更新项目状态与 worker 推进说明。
-- 同一明确任务继续使用原 worker 会话；实质不同的新任务默认使用新 worker 会话。
-- 项目状态最多是一份可整体重写的自由格式 Markdown，不做字段校验、版本、迁移、兼容和自动修复。
+- 首版严格一对一，任何时刻只有一个活动 worker；
+- 不管理 worker 内部子代理；
+- 不建设多 worker、执行图、任务数据库和节点协议；
+- orchestra 默认只读检查业务代码；
+- 同一明确任务继续使用原 worker 会话；
+- 实质不同的新任务启动新 worker 会话；
+- 项目状态最多是一份可整体重写的自由格式 Markdown；
+- 不做字段校验、版本、迁移、兼容和自动修复；
+- 人类显式触发每个决策轮，不运行后台自治循环。
+
+## 首版实现选择
+
+orchestra 直接复用 Hermes 的 `run_agent.AIAgent`，每次 `decide` 创建全新实例并关闭普通记忆、人格和上下文文件。
+
+worker 首版只接 Codex app-server，不建立通用 worker 接口。需要实现：
+
+```text
+thread/start
+thread/resume
+turn/start
+turn/interrupt
+事件流读取
+最终消息收集
+```
+
+首版命令：
+
+```text
+python scripts/orchestra_v1.py init --project <path> --goal-file <path>
+python scripts/orchestra_v1.py decide --project <path> [--human <text>]
+python scripts/orchestra_v1.py run-worker --project <path>
+python scripts/orchestra_v1.py step --project <path> [--human <text>]
+python scripts/orchestra_v1.py status --project <path>
+```
+
+当前这些命令尚未实现。
+
+## 当前开工顺序
+
+严格按以下顺序：
+
+1. 编写最小 Codex app-server 接入，验证新建、执行、恢复、中断和结果收集；
+2. 实现控制目录、`init`、`status`、原子文件写入和输出解析；
+3. 接入全新的 Hermes orchestra，实现 `decide`；
+4. 接入 `run-worker` 和交互式 `step`；
+5. 在极小临时仓库连续完成三个机械决策轮；
+6. 只有闭环通过后，才初始化股票模拟系统并开始真实调试。
+
+不要先写股票系统代码来假装 orchestra 已经存在。
+
+## 最小控制材料
+
+```text
+$HERMES_HOME/orchestra/<project-key>/
+├── state.md
+├── task.md
+├── result.md
+├── decision.txt
+├── worker-thread.txt
+└── last-orchestra-output.md
+```
+
+只有 `state.md` 是长期项目语义材料。其他文件用于当前任务、最近结果和机械运行。
 
 ## 当前文档
 
-- [`README.md`](README.md)：文档入口和权威顺序；
+- [`README.md`](README.md)：文档入口与阅读顺序；
 - [`orchestra-design.md`](orchestra-design.md)：顶层设计；
 - [`v1/design.md`](v1/design.md)：首版行为设计；
-- [`v1/implementation.md`](v1/implementation.md)：首版实施设计；
-- [`v1/rollout.md`](v1/rollout.md)：股票模拟系统中的落地与调试；
+- [`v1/implementation.md`](v1/implementation.md)：可直接开工的代码计划；
+- [`v1/rollout.md`](v1/rollout.md)：从实现闭环到股票项目的落地顺序；
 - [`v1/targets.md`](v1/targets.md)：股票模拟系统目标定义；
 - [`experiments/`](experiments/)：已结束的历史实验归档。
 
 本文件不是新的设计事实源。出现冲突时，按上述顺序读取。
 
-## 首个真实目标
+## 首版完成定义
 
-当前首个真实目标是历史行情驱动的本地股票模拟交易系统：
+只有同时满足以下条件，才可以声称已有首版 orchestra：
 
-> 做一个本地可运行、结果可复现的股票模拟交易系统。用户提供历史行情、初始资金和交易规则，系统按时间推进，接受买卖指令，模拟成交，维护现金、持仓、成本和账户净值，并能查看和解释完整过程。重点是让交易流程和账户结果可信、透明、可反复验证，不是接入真实券商，不是提供投资建议，也不是提前建设一个通用量化平台。
+- `decide` 实际启动全新 orchestra 会话；
+- 项目状态和 worker 任务可以自动保存；
+- 一个真实 Codex worker 可以新建和恢复；
+- worker 结果可以进入下一轮；
+- 新任务与继续任务边界实际工作；
+- 连续三个决策轮不需要人工复制粘贴材料；
+- `等待`、`询问人类` 和 `停止` 不会启动 worker。
 
-该目标应放在独立业务仓库中，不在 `hermes-agent` 内直接实现。
-
-正式运行前需要准备并核实：
-
-- 目标仓库路径和当前代码状态；
-- 一份本地历史行情；
-- 数据包含的股票、时间范围、字段、时区和复权方式；
-- 初始资金与基础市场范围；
-- 不接实盘、不做实时高频、不做多用户平台等边界；
-- 当前是否已有任何可运行模拟流程；
-- 最承重但最缺证据的时间、成交或账户语义。
-
-不要预先写完整模块图和路线图。第一轮 orchestra 应根据真实仓库与数据，选择一个能够产生端到端结果或判别性证据的明确任务。
-
-## 目标中的主要注意力陷阱
-
-- 在一笔完整交易尚未跑通前建设事件总线和通用框架；
-- 在一个真实规则尚未验证前建设策略插件系统；
-- 在日线模拟尚不可信前实现逐笔撮合和订单簿；
-- 在交易与账目尚不可解释前增加大量指标和图表；
-- 提前抽象所有交易所、券商、行情源和账户类型；
-- 把数据库、队列、迁移、恢复和审计变成新的项目中心；
-- 因已有代码和测试投入而拒绝停止错误路线。
-
-orchestra 应持续把项目拉回：用户能否准备数据、运行模拟、观察交易，并从现金、持仓和交易记录解释账户结果。
-
-## 下一步实施
-
-按 [`v1/implementation.md`](v1/implementation.md) 和 [`v1/rollout.md`](v1/rollout.md) 执行：
-
-1. 建立或选择一个独立的股票模拟系统仓库；
-2. 准备固定的本地历史行情，不让首轮依赖在线数据源；
-3. 根据真实仓库和数据写第一份自由格式 `state.md`；
-4. 手工跑通两到三个完整决策轮；
-5. 确认项目状态、worker 推进说明和结果材料的边界；
-6. 实现薄的 `decide` 启动器，直接创建全新的 `AIAgent`；
-7. 只接入一个当前稳定的 Codex 或 Claude Code worker 后端；
-8. 连成由人类显式触发的一对一闭环；
-9. 只根据真实重复问题增加最小能力。
-
-首版不要先实现守护进程、自动边界检测、通用 worker 适配、多 worker、数据库或状态协议。
-
-## 首版需要持续观察的问题
-
-- 精简项目状态是否足以让全新的 orchestra 恢复项目局面；
-- 哪些事实需要直接输入，哪些只需提供引用；
-- orchestra 是否过度依赖 worker 自述；
-- orchestra 的代码检查是否过深，开始变成第二个 worker；
-- 项目决策边界是否过早或过晚；
-- worker 推进说明是否过细或过粗；
-- 新任务是否仍被旧 worker 会话中的局部叙事污染；
-- 项目状态是否开始形成自己的格式兼容和维护责任；
-- 股票模拟是否仍围绕完整用户流程、未来信息边界、账目一致性和结果复现推进；
-- 项目是否开始漂移到实盘、实时、完整交易所或通用量化平台；
-- 人类在连续运行后是否逐渐只需处理真正的方向与价值选择。
-
-这些问题用于调试接口，不用于继续扩建新的运行时机制。
+在此之前，股票模拟系统仍然只是目标材料，不是已经开始的 orchestra 运行。
