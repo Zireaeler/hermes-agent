@@ -37,11 +37,11 @@ Hermes Runtime Kernel 本身出现过这种情况。历史对照还显示，多�
 
 两组都在 R3、R5、R7 通过公开测试后获得相同次数的 reviewer 和 executor。唯一有意差异是 reviewer 可以提出什么动作。主要结果看最终能力和新的维护 agent 完成后续修改的真实成本，而不是 review 数量、LOC 或命名实体数。
 
-共同 prompt 见 `deep-review-prompt.md`。
+共同 prompt 见 [`experiments/review-prompts.md`](experiments/review-prompts.md)。
 
 ## 4. 第一对：scheduler
 
-第一对协议见 `cheap-experiment.md`，已经完整运行。
+第一对协议见 [`experiments/scheduler-negative-review.md`](experiments/scheduler-negative-review.md)，已经完整运行。
 
 主要结果：
 
@@ -57,7 +57,7 @@ Hermes Runtime Kernel 本身出现过这种情况。历史对照还显示，多�
 
 ## 5. 第二对：JSON 决策规则解释器
 
-完整规格和结果见 `rule-interpreter-experiment.md`。第二对已经完整运行。
+完整规格和结果见 [`experiments/rule-interpreter-review.md`](experiments/rule-interpreter-review.md)。第二对已经完整运行。
 
 结果：
 
@@ -89,18 +89,21 @@ Worker 可以按实际需要使用子代理，但每个子代理必须承担不�
 
 ## 7. 文档状态
 
-- `orchestra-design.md`：三次实验后的主结论、已排除职责和仍待讨论的最小外层边界；
-- `cheap-experiment.md`：第一对 scheduler 实验归档；
-- `rule-interpreter-experiment.md`：第二对规则解释器实验归档；
-- `controlled-stockroom-experiment.md`：第三次受控库存实验归档；
-- `deep-review-prompt.md`：实验使用过的 review prompt 归档，不是 Runtime 流程；
+- [`README.md`](README.md)：orchestra 文档入口；
+- [`orchestra-design.md`](orchestra-design.md)：顶层定义、问题边界、角色和首版范围；
+- [`v1/design.md`](v1/design.md)：首版详细运行设计；
+- [`v1/rollout.md`](v1/rollout.md)：真实项目落地与调试；
+- [`experiments/scheduler-negative-review.md`](experiments/scheduler-negative-review.md)：第一对 scheduler 实验归档；
+- [`experiments/rule-interpreter-review.md`](experiments/rule-interpreter-review.md)：第二对规则解释器实验归档；
+- [`experiments/controlled-stockroom-review.md`](experiments/controlled-stockroom-review.md)：第三次受控库存实验归档；
+- [`experiments/review-prompts.md`](experiments/review-prompts.md)：实验使用过的 review prompt 归档，不是 Runtime 流程；
 - 本文件：当前接手摘要和最终判断。
 
 旧 Runtime Kernel phase 文档是历史实现和实验记录，不应因为存在就自动成为新 Orchestra 的需求。
 
 ## 8. 第三次受控实验结论
 
-第三次协议和结果见 `controlled-stockroom-experiment.md`。实验已完整运行。
+第三次协议和结果见 [`experiments/controlled-stockroom-review.md`](experiments/controlled-stockroom-review.md)。实验已完整运行。
 
 共同 Worker 完成 R1–R3 后，两组从完全相同的单文件基线开始，无项目内测试差异。消除 treatment 前混杂后：
 

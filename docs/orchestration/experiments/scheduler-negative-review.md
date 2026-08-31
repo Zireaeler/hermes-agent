@@ -158,7 +158,7 @@ Reviewer 不看：
 
 依赖、调用和测试结果是事实；“语义重复”“概念太多”“架构不健康”是 reviewer 的判断，必须回到代码和行为验证。
 
-具体 prompt 见 `deep-review-prompt.md`。
+具体 prompt 见 [`review-prompts.md`](review-prompts.md)。
 
 ## 5. 怎么判断能力有没有受损
 
@@ -259,4 +259,4 @@ Worker 可以按任务需要调用任意数量的子代理，但每个子代理�
 - 负向 review 主轨迹本身并不更便宜，收益主要出现在后续维护；
 - 一对轨迹不足以作因果结论，两组从 R1 起的 JSON/SQLite 架构差异和项目内测试策略是明显混杂因素。
 
-因此按第 8 节规则补跑第二对。第二对改用完全确定、无持久状态、无真实时间和无并发的 JSON 决策规则解释器，检查信号能否跨问题类型复现。具体规格见 `rule-interpreter-experiment.md`。
+因此按第 8 节规则补跑第二对。第二对改用完全确定、无持久状态、无真实时间和无并发的 JSON 决策规则解释器，检查信号能否跨问题类型复现。具体规格见 [`rule-interpreter-review.md`](rule-interpreter-review.md)。

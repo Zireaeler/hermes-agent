@@ -228,7 +228,7 @@ Reviewer 只能提出：
 
 两组 reviewer 都只看截至当前轮的需求、当前代码、项目内测试和公开测试通过事实；不看另一组、此前 review 辩护、最终测试或维护任务。相同配置 executor 执行本组建议，`doubt` 不自动转成修改。
 
-具体共同要求沿用 `deep-review-prompt.md`。
+具体共同要求沿用 [`review-prompts.md`](review-prompts.md)。
 
 ## 5. 公开测试
 
