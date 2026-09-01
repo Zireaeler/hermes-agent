@@ -43,9 +43,9 @@ python scripts/orchestra_v1.py status --project <path>
 
 ## 1. 首版固定选择
 
-### 1.1 代码位置
+### 1.1 代码组织
 
-先只增加少量文件：
+首轮实现实际落在以下文件：
 
 ```text
 hermes_cli/orchestra_v1.py
@@ -55,7 +55,9 @@ tests/test_orchestra_v1.py
 tests/test_codex_worker.py
 ```
 
-不要一开始建立 `orchestra/` 大目录、插件系统或通用运行时。只有单文件已经明显无法维护时再拆分。
+这是首轮实施记录，不是继续向少数大文件堆叠功能的结构要求。后续修改必须遵守 [`project-rules.md`](project-rules.md)：按控制材料、决策、Agent 单轮执行、仓库读取、worker 协调和 Codex transport 等真实职责逐步拆分；CLI 保持薄层，测试按职责镜像组织。
+
+不为了形式一次性建立空目录、插件系统或通用运行时，但下一项实质功能触及现有混合职责时，必须在同一改动中拆出所触及的职责，而不是继续扩大 `orchestra_v1.py` 或 `codex_worker.py`。
 
 ### 1.2 orchestra 使用 Hermes 现有代理循环
 

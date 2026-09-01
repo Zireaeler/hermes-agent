@@ -1,6 +1,20 @@
-# Hermes Agent - Development Guide
+# Hermes Agent 开发指南
 
-Instructions for AI coding assistants and developers working on the hermes-agent codebase.
+供参与 hermes-agent 代码库工作的 AI 编码助手和开发者使用。
+
+## 文档与代码注释语言
+
+本仓库新增或修改的所有说明性、规范性文档，以及代码注释和 docstring，必须使用中文。函数名、类名、schema 字段、命令、路径、模型/provider 名称、协议原始字段和引用的外部原文可以保留英文；围绕它们的解释必须使用中文。除非用户明确要求，不得新写英文说明段落或英文代码注释。此规则适用于整个仓库，不只适用于 Runtime Kernel 或 Orchestra。
+
+不要求为了局部任务一次性翻译未触及的历史文件；但只要修改了某段说明或注释，就必须把该段改为中文，不得继续扩散英文内容。
+
+## Orchestra v1 约束
+
+修改 Orchestra v1 的代码、测试或文档前，必须先阅读并遵守
+`docs/orchestration/v1/project-rules.md`，该文档是强制工程约束。
+不得继续把 `hermes_cli/orchestra_v1.py`、`hermes_cli/codex_worker.py`
+或对应测试当作功能堆放文件。修改到真实职责时应将其拆入聚焦模块，
+同时禁止建立空抽象、臆测性框架或与当前改动无关的全量重构。
 
 ## Runtime Kernel Branch Constraints
 

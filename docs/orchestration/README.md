@@ -26,6 +26,7 @@ docs/orchestration/
 ├── HANDOFF.md
 ├── v1/
 │   ├── design.md
+│   ├── project-rules.md
 │   ├── implementation.md
 │   ├── rollout.md
 │   └── targets.md
@@ -35,27 +36,31 @@ docs/orchestration/
 ## 阅读顺序与职责
 
 1. [`orchestra-design.md`](orchestra-design.md)
-   
+
    顶层设计。说明 orchestra 为什么存在、与 worker 的边界、全新决策轮和一对一首版范围。稳定原则以此为准。
 
 2. [`v1/design.md`](v1/design.md)
-   
+
    首版行为设计。说明项目状态、上下文、项目决策边界、worker 会话边界和推进说明。
 
-3. [`v1/implementation.md`](v1/implementation.md)
-   
+3. [`v1/project-rules.md`](v1/project-rules.md)
+
+   首版独立工程规范。约束代码、测试和文档按真实职责拆分，禁止继续把 Orchestra 功能堆进单个主文件。修改 Orchestra v1 前必须阅读。
+
+4. [`v1/implementation.md`](v1/implementation.md)
+
    首版实现与验收记录。说明固定实现选择、实际代码落点、Hermes `AIAgent` 与 Codex app-server 接入、命令和文件边界、测试结果及真实三轮闭环。
 
-4. [`v1/rollout.md`](v1/rollout.md)
-   
+5. [`v1/rollout.md`](v1/rollout.md)
+
    已完成首版闭环之后进入股票模拟系统的落地与校准顺序。
 
-5. [`v1/targets.md`](v1/targets.md)
-   
+6. [`v1/targets.md`](v1/targets.md)
+
    首个真实目标：历史行情驱动的本地股票模拟交易系统。它不是 orchestra 实现的前置步骤。
 
-6. [`HANDOFF.md`](HANDOFF.md)
-   
+7. [`HANDOFF.md`](HANDOFF.md)
+
    当前状态和下一步摘要，不是新的设计事实源。与上面文档冲突时，以上面文档为准。
 
 ## 当前首版范围
