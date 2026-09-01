@@ -4,19 +4,20 @@
 
 ## 当前状态
 
-**当前仓库里还没有可运行的 orchestra。**
+**Orchestra v1 已实现，并于 2026-09-01 通过真实三轮一对一闭环验收。**
 
-已有内容全部是设计：
+当前已有：
 
-- orchestra 每轮使用全新会话；
-- 从当前人类意图、项目状态、最近结果和按需证据重新组装上下文；
-- 单轮内允许完整代理循环；
-- 跨轮不继承旧对话、推理过程和策略辩护；
-- 每轮最多选择一个当前任务；
-- 任务内部交给完整 worker 自治；
-- 长期连续性属于可直接重写的项目状态。
+- 每轮使用全新 `AIAgent` 的真实 `decide`；
+- 当前状态、任务、最近结果与 Git 事实的自动组装；
+- 只限目标仓库的临时读取与搜索工具；
+- 六个可直接查看和编辑的项目控制文件；
+- Codex app-server 的新建、恢复、中断、事件读取和最终消息收集；
+- 新任务使用新 Codex thread、继续任务恢复原 thread 的实际边界；
+- `init`、`decide`、`run-worker`、`step` 和 `status` 前台命令；
+- 真实三轮闭环和自动化测试记录。
 
-股票模拟系统只是首个真实长期目标，不能在 orchestra 代码尚不存在时直接开始运行。
+详细实现与验收结果见 [`v1/implementation.md`](v1/implementation.md) 第 10 节。股票模拟系统仍未初始化，它现在是闭环通过后的下一阶段，而不是用于代替 Orchestra 实现的演示。
 
 ## 首版固定边界
 
@@ -55,20 +56,18 @@ python scripts/orchestra_v1.py step --project <path> [--human <text>]
 python scripts/orchestra_v1.py status --project <path>
 ```
 
-当前这些命令尚未实现。
+这些命令已经实现并通过 CLI、单元、回归和真实闭环验证。
 
-## 当前开工顺序
+## 当前下一步
 
-严格按以下顺序：
+首版实现和机械验收已经完成。下一步按 [`v1/rollout.md`](v1/rollout.md) 初始化股票模拟系统，把它作为第一个真实长期目标，逐轮校准：
 
-1. 编写最小 Codex app-server 接入，验证新建、执行、恢复、中断和结果收集；
-2. 实现控制目录、`init`、`status`、原子文件写入和输出解析；
-3. 接入全新的 Hermes orchestra，实现 `decide`；
-4. 接入 `run-worker` 和交互式 `step`；
-5. 在极小临时仓库连续完成三个机械决策轮；
-6. 只有闭环通过后，才初始化股票模拟系统并开始真实调试。
+- Orchestra 的项目状态是否保持最小充分；
+- 新任务与继续任务边界是否合适；
+- worker 结果中哪些线索需要独立核实；
+- 哪些变化应触发下一次人工决策轮。
 
-不要先写股票系统代码来假装 orchestra 已经存在。
+不要在进入真实项目时顺手扩张多 worker、后台循环、状态协议或通用运行时。
 
 ## 最小控制材料
 
@@ -89,23 +88,23 @@ $HERMES_HOME/orchestra/<project-key>/
 - [`README.md`](README.md)：文档入口与阅读顺序；
 - [`orchestra-design.md`](orchestra-design.md)：顶层设计；
 - [`v1/design.md`](v1/design.md)：首版行为设计；
-- [`v1/implementation.md`](v1/implementation.md)：可直接开工的代码计划；
+- [`v1/implementation.md`](v1/implementation.md)：首版实现选择、实际代码记录与验收结果；
 - [`v1/rollout.md`](v1/rollout.md)：从实现闭环到股票项目的落地顺序；
 - [`v1/targets.md`](v1/targets.md)：股票模拟系统目标定义；
 - [`experiments/`](experiments/)：已结束的历史实验归档。
 
 本文件不是新的设计事实源。出现冲突时，按上述顺序读取。
 
-## 首版完成定义
+## 首版完成情况
 
-只有同时满足以下条件，才可以声称已有首版 orchestra：
+以下条件已经全部满足：
 
 - `decide` 实际启动全新 orchestra 会话；
 - 项目状态和 worker 任务可以自动保存；
 - 一个真实 Codex worker 可以新建和恢复；
 - worker 结果可以进入下一轮；
 - 新任务与继续任务边界实际工作；
-- 连续三个决策轮不需要人工复制粘贴材料；
+- 连续三个真实决策轮不需要人工复制粘贴材料；
 - `等待`、`询问人类` 和 `停止` 不会启动 worker。
 
-在此之前，股票模拟系统仍然只是目标材料，不是已经开始的 orchestra 运行。
+实际三轮 thread 边界、文件结果和测试数量记录在 [`v1/implementation.md`](v1/implementation.md) 第 10 节。股票模拟系统仍只是尚未初始化的下一阶段目标。

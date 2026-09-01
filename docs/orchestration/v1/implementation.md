@@ -1,45 +1,45 @@
-# orchestra 首版实施计划
+# orchestra 首版实施与验收记录
 
-> 本文定义真正需要写出的首版代码。当前仓库里还没有可运行的 orchestra，只有设计文档。股票模拟系统是首个真实目标，但必须等最小 orchestra 闭环已经运行后再开始。
+> 本文前半部分保留首版实现选择和行为边界，末尾记录 2026-09-01 实际落地的代码、模型接入、测试与真实三轮验收。股票模拟系统仍是首个真实长期目标，但尚未初始化。
 
-## 0. 当前状态与首版完成标准
+## 0. 当前实现状态
 
-当前已有：
+**Orchestra v1 已实现并通过真实一对一闭环验收。**
 
-- orchestra 与 worker 的职责边界；
-- 全新 orchestra 决策轮的上下文原则；
-- 一对一首版范围；
-- 股票模拟系统目标定义。
-
-当前没有：
-
-- 启动全新 orchestra 的实际命令；
-- 项目状态与本轮结果的自动组装；
-- orchestra 输出到 worker 任务的实际传递；
-- worker 新建与恢复会话的实际接入；
-- 一次完整的一对一运行闭环。
-
-所以首版不能从股票系统开始。正确顺序是：
+实际代码：
 
 ```text
-先实现机械闭环
-→ 用极小仓库确认会话、状态和结果传递正确
-→ 再把股票模拟系统接入成为第一个真实长期目标
+hermes_cli/orchestra_v1.py
+hermes_cli/codex_worker.py
+scripts/orchestra_v1.py
+tests/test_orchestra_v1.py
+tests/test_codex_worker.py
 ```
 
-首版完成必须同时满足：
+当前已经可以：
 
 ```text
-人类可以初始化一个目标项目
-→ 每次决定都启动全新的 orchestra 会话
-→ orchestra 能读取当前项目状态并按需检查仓库
-→ orchestra 只生成一个当前 worker 任务
-→ 系统能启动或恢复一个真实 Codex worker
-→ worker 结果能回到下一轮 orchestra
-→ 连续运行三个决策轮不需要人工复制粘贴材料
+初始化一个目标项目
+→ 每次 decide 创建全新的 Hermes AIAgent
+→ 从当前状态、任务、最近结果与 Git 事实重建上下文
+→ 只允许 Orchestra 读取和搜索目标仓库
+→ 保存完整的新 state.md、task.md 和 decision.txt
+→ 根据决定新建或恢复真实 Codex thread
+→ 将 worker 最终结果写入 result.md
+→ 在下一次 fresh decide 中自动使用该结果
 ```
 
-首版仍然由人类显式触发，不自动持续循环。
+首版命令已经可运行：
+
+```text
+python scripts/orchestra_v1.py init --project <path> --goal-file <path>
+python scripts/orchestra_v1.py decide --project <path> [--human <text>]
+python scripts/orchestra_v1.py run-worker --project <path>
+python scripts/orchestra_v1.py step --project <path> [--human <text>]
+python scripts/orchestra_v1.py status --project <path>
+```
+
+首版仍由人类显式触发，不运行后台循环。实际实现与验收细节见本文第 10 节。
 
 ## 1. 首版固定选择
 
@@ -578,3 +578,113 @@ worker 执行失败
 - 完整可视化界面。
 
 如果实施过程中开始围绕上述非目标增加基础设施，应停止并回到“一个全新 orchestra、一个当前任务、一个真实 worker、一次显式运行”这个最小闭环。
+
+## 10. 2026-09-01 实际实施记录
+
+### 10.1 代码落点
+
+`hermes_cli/orchestra_v1.py` 实现：
+
+- 按项目绝对路径生成稳定 `project-key`；
+- 创建并管理六个自由格式控制文件；
+- 单文件临时写入后原子替换，并保留已有 symlink；
+- 机械收集 Git 根目录、分支、提交、状态、diff stat 和最近提交；
+- 解析五种决定以及完整的新项目状态和 worker 推进说明；
+- 每次 `decide` 创建新的 `AIAgent`，不传旧对话和父会话；
+- 关闭普通上下文文件、记忆、人格和旧 Kanban 工具；
+- 为本轮临时注册只读、只限目标仓库路径的读取与搜索工具，结束后注销；
+- 根据当前决定启动新 worker、恢复旧 worker 或跳过 worker；
+- 保存 worker thread 与最终结果，并提供机械 `status` 输出。
+
+`hermes_cli/codex_worker.py` 在保留旧 Kanban lane 接口的同时增加独立的最小 `run_codex_turn`：
+
+- 初始化 `codex app-server`；
+- `thread/start` / `thread/resume`；
+- 在 `turn/start` 前回调保存 thread ID；
+- 读取流式通知并收集最后一条 `agentMessage`；
+- 处理 `turn/completed`、服务异常退出、超时、`KeyboardInterrupt` 和 `<turn_aborted>`；
+- 中断活动 turn 后清理 app-server 子进程。
+
+`scripts/orchestra_v1.py` 提供 `init`、`decide`、`run-worker`、`step` 和 `status` 五个前台命令。`step` 在启动 worker 前显示决定和任务并要求人类确认，不构成后台循环。
+
+### 10.2 模型与认证接入
+
+Orchestra 仍使用 Hermes 的 `run_agent.AIAgent`，但首版直接复用同一台机器上的 Codex 模型源：
+
+- 模型、provider 和 `base_url` 来自 `~/.codex/config.toml`；
+- API key 来自 `~/.codex/auth.json` 的现有 `OPENAI_API_KEY`；
+- AIAgent 使用 OpenAI-compatible Responses 路径；
+- key 不写入项目控制材料、不进入 Orchestra 请求体，也不复制到新的凭据文件。
+
+当前 Codex 自定义 provider 需要声明：
+
+```toml
+wire_api = "responses"
+requires_openai_auth = true
+```
+
+否则 `auth.json` 中已有 key 不会被该 provider 用于请求，app-server 会得到 `401 Missing API key`。
+
+### 10.3 自动测试与静态检查
+
+使用隔离 Python 环境 `/tmp/hermes-orchestra-venv.2Kovrn` 执行：
+
+```text
+Orchestra/Codex 新增单元测试：27 passed
+真实 Codex integration：1 passed
+既有 Codex worker 回归测试：81 passed
+合计：109 passed
+ruff：passed
+ty：passed
+```
+
+新增测试覆盖：
+
+- 稳定 `project-key`；
+- 初始化拒绝静默覆盖；
+- 原子写入和 symlink 保留；
+- 五种决定解析与错误输出保护；
+- fresh session ID；
+- 上一轮原始 Orchestra 输出不进入下一轮；
+- 仓库绝对路径和 symlink 逃逸被拒绝；
+- 新任务清除旧 thread 并在 turn 前保存新 thread；
+- 继续任务必须恢复已有 thread；
+- 三种非运行决定不启动 worker；
+- app-server 新建、恢复、通知、最终消息、异常退出、中断和 `<turn_aborted>`；
+- 真实 Codex 新进程恢复同一个 thread 并继续修改仓库。
+
+### 10.4 真实三轮机械闭环
+
+在临时 Git 仓库中使用真实 AIAgent 和真实 Codex app-server 连续完成三轮：
+
+```text
+第 1 轮：开始新任务
+→ 创建 progress.txt，内容为 one
+→ worker completed
+
+第 2 轮：继续当前任务
+→ 新 app-server 进程恢复第 1 轮的同一 Codex thread
+→ 在 progress.txt 追加 two
+→ worker completed
+
+第 3 轮：开始新任务
+→ 创建不同的新 Codex thread
+→ 创建 done.txt，内容为 done
+→ worker completed
+```
+
+验收观察：
+
+- 三轮使用三个不同的 Orchestra session ID；
+- 前两轮 Codex thread ID 相同；
+- 第三轮 Codex thread ID 与前两轮不同；
+- `progress.txt` 最终严格为 `one\ntwo\n`；
+- `done.txt` 最终严格为 `done\n`；
+- worker 结果由程序写入并自动进入下一轮；
+- 全程不需要人工复制粘贴状态、任务或结果材料。
+
+### 10.5 首版结论与下一步
+
+第 9 节列出的首版最低条件已经全部满足。当前可以声称仓库中已有可运行的 Orchestra v1。
+
+尚未开始的下一步是按 [`rollout.md`](rollout.md) 和 [`targets.md`](targets.md) 初始化股票模拟系统，把它作为首个真实长期目标。该步骤不是首版实现的一部分，也没有在机械验收过程中提前启动。

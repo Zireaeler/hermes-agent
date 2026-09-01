@@ -1,38 +1,23 @@
 # orchestra 首版落地与调试
 
-> 本文说明首版从“只有文档”进入“可运行闭环”，再进入股票模拟系统的顺序。行为边界见 [`design.md`](design.md)，代码计划见 [`implementation.md`](implementation.md)，真实目标见 [`targets.md`](targets.md)。
+> 本文保留首版从“只有文档”进入“可运行闭环”，再进入股票模拟系统的落地顺序。行为边界见 [`design.md`](design.md)，实际代码与验收见 [`implementation.md`](implementation.md)，真实目标见 [`targets.md`](targets.md)。
 
 ## 0. 当前状态
 
-当前还没有可运行的 orchestra。
-
-已经存在的是：
-
-- 顶层设计；
-- 一对一运行边界；
-- 上下文和项目状态原则；
-- 股票模拟系统目标。
-
-尚不存在的是：
-
-- `decide` 命令；
-- 全新 orchestra 会话启动器；
-- 项目状态自动组装与保存；
-- Codex worker 新建和恢复接入；
-- 一次完整的一对一闭环。
-
-因此不能直接把股票模拟系统交给“orchestra”。先要把实际运行闭环实现出来。
-
-正确顺序：
+Orchestra v1 已于 2026-09-01 完成前五个阶段：
 
 ```text
-Codex worker 通信验证
-→ 控制材料与机械命令
-→ 全新 orchestra 决策轮
-→ 一对一闭环
-→ 极小仓库机械验收
-→ 股票模拟系统真实运行
+Codex worker 通信验证：完成
+→ 控制材料与机械命令：完成
+→ 全新 orchestra 决策轮：完成
+→ 一对一闭环：完成
+→ 极小仓库真实三轮机械验收：完成
+→ 股票模拟系统真实运行：尚未开始
 ```
+
+实际验收包括三个 fresh Orchestra session、真实 Codex thread 的新建与恢复、第三轮新 thread 边界以及无需人工复制材料的状态和结果传递。详细证据见 [`implementation.md`](implementation.md) 第 10 节。
+
+以下各阶段仍保留为落地与复核顺序；当前执行位置已经进入股票模拟系统初始化之前。
 
 ## 1. 第一阶段：验证一个真实 worker
 
