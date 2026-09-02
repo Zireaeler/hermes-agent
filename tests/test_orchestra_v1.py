@@ -179,6 +179,9 @@ def test_decide_uses_fresh_sessions_and_reloads_authoritative_intent(tmp_path):
         assert agent.kwargs["enabled_toolsets"] == []
         assert "parent_session_id" not in agent.kwargs
         assert "intent.md 为人类意图唯一来源" in agent.kwargs["ephemeral_system_prompt"]
+        assert "不得用“最简单”代替“已经确认正确”" in agent.kwargs[
+            "ephemeral_system_prompt"
+        ]
     assert "Intent one" in requests[0]
     assert "Intent two" in requests[1]
     assert "RAW_ONLY_MARKER" not in requests[1]
