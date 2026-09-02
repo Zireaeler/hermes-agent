@@ -14,6 +14,8 @@
 
 产品行为以 `orchestra-design.md` 和 `v1/design.md` 为准；工程组织以本文为准；`implementation.md` 只记录已经落地的事实，不能反过来成为继续堆叠旧结构的理由。
 
+旧 Runtime Kernel 设计和 phase 文档不是 Orchestra v1 的默认前置上下文，不得因为代码位于同一分支而从中派生 Orchestra 需求。
+
 ## 2. 不可妥协的结构原则
 
 ### 2.1 禁止把 Orchestra 当作单文件堆放区
