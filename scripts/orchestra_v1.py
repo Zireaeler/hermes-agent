@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Foreground CLI for the minimal Hermes Orchestra v1 loop."""
+"""Hermes Orchestra v1 最小闭环的前台命令行入口。"""
 
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
 
 
 def _cmd_decide(args: argparse.Namespace) -> int:
-    decide(args.project, human=args.human)
+    decide(args.project)
     _show_decision(args.project)
     return 0
 
@@ -77,7 +77,7 @@ def _cmd_run_worker(args: argparse.Namespace) -> int:
 
 
 def _cmd_step(args: argparse.Namespace) -> int:
-    decide(args.project, human=args.human)
+    decide(args.project)
     decision = _show_decision(args.project)
     if decision not in RUN_DECISIONS:
         print("当前决定不启动 worker。")
@@ -106,7 +106,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     decide_parser = subparsers.add_parser("decide", help="运行一次全新的 Orchestra 决策轮")
     decide_parser.add_argument("--project", required=True)
-    decide_parser.add_argument("--human")
     decide_parser.set_defaults(handler=_cmd_decide)
 
     worker_parser = subparsers.add_parser("run-worker", help="按当前决定启动或恢复 Codex worker")
@@ -115,7 +114,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     step_parser = subparsers.add_parser("step", help="交互式执行 decide 后按确认运行 worker")
     step_parser.add_argument("--project", required=True)
-    step_parser.add_argument("--human")
     step_parser.set_defaults(handler=_cmd_step)
 
     status_parser = subparsers.add_parser("status", help="显示机械运行状态")

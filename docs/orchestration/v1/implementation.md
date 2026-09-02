@@ -10,18 +10,24 @@
 
 ```text
 hermes_cli/orchestra_v1.py
+hermes_cli/orchestra_v1_control.py
+hermes_cli/orchestra_v1_decision.py
+hermes_cli/orchestra_v1_worker.py
 hermes_cli/codex_worker.py
 scripts/orchestra_v1.py
 tests/test_orchestra_v1.py
+tests/test_orchestra_v1_control.py
+tests/test_orchestra_v1_decision.py
+tests/test_orchestra_v1_worker.py
 tests/test_codex_worker.py
 ```
 
 当前已经可以：
 
 ```text
-初始化一个目标项目
+初始化一个目标项目并独立保存 intent.md
 → 每次 decide 创建全新的 Hermes AIAgent
-→ 从当前状态、任务、最近结果与 Git 事实重建上下文
+→ 从人类意图、当前判断、任务、最近结果与 Git 事实重建上下文
 → 只允许 Orchestra 读取和搜索目标仓库
 → 保存完整的新 state.md、task.md 和 decision.txt
 → 根据决定新建或恢复真实 Codex thread
@@ -33,9 +39,9 @@ tests/test_codex_worker.py
 
 ```text
 python scripts/orchestra_v1.py init --project <path> --goal-file <path>
-python scripts/orchestra_v1.py decide --project <path> [--human <text>]
+python scripts/orchestra_v1.py decide --project <path>
 python scripts/orchestra_v1.py run-worker --project <path>
-python scripts/orchestra_v1.py step --project <path> [--human <text>]
+python scripts/orchestra_v1.py step --project <path>
 python scripts/orchestra_v1.py status --project <path>
 ```
 
@@ -136,6 +142,7 @@ init
 
 ```text
 $HERMES_HOME/orchestra/<project-key>/
+├── intent.md
 ├── state.md
 ├── task.md
 ├── result.md
@@ -144,13 +151,18 @@ $HERMES_HOME/orchestra/<project-key>/
 └── last-orchestra-output.md
 ```
 
-`project-key` 由仓库绝对路径的稳定摘要生成。首版不建设项目注册中心。
+`project-key` 由仓库绝对路径的稳定摘要生成。控制目录解析符号链接后的真实位置必须位于目标项目之外，避免 worker 的项目写权限覆盖控制材料。首版不建设项目注册中心。
 
-### 2.1 `state.md`
+### 2.1 `intent.md`
 
-唯一长期语义材料，保存当前有效的：
+人类意图唯一来源。`init` 把 `--goal-file` 内容写入该文件，之后只有人类直接编辑它。每轮 `decide` 都重新读取；Orchestra 和 worker 无权覆盖、追加或生成替代版本。
 
-- 人类意图；
+首版不增加意图更新命令、固定格式、schema、迁移或旧状态自动提取。旧控制目录缺少 `intent.md` 时，`decide` 明确失败，由人类根据真实意图手工创建。
+
+### 2.2 `state.md`
+
+只保存 Orchestra 当前有效的项目判断，例如：
+
 - 已确认项目事实；
 - 承重假设及失效信号；
 - 当前收敛缺口；
@@ -158,7 +170,7 @@ $HERMES_HOME/orchestra/<project-key>/
 - 当前决定残留；
 - 待人类决定事项。
 
-它由每轮 orchestra 整体重写。
+初始化时该文件为空，之后由每轮 Orchestra 整体重写；它不保存或复制人类意图。
 
 实现禁止：
 
@@ -170,7 +182,7 @@ $HERMES_HOME/orchestra/<project-key>/
 - 自动修复历史状态；
 - 要求 worker 维护该文件。
 
-### 2.2 `task.md`
+### 2.3 `task.md`
 
 当前 worker 的推进说明。新任务或任务边界修正时整体覆盖。
 
@@ -185,7 +197,7 @@ $HERMES_HOME/orchestra/<project-key>/
 - 需要返回的证据；
 - 何时提前上报。
 
-### 2.3 `result.md`
+### 2.4 `result.md`
 
 最近一次 worker 最终回答，整体覆盖。
 
@@ -199,7 +211,7 @@ worker 应尽量说明：
 
 该文件只是下一轮线索，不自动成为项目事实。
 
-### 2.4 `decision.txt`
+### 2.5 `decision.txt`
 
 只保存当前机械动作之一：
 
@@ -211,18 +223,21 @@ worker 应尽量说明：
 停止
 ```
 
-它不是项目状态机，只用于决定是否启动、恢复或跳过 worker。
+它不是项目状态机，只用于决定是否启动、恢复或跳过 worker。“开始新任务”在新 thread ID 就绪后由 `run-worker` 更新为“继续当前任务”，使中断后的再次运行恢复该 thread，而不是重复新建。
 
-### 2.5 `worker-thread.txt`
+### 2.6 `worker-thread.txt`
 
 保存当前任务对应的 Codex `thread.id`。
 
-- 开始新任务时覆盖；
-- 继续当前任务时恢复；
+- “开始新任务”的决定产生时不修改旧 ID；
+- `run-worker` 请求新任务且 `thread/start` 返回新 ID 后原子覆盖；
+- 人类取消启动或新 thread 建立前失败时保留旧 ID；
+- 新 thread 已建立后，即使当前 turn 中断或失败，也保留新 ID 供同一任务恢复；
+- 继续当前任务时恢复当前 ID；
 - 文件缺失或会话无法恢复时明确失败，不自动创建替代路线；
-- 旧任务 thread 不进入下一轮 orchestra 默认上下文。
+- 旧任务 thread 不进入下一轮 Orchestra 默认上下文。
 
-### 2.6 `last-orchestra-output.md`
+### 2.7 `last-orchestra-output.md`
 
 保存本轮 orchestra 原始最终回答，便于调试。
 
@@ -234,9 +249,9 @@ worker 应尽量说明：
 
 ```text
 python scripts/orchestra_v1.py init --project <path> --goal-file <path>
-python scripts/orchestra_v1.py decide --project <path> [--human <text>]
+python scripts/orchestra_v1.py decide --project <path>
 python scripts/orchestra_v1.py run-worker --project <path>
-python scripts/orchestra_v1.py step --project <path> [--human <text>]
+python scripts/orchestra_v1.py step --project <path>
 python scripts/orchestra_v1.py status --project <path>
 ```
 
@@ -247,8 +262,8 @@ python scripts/orchestra_v1.py status --project <path>
 1. 确认项目目录存在；
 2. 计算 `project-key`；
 3. 创建控制目录；
-4. 把人类目标写入最小 `state.md`；
-5. 创建空的 `task.md`、`result.md` 和 `decision.txt`；
+4. 把人类目标写入 `intent.md`；
+5. 创建空的 `state.md`、`task.md`、`result.md`、`decision.txt`、`worker-thread.txt` 和 `last-orchestra-output.md`；
 6. 不调用模型，不分析项目，不生成路线图。
 
 重复初始化已有项目时必须拒绝，除非人类显式要求覆盖。首版不设计状态合并。
@@ -257,23 +272,22 @@ python scripts/orchestra_v1.py status --project <path>
 
 完成一次真正的全新 orchestra 决策轮：
 
-1. 读取 `state.md`；
-2. 读取当前 `task.md` 和最近 `result.md`；
-3. 读取本轮人类变化；
-4. 机械收集以下 Git 事实：
+1. 重新读取作为唯一人类意图来源的 `intent.md`；
+2. 分别读取当前判断 `state.md`、当前任务 `task.md`、最近结果 `result.md` 和当前机械动作 `decision.txt`；
+3. 机械收集以下 Git 事实：
    - 仓库根目录；
    - 当前分支；
    - 当前提交；
    - `git status --short`；
    - `git diff --stat`；
    - 最近若干提交标题；
-5. 创建新的 `AIAgent`；
-6. 注入固定职责、项目状态、本轮变化和机械事实；
-7. 允许 orchestra 按需读取和搜索仓库；
-8. 保存原始输出到 `last-orchestra-output.md`；
-9. 解析当前决定、完整新状态和 worker 推进说明；
-10. 解析成功后原子覆盖 `state.md`、`task.md` 和 `decision.txt`；
-11. 结束本轮 orchestra 会话。
+4. 创建新的 `AIAgent`；
+5. 注入固定职责、只读人类意图、当前判断、任务、结果和机械事实；
+6. 允许 Orchestra 按需读取和搜索仓库；
+7. 保存原始输出到 `last-orchestra-output.md`；
+8. 解析当前决定、完整新项目判断和 worker 推进说明；
+9. 解析成功后原子覆盖 `state.md`、`task.md` 和 `decision.txt`，不写 `intent.md` 或 `worker-thread.txt`；
+10. 结束本轮 Orchestra 会话。
 
 orchestra 输出首版只约定以下形状：
 
@@ -281,7 +295,7 @@ orchestra 输出首版只约定以下形状：
 决定：开始新任务
 
 # 项目状态
-完整的新状态正文
+完整的新项目判断正文
 
 # worker 推进说明
 完整的当前任务正文
@@ -302,27 +316,31 @@ orchestra 输出首版只约定以下形状：
 
 ```text
 开始新任务
+→ 保留旧 worker-thread.txt
 → thread/start
-→ 保存新的 thread.id
-→ turn/start(task.md)
+→ 新 ID 就绪后原子替换 worker-thread.txt
+→ decision.txt 更新为“继续当前任务”
+→ turn/start(固定 worker 约束 + task.md)
 
 继续当前任务
 → thread/resume(worker-thread.txt)
-→ turn/start(task.md)
+→ turn/start(固定 worker 约束 + task.md)
 
 等待 / 询问人类 / 停止
 → 不启动 worker
 ```
 
-worker 运行在目标仓库目录，使用 Codex 的工作区写入隔离。首版默认不允许无限制宿主机访问；需要网络时由人类通过已有 Codex 配置决定，不在 orchestra 中新增权限系统。
+worker 运行在目标仓库目录，使用 Codex 的工作区写入隔离。首版默认不允许无限制宿主机访问；需要网络时由人类通过已有 Codex 配置决定，不在 Orchestra 中新增权限系统。
+
+外层程序固定要求 worker：只完成当前任务，不扩展项目目标，不为未来建设通用机制；承重假设错误时报告而不是扩大范围；最终回答说明实际变化、证据、未完成问题和影响方向的新事实。该回答不使用 schema，也不由程序校验。
 
 执行期间：
 
 - 终端前台显示主要事件；
 - 收集最终代理消息；
-- `turn/completed` 后整体覆盖 `result.md`；
-- 不自动启动下一轮 orchestra；
-- 失败、取消和中断也写入清楚的结果摘要，供下一轮判断。
+- Codex turn 返回结果后整体覆盖 `result.md`；
+- 不自动启动下一轮 Orchestra；
+- `completed`、`failed`、`timed_out` 和 `interrupted` 返回状态都写入结果摘要；启动器在返回结果前直接抛出的异常仍向上抛出。
 
 ### 3.4 `step`
 
@@ -352,17 +370,20 @@ decide
 
 ## 4. orchestra 请求体
 
-每轮请求由四部分组成：
+每轮请求由五部分组成：
 
 ```text
 稳定职责
-  orchestra 的角色、禁止项和输出要求
+  Orchestra 的角色、禁止项和输出要求
 
-当前项目状态
-  state.md 原文
+人类意图
+  每轮重新读取的 intent.md 原文，唯一来源且只读
+
+当前项目判断
+  state.md 原文，空时明确标为尚无判断
 
 本轮变化
-  人类变化、当前 task.md、最近 result.md、Git 机械事实
+  当前 decision.txt、task.md、最近 result.md、Git 机械事实
 
 仓库检查能力
   只读文件与搜索工具
@@ -378,7 +399,8 @@ decide
 - 不因既有代码、测试、待办或投入成本继续一条路线；
 - 不把 orchestra 自身状态和运行机制扩张成业务目标；
 - 方向改变必须指出新增事实、失效假设或此前遗漏的矛盾；
-- 输出完整替换后的项目状态，而不是状态补丁。
+- 输出完整替换后的项目判断，而不是状态补丁；
+- 不复制、改写或重新解释 `intent.md`。
 
 首版不启用两段式输入。先用一次性上下文跑通真实闭环；若稳定出现旧策略锚定，再单独比较两段式做法。
 
@@ -397,7 +419,7 @@ decide
 
 orchestra 必须在输出中明确选择，不由外层代码根据文本相似度猜测。
 
-新任务启动后，旧 thread 仍保存在 Codex 自己的会话存储中，但不再属于当前运行状态，也不自动提供给新的 orchestra 或 worker。
+Orchestra 只写决定，不提前改变 thread。人类未确认运行或 `thread/start` 前失败时，`worker-thread.txt` 仍指向旧任务；新 thread ID 真正就绪后才原子替换。旧 thread 仍保存在 Codex 自己的会话存储中，但不再属于当前运行状态，也不自动提供给新的 Orchestra 或 worker。
 
 ## 6. 实现批次
 
@@ -483,13 +505,16 @@ orchestra 必须在输出中明确选择，不由外层代码根据文本相似�
 至少覆盖：
 
 - `project-key` 对同一路径稳定；
-- 初始化不会静默覆盖已有状态；
+- 初始化把人类目标只写入 `intent.md`，并拒绝静默覆盖；
+- `state.md` 初始化为空；
 - 文件更新使用临时文件后原子替换；
-- 每次 `decide` 使用不同 orchestra `session_id`；
-- 请求体不包含上一轮原始 orchestra 输出和完整 worker 对话；
-- 解析失败不覆盖状态；
+- 每次 `decide` 使用不同 Orchestra `session_id` 并重新读取 `intent.md`；
+- 请求体不包含上一轮原始 Orchestra 输出和完整 worker 对话；
+- 成功与解析失败路径都不覆盖 `intent.md`；
 - 五种决定都能正确识别；
-- `开始新任务` 清除当前 worker thread 后创建新 thread；
+- worker prompt 固定包含任务边界和最终回答要求；
+- `开始新任务` 在新 thread 就绪前保留旧 ID，就绪后原子替换；
+- 中断不会丢失当前可恢复 thread；
 - `继续当前任务` 必须存在可恢复 thread；
 - `等待`、`询问人类`、`停止` 不启动 worker。
 
@@ -585,20 +610,17 @@ worker 执行失败
 
 ### 10.1 代码落点
 
-`hermes_cli/orchestra_v1.py` 实现：
+Orchestra v1 当前按真实职责拆分：
 
-- 按项目绝对路径生成稳定 `project-key`；
-- 创建并管理六个自由格式控制文件；
-- 单文件临时写入后原子替换，并保留已有 symlink；
-- 机械收集 Git 根目录、分支、提交、状态、diff stat 和最近提交；
-- 解析五种决定以及完整的新项目状态和 worker 推进说明；
-- 每次 `decide` 创建新的 `AIAgent`，不传旧对话和父会话；
-- 关闭普通上下文文件、记忆、人格和旧 Kanban 工具；
-- 为本轮临时注册只读、只限目标仓库路径的读取与搜索工具，结束后注销；
-- 根据当前决定启动新 worker、恢复旧 worker 或跳过 worker；
-- 保存 worker thread 与最终结果，并提供机械 `status` 输出。
+- `hermes_cli/orchestra_v1_control.py` 管理七个控制文件、稳定 `project-key`、原子写入、Git 机械事实和 `status`；
+- `hermes_cli/orchestra_v1_decision.py` 定义五种决定、输出解析和包含独立 `intent.md` 的请求组装；
+- `hermes_cli/orchestra_v1_worker.py` 构造固定 worker 行为约束，并负责新建或恢复 thread、结果落盘；
+- `hermes_cli/orchestra_v1.py` 保留 fresh `AIAgent`、repository-scoped 只读工具和单轮应用协调，同时重新导出现有公共入口；
+- `scripts/orchestra_v1.py` 只负责参数、前台确认、输出和退出码。
 
-`hermes_cli/codex_worker.py` 在保留旧 Kanban lane 接口的同时增加独立的最小 `run_codex_turn`：
+每次 `decide` 创建新的 `AIAgent`，不传旧对话和父会话；普通上下文文件、记忆、人格和旧 Kanban 工具保持关闭。本轮只临时注册读取与搜索工具，并把路径限制在目标仓库内。
+
+`hermes_cli/codex_worker.py` 在保留旧 Kanban lane 接口的同时提供独立的最小 `run_codex_turn`：
 
 - 初始化 `codex app-server`；
 - `thread/start` / `thread/resume`；
@@ -649,7 +671,7 @@ ty：passed
 - fresh session ID；
 - 上一轮原始 Orchestra 输出不进入下一轮；
 - 仓库绝对路径和 symlink 逃逸被拒绝；
-- 新任务清除旧 thread 并在 turn 前保存新 thread；
+- 新任务在 `thread/start` 返回后、`turn/start` 前保存新 thread；
 - 继续任务必须恢复已有 thread；
 - 三种非运行决定不启动 worker；
 - app-server 新建、恢复、通知、最终消息、异常退出、中断和 `<turn_aborted>`；
@@ -690,3 +712,27 @@ ty：passed
 第 9 节列出的首版最低条件已经全部满足。当前可以声称仓库中已有可运行的 Orchestra v1。
 
 尚未开始的下一步是按 [`rollout.md`](rollout.md) 和 [`targets.md`](targets.md) 初始化股票模拟系统，把它作为首个真实长期目标。该步骤不是首版实现的一部分，也没有在机械验收过程中提前启动。
+
+### 10.6 2026-09-02 长期项目前边界修正
+
+进入第一个真实长期项目前完成以下修正：
+
+- 新增 `intent.md`，人类目标不再存入可被 Orchestra 重写的 `state.md`；
+- 删除 `decide` 和 `step` 的 `--human`，避免第二条人类意图输入路径；
+- `state.md` 初始化为空，之后只保存 Orchestra 当前项目判断；
+- worker 每次都收到固定行为边界以及当前 `task.md`；
+- “开始新任务”的决定不再清空旧 thread；新 ID 只在 `thread/start` 成功后原子替换；
+- 控制目录按符号链接解析后的真实路径必须位于 worker 项目之外；
+- Orchestra 代码和测试按 control、decision、worker 与应用协调职责拆分；
+- 未增加 schema、validator、数据库、迁移、调度系统、多 worker 或自动循环；
+- 未初始化或运行股票模拟系统。
+
+本次相关验证实际结果：
+
+```text
+Orchestra 与 Codex 接口相关测试：36 passed
+ruff（本次 Python 文件）：passed
+ty（Orchestra v1 模块）：passed
+```
+
+测试覆盖 intent 所有权、fresh 决策轮重新读取、解析失败保护、控制目录符号链接边界、固定 worker prompt，以及新 thread 建立前后和取消路径中的恢复能力。验证范围只覆盖本次 Orchestra 文件及其直接 Codex 接口，没有运行整个 Hermes 源项目测试。

@@ -9,11 +9,12 @@
 当前已有：
 
 - 每轮使用全新 `AIAgent` 的真实 `decide`；
-- 当前状态、任务、最近结果与 Git 事实的自动组装；
+- 人类意图、当前项目判断、任务、最近结果与 Git 事实的自动组装；
 - 只限目标仓库的临时读取与搜索工具；
-- 六个可直接查看和编辑的项目控制文件；
+- 七个可直接查看和编辑的项目控制文件，其中 `intent.md` 只由人类维护；
 - Codex app-server 的新建、恢复、中断、事件读取和最终消息收集；
-- 新任务使用新 Codex thread、继续任务恢复原 thread 的实际边界；
+- 新任务在新 thread 就绪后切换、继续任务恢复当前 thread 的实际边界；
+- 每次 worker 运行都带有固定任务范围和结果说明约束；
 - `init`、`decide`、`run-worker`、`step` 和 `status` 前台命令；
 - 真实三轮闭环和自动化测试记录。
 
@@ -27,7 +28,7 @@
 - orchestra 默认只读检查业务代码；
 - 同一明确任务继续使用原 worker 会话；
 - 实质不同的新任务启动新 worker 会话；
-- 项目状态最多是一份可整体重写的自由格式 Markdown；
+- 人类意图只来自 `intent.md`，Orchestra 当前判断只保存在一份可整体重写的 `state.md`；
 - 不做字段校验、版本、迁移、兼容和自动修复；
 - 人类显式触发每个决策轮，不运行后台自治循环。
 
@@ -50,9 +51,9 @@ turn/interrupt
 
 ```text
 python scripts/orchestra_v1.py init --project <path> --goal-file <path>
-python scripts/orchestra_v1.py decide --project <path> [--human <text>]
+python scripts/orchestra_v1.py decide --project <path>
 python scripts/orchestra_v1.py run-worker --project <path>
-python scripts/orchestra_v1.py step --project <path> [--human <text>]
+python scripts/orchestra_v1.py step --project <path>
 python scripts/orchestra_v1.py status --project <path>
 ```
 
@@ -73,6 +74,7 @@ python scripts/orchestra_v1.py status --project <path>
 
 ```text
 $HERMES_HOME/orchestra/<project-key>/
+├── intent.md
 ├── state.md
 ├── task.md
 ├── result.md
@@ -81,7 +83,7 @@ $HERMES_HOME/orchestra/<project-key>/
 └── last-orchestra-output.md
 ```
 
-只有 `state.md` 是长期项目语义材料。其他文件用于当前任务、最近结果和机械运行。
+`intent.md` 是人类意图唯一来源，只有人类直接编辑；`state.md` 只保存 Orchestra 当前项目判断。其他文件用于当前任务、最近结果和机械运行。控制目录必须位于目标项目之外，避免 worker 工作区获得写权限。
 
 ## 当前文档
 

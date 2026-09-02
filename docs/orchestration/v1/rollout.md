@@ -76,7 +76,7 @@ orchestra 输出解析
 接入 Hermes `AIAgent`：
 
 ```text
-读取 state.md、task.md、result.md
+读取 intent.md、state.md、task.md、result.md、decision.txt
 → 收集 Git 机械事实
 → 创建全新 orchestra 会话
 → 提供只读代码检查能力

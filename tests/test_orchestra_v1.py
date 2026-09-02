@@ -7,19 +7,13 @@ from typing import Any
 
 import pytest
 
-from hermes_cli.codex_worker import CodexTurnResult
+import hermes_cli.orchestra_v1 as orchestra_v1
 from hermes_cli.orchestra_v1 import (
-    DECISIONS,
+    _path_in_project,
     atomic_write,
     codex_agent_settings,
     decide,
     initialize_project,
-    parse_orchestra_output,
-    project_control_dir,
-    project_key,
-    project_status,
-    run_worker,
-    _path_in_project,
 )
 
 
@@ -82,11 +76,24 @@ class FakeAgent:
         return self.output
 
 
-def test_project_key_is_stable_for_same_canonical_path(tmp_path):
-    project = tmp_path / "project"
-    project.mkdir()
+def test_public_facade_keeps_existing_orchestra_entry_points():
+    expected = {
+        "CodexTurnResult",
+        "DECISIONS",
+        "RUN_DECISIONS",
+        "atomic_write",
+        "collect_git_facts",
+        "format_status",
+        "initialize_project",
+        "parse_orchestra_output",
+        "project_control_dir",
+        "project_key",
+        "project_status",
+        "run_codex_turn",
+        "run_worker",
+    }
 
-    assert project_key(project) == project_key(project / ".")
+    assert all(hasattr(orchestra_v1, name) for name in expected)
 
 
 def test_codex_agent_settings_reuses_codex_model_source(tmp_path):
@@ -129,85 +136,22 @@ def test_repository_path_rejects_absolute_and_symlink_escapes(tmp_path):
     try:
         link.symlink_to(outside)
     except OSError:
-        pytest.skip("symlinks unavailable")
+        pytest.skip("当前平台不支持符号链接")
     with pytest.raises(PermissionError):
         _path_in_project(project.resolve(), str(link))
 
 
-def test_initialize_creates_minimal_materials_and_refuses_silent_overwrite(tmp_path):
-    project = tmp_path / "project"
-    project.mkdir()
-    home = tmp_path / "hermes"
-
-    control = initialize_project(project, "Build the product", hermes_home=home)
-
-    assert {path.name for path in control.iterdir()} == {
-        "state.md",
-        "task.md",
-        "result.md",
-        "decision.txt",
-        "worker-thread.txt",
-        "last-orchestra-output.md",
-    }
-    assert "Build the product" in (control / "state.md").read_text(encoding="utf-8")
-    with pytest.raises(FileExistsError):
-        initialize_project(project, "Replace it", hermes_home=home)
-    assert "Build the product" in (control / "state.md").read_text(encoding="utf-8")
-
-
-def test_atomic_write_replaces_target_without_leaving_temporary_file(tmp_path):
-    target = tmp_path / "state.md"
-    target.write_text("old", encoding="utf-8")
-
-    atomic_write(target, "new")
-
-    assert target.read_text(encoding="utf-8") == "new"
-    assert list(tmp_path.glob(".state.md.*.tmp")) == []
-
-
-def test_atomic_write_preserves_symlinked_control_file(tmp_path):
-    backing = tmp_path / "backing.md"
-    backing.write_text("old", encoding="utf-8")
-    target = tmp_path / "state.md"
-    try:
-        target.symlink_to(backing)
-    except OSError:
-        pytest.skip("symlinks unavailable")
-
-    atomic_write(target, "new")
-
-    assert target.is_symlink()
-    assert backing.read_text(encoding="utf-8") == "new"
-
-
-@pytest.mark.parametrize("decision", DECISIONS)
-def test_parser_accepts_each_mechanical_decision(decision):
-    parsed = parse_orchestra_output(orchestra_output(decision))
-
-    assert parsed.decision == decision
-    assert parsed.state == "当前完整状态"
-    assert parsed.task == "当前完整任务"
-
-
-def test_parser_rejects_text_before_decision():
-    with pytest.raises(ValueError, match="开头"):
-        parse_orchestra_output("说明\n" + orchestra_output("等待"))
-
-
-def test_decide_uses_fresh_sessions_and_omits_previous_raw_output(tmp_path):
+def test_decide_uses_fresh_sessions_and_reloads_authoritative_intent(tmp_path):
     project = tmp_path / "project"
     init_git_repo(project)
     home = tmp_path / "hermes"
-    control = initialize_project(project, "Goal", hermes_home=home)
+    control = initialize_project(project, "Intent one", hermes_home=home)
+    atomic_write(control / "worker-thread.txt", "thread-old\n")
     requests: list[str] = []
     creations: list[FakeAgent] = []
     outputs = iter(
         [
-            orchestra_output(
-                "开始新任务",
-                state="状态一",
-                task="任务一",
-            ),
+            orchestra_output("开始新任务", state="状态一", task="任务一"),
             orchestra_output("继续当前任务", state="状态二", task="任务二"),
         ]
     )
@@ -218,10 +162,14 @@ def test_decide_uses_fresh_sessions_and_omits_previous_raw_output(tmp_path):
         return agent
 
     first = decide(project, hermes_home=home, agent_factory=factory)
+    assert first.decision == "开始新任务"
+    assert (control / "worker-thread.txt").read_text(encoding="utf-8") == "thread-old\n"
+    assert (control / "intent.md").read_text(encoding="utf-8") == "Intent one\n"
+
     atomic_write(control / "last-orchestra-output.md", "RAW_ONLY_MARKER\n")
+    atomic_write(control / "intent.md", "Intent two\n")
     second = decide(project, hermes_home=home, agent_factory=factory)
 
-    assert first.decision == "开始新任务"
     assert second.decision == "继续当前任务"
     assert creations[0].kwargs["session_id"] != creations[1].kwargs["session_id"]
     for agent in creations:
@@ -230,21 +178,27 @@ def test_decide_uses_fresh_sessions_and_omits_previous_raw_output(tmp_path):
         assert agent.kwargs["load_soul_identity"] is False
         assert agent.kwargs["enabled_toolsets"] == []
         assert "parent_session_id" not in agent.kwargs
+        assert "intent.md 为人类意图唯一来源" in agent.kwargs["ephemeral_system_prompt"]
+    assert "Intent one" in requests[0]
+    assert "Intent two" in requests[1]
     assert "RAW_ONLY_MARKER" not in requests[1]
     assert "状态一" in requests[1]
     assert "任务一" in requests[1]
+    assert (control / "intent.md").read_text(encoding="utf-8") == "Intent two\n"
     assert (control / "state.md").read_text(encoding="utf-8") == "状态二\n"
     assert (control / "task.md").read_text(encoding="utf-8") == "任务二\n"
+
     from tools.registry import registry
 
     assert registry.get_tool_names_for_toolset("orchestra_v1") == []
 
 
-def test_parse_failure_saves_raw_output_without_overwriting_state_or_task(tmp_path):
+def test_parse_failure_saves_raw_output_without_overwriting_control_materials(tmp_path):
     project = tmp_path / "project"
     init_git_repo(project)
     home = tmp_path / "hermes"
-    control = initialize_project(project, "Original goal", hermes_home=home)
+    control = initialize_project(project, "Original intent", hermes_home=home)
+    atomic_write(control / "state.md", "Original judgment\n")
     atomic_write(control / "task.md", "Original task\n")
 
     def factory(**_kwargs: Any) -> FakeAgent:
@@ -253,121 +207,20 @@ def test_parse_failure_saves_raw_output_without_overwriting_state_or_task(tmp_pa
     with pytest.raises(ValueError):
         decide(project, hermes_home=home, agent_factory=factory)
 
-    assert "Original goal" in (control / "state.md").read_text(encoding="utf-8")
+    assert (control / "intent.md").read_text(encoding="utf-8") == "Original intent\n"
+    assert (control / "state.md").read_text(encoding="utf-8") == "Original judgment\n"
     assert (control / "task.md").read_text(encoding="utf-8") == "Original task\n"
-    assert (
-        control / "last-orchestra-output.md"
-    ).read_text(encoding="utf-8") == "malformed orchestra output"
+    assert (control / "last-orchestra-output.md").read_text(
+        encoding="utf-8"
+    ) == "malformed orchestra output"
 
 
-def test_new_task_clears_old_thread_then_saves_new_thread_and_result(tmp_path):
-    project = tmp_path / "project"
-    project.mkdir()
-    home = tmp_path / "hermes"
-    control = initialize_project(project, "Goal", hermes_home=home)
-    atomic_write(control / "decision.txt", "开始新任务\n")
-    atomic_write(control / "task.md", "Do new work\n")
-    atomic_write(control / "worker-thread.txt", "stale-thread\n")
-    calls: list[dict[str, Any]] = []
-
-    def runner(**kwargs: Any) -> CodexTurnResult:
-        assert (control / "worker-thread.txt").read_text(encoding="utf-8") == ""
-        calls.append(kwargs)
-        kwargs["on_thread_ready"]("thread-new")
-        assert (
-            control / "worker-thread.txt"
-        ).read_text(encoding="utf-8") == "thread-new\n"
-        return CodexTurnResult(
-            thread_id="thread-new",
-            turn_id="turn-1",
-            status="completed",
-            final_text="done",
-        )
-
-    result = run_worker(project, hermes_home=home, worker_runner=runner)
-
-    assert result is not None and result.status == "completed"
-    assert calls[0]["resume_thread_id"] is None
-    assert (control / "worker-thread.txt").read_text(encoding="utf-8") == "thread-new\n"
-    saved = (control / "result.md").read_text(encoding="utf-8")
-    assert "状态：completed" in saved
-    assert "done" in saved
-
-
-def test_continue_task_requires_and_resumes_current_thread(tmp_path):
-    project = tmp_path / "project"
-    project.mkdir()
-    home = tmp_path / "hermes"
-    control = initialize_project(project, "Goal", hermes_home=home)
-    atomic_write(control / "decision.txt", "继续当前任务\n")
-    atomic_write(control / "task.md", "Continue work\n")
-
-    with pytest.raises(RuntimeError, match="需要已有 worker thread"):
-        run_worker(project, hermes_home=home, worker_runner=lambda **_kwargs: None)
-
-    atomic_write(control / "worker-thread.txt", "thread-existing\n")
-    seen: list[str | None] = []
-
-    def runner(**kwargs: Any) -> CodexTurnResult:
-        seen.append(kwargs["resume_thread_id"])
-        return CodexTurnResult(
-            thread_id="thread-existing",
-            turn_id="turn-2",
-            status="completed",
-            final_text="continued",
-        )
-
-    run_worker(project, hermes_home=home, worker_runner=runner)
-    assert seen == ["thread-existing"]
-
-
-@pytest.mark.parametrize("decision", ["等待", "询问人类", "停止"])
-def test_non_running_decisions_do_not_start_worker(tmp_path, decision):
-    project = tmp_path / "project"
-    project.mkdir()
-    home = tmp_path / "hermes"
-    control = initialize_project(project, "Goal", hermes_home=home)
-    atomic_write(control / "decision.txt", decision + "\n")
-    atomic_write(control / "task.md", "No worker now\n")
-
-    def should_not_run(**_kwargs: Any) -> CodexTurnResult:
-        raise AssertionError("worker must not start")
-
-    assert run_worker(project, hermes_home=home, worker_runner=should_not_run) is None
-
-
-def test_missing_debug_output_does_not_block_status_or_worker(tmp_path):
+def test_decide_requires_explicit_intent_file_without_migration(tmp_path):
     project = tmp_path / "project"
     init_git_repo(project)
     home = tmp_path / "hermes"
-    control = initialize_project(project, "Goal", hermes_home=home)
-    atomic_write(control / "decision.txt", "等待\n")
-    (control / "last-orchestra-output.md").unlink()
+    control = initialize_project(project, "Intent", hermes_home=home)
+    (control / "intent.md").unlink()
 
-    assert run_worker(project, hermes_home=home) is None
-    assert project_status(project, hermes_home=home).file_times[
-        "last-orchestra-output.md"
-    ] == "不存在"
-
-
-def test_status_reports_mechanical_worker_result(tmp_path):
-    project = tmp_path / "project"
-    init_git_repo(project)
-    home = tmp_path / "hermes"
-    control = initialize_project(project, "Goal", hermes_home=home)
-    atomic_write(control / "decision.txt", "等待\n")
-    atomic_write(control / "result.md", "状态：completed\n")
-
-    status = project_status(project, hermes_home=home)
-
-    assert status.decision == "等待"
-    assert status.worker_thread == "尚无"
-    assert status.last_worker_status == "completed"
-    assert set(status.file_times) == {
-        "state.md",
-        "task.md",
-        "result.md",
-        "decision.txt",
-        "worker-thread.txt",
-        "last-orchestra-output.md",
-    }
+    with pytest.raises(FileNotFoundError, match="intent.md"):
+        decide(project, hermes_home=home, agent_factory=lambda **_kwargs: None)
