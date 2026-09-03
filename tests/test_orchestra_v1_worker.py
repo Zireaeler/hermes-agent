@@ -4,7 +4,8 @@ from typing import Any
 
 import pytest
 
-from hermes_cli.codex_worker import CodexTurnResult
+import hermes_cli.orchestra_v1_worker as worker_module
+from hermes_cli.orchestra_v1_codex import CodexTurnResult
 from hermes_cli.orchestra_v1_control import atomic_write, initialize_project
 from hermes_cli.orchestra_v1_worker import build_worker_prompt, run_worker
 
@@ -23,6 +24,39 @@ def test_worker_prompt_keeps_task_and_fixed_scope_boundaries():
     assert "可复核的证据" in prompt
     assert "仍未完成的问题" in prompt
     assert "可能影响项目方向的新事实" in prompt
+
+
+
+def test_default_runner_uses_orchestra_codex_entry(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    home = tmp_path / "hermes"
+    control = initialize_project(project, "Goal", hermes_home=home)
+    atomic_write(control / "decision.txt", "开始新任务\n")
+    atomic_write(control / "task.md", "Do work\n")
+    calls: list[dict[str, Any]] = []
+
+    def runner(**kwargs: Any) -> CodexTurnResult:
+        calls.append(kwargs)
+        kwargs["on_thread_ready"]("thread-new")
+        return CodexTurnResult(
+            thread_id="thread-new",
+            turn_id="turn-1",
+            status="completed",
+            final_text="done",
+        )
+
+    monkeypatch.setattr(worker_module, "run_codex_turn", runner)
+
+    result = run_worker(
+        project,
+        hermes_home=home,
+        codex_home="/tmp/test-codex-home",
+    )
+
+    assert result is not None and result.status == "completed"
+    assert calls[0]["codex_home"] == "/tmp/test-codex-home"
+    assert calls[0]["compact_before_turn"] is False
 
 
 def test_new_task_keeps_old_thread_until_new_thread_is_ready(tmp_path):
@@ -51,6 +85,7 @@ def test_new_task_keeps_old_thread_until_new_thread_is_ready(tmp_path):
 
     assert result is not None and result.status == "completed"
     assert calls[0]["resume_thread_id"] is None
+    assert calls[0]["compact_before_turn"] is False
     assert "Do new work" in calls[0]["prompt"]
     assert "只负责完成后附 task.md 中的当前任务" in calls[0]["prompt"]
     assert "可能影响项目方向的新事实" in calls[0]["prompt"]
@@ -156,10 +191,12 @@ def test_continue_task_requires_and_resumes_current_thread(tmp_path):
         run_worker(project, hermes_home=home, worker_runner=lambda **_kwargs: None)
 
     atomic_write(control / "worker-thread.txt", "thread-existing\n")
-    seen: list[str | None] = []
+    seen: list[tuple[str | None, bool]] = []
 
     def runner(**kwargs: Any) -> CodexTurnResult:
-        seen.append(kwargs["resume_thread_id"])
+        seen.append(
+            (kwargs["resume_thread_id"], kwargs["compact_before_turn"])
+        )
         return CodexTurnResult(
             thread_id="thread-existing",
             turn_id="turn-2",
@@ -169,7 +206,7 @@ def test_continue_task_requires_and_resumes_current_thread(tmp_path):
 
     run_worker(project, hermes_home=home, worker_runner=runner)
 
-    assert seen == ["thread-existing"]
+    assert seen == [("thread-existing", True)]
     assert (control / "worker-thread.txt").read_text(encoding="utf-8") == "thread-existing\n"
 
 

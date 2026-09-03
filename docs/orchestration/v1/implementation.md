@@ -13,13 +13,14 @@ hermes_cli/orchestra_v1.py
 hermes_cli/orchestra_v1_control.py
 hermes_cli/orchestra_v1_decision.py
 hermes_cli/orchestra_v1_worker.py
-hermes_cli/codex_worker.py
+hermes_cli/orchestra_v1_codex.py
 scripts/orchestra_v1.py
 tests/test_orchestra_v1.py
 tests/test_orchestra_v1_control.py
 tests/test_orchestra_v1_decision.py
 tests/test_orchestra_v1_worker.py
-tests/test_codex_worker.py
+tests/test_orchestra_v1_codex.py
+tests/test_orchestra_v1_codex_integration.py
 ```
 
 当前已经可以：
@@ -324,6 +325,8 @@ orchestra 输出首版只约定以下形状：
 
 继续当前任务
 → thread/resume(worker-thread.txt)
+→ thread/compact/start
+→ 等待 contextCompaction item 与压缩 turn 完整成功
 → turn/start(固定 worker 约束 + task.md)
 
 等待 / 询问人类 / 停止
@@ -331,6 +334,8 @@ orchestra 输出首版只约定以下形状：
 ```
 
 worker 运行在目标仓库目录，使用 Codex 的工作区写入隔离。首版默认不允许无限制宿主机访问；需要网络时由人类通过已有 Codex 配置决定，不在 Orchestra 中新增权限系统。
+
+Orchestra 启动的 app-server 会只在该子进程中启用 Codex `remote_compaction_v2`，使当前 OpenAI-compatible Responses 服务通过已验证可用的 v2 压缩协议工作，而不是调用缺失的旧 `/v1/responses/compact` 端点。该参数不修改 `~/.codex/config.toml`、不复制凭据，也不改变 provider 身份和原生工具能力。新 thread 没有历史，因此不主动压缩；恢复 thread 时必须先等待显式压缩完成。压缩失败时不启动业务 turn、不自动重试，并保留原 thread 供人类再次显式恢复。
 
 外层程序固定要求 worker：只完成当前任务，不扩展项目目标，不为未来建设通用机制；承重假设错误时报告而不是扩大范围；最终回答说明实际变化、证据、未完成问题和影响方向的新事实。该回答不使用 schema，也不由程序校验。
 
@@ -615,12 +620,13 @@ Orchestra v1 当前按真实职责拆分：
 - `hermes_cli/orchestra_v1_control.py` 管理七个控制文件、稳定 `project-key`、原子写入、Git 机械事实和 `status`；
 - `hermes_cli/orchestra_v1_decision.py` 定义五种决定、输出解析和包含独立 `intent.md` 的请求组装；
 - `hermes_cli/orchestra_v1_worker.py` 构造固定 worker 行为约束，并负责新建或恢复 thread、结果落盘；
+- `hermes_cli/orchestra_v1_codex.py` 负责 Orchestra 专属的 app-server 启动参数、预压缩和业务 turn；
 - `hermes_cli/orchestra_v1.py` 保留 fresh `AIAgent`、repository-scoped 只读工具和单轮应用协调，同时重新导出现有公共入口；
 - `scripts/orchestra_v1.py` 只负责参数、前台确认、输出和退出码。
 
 每次 `decide` 创建新的 `AIAgent`，不传旧对话和父会话；普通上下文文件、记忆、人格和旧 Kanban 工具保持关闭。本轮只临时注册读取与搜索工具，并把路径限制在目标仓库内。
 
-`hermes_cli/codex_worker.py` 在保留旧 Kanban lane 接口的同时提供独立的最小 `run_codex_turn`：
+`hermes_cli/orchestra_v1_codex.py` 提供 Orchestra 专属的最小 `run_codex_turn`，共享 `hermes_cli/codex_worker.py` 不再承载 Orchestra 行为：
 
 - 初始化 `codex app-server`；
 - `thread/start` / `thread/resume`；
@@ -736,3 +742,29 @@ ty（Orchestra v1 模块）：passed
 ```
 
 测试覆盖 intent 所有权、fresh 决策轮重新读取、解析失败保护、控制目录符号链接边界、固定 worker prompt，以及新 thread 建立前后和取消路径中的恢复能力。验证范围只覆盖本次 Orchestra 文件及其直接 Codex 接口，没有运行整个 Hermes 源项目测试。
+
+### 10.7 2026-09-03 worker 预压缩修正
+
+stock-sim 首个全量数据任务在上下文接近自动压缩阈值时失败。Codex 0.152.0 在 `remote_compaction_v2 = false` 时选择兼容服务不支持的旧 `/v1/responses/compact` 端点，因此返回 404；该配置并不表示关闭远端压缩或自动改用其他路径。
+
+当前 Responses 服务已用临时 thread 验证支持 Codex v2 压缩协议，因此本次只修正 Orchestra worker：
+
+- Orchestra app-server 子进程固定启用 `remote_compaction_v2`，不再调用缺失的旧 compact 端点；
+- 不改 provider 名称，继续保留原生 web search 等 OpenAI provider 能力；
+- 新 thread 仍直接进入业务 turn；恢复 thread 时先调用 `thread/compact/start`，等待 `contextCompaction` item 和压缩 turn 完整成功后再启动业务 turn；
+- 压缩失败、生命周期不完整、超时、中断或 app-server 退出时不发送业务 turn、不自动重试，并保留原 thread；压缩请求和业务 turn 启动请求都受同一个剩余时限约束；
+- 全局 `~/.codex/config.toml`、认证材料、其他 Codex 进程和旧 Runtime 行为均不修改；共享 `codex_worker.py` 只保留原有导入路径的兼容导出。
+
+聚焦验证结果：
+
+```text
+Orchestra/Codex 相关测试：30 passed
+tests/test_orchestra_v1_codex_integration.py：与纯单元测试分文件保存，默认不运行
+ruff（本次 Python 文件）：passed
+ty（Orchestra worker 与 Codex 模块）：passed
+临时真实 thread：remote_compaction_v2 预压缩后继续 turn completed
+stock-sim 真实恢复：contextCompaction started/completed 后业务 turn completed
+全局 Codex config：运行前后未改变
+```
+
+真实恢复继续使用 stock-sim thread `01a06271-aaf8-7a02-89a7-1e5db772169d`，没有新建替代 thread。预压缩成功后当前数据调查 turn 完成，证明兼容服务不再需要 `/v1/responses/compact` 才能恢复长任务。

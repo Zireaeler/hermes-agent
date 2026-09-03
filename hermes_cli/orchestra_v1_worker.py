@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from hermes_cli.codex_worker import CodexTurnResult, run_codex_turn
+from hermes_cli.orchestra_v1_codex import CodexTurnResult, run_codex_turn
 from hermes_cli.orchestra_v1_control import atomic_write, require_control
 from hermes_cli.orchestra_v1_decision import DECISIONS, RUN_DECISIONS
 
@@ -35,6 +35,7 @@ def build_worker_prompt(task: str) -> str:
 """
 
 
+
 def _worker_result_markdown(result: CodexTurnResult) -> str:
     error = result.error or "(无)"
     final_text = result.final_text.strip() or "(worker 未返回最终消息)"
@@ -53,9 +54,10 @@ def run_worker(
     project: str | Path,
     *,
     hermes_home: Optional[str | Path] = None,
-    worker_runner: Callable[..., CodexTurnResult] = run_codex_turn,
+    worker_runner: Optional[Callable[..., CodexTurnResult]] = None,
     on_notification: Optional[Callable[[dict[str, Any]], None]] = None,
     model: Optional[str] = None,
+    codex_home: Optional[str | Path] = None,
     timeout_seconds: float = 3600,
 ) -> Optional[CodexTurnResult]:
     project_path, control = require_control(project, hermes_home)
@@ -82,17 +84,22 @@ def run_worker(
         if decision == "开始新任务":
             atomic_write(control / "decision.txt", "继续当前任务\n")
 
-    result = worker_runner(
-        prompt=build_worker_prompt(task),
-        workspace=project_path,
-        resume_thread_id=resume_thread_id,
-        model=model,
-        sandbox="workspace-write",
-        approval="never",
-        timeout_seconds=timeout_seconds,
-        on_notification=on_notification,
-        on_thread_ready=save_thread_ready,
-    )
+    runner = worker_runner or run_codex_turn
+    runner_kwargs: dict[str, Any] = {
+        "prompt": build_worker_prompt(task),
+        "workspace": project_path,
+        "resume_thread_id": resume_thread_id,
+        "model": model,
+        "sandbox": "workspace-write",
+        "approval": "never",
+        "compact_before_turn": resume_thread_id is not None,
+        "timeout_seconds": timeout_seconds,
+        "on_notification": on_notification,
+        "on_thread_ready": save_thread_ready,
+    }
+    if worker_runner is None:
+        runner_kwargs["codex_home"] = str(codex_home) if codex_home else None
+    result = runner(**runner_kwargs)
     if result.thread_id:
         save_thread_ready(result.thread_id)
     atomic_write(control / "result.md", _worker_result_markdown(result))

@@ -10,7 +10,7 @@ import tomllib
 from typing import Any, Callable, Iterator, Optional
 import uuid
 
-from hermes_cli.codex_worker import CodexTurnResult, run_codex_turn
+from hermes_cli.orchestra_v1_codex import CodexTurnResult, run_codex_turn
 from hermes_cli.orchestra_v1_control import (
     CONTROL_FILES,
     GitFacts,
