@@ -83,8 +83,12 @@ def build_decision_request(
 以下内容来自 intent.md，只有人类可以修改。不得用项目状态、worker 结果或代理自建目标替代或扩张它。
 {intent.strip() or '(intent.md 为空)'}
 
+## 当前项目规则与执行能力
+请先按需读取仓库根目录 AGENTS.md 及相关项目规则，确认人类明确的本轮目标、预算、权限和停止边界；它们不因模型任务而失效。项目决策不等于人类批准，授权范围内可以自主选择新任务。
+当前 Orchestra 只能读取和搜索仓库；Codex worker 可修改工作区普通文件，但 .git 只读（workspace-write、approval=never）。不要要求 worker 提交或推送；已获授权的宿主实施者负责 Git 交付，尚未提交不等于业务失败。其他权限与资源以实际运行结果为准。
+
 ## 当前项目判断
-以下内容来自 state.md，只是上一轮 Orchestra 对当前项目的可重写判断，不是人类意图。
+以下内容来自 state.md，只是上一轮 Orchestra 对当前项目的可重写判断，不是人类意图；可保留当前推进方向及任务理由，但当前可核实事实能够推翻其中假设。
 {state.strip() or '(尚无当前项目判断)'}
 
 ## 当前机械决定

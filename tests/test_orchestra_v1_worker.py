@@ -20,10 +20,22 @@ def test_worker_prompt_keeps_task_and_fixed_scope_boundaries():
     assert "不要自动扩展项目目标" in prompt
     assert "不要因为未来可能需要而建设通用机制" in prompt
     assert "承重假设错误" in prompt
-    assert "实际完成的变化" in prompt
-    assert "可复核的证据" in prompt
-    assert "仍未完成的问题" in prompt
-    assert "可能影响项目方向的新事实" in prompt
+    assert "不能自动覆盖人类约束" in prompt
+    assert "当前可核实事实可以推翻任务和旧会话中的假设" in prompt
+    assert "按需确认当前 AGENTS.md" in prompt
+    assert ".git 只读" in prompt
+    assert "由已获授权的宿主实施者完成" in prompt
+    assert "关键测试和运行结果保留在已有仓库报告或结果材料中" in prompt
+    assert "恢复旧 thread 或完成上下文压缩后" in prompt
+    assert "重新锚定本轮完整 task.md" in prompt
+    assert "子代理只返回精简结论、证据位置和仍未确认的内容" in prompt
+    assert "承重结论由你核对后再采用" in prompt
+    assert "足以支持当前结论的最小充分验证" in prompt
+    assert "完成：本任务产生的真实可观察变化" in prompt
+    assert "关键验证：足以支持结论的关键结果" in prompt
+    assert "未闭合：任务范围内仍未完成" in prompt
+    assert "方向影响：可能改变下一步项目判断的新事实" in prompt
+    assert "产物位置：相关提交、文件、报告或运行结果的位置" in prompt
 
 
 
@@ -88,7 +100,7 @@ def test_new_task_keeps_old_thread_until_new_thread_is_ready(tmp_path):
     assert calls[0]["compact_before_turn"] is False
     assert "Do new work" in calls[0]["prompt"]
     assert "只负责完成后附 task.md 中的当前任务" in calls[0]["prompt"]
-    assert "可能影响项目方向的新事实" in calls[0]["prompt"]
+    assert "方向影响：可能改变下一步项目判断的新事实" in calls[0]["prompt"]
     assert (control / "worker-thread.txt").read_text(encoding="utf-8") == "thread-new\n"
     assert (control / "decision.txt").read_text(encoding="utf-8") == "继续当前任务\n"
     saved = (control / "result.md").read_text(encoding="utf-8")
@@ -191,11 +203,15 @@ def test_continue_task_requires_and_resumes_current_thread(tmp_path):
         run_worker(project, hermes_home=home, worker_runner=lambda **_kwargs: None)
 
     atomic_write(control / "worker-thread.txt", "thread-existing\n")
-    seen: list[tuple[str | None, bool]] = []
+    seen: list[tuple[str | None, bool, str]] = []
 
     def runner(**kwargs: Any) -> CodexTurnResult:
         seen.append(
-            (kwargs["resume_thread_id"], kwargs["compact_before_turn"])
+            (
+                kwargs["resume_thread_id"],
+                kwargs["compact_before_turn"],
+                kwargs["prompt"],
+            )
         )
         return CodexTurnResult(
             thread_id="thread-existing",
@@ -206,7 +222,9 @@ def test_continue_task_requires_and_resumes_current_thread(tmp_path):
 
     run_worker(project, hermes_home=home, worker_runner=runner)
 
-    assert seen == [("thread-existing", True)]
+    assert seen[0][:2] == ("thread-existing", True)
+    assert seen[0][2].count("Continue work") == 1
+    assert "重新锚定本轮完整 task.md" in seen[0][2]
     assert (control / "worker-thread.txt").read_text(encoding="utf-8") == "thread-existing\n"
 
 

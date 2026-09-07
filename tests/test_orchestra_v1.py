@@ -178,7 +178,11 @@ def test_decide_uses_fresh_sessions_and_reloads_authoritative_intent(tmp_path):
         assert agent.kwargs["load_soul_identity"] is False
         assert agent.kwargs["enabled_toolsets"] == []
         assert "parent_session_id" not in agent.kwargs
-        assert "intent.md 为人类意图唯一来源" in agent.kwargs["ephemeral_system_prompt"]
+        prompt = agent.kwargs["ephemeral_system_prompt"]
+        assert "intent.md 为人类意图唯一来源" in prompt
+        assert "项目决策边界不等于人类批准边界" in prompt
+        assert "不因普通任务完成而等待人类" in prompt
+        assert "当前推进方向及本任务服务该方向的理由" in prompt
         assert "不得用“最简单”代替“已经确认正确”" in agent.kwargs[
             "ephemeral_system_prompt"
         ]

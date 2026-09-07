@@ -69,6 +69,10 @@ def test_decision_request_separates_authoritative_intent_from_state():
     assert "开始新任务" in request
     assert "本轮人类变化" not in request
     assert "以下只是线索，不自动视为事实" in request
+    assert "AGENTS.md" in request
+    assert "项目决策不等于人类批准" in request
+    assert "不要要求 worker 提交或推送" in request
+    assert "当前可核实事实能够推翻其中假设" in request
 
 
 def test_decision_request_marks_empty_state_without_inventing_intent():

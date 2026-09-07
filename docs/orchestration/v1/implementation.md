@@ -768,3 +768,13 @@ stock-sim 真实恢复：contextCompaction started/completed 后业务 turn comp
 ```
 
 真实恢复继续使用 stock-sim thread `01a06271-aaf8-7a02-89a7-1e5db772169d`，没有新建替代 thread。预压缩成功后当前数据调查 turn 完成，证明兼容服务不再需要 `/v1/responses/compact` 才能恢复长任务。
+
+### 10.8 2026-09-07 设计与运行提示对齐
+
+现有设计、Orchestra 系统提示、决策请求和 worker 固定提示共同区分项目决策与人类批准：授权范围内的新任务不再自动要求人类批准；人类本轮目标、预算、权限和停止条件继续有效。`state.md` 可保留简短可修订方向和任务理由，不增加字段。人类约束不能被模型任务覆盖，当前可核实事实可推翻任务假设。
+
+新任务和恢复任务继续共用 `build_worker_prompt()`；恢复仍先完成预压缩，再发送当前完整任务。Hermes 不拼接设计全文或仓库规则，提示 worker 按需确认当前 `AGENTS.md`、相关规则和工作区变化。请求中明确 Codex 的 `workspace-write`、`approval=never` 和 `.git` 只读能力，提交推送由授权宿主执行，避免再向 worker 下发不可执行的 Git 要求。
+
+内部子代理精简返回，验证保持最小充分，关键测试和运行结果在已有仓库材料中保留可定位引用。`result.md` 沿用现有外层包装和原始最终文本，内容为完成、关键验证、未闭合、方向影响、产物位置；不解析它们，也不新增 schema、事件日志、reviewer 或运行时。
+
+聚焦验证：`scripts/run_tests.sh tests/test_orchestra_v1.py tests/test_orchestra_v1_decision.py tests/test_orchestra_v1_worker.py tests/test_orchestra_v1_codex.py`，38 项通过；本次修改的 Python 文件 Ruff 和 `git diff --check` 通过，未运行全仓测试。
