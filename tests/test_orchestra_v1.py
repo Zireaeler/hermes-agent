@@ -182,7 +182,10 @@ def test_decide_uses_fresh_sessions_and_reloads_authoritative_intent(tmp_path):
         assert "intent.md 为人类意图唯一来源" in prompt
         assert "项目决策边界不等于人类批准边界" in prompt
         assert "不因普通任务完成而等待人类" in prompt
-        assert "当前推进方向及本任务服务该方向的理由" in prompt
+        assert "从整体人类目标和项目已有能力判断当前主要缺口" in prompt
+        assert "当前中程方向及本任务服务该方向的理由" in prompt
+        assert "不把完成一个自行选择的小功能当作默认停止条件" in prompt
+        assert "证据充分可以延续" in prompt
         assert "不得用“最简单”代替“已经确认正确”" in agent.kwargs[
             "ephemeral_system_prompt"
         ]
