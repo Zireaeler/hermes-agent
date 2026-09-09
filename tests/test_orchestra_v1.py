@@ -186,6 +186,10 @@ def test_decide_uses_fresh_sessions_and_reloads_authoritative_intent(tmp_path):
         assert "当前中程方向及本任务服务该方向的理由" in prompt
         assert "不把完成一个自行选择的小功能当作默认停止条件" in prompt
         assert "证据充分可以延续" in prompt
+        assert "能力概况区分接口可接收范围与已经验证的覆盖" in prompt
+        assert "长期完整目标不自动成为每个局部用途的准入条件" in prompt
+        assert "区分证据缺失与已有反证" in prompt
+        assert "固定本地输入的复现与在线来源长期不变" in prompt
         assert "不得用“最简单”代替“已经确认正确”" in agent.kwargs[
             "ephemeral_system_prompt"
         ]

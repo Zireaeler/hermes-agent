@@ -77,6 +77,10 @@ def test_decision_request_separates_authoritative_intent_from_state():
     assert "简述本任务为何值得优先推进" in request
     assert "不单独证明任务优先级" in request
     assert "宿主已有权限内的操作" in request
+    assert "仍有效的能力概况与当前推进方向" in request
+    assert "已验证的样本覆盖不等于接口可接收范围" in request
+    assert "资格条件由此前 Orchestra 生成，不是新增人类约束" in request
+    assert "按当前用途重新判断这些条件是否必要" in request
 
 
 def test_decision_request_marks_empty_state_without_inventing_intent():
