@@ -190,6 +190,9 @@ def test_decide_uses_fresh_sessions_and_reloads_authoritative_intent(tmp_path):
         assert "长期完整目标不自动成为每个局部用途的准入条件" in prompt
         assert "区分证据缺失与已有反证" in prompt
         assert "固定本地输入的复现与在线来源长期不变" in prompt
+        assert "你制定的阶段目标、路线和验收方法可以重新选择" in prompt
+        assert "吸收结论时保留其用途、条件和证据范围" in prompt
+        assert "恢复条件只对应实际受阻的行为" in prompt
         assert "不得用“最简单”代替“已经确认正确”" in agent.kwargs[
             "ephemeral_system_prompt"
         ]

@@ -81,6 +81,8 @@ def test_decision_request_separates_authoritative_intent_from_state():
     assert "已验证的样本覆盖不等于接口可接收范围" in request
     assert "资格条件由此前 Orchestra 生成，不是新增人类约束" in request
     assert "按当前用途重新判断这些条件是否必要" in request
+    assert "按旧任务条件得出的结论仍受该用途和条件限制" in request
+    assert "先重新判断自拟阶段目标、路线与验收是否必要" in request
 
 
 def test_decision_request_marks_empty_state_without_inventing_intent():
