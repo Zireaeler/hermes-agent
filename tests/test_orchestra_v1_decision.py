@@ -84,7 +84,26 @@ def test_decision_request_separates_authoritative_intent_from_state():
     assert "按旧任务条件得出的结论仍受该用途和条件限制" in request
     assert "先重新判断自拟阶段目标、路线与验收是否必要" in request
     assert "完成声明须对照人类原义和已知限制" in request
-    assert "新任务应在正文简述原义、相关已知限制和证据位置" in request
+    assert "新任务应在相关行为旁引用原义、已知限制的必要短摘及原文位置" in request
+
+
+def test_decision_request_keeps_task_evidence_beside_completion_verbatim():
+    task = '原义：“提交前已经可见”（intent.md:23）；限制：“统一发布”（report.md:280）。'
+    result = '完成声明：“按业务时间过滤”；未确认：“实际发布时间”。'
+    request = build_decision_request(
+        intent="人类原要求",
+        state="其他当前方向",
+        task=task,
+        result=result,
+        decision="继续当前任务",
+        git_facts=git_facts(),
+    )
+
+    paired = request.split("## 当前任务与完成说明\n", 1)[1].split("## Git 机械事实", 1)[0]
+    assert paired.count(task) == 1
+    assert paired.count(result) == 1
+    assert paired.index(task) < paired.index(result)
+    assert "其他当前方向" not in paired
 
 
 def test_decision_request_marks_empty_state_without_inventing_intent():

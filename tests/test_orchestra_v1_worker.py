@@ -34,6 +34,7 @@ def test_worker_prompt_keeps_task_and_fixed_scope_boundaries():
     assert "承重结论由你核对后再采用" in prompt
     assert "足以支持当前结论的最小充分验证" in prompt
     assert "完成：本任务产生的真实可观察变化" in prompt
+    assert "在相应完成声明旁保留任务中的原义、已知限制短摘及原文位置" in prompt
     assert "关键验证：足以支持结论的关键结果" in prompt
     assert "未闭合：任务范围内仍未完成" in prompt
     assert "方向影响：可能改变下一步项目判断的新事实" in prompt
