@@ -83,6 +83,8 @@ def test_decision_request_separates_authoritative_intent_from_state():
     assert "按当前用途重新判断这些条件是否必要" in request
     assert "按旧任务条件得出的结论仍受该用途和条件限制" in request
     assert "先重新判断自拟阶段目标、路线与验收是否必要" in request
+    assert "完成声明须对照人类原义和已知限制" in request
+    assert "新任务应在正文简述原义、相关已知限制和证据位置" in request
 
 
 def test_decision_request_marks_empty_state_without_inventing_intent():

@@ -191,7 +191,9 @@ def test_decide_uses_fresh_sessions_and_reloads_authoritative_intent(tmp_path):
         assert "区分证据缺失与已有反证" in prompt
         assert "固定本地输入的复现与在线来源长期不变" in prompt
         assert "你制定的阶段目标、路线和验收方法可以重新选择" in prompt
-        assert "吸收结论时保留其用途、条件和证据范围" in prompt
+        assert "吸收结论时对照人类要求的原义" in prompt
+        assert "承重任务应简短带上该原义、已知限制和证据位置" in prompt
+        assert "不能仅凭新任务要求推翻它" in prompt
         assert "恢复条件只对应实际受阻的行为" in prompt
         assert "不得用“最简单”代替“已经确认正确”" in agent.kwargs[
             "ephemeral_system_prompt"

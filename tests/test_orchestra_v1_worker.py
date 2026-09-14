@@ -20,6 +20,8 @@ def test_worker_prompt_keeps_task_and_fixed_scope_boundaries():
     assert "不要自动扩展项目目标" in prompt
     assert "不要因为未来可能需要而建设通用机制" in prompt
     assert "承重假设错误" in prompt
+    assert "任务与人类要求的原义、已知限制冲突" in prompt
+    assert "不能把新任务要求本身当作反证" in prompt
     assert "不能自动覆盖人类约束" in prompt
     assert "当前可核实事实可以推翻任务和旧会话中的假设" in prompt
     assert "按需确认当前 AGENTS.md" in prompt
