@@ -73,7 +73,7 @@ def test_decision_request_separates_authoritative_intent_from_state():
     assert "项目决策不等于人类批准" in request
     assert "不要要求 worker 提交或推送" in request
     assert "当前可核实事实能够推翻其中假设" in request
-    assert "不要把已结束的股票子目标" in request
+    assert "不要把已结束的历史子目标" in request
     assert "简述本任务为何值得优先推进" in request
     assert "不单独证明任务优先级" in request
     assert "宿主已有权限内的操作" in request

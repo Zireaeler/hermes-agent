@@ -19,6 +19,18 @@ Codex worker 接入：完成
 
 实际代码、模型接入和机械验收记录见 [`v1/implementation.md`](v1/implementation.md)。项目战略效果应继续通过真实运行观察，不以一次正面结果或普通工程收尾证明。
 
+## 当前提示词入口
+
+Orchestra 主系统提示在 [`hermes_cli/orchestra_v1.py`](../../hermes_cli/orchestra_v1.py) 的 `ORCHESTRA_SYSTEM_PROMPT`。普通决策和执行中观察共用该提示；`decide()` 为观察附加调用模式，说明只读、不传递意见和交回控制的语义。人类意图、当前状态与任务结果由 [`orchestra_v1_decision.py`](../../hermes_cli/orchestra_v1_decision.py) 组装，运行预算、唤醒原因和通知片段由 [`orchestra_v1_runtime.py`](../../hermes_cli/orchestra_v1_runtime.py) 提供。worker 固定约束则在 [`orchestra_v1_worker.py`](../../hermes_cli/orchestra_v1_worker.py)，不承担项目阶段选择。
+
+主提示按授权、项目与阶段判断、证据边界、执行中检查、状态与任务输出组织。判断方法以 [`v1/design.md`](v1/design.md) 第 5 节为准；提示进入模型不等于这些行为已经可靠发生，真实检查的结果与限制另记于实施记录。
+
+显式有限团队入口为 `scripts/orchestra_v1.py run-team`，团队提示和分配协议在 [`orchestra_v1_team_decision.py`](../../hermes_cli/orchestra_v1_team_decision.py)，执行循环在 [`orchestra_v1_team.py`](../../hermes_cli/orchestra_v1_team.py)。它按本次授权最多运行 4 个 worker、每棵 worker 树连根最多 4 个并发执行代理；默认一天总预算，没有单 worker 一小时超时或任务轮数上限。原单 worker 命令保持兼容。用户纠正后的 worldBox 测试采用独立研究后再比较旧报告，不能用原基线摘要启动独立阶段。
+
+## 研究能力接入提案
+
+[`v1/research-integration.md`](v1/research-integration.md) 定义条件式研究纪律、关键认识如何进入后继任务、单人与团队路径的接入边界，以及实施与行为验收方案。当前为待实施提案，不代表生产提示已经修改或研究能力已经验证。
+
 ## 当前文档结构
 
 ```text
@@ -29,6 +41,7 @@ docs/orchestration/
 ├── v1/
 │   ├── design.md
 │   ├── worker-design.md
+│   ├── research-integration.md
 │   ├── project-rules.md
 │   ├── implementation.md
 │   ├── rollout.md
@@ -92,6 +105,7 @@ docs/orchestration/
 - `decide`；
 - `run-worker`；
 - `step`；
+- `run`：预算内自动决策、执行与周期只读观察；
 - `status`；
 - 人类意图与项目状态分离；
 - 每轮全新的 orchestra；
@@ -105,7 +119,7 @@ docs/orchestration/
 - 外层任务并行；
 - Claude Code 后端；
 - 通用 worker 插件系统；
-- 守护进程和自动轮询；
+- 无人值守守护进程与外部事件订阅；
 - 数据库和执行图；
 - append-only 事件账本；
 - 状态版本、迁移和校验；
@@ -115,6 +129,8 @@ docs/orchestration/
 - 持久 orchestra 推理历史。
 
 ## 当前重点
+
+当前已补齐前台自动运行入口、worker 返回后的 fresh 决策、活跃执行的周期观察、交回控制的终态确认、同项目互斥和可检索调用档案。使用方式见 [`v1/rollout.md`](v1/rollout.md#自动运行入口)，行为边界见 [`v1/design.md`](v1/design.md#自动运行)。这解决机械闭环缺口，不代表长期项目判断可靠性已经得到证明。
 
 后续工作不应继续堆叠 Orchestra 运行时功能，而应在真实项目中观察：
 

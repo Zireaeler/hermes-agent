@@ -8,6 +8,8 @@ from typing import Any, Callable, Optional
 from hermes_cli.orchestra_v1_codex import CodexTurnResult, run_codex_turn
 from hermes_cli.orchestra_v1_control import atomic_write, require_control
 from hermes_cli.orchestra_v1_decision import DECISIONS, RUN_DECISIONS
+from hermes_cli.orchestra_v1_history import CallRecord
+from hermes_cli.orchestra_v1_lock import project_exclusive
 
 
 WORKER_BEHAVIOR_PROMPT = """你是 Hermes Orchestra v1 当前任务的执行 worker。
@@ -42,13 +44,16 @@ def build_worker_prompt(task: str) -> str:
 
 
 
-def _worker_result_markdown(result: CodexTurnResult) -> str:
+def _worker_result_markdown(result: CodexTurnResult, task_reference: str = "") -> str:
     error = result.error or "(无)"
     final_text = result.final_text.strip() or "(worker 未返回最终消息)"
     return f"""状态：{result.status}
 线程：{result.thread_id or '(无)'}
 回合：{result.turn_id or '(无)'}
 错误：{error}
+交回控制原因：{result.control_reason or '(无)'}
+终态已确认：{result.termination_confirmed}
+原任务档案（相对 history）：{task_reference or '(未记录)'}
 
 # worker 最终回答
 
@@ -56,6 +61,7 @@ def _worker_result_markdown(result: CodexTurnResult) -> str:
 """
 
 
+@project_exclusive
 def run_worker(
     project: str | Path,
     *,
@@ -65,6 +71,7 @@ def run_worker(
     model: Optional[str] = None,
     codex_home: Optional[str | Path] = None,
     timeout_seconds: float = 3600,
+    on_poll: Optional[Callable[[], Optional[str]]] = None,
 ) -> Optional[CodexTurnResult]:
     project_path, control = require_control(project, hermes_home)
     decision = (control / "decision.txt").read_text(encoding="utf-8").strip()
@@ -87,8 +94,17 @@ def run_worker(
 
     def save_thread_ready(thread_id: str) -> None:
         atomic_write(control / "worker-thread.txt", thread_id + "\n")
+        record.write("worker-thread.txt", thread_id + "\n")
         if decision == "开始新任务":
             atomic_write(control / "decision.txt", "继续当前任务\n")
+
+    record = CallRecord(control, "worker")
+    record.write("prompt.md", build_worker_prompt(task))
+
+    def notification(note: dict[str, Any]) -> None:
+        record.notification(note)
+        if on_notification is not None:
+            on_notification(note)
 
     runner = worker_runner or run_codex_turn
     runner_kwargs: dict[str, Any] = {
@@ -100,13 +116,23 @@ def run_worker(
         "approval": "never",
         "compact_before_turn": resume_thread_id is not None,
         "timeout_seconds": timeout_seconds,
-        "on_notification": on_notification,
+        "on_notification": notification,
         "on_thread_ready": save_thread_ready,
     }
     if worker_runner is None:
         runner_kwargs["codex_home"] = str(codex_home) if codex_home else None
-    result = runner(**runner_kwargs)
+    if on_poll is not None:
+        runner_kwargs["on_poll"] = on_poll
+    try:
+        result = runner(**runner_kwargs)
+    except BaseException as exc:
+        record.write("error.txt", str(exc) or type(exc).__name__)
+        record.finish("interrupted" if isinstance(exc, KeyboardInterrupt) else "failed")
+        raise
     if result.thread_id:
         save_thread_ready(result.thread_id)
-    atomic_write(control / "result.md", _worker_result_markdown(result))
+    markdown = _worker_result_markdown(result, f"{record.path.name}/input/task.md")
+    atomic_write(control / "result.md", markdown)
+    record.write("result.md", markdown)
+    record.finish(result.status)
     return result

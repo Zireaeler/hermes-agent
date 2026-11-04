@@ -21,6 +21,8 @@ from hermes_cli.orchestra_v1 import (  # noqa: E402
     project_status,
     run_worker,
 )
+from hermes_cli.orchestra_v1_runtime import run_project  # noqa: E402
+from hermes_cli.orchestra_v1_team import run_team_project  # noqa: E402
 
 
 def _worker_event(note: dict[str, Any]) -> None:
@@ -94,6 +96,53 @@ def _cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _runtime_event(event: dict[str, Any]) -> None:
+    kind = event["kind"]
+    if kind in {"decision", "observation"}:
+        print(f"[orchestra {kind}] {event['decision']}\n{event['task']}", flush=True)
+    else:
+        print(f"[orchestra] {event}", flush=True)
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    result = run_project(
+        args.project,
+        max_worker_turns=args.max_worker_turns,
+        max_seconds=args.max_seconds,
+        check_interval=args.check_interval,
+        worker_timeout=args.worker_timeout,
+        on_notification=_worker_event,
+        on_event=_runtime_event,
+    )
+    print(f"本次运行结束：{result.reason}；worker turn：{result.worker_turns}")
+    print(f"运行档案：{result.history_dir}")
+    if result.reason == "interrupted":
+        return 130
+    return 1 if result.reason in {"worker_unconfirmed", "observer_failed", "worker_failure_limit"} else 0
+
+
+def _cmd_run_team(args: argparse.Namespace) -> int:
+    result = run_team_project(
+        args.project, output_dir=args.output_dir,
+        max_workers=args.max_workers, max_subagents=args.max_subagents,
+        max_seconds=args.max_seconds, check_interval=args.check_interval,
+        max_iterations=args.max_iterations, codex_bin=args.codex_bin,
+        on_event=_runtime_event,
+    )
+    print(f"团队运行结束：{result.reason}；worker任务数：{result.worker_turns}")
+    print(f"运行档案：{result.history_dir}")
+    return 130 if result.reason == "interrupted" else 1 if result.reason in {"worker_unconfirmed", "failed", "no_active_work"} else 0
+
+
+def _cmd_stop_team(args: argparse.Namespace) -> int:
+    control = project_control_dir(args.project)
+    if not (control / "team-status.json").is_file():
+        raise FileNotFoundError("项目尚无团队运行现场")
+    (control / "STOP").write_text("人类通过stop-team请求停止\n", encoding="utf-8")
+    print("已请求团队交回控制；请等待真实终态，不能把请求当作已经停止。")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python scripts/orchestra_v1.py")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -115,6 +164,29 @@ def build_parser() -> argparse.ArgumentParser:
     step_parser = subparsers.add_parser("step", help="交互式执行 decide 后按确认运行 worker")
     step_parser.add_argument("--project", required=True)
     step_parser.set_defaults(handler=_cmd_step)
+
+    run_parser = subparsers.add_parser("run", help="在本次预算内自动决策、执行及周期观察")
+    run_parser.add_argument("--project", required=True)
+    run_parser.add_argument("--max-worker-turns", type=int, default=10, help="本次 worker turn 上限，默认 10")
+    run_parser.add_argument("--max-seconds", type=float, default=3600, help="本次运行秒数上限，默认 3600")
+    run_parser.add_argument("--check-interval", type=float, default=300, help="执行中项目检查间隔秒数，0 关闭，默认 300")
+    run_parser.add_argument("--worker-timeout", type=float, default=3600, help="单次 worker 秒数上限，默认 3600")
+    run_parser.set_defaults(handler=_cmd_run)
+
+    team_parser = subparsers.add_parser("run-team", help="显式运行最多4个worker的整合研究团队")
+    team_parser.add_argument("--project", required=True)
+    team_parser.add_argument("--output-dir", required=True, help="项目内新研究目录，各worker在各自目录写入")
+    team_parser.add_argument("--max-workers", type=int, default=4)
+    team_parser.add_argument("--max-subagents", type=int, default=3)
+    team_parser.add_argument("--max-seconds", type=float, default=86400, help="整次运行秒数，默认一天；单worker无固定时限")
+    team_parser.add_argument("--check-interval", type=float, default=900, help="项目观察间隔秒数，默认15分钟")
+    team_parser.add_argument("--max-iterations", type=int, default=60, help="每次Orchestra只读决策的工具轮数预算")
+    team_parser.add_argument("--codex-bin", default="codex", help="Codex可执行文件或本次隔离包装入口")
+    team_parser.set_defaults(handler=_cmd_run_team)
+
+    stop_parser = subparsers.add_parser("stop-team", help="请求团队保存现场并停止，不重启旧任务")
+    stop_parser.add_argument("--project", required=True)
+    stop_parser.set_defaults(handler=_cmd_stop_team)
 
     status_parser = subparsers.add_parser("status", help="显示机械运行状态")
     status_parser.add_argument("--project", required=True)

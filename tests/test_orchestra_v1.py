@@ -70,9 +70,10 @@ class FakeAgent:
             tool["function"]["name"] for tool in self.tools
         }
         assert tool_names == self.valid_tool_names
-        assert len(tool_names) == 2
+        assert len(tool_names) == 3
         assert any(name.startswith("orchestra_read_") for name in tool_names)
         assert any(name.startswith("orchestra_search_") for name in tool_names)
+        assert any(name.startswith("orchestra_history_") for name in tool_names)
         return self.output
 
 
@@ -139,6 +140,18 @@ def test_repository_path_rejects_absolute_and_symlink_escapes(tmp_path):
         pytest.skip("当前平台不支持符号链接")
     with pytest.raises(PermissionError):
         _path_in_project(project.resolve(), str(link))
+
+
+@pytest.mark.parametrize("source", ["bearer", "env"])
+def test_codex_settings_accepts_provider_auth_without_auth_json(tmp_path, monkeypatch, source):
+    provider_auth = 'experimental_bearer_token = "provider-test-key"' if source == "bearer" else 'env_key = "ORCHESTRA_TEST_KEY"'
+    monkeypatch.setenv("ORCHESTRA_TEST_KEY", "provider-test-key")
+    (tmp_path / "config.toml").write_text(
+        'model = "gpt-test"\nmodel_provider = "local"\n'
+        '[model_providers.local]\nbase_url = "http://localhost:9999/v1"\n'
+        + provider_auth + '\n', encoding="utf-8",
+    )
+    assert codex_agent_settings(tmp_path)["api_key"] == "provider-test-key"
 
 
 def test_decide_uses_fresh_sessions_and_reloads_authoritative_intent(tmp_path):

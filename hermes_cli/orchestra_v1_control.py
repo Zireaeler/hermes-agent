@@ -14,6 +14,7 @@ import tempfile
 from typing import Optional
 
 from utils import atomic_replace
+from hermes_cli.orchestra_v1_lock import project_exclusive
 
 
 CONTROL_FILES = (
@@ -99,6 +100,7 @@ def atomic_write(path: str | Path, content: str) -> None:
         temporary_path.unlink(missing_ok=True)
 
 
+@project_exclusive
 def initialize_project(
     project: str | Path,
     goal: str,

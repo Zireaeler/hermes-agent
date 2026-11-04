@@ -4,6 +4,43 @@
 
 ## 0. 当前状态
 
+### 显式有限团队与长研究
+
+用户明确授权多 worker 时，可在初始化控制目录后使用：
+
+```bash
+python scripts/orchestra_v1.py run-team --project /path/to/project \
+  --output-dir research/new-study --max-workers 4 --max-subagents 3 \
+  --max-seconds 86400 --check-interval 900
+```
+
+单 worker 没有固定超时，只受整次运行剩余时间与有依据的交回控制影响；不限任务轮数。`--codex-bin` 可以选择本次环境的隔离包装入口，不改变研究路线。停止使用相同 `HERMES_HOME` 调用 `stop-team --project /path/to/project`；停止请求不等于终态已确认。`team-status.json` 保存实际槽位、任务、用时与结果位置，控制目录和模型配置留在仓库外。
+
+worldBox 本次是先独立研究、后开放旧报告比较：独立工作区不含旧研究、旧 Git 对象或旧基线摘要，使用全新控制材料与模型会话。worker 包装隐藏原工作区，仅挂载新的研究与会话目录；网络保留公开领域研究，但禁止获取本项目旧报告。比较前保存独立原稿；比较阶段使用另一新工作区，新增分析并区分独立发现与事后认识。约 20 小时独立研究、余下约 4 小时比较，总体最长一天；不能将看到旧研究后的修改冒充独立结果。
+
+### 自动运行入口
+
+现有项目可直接运行（决策仍使用原有 Codex `config.toml` 和认证配置）：
+
+```bash
+python scripts/orchestra_v1.py run --project /path/to/project \
+  --max-worker-turns 10 --max-seconds 3600 --check-interval 300
+```
+
+未初始化时先由人类提供目标文件：
+
+```bash
+python scripts/orchestra_v1.py init --project /path/to/project --goal-file /path/to/goal.md
+```
+
+`run` 在授权及本次预算内自动衔接后续任务，不逐项要求确认。`--worker-timeout` 限定单次 worker 用时，默认 3600 秒；`--check-interval 0` 关闭执行中的周期观察，但仍检查预算与人类意图变化。等待、询问人类、停止和 Ctrl+C 都退出；本入口不会自行回答人类问题、提交或推送。
+
+周期观察只读，不修改正在执行的任务。请求交回控制后须收到真实终态，再 fresh 决定下一步；中断没有确认则停止自动续跑。用尽轮数或时间后吸收最后结果，保留下一项判断但不执行；预算不是全项目受阻的理由。同步模型请求可能超过剩余预算，预算不是模型调用的强制终止期限。
+
+控制目录仍由 `status` 显示。其下 `history/` 保存每轮输入、请求、输出、用时、worker 通知和原任务关联；Orchestra 可按需分页查询，普通下一轮只接收近期索引和通知尾部。档案可由人类清理，不承担恢复重放职责。当前只能观察 app-server 实际通知，不代表完整接通所有后代会话；没有完整 token 用量或战略质量保证。
+
+以下是此前首版落地过程，保留作历史记录。
+
 Orchestra v1 已于 2026-09-01 完成前五个阶段：
 
 ```text

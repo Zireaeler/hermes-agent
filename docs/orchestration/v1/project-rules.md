@@ -54,6 +54,21 @@ hermes_cli/orchestra_v1_codex.py
 
 scripts/orchestra_v1.py
   参数解析、前台确认、输出和退出码
+
+hermes_cli/orchestra_v1_runtime.py
+  前台自动循环、预算与周期观察、交回控制后的重新决策
+
+hermes_cli/orchestra_v1_history.py
+  调用快照、执行日志和当前项目只读历史查询
+
+hermes_cli/orchestra_v1_lock.py
+  同一项目控制写入的可重入跨进程互斥
+
+hermes_cli/orchestra_v1_team_decision.py
+  显式团队的战略提示、有限槽位分配与只读决策
+
+hermes_cli/orchestra_v1_team.py
+  有限团队并发、终态收集、运行预算与任务写目录隔离
 ```
 
 这些模块的边界应保持稳定，但不是不可修改的冻结架构。若真实职责变化，可以调整；不得仅为形式对称继续拆出没有独立行为的文件。
@@ -123,6 +138,8 @@ scripts/orchestra_v1.py
 - 外层任务图。
 
 只有独立的多 worker 研究已经证明具体边界后，才讨论对应最小实现。
+
+2026-10-21 用户已明确要求当前 worldBox 研究使用最多 4 个 worker、每个最多 3 个子代理，覆盖上述“未来需求”限制。允许为这项真实授权增加有限槽位执行、明确分配与写目录隔离；不得据此建立通用调度框架、外层角色流水线或旧 Runtime 任务图。默认单 worker 路径保持兼容。团队决策和团队执行循环放在聚焦模块，不能重新堆入原单轮协调文件。
 
 ### 4.6 不用过度防御替代真实行为
 
