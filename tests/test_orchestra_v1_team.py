@@ -49,6 +49,18 @@ def run(env, decider, worker, **kwargs):
 
 
 def test_four_workers_overlap_and_early_return_is_absorbed_without_waiting_all(env):
+    (env[0] / "prior-analysis.md").write_text(
+        "固定样例中等待集中在全局互斥前，缓存实验仅观察到局部加速。\n",
+        encoding="utf-8",
+    )
+    tasks = {
+        slot: (
+            f"核实第{slot}组样例的慢请求，保持订单幂等。\n"
+            "已有等待区间证据见 prior-analysis.md，仅适用于固定样例。\n"
+            "阶段计时是否准确仍未知；缓存局部加速不能证明整体排队减少，也不否定其他缓存用途。"
+        )
+        for slot in range(1, 5)
+    }
     barrier = threading.Barrier(4)
     busy = set()
     lock = threading.Lock()
@@ -64,6 +76,7 @@ def test_four_workers_overlap_and_early_return_is_absorbed_without_waiting_all(e
         assert kwargs["env"] == {"HERMES_KANBAN_TASK": ""}
         workspace = Path(kwargs["workspace"])
         slot = int(workspace.parent.name.rsplit("-", 1)[1])
+        assert kwargs["prompt"].count(tasks[slot]) == 1
         with lock:
             busy.add(slot)
             peak = max(peak, len(busy))
@@ -80,7 +93,7 @@ def test_four_workers_overlap_and_early_return_is_absorbed_without_waiting_all(e
         nonlocal rounds
         rounds += 1
         if rounds == 1:
-            return decision(*(assignment(i) for i in range(1, 5)))
+            return decision(*(assignment(i, task=tasks[i]) for i in range(1, 5)))
         observed.append(kwargs["context"])
         active = kwargs["active_slots"]
         if "关键新认识" not in kwargs["context"]:

@@ -77,10 +77,20 @@ def test_default_runner_uses_orchestra_codex_entry(tmp_path, monkeypatch):
 def test_new_task_keeps_old_thread_until_new_thread_is_ready(tmp_path):
     project = tmp_path / "project"
     project.mkdir()
+    (project / "prior-analysis.md").write_text(
+        "固定样例中等待集中在全局互斥前，缓存实验仅观察到局部加速。\n",
+        encoding="utf-8",
+    )
+    task = (
+        "核实慢请求的等待来源，保持订单幂等。\n"
+        "已有样例中等待集中在全局互斥前，证据见 prior-analysis.md。\n"
+        "该认识仅适用于固定样例，阶段计时仍需核实。\n"
+        "缓存实验仅证明局部加速，整体排队是否减少尚未知，不能据此排除所有缓存用途。"
+    )
     home = tmp_path / "hermes"
     control = initialize_project(project, "Goal", hermes_home=home)
     atomic_write(control / "decision.txt", "开始新任务\n")
-    atomic_write(control / "task.md", "Do new work\n")
+    atomic_write(control / "task.md", task + "\n")
     atomic_write(control / "worker-thread.txt", "thread-old\n")
     calls: list[dict[str, Any]] = []
 
@@ -101,7 +111,7 @@ def test_new_task_keeps_old_thread_until_new_thread_is_ready(tmp_path):
     assert result is not None and result.status == "completed"
     assert calls[0]["resume_thread_id"] is None
     assert calls[0]["compact_before_turn"] is False
-    assert "Do new work" in calls[0]["prompt"]
+    assert calls[0]["prompt"].count(task) == 1
     assert "只负责完成后附 task.md 中的当前任务" in calls[0]["prompt"]
     assert "方向影响：可能改变下一步项目判断的新事实" in calls[0]["prompt"]
     assert (control / "worker-thread.txt").read_text(encoding="utf-8") == "thread-new\n"

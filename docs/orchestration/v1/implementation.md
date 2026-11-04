@@ -1012,3 +1012,44 @@ bash scripts/run_tests.sh -j 4 \
 ```
 
 私人 `config.toml`、provider 认证、旧会话及云端工作目录不进入仓库。继续代码接入不依赖仓库外源码；原始计划、另一模型意见与动态图可按需作为单独参考材料交付。真实运行时须在本地使用自己的有效配置与实际可用工具。
+
+## 16. 2026-11-04 研究能力最小接入
+
+在 `codex/orchestra-auto-runtime` 的 `e04208e` 基线上，按 `research-integration.md` 接入条件式研究纪律和知识交接。人类明确本次最终交付无需实际任务检验，并限定只跑相关 Orchestra 文件的单元测试；本轮未运行全仓测试、PET、业务任务或真实模型，不把机械通过描述为研究效果已经验证。
+
+### 16.1 已有职责与本次增量
+
+原有提示已经要求整体与阶段重判、保持人类原义、Worker 任务内自治、最小充分验证和结果位置；这些不是本次新增。生产改动只涉及两份固定提示：
+
+- `hermes_cli/orchestra_v1_worker.py`：仅在关键未知影响可行性或方案选择时研究；按实际环境核对能力，成熟方法前提清楚时直接实施；判别实验说明条件、观察与改变选择的结果，不预设赢家。接手时按需读前驱产物，结果区分事实、解释、假设与决定，保留负结果和失败范围；局部问题自主解决，当前完整责任无法有意义地推进或实质改变目标、范围、授权时才交回。
+- `hermes_cli/orchestra_v1.py`：按不确定性对决定的影响选择核实深度，已有证据充分时有条件采纳；不把局部失败或暂未采用写成无条件路线淘汰。状态仅保留影响选择的认识、条件、未知与位置；后继任务明确交接相关原义、前提、失败范围及目标项目内可读产物，区分可直接采用与需要复验的结论，不假定 Worker 收到整个 state 或控制历史工具。
+
+`build_team_system_prompt()` 继续继承基础提示，三处单人机械边界替换仍正确；没有在团队模块另写一套研究规则。单人及团队现有任务传递代码未发现内容丢失，因此未改控制材料、请求拼接、运行器、RPC、档案、锁或输出协议。权限、预算与既有生命周期沿用。
+
+正式职责已合并至 `design.md` 和 `worker-design.md`；README、HANDOFF 与研究设计的状态同步为实现已接入、实际研究效果尚未验收，未扩展顶层角色或新增固定研究阶段。
+
+### 16.2 完整任务交接与机械检查
+
+可读的实际测试任务见 `tests/test_orchestra_v1_worker.py` 的 `test_new_task_keeps_old_thread_until_new_thread_is_ready`：任务要求核实等待来源并保持订单幂等，带入固定样例中的已有证据、仍未知的计时与整体排队效果、缓存局部结果的适用范围，以及项目内 `prior-analysis.md` 路径。测试为该路径提供可读的合成报告，并检查完整多行任务仅一次进入实际 runner 输入，原有新 thread 就绪后才切换的断言保留。
+
+团队的对应示例位于 `tests/test_orchestra_v1_team.py` 的 `test_four_workers_overlap_and_early_return_is_absorbed_without_waiting_all`：各槽位收到不同的完整任务，分别核对其内容原样进入对应 runner prompt；原有并发、结果吸收和终态收集断言保留。这些是合成输入的机械传递检查，不是模型生成了正确任务或理解了证据的行为结论。
+
+通过规范入口一次运行以下 6 个相关文件：
+
+```bash
+bash scripts/run_tests.sh -j 4 \
+  tests/test_orchestra_v1.py \
+  tests/test_orchestra_v1_worker.py \
+  tests/test_orchestra_v1_decision.py \
+  tests/test_orchestra_v1_team_decision.py \
+  tests/test_orchestra_v1_team.py \
+  tests/test_orchestra_v1_runtime.py
+```
+
+结果：**84 项通过、0 项失败，4 个并行进程，约 4.6 秒**。覆盖提示构造、自然语言任务与结果传递、fresh 会话、团队协议、观察不写回以及确认终态后替换等现有路径。未修改 Codex 通信和额度配置，不为本次提示改动复跑这些无关文件。
+
+修改的 4 个 Python 文件 Ruff 通过；一次性生成团队提示，确认完整证据段和任务交接要求被继承，且单人任务数、观察语义及最终回答格式仍替换为团队协议；`git diff --check` 通过。没有将一次性提示检查增加为新的永久测试或运行 gate。
+
+### 16.3 交付范围
+
+本轮完成生产提示、正式设计和相关机械检查。真实任务中的选择质量、跨轮条件保持、误停及重复研究表现均未检验；按人类当前范围，这些不作为本次交付前置，也不能声称已经改善。后续若单独开展行为观察，可使用 `research-integration.md` 中的方案。

@@ -27,9 +27,9 @@ Orchestra 主系统提示在 [`hermes_cli/orchestra_v1.py`](../../hermes_cli/orc
 
 显式有限团队入口为 `scripts/orchestra_v1.py run-team`，团队提示和分配协议在 [`orchestra_v1_team_decision.py`](../../hermes_cli/orchestra_v1_team_decision.py)，执行循环在 [`orchestra_v1_team.py`](../../hermes_cli/orchestra_v1_team.py)。它按本次授权最多运行 4 个 worker、每棵 worker 树连根最多 4 个并发执行代理；默认一天总预算，没有单 worker 一小时超时或任务轮数上限。原单 worker 命令保持兼容。用户纠正后的 worldBox 测试采用独立研究后再比较旧报告，不能用原基线摘要启动独立阶段。
 
-## 研究能力接入提案
+## 研究能力接入
 
-[`v1/research-integration.md`](v1/research-integration.md) 定义条件式研究纪律、关键认识如何进入后继任务、单人与团队路径的接入边界，以及实施与行为验收方案。当前为待实施提案，不代表生产提示已经修改或研究能力已经验证。
+[`v1/research-integration.md`](v1/research-integration.md) 记录条件式研究纪律、关键认识如何进入后继任务、单人与团队路径的接入边界，以及行为验收方案。相关生产提示已接入，正式职责见 `v1/design.md` 与 `v1/worker-design.md`，实施记录见 `v1/implementation.md` 第 16 节。本轮按人类要求仅做相关单元与机械检查，研究效果尚未通过实际任务验证。
 
 ## 当前文档结构
 
