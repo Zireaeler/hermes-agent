@@ -1,6 +1,7 @@
 ---
 title: Orchestra 讨论花园
 date: 2026-11-06
+updated: 2026-11-07
 status: 持续讨论
 tags: [orchestra, digital-garden]
 ---
@@ -14,6 +15,7 @@ tags: [orchestra, digital-garden]
 - [[01-rfcs/战略监督者|讨论稿 01：Orchestra 作为战略监督者]]
 - [[01-rfcs/死胡同识别与策略切换|讨论稿 02：死胡同识别与策略切换]]
 - [[01-rfcs/能力边界与未知未知|讨论稿 03：能力边界与未知未知]]
+- [[01-rfcs/共享知识入口与旁路能力检查|讨论稿 04：共享知识入口与旁路能力检查]]
 
 ## 概念卡片
 - [[02-concepts/元认知与元推理]]
